@@ -19,10 +19,9 @@ for(const phase of ['Python'])test(`B1 HFS_CURSOR ${phase}: a live receipt regis
   // the new receipt behind the real directory cursor.
   const cursorName='registration-finished';
   const shown=await manager.present(person);assert.equal(shown.directories,1);
-  // Start safely inside a fresh one-second timestamp interval. No stat values,
-  // register(), receipt contents, liveness oracle or deletion gates are mocked.
-  await new Promise(r=>setTimeout(r,1000-Date.now()%1000+25));
-  const touch=path.join(registryDir,'.time-marker');fs.writeFileSync(touch,'x');fs.unlinkSync(touch);
+  // Model HFS timestamp aliasing in the Python fixture, without a wall-clock
+  // deadline: only this registry directory's mtime/ctime are projected. Its
+  // identity, real receipts/counters, iterator, owner and deletion stay real.
   if(phase==='Node') {
   const realInspect=manager.inspect;let proofBefore,proofAfter,liveId,ownerAlive;manager.inspect=async()=>{
    if(!liveId){proofBefore=ownership.revision(registryDir);liveId=ownership.register(nested,{registryDir});proofAfter=ownership.revision(registryDir);
@@ -37,10 +36,74 @@ for(const phase of ['Python'])test(`B1 HFS_CURSOR ${phase}: a live receipt regis
    const snapshot=manager.candidates[0],owner=require('../service-lock.cjs').lockIdentity(process.pid),diagnostic=path.join(base,'helper-proof.json');
    const register="require(process.argv[1]).register(process.argv[2],{registryDir:process.argv[3],owner:JSON.parse(process.argv[4])})";
    const request={path:dir,owner:snapshot.record.owner,roots:[root],entries:snapshot.entries,registry:ownership.revision(registryDir)};
-   const harness=`import sys,json,subprocess,os\nscript,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]\nscope={}\nexec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)\noriginal_scan=os.scandir\nscans=0\nregistered=False\ndef identity():\n s=os.stat(registry)\n return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]\nclass ChangingScan:\n def __init__(self,fd):\n  global scans\n  scans+=1\n  self.number=scans\n  self.inner=original_scan(fd)\n  self.started=False\n  self.seen=[]\n  self.details=None\n def __enter__(self):\n  self.inner.__enter__()\n  return self\n def __exit__(self,*args):\n  if self.details is not None:\n   self.details['enumerated']=self.seen\n   with open(diagnostic,'w') as f: json.dump(self.details,f)\n  return self.inner.__exit__(*args)\n def __iter__(self): return self\n def __next__(self):\n  global registered\n  entry=next(self.inner)\n  self.seen.append(entry.name)\n  if self.number==3 and entry.name=='registration-finished' and not self.started:\n   self.started=True\n   before=identity()\n   subprocess.run([node,'-e',register,module,live,registry,owner],check=True)\n   registered=True\n   self.details={'before':before,'after':identity(),'duringScan':self.number,'firstEntry':entry.name}\n  return entry\nos.scandir=ChangingScan\nscope['main']()\n`;
+   const harness=`import sys,json,subprocess,os,io
+script,live,registry,node,module,owner,register,diagnostic=sys.argv[1:]
+scope={}
+exec(compile(open(script).read().rsplit('\\ntry: main()',1)[0],script,'exec'),scope)
+request=json.load(sys.stdin)
+sys.stdin=io.StringIO(json.dumps(request))
+original_stat=os.stat
+registry_stat=original_stat(registry)
+fixed_mtime,fixed_ctime=map(int,request['registry']['identity'][4:])
+class RegistryTimes:
+ def __init__(self,actual): self.actual=actual
+ def __getattr__(self,name):
+  if name=='st_mtime_ns': return fixed_mtime
+  if name=='st_ctime_ns': return fixed_ctime
+  if name=='st_mtime': return fixed_mtime/1000000000
+  if name=='st_ctime': return fixed_ctime/1000000000
+  return getattr(self.actual,name)
+def fixed_registry_times(original):
+ def read(*args,**kwargs):
+  actual=original(*args,**kwargs)
+  if (actual.st_dev,actual.st_ino)==(registry_stat.st_dev,registry_stat.st_ino): return RegistryTimes(actual)
+  return actual
+ return read
+for name in ('stat','lstat','fstat'): setattr(os,name,fixed_registry_times(getattr(os,name)))
+original_scan=os.scandir
+scans=0
+registered=False
+def identity(raw=False):
+ s=original_stat(registry) if raw else os.stat(registry)
+ return [str(s.st_dev),str(s.st_ino),str(s.st_uid),str(s.st_mode),str(s.st_mtime_ns),str(s.st_ctime_ns)]
+class ChangingScan:
+ def __init__(self,fd):
+  global scans
+  scans+=1
+  self.number=scans
+  self.inner=original_scan(fd)
+  self.started=False
+  self.seen=[]
+  self.details=None
+ def __enter__(self):
+  self.inner.__enter__()
+  return self
+ def __exit__(self,*args):
+  if self.details is not None:
+   self.details['enumerated']=self.seen
+   with open(diagnostic,'w') as f: json.dump(self.details,f)
+  return self.inner.__exit__(*args)
+ def __iter__(self): return self
+ def __next__(self):
+  global registered
+  entry=next(self.inner)
+  self.seen.append(entry.name)
+  if self.number==3 and entry.name=='registration-finished' and not self.started:
+   self.started=True
+   before=identity()
+   actual_before=identity(True)
+   subprocess.run([node,'-e',register,module,live,registry,owner],check=True)
+   registered=True
+   self.details={'before':before,'after':identity(),'actualBefore':actual_before,'actualAfter':identity(True),'duringScan':self.number,'firstEntry':entry.name}
+  return entry
+os.scandir=ChangingScan
+scope['main']()
+`;
    const result=JSON.parse(execFileSync(require('../platform.cjs').pythonExecutable(),['-c',harness,path.join(__dirname,'../temp-cleanup.py'),nested,registryDir,process.execPath,require.resolve('../temp-ownership.cjs'),JSON.stringify(owner),register,diagnostic],{input:JSON.stringify(request),encoding:'utf8',timeout:10000}));
    const observed=JSON.parse(fs.readFileSync(diagnostic,'utf8'));
    assert.deepEqual(observed.before,request.registry.identity);assert.deepEqual(observed.after,observed.before,'Python must detect a registration the timestamp-only proof misses');
+   assert.deepEqual(observed.actualBefore.slice(0,4),request.registry.identity.slice(0,4),'The actual registry identity is unchanged');
+   assert.deepEqual(observed.actualAfter.slice(0,4),observed.actualBefore.slice(0,4),'Only directory timestamps are projected');
    const live=ownership.read(registryDir).find(r=>r.path===nested);assert.equal(manager.isAlive(live.owner),true);observed.liveId=live.id;observed.liveReceiptSeen=observed.enumerated.includes(live.id+'.json');observed.enumeratedCount=observed.enumerated.length;
    t.diagnostic(JSON.stringify({phase,result,observed,candidateExists:fs.existsSync(dir),activeDataExists:fs.existsSync(payload)}));
    assert.equal(observed.firstEntry,cursorName,'Register only after the existing counter has been consumed');
