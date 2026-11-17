@@ -145,9 +145,7 @@ local branch or main; not installed, pushed or published):
 - Stop after the required evidence arrives. No polling prompts, automatic
   retry, extra acknowledgement loops, or fleet tests merely for completeness.
   Unverified capabilities remain explicitly unverified.
-- Wait on a running command with one long tool wait that returns when it exits
-  or prints (for example a 300-second yield); do not poll it with repeated
-  short empty waits, since each poll is a full model call over the whole context.
+- 普通测试的完整输出写私有日志、完成回汇总；首次命令尽量等满当前上限（此客户端 30s），后续内外层等待对齐各自允许上限（此客户端不超过 60s），不以 1s 空轮询取状态；异常、需交互和取消及时处理，进展汇报照旧。
 - In native command tests, inspect the actual edit line and completion menu
   before pressing Enter. Browser typing completion or IPC acknowledgement is
   not proof that the native command UI has settled. If another command runs,
