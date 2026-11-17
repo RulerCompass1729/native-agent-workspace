@@ -83,6 +83,15 @@ function columns(s, label, count) {
     column(m, label, 80);
   }
 }
+// Prove there is room using the rendered regions, rather than trusting the allocator's current value.
+// Their combined height can hold four hint lines while leaving the 80/64px floors intact.
+function fourLinesWithRoom(s, label) {
+  for (const m of s.members) {
+    const room = m.messages.h - 80 + m.terminal.h - 64 + (m.hint?.shown || 0);
+    assert.ok(room >= MOST * LINE - 0.5, `${label}: ${m.name} has room for four hint lines (${room}px)`);
+    assert.equal(m.allow, MOST, `${label}: ${m.name} allocates four hint lines when they fit`);
+  }
+}
 // A column holds its conversation, its terminal and its input, in that order and inside its frame.
 function column(m, label, conversation) {
   assert.ok(m.messages && m.block && m.terminal, `${label}: ${m.name} has its conversation, terminal and input`);
@@ -152,6 +161,7 @@ async function run() {
   await page.mouse.move(2, 2); await settled();
   const before = (await fixture('stats')).overviewCalls, identityBefore = await page.evaluate(async () => (await workspace.initial()).sessions.map(v => [v.id, v.nativeId, v.owner, v.name]));
   const zhButtons = [[['原生输入', false], ['发送 ↑', true]], [['接管此窗口', false]], [['原生输入', false], ['发送 ↑', true]], [['打开原生终端', false]]];
+  const enButtons = [[['Native input', false], ['Send ↑', true]], [['Take control here', false]], [['Native input', false], ['Send ↑', true]], [['Open native terminal', false]]];
   const zhHints = { working: '当前原生连接不能在回复中发送。草稿保留，空闲后再发送。', readOnly: '此窗口只读。接管后继续使用原会话，草稿保留。' };
   const kept = (s, label, buttons) => {
     assert.equal(s.spaceDraft, spaceDraft, label + ': the space draft is kept'); assert.equal(s.members[0].area.value, privateDraft, label + ': the private draft is kept');
@@ -162,11 +172,14 @@ async function run() {
   // column width; typography, complete/scrollable hints, drafts, controls and 80/64px floors do not.
   for (const lang of ['zh', 'en']) {
     if (lang === 'en') await language(lang);
-    const buttons = (await sample()).members.map(m => m.buttons);
+    const buttons = lang === 'zh' ? zhButtons : enButtons;
     for (const [width, height] of [[1240, 850], [1280, 800], [1000, 700], [850, 600]]) {
       await size(width, height); const s = await sample(), label = `${lang} ${width}x${height}`;
       columns(s, label, 4); kept(s, label, buttons);
       assert.ok(s.members[3].hint && s.members[1].hint && !s.members[2].hint, label + ': error and read-only hints remain; the ready member has none');
+      assert.equal(s.members[1].hint.colour, s.members[3].hint.colour, label + ': read-only and error hints keep the same colour');
+      assert.ok(s.members[3].hint.text.includes(lang === 'zh' ? '打开终端' : 'Open the terminal'), label + ': the error hint includes its recovery action');
+      if (height === 850) fourLinesWithRoom(s, label);
       measured[label] = s.members.map(m => ({ width: m.card.w, conversation: m.messages.h, terminal: m.terminal.h, allow: m.allow }));
       await capture(`${lang}-${width}x${height}`);
       if (width === 850) for (const member of s.members) {
@@ -190,6 +203,7 @@ async function run() {
   await until(async () => (await sample()).members.find(m => m.id === c)?.hint, 'The newly failed member has its hint'); await settled();
   s = await sample(); columns(s, 'a hint appears at 850x600', 4);
   assert.ok(s.members.find(m => m.id === c).hint.text.startsWith('原生请求未完成。'));
+  assert.ok(s.members.find(m => m.id === c).hint.text.includes('打开终端'), 'The newly failed member keeps the terminal recovery action');
   check('A hint appearing in the small window preserves every conversation and terminal floor');
 
   await page.locator('#room-record').click(); await page.locator('#activity-stream').waitFor();
@@ -220,7 +234,10 @@ async function run() {
   for (const [name, provider] of [['测试覆盖 · Coverage', 'claude'], ['Perf_benchmarks', 'codex']]) { const id = await client.call('create', { provider, cwd, name, view: 'chat' }); await client.call('join', id, true); }
   await until(() => page.locator('#collaboration-overview .collaboration-member-unit').count().then(n => n === 6), 'Six member cards exist');
   await revealAll(); await settled();
-  for (const [width, height] of [[1240, 850], [850, 600]]) { await size(width, height); columns(await sample(), `six members ${width}x${height}`, 6); }
+  for (const [width, height] of [[1240, 850], [850, 600]]) {
+    await size(width, height); const s = await sample(), label = `six members ${width}x${height}`;
+    columns(s, label, 6); if (height === 850) fourLinesWithRoom(s, label);
+  }
   check('All six members remain reachable through reveal; the same width and reading floors survive more rows');
 
   // Looking, resizing and the member that failed sent nothing and gave no input to any session.
