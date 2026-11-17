@@ -134,3 +134,16 @@
   }
 
 }
+
+/* Space headers use U02's type sizes; long names and counters may wrap. */
+:root[data-sidebar-look="b"] &[data-native-surface="sidebar"]:not([data-collapsed="true"]){
+  .session-space-group:not([data-session-group="independent"]){
+    h3{min-height:32px!important}
+    .session-space-heading{min-height:32px;padding:2px 0;gap:7px}
+    .session-space-toggle{min-height:32px!important;height:32px!important}
+    .sidebar-space-tile{width:20px;height:20px;border-radius:6px;font-size:11px}
+    .sidebar-space-lines{flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:0 6px}
+    .sidebar-space-name{min-width:0;font-size:13px;line-height:18px}
+    .sidebar-space-meta{flex:0 1 auto;min-width:0;max-width:100%;font-size:11px;line-height:15px;white-space:normal;overflow:visible;text-overflow:clip}
+  }
+}

@@ -1393,7 +1393,7 @@ function hoverSessionCard(record, steward) {
   return [head, facts];
 }
 function hoverSpaceCard(room) {
-  const people = orderedMembers(room.id), head = node('div', undefined, 'hover-card-head'), lines = node('div', undefined, 'hover-card-lines'), title = node('div', undefined, 'hover-card-title');
+  const people = orderedMembers(room.id), head = node('div', undefined, 'hover-card-head hover-card-space'), lines = node('div', undefined, 'hover-card-lines'), title = node('div', undefined, 'hover-card-title');
   const tile = node('span', Array.from(spaceName(room).trim())[0]?.toUpperCase() || '·', `sidebar-space-tile ${roomTone(room.id)}`); tile.setAttribute('aria-hidden', 'true');
   title.append(node('span', spaceName(room), 'hover-card-name')); lines.append(title, node('div', uiText('hover.members', { count: people.length }), 'hover-card-status')); head.append(tile, lines);
   // Six rows at most: five members and 「还有 N 位」 when there are more.
