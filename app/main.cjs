@@ -299,19 +299,23 @@ function acceptLocale(value, generation) {
   updateApplicationMenu(); broadcastLocale();
 }
 function workspaceMenuReady() { return Boolean(wired && dsh && entry && dataDir && viewStore?.loaded && !starting && !quitting && !startupWindow); }
+function switchWindowMode(mode, win = BrowserWindow.getFocusedWindow()) {
+  if (!workspaceMenuReady() || !['chat', 'terminal'].includes(mode)) return;
+  if (win && windows.get(win.webContents.id)?.win === win) win.webContents.send('workspace:switch-mode', mode);
+}
 function updateApplicationMenu() {
   const text = key => displayText(key, { app: app.name });
   const create = !applicationMenu;
   const menu = applicationMenu ||= Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { id: 'naw-menu-quit', label: text('menu.quit'), accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
     { id: 'naw-menu-file', label: text('menu.file'), submenu: [{ id: 'naw-menu-new-window', label: text('menu.newWindow'), accelerator: 'CmdOrCtrl+Shift+N', click: () => { if (workspaceMenuReady()) return openWindow(); } }, { id: 'naw-menu-new-session', label: text('menu.newSession'), accelerator: 'CmdOrCtrl+N', click: () => { if (!workspaceMenuReady()) return; const win = BrowserWindow.getFocusedWindow(); if (win && windows.get(win.webContents.id)?.win === win) win.webContents.send('workspace:new'); } }, { role: 'close' }] },
-    { role: 'editMenu' }, { id: 'naw-menu-view', label: text('menu.view'), submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' },
+    { role: 'editMenu' }, { id: 'naw-menu-view', label: text('menu.view'), submenu: [{ id: 'naw-menu-chat', label: text('view.chat'), click: (_item, win) => switchWindowMode('chat', win) }, { id: 'naw-menu-terminal', label: text('view.native'), click: (_item, win) => switchWindowMode('terminal', win) }, { type: 'separator' }, { role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' },
   ]);
   // Keep Electron's generated actions/accelerators and native window/Services
   // contents. Relabel only known application-owned standard role labels.
   const roles = { about: 'about', hide: 'hide', hideothers: 'hideOthers', unhide: 'unhide', close: 'close', editmenu: 'edit', undo: 'undo', redo: 'redo', cut: 'cut', copy: 'copy', paste: 'paste', pasteandmatchstyle: 'pasteAndMatchStyle', delete: 'delete', selectall: 'selectAll', reload: 'reload', forcereload: 'forceReload', resetzoom: 'resetZoom', zoomin: 'zoomIn', zoomout: 'zoomOut', togglefullscreen: 'togglefullscreen', windowmenu: 'window', minimize: 'minimize', zoom: 'zoom', front: 'front', services: 'services', speech: 'speech', startspeaking: 'startSpeaking', stopspeaking: 'stopSpeaking' };
   const own = { 'naw-menu-quit': 'quit', 'naw-menu-file': 'file', 'naw-menu-new-window': 'newWindow', 'naw-menu-new-session': 'newSession', 'naw-menu-view': 'view' };
-  const relabel = current => { for (const item of current.items || []) { const role = item.role?.toLowerCase(); const key = Object.hasOwn(own, item.id) ? own[item.id] : Object.hasOwn(roles, role) ? roles[role] : undefined; if (key) item.label = text(`menu.${key}`); if (['naw-menu-new-window', 'naw-menu-new-session'].includes(item.id)) item.enabled = workspaceMenuReady(); if (item.submenu) relabel(item.submenu); } };
+  const relabel = current => { for (const item of current.items || []) { const role = item.role?.toLowerCase(); const key = Object.hasOwn(own, item.id) ? own[item.id] : Object.hasOwn(roles, role) ? roles[role] : undefined; if (key) item.label = text(`menu.${key}`); if (item.id === 'naw-menu-chat') item.label = text('view.chat'); if (item.id === 'naw-menu-terminal') item.label = text('view.native'); if (['naw-menu-new-window', 'naw-menu-new-session', 'naw-menu-chat', 'naw-menu-terminal'].includes(item.id)) item.enabled = workspaceMenuReady(); if (item.submenu) relabel(item.submenu); } };
   relabel(menu); if (create) Menu.setApplicationMenu(menu);
 }
 

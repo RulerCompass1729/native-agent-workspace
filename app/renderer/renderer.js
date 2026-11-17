@@ -4318,18 +4318,13 @@ function fitRoomTabs(measure = false) {
   if (two) header.classList.add('room-tabs-two-rows');
   if (two || was) restoreOverviewReading();
 }
-// Reuse the actual controls and their handlers; moving a tab never starts a session.
-function renderPaneSwitches(s, inRoom, terminalVisible) {
-  const compact = Boolean(s && !inRoom), original = $('reading-mode-controls');
-  const chat = $('chat-pane-tabs'), native = $('native-pane-tabs');
-  const move = (element, target) => { if (element.parentElement !== target) target.append(element); };
-  move($('chat-tab'), compact ? terminalVisible && terminalLayout === 'maximized' ? native : chat : original);
-  move($('terminal-tab'), compact ? terminalVisible ? native : chat : original);
-  for (const [id, present] of [['chat-tab', !terminalVisible || terminalLayout !== 'maximized'], ['terminal-tab', terminalVisible]]) {
-    $(id).classList.toggle('pane-present', compact && present);
-    $(id).classList.toggle('pane-restore', compact && !present);
+// One fixed mode group; pane labels identify content without a second switch.
+function renderPaneSwitches(s, inRoom) {
+  const compact = Boolean(s && !inRoom);
+  for (const [id, value] of [['chat-tab', 'chat'], ['terminal-tab', 'terminal']]) {
+    $(id).setAttribute('aria-pressed', String(mode === value));
   }
-  chat.hidden = native.hidden = !compact;
+  $('chat-pane-tabs').hidden = $('native-pane-tabs').hidden = !compact;
   $('native-pane-title').hidden = compact;
 }
 function renderHeaderLayout(s, inRoom) {
@@ -4856,8 +4851,8 @@ function render() {
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
     $('conversation-pane').hidden = inRoom && !memberFocus;
-    $('reading-mode-controls').hidden = inRoom && !memberFocus;
-    renderPaneSwitches(s, inRoom, terminalVisible);
+    $('reading-mode-band').hidden = inRoom && !memberFocus;
+    renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
     document.title = sessionWindowTitle(s);
@@ -5458,6 +5453,11 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
+  api.onSwitchMode(next => {
+    if (!['chat', 'terminal'].includes(next) || document.querySelector('dialog:modal')) return;
+    const control = $(next === 'chat' ? 'chat-tab' : 'terminal-tab');
+    if (!control.disabled && control.getClientRects().length) attempt(() => switchMode(next));
+  }),
   api.onRevealRecord(target => attempt(() => target?.sessionId ? showBackgroundConfirmation(target) : showRoomRecord(target?.roomId, target?.eventId))),
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });

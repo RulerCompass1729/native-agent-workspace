@@ -12,7 +12,7 @@ const detached = value => value === undefined ? undefined : JSON.parse(JSON.stri
 
 function preload(argv) {
   const exposed = {}, listeners = new Map(), calls = [];
-  const ipcRenderer = { invoke: (...args) => { calls.push(args); return Promise.reject(Error('IPC unavailable')); }, on: (name, callback) => { const list = listeners.get(name) || []; list.push(callback); listeners.set(name, list); }, removeListener() {} };
+  const ipcRenderer = { invoke: (...args) => { calls.push(args); return Promise.reject(Error('IPC unavailable')); }, on: (name, callback) => { const list = listeners.get(name) || []; list.push(callback); listeners.set(name, list); }, removeListener(name, callback) { const list = listeners.get(name) || []; const index = list.indexOf(callback); if (index >= 0) list.splice(index, 1); } };
   const context = vm.createContext({ require: name => { assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld: (name, value) => { exposed[name] = value; } }, ipcRenderer }; }, process: { argv }, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8'), context);
   return { exposed, calls, emit(name, value) { for (const callback of listeners.get(name) || []) callback({}, value); } };
@@ -240,4 +240,34 @@ test('workspace menu actions become available only after startup and still route
   newWindow.click(); newSession.click();
   assert.equal(s.context.effectCount.windows, 1);
   assert.equal(s.sent.filter(value => value[0] === 'workspace:new').length, 1);
+});
+
+test('view menu modes retain native shortcuts and route only to an owned ready window', async t => {
+  const s = shell(t); await s.run('readStartupLocale()');
+  const view = s.menu.items.find(item => item.id === 'naw-menu-view');
+  const chat = view.submenu.items.find(item => item.id === 'naw-menu-chat');
+  const native = view.submenu.items.find(item => item.id === 'naw-menu-terminal');
+  assert.ok(chat && native, 'Both mode entries are in the existing View menu');
+  assert.equal(chat.label, 'Conversation'); assert.equal(native.label, 'Native terminal');
+  assert.equal(chat.accelerator, undefined); assert.equal(native.accelerator, undefined);
+  assert.deepEqual(detached(view.submenu.items.filter(i => i.role).map(i => i.role)), ['reload', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen']);
+  s.run("var modeWindow=new BrowserWindow({}); windows.set(modeWindow.webContents.id,{win:modeWindow}); wired=true; dsh={}; entry={}; dataDir='synthetic'; viewStore={loaded:true}; starting=false; startupWindow=null; quitting=false; updateApplicationMenu();");
+  const win = s.run('modeWindow');
+  chat.click({}, win); native.click({}, win);
+  assert.deepEqual(s.sent.slice(-2), [['workspace:switch-mode', 'chat'], ['workspace:switch-mode', 'terminal']]);
+  const count = s.sent.length;
+  s.run('windows.clear()'); chat.click({}, win); assert.equal(s.sent.length, count);
+  s.run('windows.set(modeWindow.webContents.id,{win:modeWindow}); starting=true; updateApplicationMenu();');
+  native.click({}, win); assert.equal(s.sent.length, count); assert.equal(native.enabled, false);
+  s.run("starting=false; acceptLocale({preference:'zh',revision:1,warning:null},0)");
+  assert.equal(chat.label, '对话'); assert.equal(native.label, '原生终端');
+});
+
+test('mode menu preload event is disposable and cannot invoke service commands', () => {
+  const p = preload([]), seen = [];
+  assert.equal(typeof p.exposed.workspace.onSwitchMode, 'function');
+  const dispose = p.exposed.workspace.onSwitchMode(mode => seen.push(mode));
+  p.emit('workspace:switch-mode', 'chat'); p.emit('workspace:switch-mode', 'terminal');
+  assert.deepEqual(seen, ['chat', 'terminal']); assert.equal(p.calls.length, 0);
+  dispose(); p.emit('workspace:switch-mode', 'chat'); assert.equal(seen.length, 2);
 });
