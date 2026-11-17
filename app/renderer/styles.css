@@ -1,4 +1,4 @@
-:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;color:var(--ink);background:var(--surface)}
+:root{--vendor-image-size:26px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;color:var(--ink);background:var(--surface)}
 /* "Needs you" status text, 4.5:1 on sidebar rows and on the card over the page (app/tests/approval-ink.test.cjs).
    build-ui nests this file in .naw, so & is each NAW surface there. */
 body[data-ds-dark-theme] &{--approval-ink:#f28d61}
@@ -763,14 +763,14 @@ header h1, header p { overflow-wrap: anywhere; }
    hollow ring; unknown sub-tasks or unconfirmed background work a dashed ring. Only working breathes and
    waiting pulses, and nothing moves when reduced motion is asked for. The full text is in the row's label. */
 .session-link .agent-icon{position:relative}
-.session-link .agent-icon>.state-dot{--ring:var(--panel,var(--bg,#fff));position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 2px var(--ring)}
+.session-link .agent-icon>.state-dot{--ring:var(--panel,var(--bg,#fff));position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring)}
 .session-row.active .session-link .agent-icon>.state-dot{--ring:var(--selected)}
 .session-row.space-highlight .session-link .agent-icon>.state-dot{--ring:var(--raised)}
 .session-link .agent-icon>.state-dot.working{background:radial-gradient(circle,#b78c42 0 1.6px,var(--ring) 1.6px 2.6px,#b78c42 2.6px)}
-.session-link .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 2px var(--ring),inset 0 0 0 1.5px #5b7fa6}
-.session-link .agent-icon>.state-dot.ended,.session-link .agent-icon>.state-dot.disconnected,.session-link .agent-icon>.state-dot.recoverable{background:var(--ring);box-shadow:0 0 0 2px var(--ring),inset 0 0 0 2px #868980}
+.session-link .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 1.5px #5b7fa6}
+.session-link .agent-icon>.state-dot.ended,.session-link .agent-icon>.state-dot.disconnected,.session-link .agent-icon>.state-dot.recoverable{background:var(--ring);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 2px #868980}
 .session-link .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed #6c7266}
-.session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{background:#b26345;border:0;box-shadow:0 0 0 2px var(--ring),0 0 0 3.5px #b26345}
+.session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{background:#b26345;border:0;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),0 0 0 calc(var(--state-dot-ring-width, 2px) + 1.5px) #b26345}
 .session-row:not(.active) .session-link:hover .agent-icon>.state-dot{--ring:var(--hover)}
 .session-link .agent-icon>.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
 @media(prefers-reduced-motion:no-preference){
@@ -778,7 +778,7 @@ header h1, header p { overflow-wrap: anywhere; }
   .session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{animation:naw-status-call 1.1s ease-in-out infinite}
 }
 @keyframes naw-status-breathe{50%{opacity:.55}}
-@keyframes naw-status-call{50%{box-shadow:0 0 0 2px var(--ring),0 0 0 4.5px rgba(178,99,69,.45)}}
+@keyframes naw-status-call{50%{box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),0 0 0 4.5px rgba(178,99,69,.45)}}
 /* T-144: a space label is marked as a space and shortened only by the width it has. */
 .space-badge:not(.space-badge-more)::before{content:'# ';opacity:.7}
 
@@ -1143,8 +1143,10 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 
 /* One member identity in each overview column; its header owns its width. */
 .collaboration-member-name .vendor-mark { margin-right: 5px; align-self: center; }
-.vendor-image { display: block; width: 18px; height: 18px; object-fit: contain; }
-.vendor-mark.small .vendor-image { width: 16px; height: 16px; }
+/* Only real images lose their tile. Failed/missing images retain the letter mark. */
+.agent-icon.vendor-mark:has(> .vendor-image) { display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; box-shadow: none; border-radius: 0; --state-dot-ring-width: 1.5px; }
+.vendor-image { display: block; width: var(--vendor-image-size); height: var(--vendor-image-size); object-fit: contain; flex: none; }
+.vendor-mark.small .vendor-image { width: calc(var(--vendor-image-size) * 16 / 28); height: calc(var(--vendor-image-size) * 16 / 28); }
 .session-link .agent-icon.vendor-mark { width: 28px; height: 28px; flex: 0 0 28px; }
 .session-link .agent-icon.vendor-mark > .state-dot { top: -3px; right: -3px; width: 8px; height: 8px; }
 /* Tabs occupy the toolbar's left edge. The path slot is reserved for the path toolbar. */
