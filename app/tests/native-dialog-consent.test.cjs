@@ -12,7 +12,7 @@ async function fixture(t,initial=A){
  await change(initial);return {screen,journal,runtime,record,snapshot,change};
 }
 const scenarios=[
- ['same dialog redrawn three times',[A,A,A],'valid'],
+ ['screen-only dialog redrawn three times needs a new card',[A,A,A],'invalid'],
  ['same-title option text replaced in one chunk',[B],'invalid'],
  ['highlight moves to option two',[dialog('Switch model?',['Yes, switch to model-x','No'],1)],'invalid'],
  ['same-title dialog follows a dialog-free frame',['\x1b[2J\x1b[Hworking...\r\n',B],'invalid'],
@@ -30,9 +30,10 @@ test('real detector: changed approval request still revokes an unchanged dialog'
  const f=await fixture(t),approval=id=>({nativeOnly:true,requests:[{id,title:'Synthetic permission'}]});const proof=op.terminalInputProof(f.snapshot(approval('a')));
  await f.change(A);assert.equal(op.checkTerminalInput(proof,{sessions:[f.snapshot(approval('b'))]},'t').status,'invalid');
 });
-test('real detector: a wider resize with unchanged logical dialog remains valid',async t=>{
+test('real detector: a wider resize keeps its observed dialog but requires a fresh input card',async t=>{
  const f=await fixture(t),before=f.snapshot(),proof=op.terminalInputProof(before);f.screen.resize(140,30);f.journal.index++;
- const after=f.snapshot();assert.equal(op.checkTerminalInput(proof,{sessions:[after]},'t').status,'valid');assert.equal(after.nativeTerminalDialog.since,before.nativeTerminalDialog.since);
+ const after=f.snapshot();assert.equal(op.checkTerminalInput(proof,{sessions:[after]},'t').status,'invalid');assert.equal(after.nativeTerminalDialog.since,before.nativeTerminalDialog.since);
+ assert.equal(op.checkTerminalInput(op.terminalInputProof(after),{sessions:[after]},'t').status,'valid');
 });
 test('real detector: without a dialog any output still revokes the frame proof',async t=>{
  const f=await fixture(t,'plain output'),proof=op.terminalInputProof(f.snapshot());await f.change('more output');assert.equal(op.checkTerminalInput(proof,{sessions:[f.snapshot()]},'t').status,'invalid');
@@ -40,10 +41,11 @@ test('real detector: without a dialog any output still revokes the frame proof',
 test('real detector: dismissal cannot reuse an instance when the clock has not advanced',async t=>{
  t.mock.method(Date,'now',()=>1000);const f=await fixture(t),proof=op.terminalInputProof(f.snapshot());await f.change('\x1b[2J\x1b[Hworking...');await f.change(A);
  assert.equal(op.checkTerminalInput(proof,{sessions:[f.snapshot()]},'t').status,'invalid');
+ assert.notEqual(f.snapshot().nativeTerminalDialog.since,proof.stateMark.since,'The detector must still distinguish an observed new instance');
 });
 test('real detector: persisted proof contains only dialog metadata, no region text or digest',async t=>{
  const f=await fixture(t),prompt=f.snapshot().nativeTerminalDialog,proof=op.terminalInputProof(f.snapshot());
- assert.deepEqual(Object.keys(proof.stateMark).sort(),['kind','revision','since']);assert.equal(proof.stateMark.revision,0);assert.deepEqual(Object.keys(prompt).sort(),['kind','revision','since','title']);
+ assert.deepEqual(Object.keys(proof.stateMark).sort(),['frame','kind','revision','since']);assert.equal(proof.stateMark.revision,0);assert.deepEqual(Object.keys(prompt).sort(),['kind','revision','since','title']);
  assert.doesNotMatch(JSON.stringify(proof),/Switch model|model-x|region|dialogKey/);
 });
 test('legacy dialogs without a revision retain strict frame invalidation',()=>{

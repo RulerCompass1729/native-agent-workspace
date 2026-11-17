@@ -141,10 +141,15 @@ async function run() {
     if (change.startsWith('output-')) await fixture('consentOutput', recipient, Number(change.slice(7)));
     if (change === 'resize') await fixture('consentResize', recipient, [80, 24]);
     const result = await decide(pending, 1);
-    assert.equal(result.state, 'complete', result.error || result.reason);
+    if (change === 'none') assert.equal(result.state, 'complete', result.error || result.reason);
+    else {
+      assert.equal(result.disposition, 'invalidated'); assert.equal((await fixture('stats')).inputs.length, inputCount);
+      const fresh = await control(invoke('input', [recipient, '\x1b']));
+      assert.equal((await decide(fresh, 1)).state, 'complete');
+    }
     const stats = await fixture('stats'); assert.equal(stats.inputs.length, ++inputCount);
     assert.equal(stats.inputs.at(-1).data, '\x1b');
-    checks.push(`Same dialog + ${change}: one Esc through actual GUI and daemon`);
+    checks.push(`Screen-only dialog + ${change}: ${change === 'none' ? 'current frame accepted' : 'old frame refused; fresh card accepted'}, one Esc`);
   }
   const beforeReplacement = await fixture('consentProof', recipient);
   const replaced = await control(invoke('input', [recipient, '\x1b']));

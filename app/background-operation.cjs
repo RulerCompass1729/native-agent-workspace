@@ -235,7 +235,11 @@ function terminalInputProof(session) {
     connectionRevision: session.connectionRevision || 0, controlRevision: session.controlRevision || 0,
     state: session.state, activeTurnId: session.activeTurnId || null, pendingTag: session.pendingTag || null,
     terminalEpoch: terminal.epoch,
-    stateMark: dialog && Number.isSafeInteger(dialog.since) && Number.isSafeInteger(dialog.revision) && dialog.revision >= 0 ? { kind: dialog.kind, since: dialog.since, revision: dialog.revision } : { frame: terminal.observationIndex },
+    // A cooked-screen match does not prove the same native popup instance:
+    // dismissal and identical replacement can share one PTY output batch.
+    // Until an exact native lifecycle is available, every old input card is
+    // invalid after this target's output/resize frame advances.
+    stateMark: dialog && Number.isSafeInteger(dialog.since) && Number.isSafeInteger(dialog.revision) && dialog.revision >= 0 ? { kind: dialog.kind, since: dialog.since, revision: dialog.revision, frame: terminal.observationIndex } : { frame: terminal.observationIndex },
     nativeInputRequired: session.nativeInputRequired === true,
     approval: require('node:crypto').createHash('sha256').update(JSON.stringify([session.approval || null, session.nativeApproval || null])).digest('hex') };
 }

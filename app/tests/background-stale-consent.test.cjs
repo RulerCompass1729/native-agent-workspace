@@ -207,7 +207,7 @@ test('native conditional write also rejects the exact deadline before any termin
 
 
 // F1/F2: both the desktop and native conditional-write snapshot must see the dialog.
-for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`same dialog survives ${change} and sends Esc once`, async t => {
+for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`screen-only dialog after ${change}: changed frame needs a new card, then one Esc`, async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
   runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
   const card = await f.ask(), index = runtime.terminal.journal.index;
@@ -218,9 +218,14 @@ for (const change of ['none', 'output-1', 'output-5', 'resize']) test(`same dial
   if (change === 'resize') f.w.resize(f.target, 'owner', 80, 24);
   assert.equal(runtime.terminal.journal.index, index + (count || (change === 'resize' ? 1 : 0)));
   const result = await f.confirm(card);
-  assert.equal(result.state, 'complete', result.error || result.reason);
+  let accepted = card;
+  if (change === 'none') assert.equal(result.state, 'complete', result.error || result.reason);
+  else {
+    assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+    accepted = await f.ask(); assert.equal((await f.confirm(accepted)).state, 'complete');
+  }
   assert.deepEqual(f.bytes, ['\x1b']);
-  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, ['\x1b']);
+  await assert.rejects(f.confirm(accepted)); assert.deepEqual(f.bytes, ['\x1b']);
 });
 test('same-title new dialog at the same observation index rejects solely by its instance', async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
@@ -298,7 +303,7 @@ test('PF11: an unchanged unrelated request ID cannot vouch for a replaced local 
   await f.draw('\x1b[2J\x1b[Hworking...\r\n' + statusDialog());
   assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
-for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) test(`PF12 real detector: status below ${wrapped ? 'wrapped' : 'single-line'} legend preserves ${JSON.stringify(data)} card`, async t => {
+for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) test(`PF11 fallback: status below ${wrapped ? 'wrapped' : 'single-line'} legend preserves the detector but requires a fresh ${JSON.stringify(data)} card`, async t => {
   const f = await statusFixture(t, { wrapped }), before = f.current();
   assert.ok(before.nativeTerminalDialog, 'The original screen must be a detected dialog');
   const card = await f.ask('input', [f.target, data]); assert.equal(card.state, 'confirmation-required');
@@ -306,16 +311,17 @@ for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) tes
   const after = f.current(); assert.ok(after.nativeTerminalDialog, 'The repaint must still be detected');
   assert.notEqual(after.terminalState.observationIndex, before.terminalState.observationIndex);
   const result = await f.confirm(card);
-  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes })); assert.deepEqual(f.bytes, [data]);
+  assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
   assert.deepEqual(after.nativeTerminalDialog, before.nativeTerminalDialog, 'Status does not change the observed episode or revision');
-  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, [data], 'A duplicate decision never writes again');
+  const fresh = await f.ask('input', [f.target, data]); assert.equal((await f.confirm(fresh)).state, 'complete');
+  await assert.rejects(f.confirm(fresh)); assert.deepEqual(f.bytes, [data], 'Only the fresh card writes, exactly once');
 });
-test('PF12 real detector: a legend rewrapped during the status repaint preserves its card', async t => {
+test('PF11 fallback: a legend rewrapped during status repaint requires a new card', async t => {
   const f = await statusFixture(t), before = f.current(), card = await f.ask();
   await f.draw(statusDialog({ status: '..', wrapped: true }));
   const result = await f.confirm(card);
-  assert.equal(result.state, 'complete', JSON.stringify({ reason: result.reason, disposition: result.disposition, bytes: f.bytes }));
-  assert.deepEqual(f.bytes, ['\x1b']); assert.deepEqual(f.current().nativeTerminalDialog, before.nativeTerminalDialog);
+  assert.equal(result.disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+  assert.deepEqual(f.current().nativeTerminalDialog, before.nativeTerminalDialog);
 });
 
 const statusChanges = [
@@ -382,12 +388,12 @@ test('PF12 BLOCK: a candidate legend must contain its own complete key instructi
   const result = await f.confirm(card);
   assert.deepEqual(f.bytes, []); assert.equal(result.disposition, 'invalidated');
 });
-test('PF12 control: a separately aligned bordered legend still permits status repaint once', async t => {
+test('PF11 fallback: bordered legend status repaint keeps its episode but revokes the old card', async t => {
   const f = await statusFixture(t);
   const frame = status => '\x1b[2J\x1b[H' + statusDialog({ status }).replace(/^\x1b\[2J\x1b\[H/, '').split('\r\n').map(line => '│ ' + line + ' │').join('\r\n');
   await f.draw(frame('.')); const before = f.current().nativeTerminalDialog; assert.ok(before);
   const card = await f.ask('input', [f.target, '\r']); await f.draw(frame('..'));
-  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
   assert.deepEqual(f.current().nativeTerminalDialog, before);
 });
 
@@ -421,10 +427,10 @@ test('PF12 BLOCK: standalone legend words remain bound during a footer rewrap',a
 
 
 const returnFrame=(legend,status='.')=>'\x1b[2J\x1b[HSelect model\r\n❯ 1. Model X\r\n  2. Cancel\r\n'+legend+'\r\n'+status;
-test('PF12 Return: rewrapping a Return legend keeps the same words and executes once',async t=>{
+test('PF11 fallback: rewrapping a Return legend keeps its detector but requires a new card',async t=>{
  const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
  const card=await f.ask();await f.draw(returnFrame('Press Return to\r\nconfirm or Escape to cancel','..'));
- assert.equal((await f.confirm(card)).state,'complete');assert.deepEqual(f.bytes,['\x1b']);
+ assert.equal((await f.confirm(card)).disposition,'invalidated');assert.deepEqual(f.bytes,[]);
 });
 test('PF12 Return: changing a Return legend word revokes input without bytes',async t=>{
  const f=await statusFixture(t);await f.draw(returnFrame('Press Return to confirm or Escape to cancel'));
@@ -468,13 +474,29 @@ test('PF12 second BLOCK: a body cannot borrow a differently introduced trailing 
   const frame = body => ['Choose shell action?', '  1. Cancel', '❯ 2. Run command', ...body, 'Use Enter to confirm or Esc to cancel'];
   await boundaryReject(t, frame(['Return command: printf A', 'printf B']), frame(['Return command: printf', 'A printf B']));
 });
-test('PF12 second control: complete model key instructions still rewrap and repaint once', async t => {
+test('PF11 fallback: complete model key instructions rewrap without a new detected episode but need a fresh card', async t => {
   const f = await statusFixture(t);
   const frame = (legend, status) => boundaryClear + ['Select model', '  1. Default', '❯ 2. Model X', legend, status].join('\r\n');
   await f.draw(frame('Enter to set as default · s to use this session\r\nonly · Esc to cancel', '.'));
   const before = f.current().nativeTerminalDialog, card = await f.ask('input', [f.target, '\r']);
   await f.draw(frame('Enter to set as default · s to use this\r\nsession only · Esc to cancel', '..'));
-  assert.equal((await f.confirm(card)).state, 'complete'); assert.deepEqual(f.bytes, ['\r']);
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
   assert.deepEqual(f.current().nativeTerminalDialog, before);
-  await assert.rejects(f.confirm(card)); assert.deepEqual(f.bytes, ['\r']);
+  const fresh = await f.ask('input', [f.target, '\r']); assert.equal((await f.confirm(fresh)).state, 'complete');
+  await assert.rejects(f.confirm(fresh)); assert.deepEqual(f.bytes, ['\r']);
+});
+
+test('PF11 fallback: an old persisted dialog proof without a frame cannot authorize a native write', async t => {
+  const f = await statusFixture(t), proof = operation.terminalInputProof(f.current()); delete proof.stateMark.frame;
+  assert.throws(() => f.w.input(f.target, '\r', 'owner', { proof, expiresAt: Date.now() + 60000 }),
+    e => e.uiMessage?.key === 'error.background.terminalInvalidated');
+  assert.deepEqual(f.bytes, []);
+});
+test('PF11 fallback: frame advance after desktop approval is rejected by the final native check', async t => {
+  const f = await statusFixture(t), card = await f.ask('input', [f.target, '\r']), original = f.handlers.get('input');
+  f.handlers.set('input', (...args) => {
+    f.runtime.terminal.journal.append('output', '', 100, 30, () => '');
+    return original(...args);
+  });
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
