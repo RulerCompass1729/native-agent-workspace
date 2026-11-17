@@ -455,7 +455,7 @@ prove runtime compatibility. Record untested requirements explicitly.
 
 ## Push rules
 
-- Push only `main`, and only when the person explicitly says to push.
+- Push only `main` under the person's standing authorization, without asking again, after the complete unpushed range passes the security checks below and independent review with zero unresolved findings; on any finding, stop, do not push and report it to the person. Show the full scan output to the person as before.
 - Never push `backup/*` or `lane/*`.
 - Never use `--no-verify` or bypass hooks or publication checks.
 - Before pushing, run `python3 scripts/privacy_guard.py history` (see
