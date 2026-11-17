@@ -4318,14 +4318,21 @@ function fitRoomTabs(measure = false) {
   if (two) header.classList.add('room-tabs-two-rows');
   if (two || was) restoreOverviewReading();
 }
-// One fixed mode group; pane labels identify content without a second switch.
+// Each pane owns its mode control; the hidden pane has an entry in the visible one.
 function renderPaneSwitches(s, inRoom) {
-  const compact = Boolean(s && !inRoom);
+  const paired = Boolean(s && !$('conversation-pane').hidden);
   for (const [id, value] of [['chat-tab', 'chat'], ['terminal-tab', 'terminal']]) {
     $(id).setAttribute('aria-pressed', String(mode === value));
   }
-  $('chat-pane-tabs').hidden = $('native-pane-tabs').hidden = !compact;
-  $('native-pane-title').hidden = compact;
+  $('chat-pane-tabs').hidden = $('native-pane-tabs').hidden = !paired;
+  $('native-pane-title').hidden = paired && !inRoom;
+  $('open-native-terminal').hidden = !paired || !$('native-pane').hidden;
+  $('open-native-terminal').setAttribute('aria-expanded', String(!$('native-pane').hidden));
+  $('return-to-chat').hidden = !paired || terminalLayout !== 'maximized';
+}
+function visibleModeControl(next) {
+  const ids = next === 'chat' ? ['chat-tab', 'return-to-chat'] : ['terminal-tab', 'open-native-terminal'];
+  return ids.map(id => $(id)).find(control => control && !control.disabled && control.getClientRects().length);
 }
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
@@ -4361,7 +4368,7 @@ function renderHeaderLayout(s, inRoom) {
     if ($('session-files').parentElement !== toolbar) toolbar.insertBefore($('session-files'), $('session-status'));
     if ($('chat-maximize').parentElement !== toolbar) toolbar.insertBefore($('chat-maximize'), $('session-status'));
   }
-  $('conversation-pane-toolbar').hidden = !compact;
+  $('conversation-pane-toolbar').hidden = !s || $('conversation-pane').hidden;
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
   ui.display.computed($('title'), 'title', () => compact ? archivedName(s) : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
@@ -4851,7 +4858,6 @@ function render() {
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
     $('conversation-pane').hidden = inRoom && !memberFocus;
-    $('reading-mode-band').hidden = inRoom && !memberFocus;
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
@@ -4888,7 +4894,8 @@ function render() {
     if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
-      ui.display.text($('native-pane-title'), inRoom ? 'terminal.named' : 'terminal.native', { name: participantLabel(s, state.sessions) });
+      if (inRoom && !$('native-pane-tabs').hidden) ui.display.computed($('native-pane-title'), 'text', () => participantLabel(s, state.sessions));
+      else ui.display.text($('native-pane-title'), inRoom ? 'terminal.named' : 'terminal.native', { name: participantLabel(s, state.sessions) });
       ui.display.attribute($('native-pane-title'), 'title', 'terminal.named', { name: participantLabel(s, state.sessions) });
       // A focused member's conversation tab also shows the chat alone, whatever the saved split.
       for (const [id, key] of [['terminal-maximize', terminalLayout === 'maximized' ? 'terminal.restoreSplit' : 'terminal.maximize'], ['chat-maximize', !terminalVisible ? 'terminal.restoreSplit' : 'terminal.maximizeChat']]) {
@@ -5456,8 +5463,7 @@ const disposers = [
   api.onNew(() => openCreate()),
   api.onSwitchMode(next => {
     if (!['chat', 'terminal'].includes(next) || document.querySelector('dialog:modal')) return;
-    const control = $(next === 'chat' ? 'chat-tab' : 'terminal-tab');
-    if (!control.disabled && control.getClientRects().length) attempt(() => switchMode(next));
+    if (visibleModeControl(next)) attempt(() => switchMode(next));
   }),
   api.onRevealRecord(target => attempt(() => target?.sessionId ? showBackgroundConfirmation(target) : showRoomRecord(target?.roomId, target?.eventId))),
 ];
@@ -5688,6 +5694,8 @@ for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace
   };
 }
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
+$('open-native-terminal').onclick = () => attempt(() => switchMode('terminal'));
+$('return-to-chat').onclick = () => attempt(() => switchMode('chat'));
 $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
 // The chat's own full-width toggle: hide the terminal, or bring it back beside the chat.
 $('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });
