@@ -79,8 +79,9 @@
     .session-space-attention{order:7;padding:0 6px;border-radius:999px;background:#b26345;color:#fff;font-size:10.5px;line-height:16px}
     .session-space-group>div{margin:2px 0 0!important;padding:0;border:0!important}
     .session-space-group:not([data-session-group="independent"])>div{border-top:1px solid var(--border)!important;padding-top:3px}
-    .session-row{min-height:42px!important;margin:1px 0!important;border-radius:8px;box-shadow:none!important}
-    .session-row .session-link{min-height:42px!important;padding:4px 6px!important;gap:9px}
+    /* U02 A keeps all three text bands; only their surrounding space shrinks. */
+    .session-row{min-height:42px!important;margin:0!important;border-radius:8px;box-shadow:none!important}
+    .session-row .session-link{min-height:42px!important;padding:3px 6px!important;gap:9px}
     .session-row.active{background:var(--selected);box-shadow:none!important}
     .session-row:not(.active):hover{background:var(--hover)}
     .agent-icon{width:24px!important;height:24px!important;border-radius:7px!important;font-size:10.5px!important}
