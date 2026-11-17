@@ -9,7 +9,7 @@ const { ProgressJournal } = require('./observation.cjs');
 const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress, persistedMessages } = require('./native-blocks.cjs');
 const { SharedReplies } = require('./shared-replies.cjs');
 const addressed = require('./addressed-handoffs.cjs');
-const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
+const { nativeApprovalPolicy, nonBlockingQuestion, ApprovalQueue } = require('./approval-policy.js');
 const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('./native-history.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice, uiActivity, setActivity, setWarning } = require('./ui-errors.cjs');
@@ -2000,7 +2000,9 @@ class Workspace extends EventEmitter {
   answer(id, requestId, answers, owner, mobile = null) {
     if (this.get(id).provider === 'claude') return this.answerClaude(this.get(id), requestId, answers, owner, mobile);
     const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);
-    if (!route || queue.overflow || route.approval.pending || s.state !== 'approval' || (!mobile && s.owner !== owner) || mobile && !require('./mobile-session.cjs').valid(mobile) ||
+    // A non-blocking question leaves the turn running (adapters.cjs), so it is answered while working or idle too.
+    const waiting = s.state === 'approval' || nonBlockingQuestion(route?.approval) && ['working', 'idle'].includes(s.state);
+    if (!route || queue.overflow || route.approval.pending || !waiting || (!mobile && s.owner !== owner) || mobile && !require('./mobile-session.cjs').valid(mobile) ||
       route.runtime !== this.runtimes.get(id) || !(route.rpc === this.host.rpc || route.runtime.currentRpc?.(route.rpc)) || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw uiError("error.workspace.questionChanged");
     const questions = nativeApprovalPolicy(route.approval).questions;

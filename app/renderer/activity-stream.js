@@ -15,7 +15,7 @@
     const roomName = id => { const room = host.rooms().find(r => r.id === id); return room ? host.roomName(room) : ''; };
     const nameOf = id => sessions().find(s => s.id === id)?.name || '';
     let openRoom = '', waitingOpen = false, waitingKey = '', filter = 'all', scope = '', limit = 120, signature = '';
-    const cache = new Map();
+    const cache = new Map(), waitingRows = new Map(); let waitingNodes;
     const strip = el('section', 'stream-waiting'); strip.id = 'stream-waiting'; strip.hidden = true;
     const panel = el('aside', 'activity-stream'); panel.id = 'activity-stream'; panel.hidden = true;
     const head = el('div', 'stream-heading'); head.append(el('strong', '', host.text('room.records')),
@@ -43,37 +43,55 @@
     function drawWaiting() {
       const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations,
         butlerId: state()?.steward?.sessionId, roomOf, nameOf });
-      const key = JSON.stringify([host.language(), host.connected(), waitingOpen, items]);
+      const questionState = items.filter(i => i.kind === 'question').map(i => {
+        const s = sessions().find(s => s.id === i.sessionId);
+        return [s?.nativeId, s?.owner, s?.state, s?.approvalOverflow, s?.serviceCapabilities, state()?.capabilities];
+      });
+      const key = JSON.stringify([host.language(), host.connected(), waitingOpen, items, questionState]);
       if (key === waitingKey) return;
       waitingKey = key;
-      const restoreMore = doc.activeElement?.id === 'stream-waiting-more';
       const label = waitingLabel(items, t);
-      strip.replaceChildren(); strip.hidden = !items.length; strip.setAttribute('aria-label', label);
-      if (!items.length) return;
-      const first = items[0], lead = button('stream-waiting-lead', '', () => go(first));
+      strip.hidden = !items.length; strip.setAttribute('aria-label', label);
+      if (!waitingNodes) {
+        const lead = button('stream-waiting-lead', '', () => go(waitingNodes.first));
+        const more = button('small stream-waiting-more', '', () => { waitingOpen = !waitingOpen; drawWaiting(); });
+        more.id = 'stream-waiting-more'; more.setAttribute('aria-controls', 'stream-waiting-list');
+        const menu = el('div', 'stream-waiting-list'); menu.id = 'stream-waiting-list'; menu.setAttribute('role', 'list');
+        waitingNodes = { lead, more, menu }; strip.append(lead, more, menu);
+      }
+      const { lead, more, menu } = waitingNodes, first = items[0]; waitingNodes.first = first;
+      more.textContent = t(waitingOpen ? 'close' : 'allItems'); more.setAttribute('aria-expanded', String(waitingOpen));
+      menu.hidden = !waitingOpen;
+      if (!first) { menu.replaceChildren(); waitingRows.clear(); return; }
+      lead.replaceChildren();
       lead.append(el('strong', 'stream-waiting-count', label), el('span', 'stream-kind', t(first.kind)),
         el('strong', '', first.actorName), el('span', 'stream-waiting-title', (first.card && host.cardTitle?.(first.card.message)) || first.title || t('approval')), el('span', 'quiet', clock(first.time)));
-      const more = button('small stream-waiting-more', t(waitingOpen ? 'close' : 'allItems'), () => { waitingOpen = !waitingOpen; drawWaiting(); });
-      more.id = 'stream-waiting-more'; more.setAttribute('aria-expanded', String(waitingOpen)); more.setAttribute('aria-controls', 'stream-waiting-list');
-      strip.append(lead, more);
-      if (waitingOpen) {
-        const menu = el('div', 'stream-waiting-list'); menu.id = 'stream-waiting-list'; menu.setAttribute('role', 'list');
+      {
+        const rows = [], retained = new Set();
         for (const item of items) {
-          const row = el('div', 'stream-waiting-row'); row.dataset.waitingId = item.id; row.setAttribute('role', 'listitem');
+          const row = item.kind === 'question' && waitingRows.get(item.id) || el('div', 'stream-waiting-row'); row.dataset.waitingId = item.id; row.setAttribute('role', 'listitem');
           const top = button('stream-waiting-link', '', () => go(item));
           top.append(el('span', 'stream-kind', t(item.kind)), el('strong', '', item.actorName), el('span', 'quiet', roomName(item.roomId)), el('time', 'quiet', clock(item.time)));
-          row.append(top);
+          if (row.firstChild) row.replaceChild(top, row.firstChild); else row.append(top);
           if (item.card) {
             // The conversation renderer owns the full warning, stale/repeat
             // checks, buttons, disconnect state and backgroundDecision call.
             const actions = el('div'); row.append(actions);
             host.card({ item: row, actions }, item.card.message);
+          } else if (item.kind === 'question' && host.question) {
+            // A question that does not block its turn: its text and the session view's answer form, answered here.
+            host.question(row, item);
+            waitingRows.set(item.id, row); retained.add(item.id);
           } else row.append(button('stream-waiting-question', item.title || t('approval'), () => go(item)));
-          menu.append(row);
+          rows.push(row);
         }
-        strip.append(menu);
+        // Keep an unchanged question's input connected, including during IME
+        // composition. Updating another member must not erase the person's work.
+        const wanted = new Set(rows);
+        for (const row of [...menu.children]) if (!wanted.has(row)) row.remove();
+        for (let i = 0; i < rows.length; i++) if (menu.children[i] !== rows[i]) menu.insertBefore(rows[i], menu.children[i] || null);
+        for (const id of waitingRows.keys()) if (!retained.has(id)) waitingRows.delete(id);
       }
-      if (restoreMore) more.focus({ preventScroll: true });
     }
     function drawFeed() {
       const room = host.rooms().find(r => r.id === openRoom);

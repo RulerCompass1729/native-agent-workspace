@@ -110,7 +110,7 @@
       heading('home'); const butler = button('', () => dialog(t('butler'), t('noScope')), 'box row butler-entry'), body = node('div', undefined, 'row-main');
       body.append(node('strong', t('butler')), node('p', t('butlerNote'))); butler.append(avatar({}), body, node('span', '›', 'chev')); el('content').append(butler);
       const sessions = section(t('sessions'), view.sessions.length, 'newSession'), box = node('div', undefined, 'box');
-      for (const s of view.sessions) { const a = link('', 'chat/' + encodeURIComponent(s.id), 'row'), main = node('div', undefined, 'row-main'); main.append(node('strong', s.name), node('p', providerName(s.provider))); a.append(avatar(s), main, node('span', stateText(s.state), 'tag ' + (s.state === 'working' ? 'work' : 'neutral'))); box.append(a); }
+      for (const s of view.sessions) { const a = link('', 'chat/' + encodeURIComponent(s.id), 'row'), main = node('div', undefined, 'row-main'); main.append(node('strong', s.name), node('p', providerName(s.provider))); a.append(avatar(s), main, node('span', stateText(s.question ? 'approval' : s.state), 'tag ' + (s.state === 'working' && !s.question ? 'work' : 'neutral'))); box.append(a); }
       if (!view.sessions.length) box.append(node('p', t('noData'))); sessions.append(box); roomList(section(t('space'), view.rooms.length, 'newSpace'));
     }
     function thread(rows, container) {

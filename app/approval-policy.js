@@ -13,7 +13,8 @@
       if (previous?.content === content) return previous;
       if (index < 0 && this.entries.length >= 200) { this.overflowSources.add(rpc); return null; }
       const requestId = this.makeId();
-      const entry = { runtime, rpc, requestId, nativeRequestId: approval.requestId, content, approval: { ...approval, requestId } };
+      // receivedAt: when NAW first saw this content, so every list shows one steady time for it.
+      const entry = { runtime, rpc, requestId, nativeRequestId: approval.requestId, content, approval: { ...approval, requestId, receivedAt: Date.now() } };
       if (index < 0) this.entries.push(entry); else this.entries[index] = entry;
       return entry;
     }
@@ -34,6 +35,9 @@
     }
     return questions;
   }
+  // A Codex question that does not hold the turn (isBlocking false): the turn goes on, the question stays open
+  // until native resolves it or the person answers it, so it is listed and answerable outside the waiting state.
+  const nonBlockingQuestion = approval => approval?.method === 'item/tool/requestUserInput' && approval.params?.isBlocking === false && Boolean(nativeQuestions(approval));
   function nativeApprovalPolicy(approval, { localDecisions = true } = {}) {
     const p = approval?.params && typeof approval.params === 'object' ? approval.params : {};
     const text = value => typeof value === 'string' ? value : '';
@@ -59,6 +63,6 @@
       noticeKey: !ordinary ? 'approval.nativeScope' : null,
     };
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { nativeApprovalPolicy, ApprovalQueue };
-  else target.nativeWorkspaceApproval = { nativeApprovalPolicy };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { nativeApprovalPolicy, nonBlockingQuestion, ApprovalQueue };
+  else target.nativeWorkspaceApproval = { nativeApprovalPolicy, nonBlockingQuestion };
 })(typeof window === 'undefined' ? globalThis : window);

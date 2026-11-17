@@ -4,8 +4,9 @@
   const ENDED = ['ready', 'done', 'cancelled', 'failed'];
   const NEEDS_YOU = ['decide', 'look'];
   // 「等你」 order: a member's decision, the butler's question, confirmation cards, permission
-  // requests, then things only left to look at.
-  const RANK = { decide: 0, 'butler-question': 1, 'background-confirmation': 2, approval: 3, look: 4 };
+  // requests, a question that does not block its turn, then things only left to look at.
+  const RANK = { decide: 0, 'butler-question': 1, 'background-confirmation': 2, approval: 3, question: 4, look: 5 };
+  const approvalPolicy = typeof module !== 'undefined' && module.exports ? require('./approval-policy.js') : root.nativeWorkspaceApproval;
   // The queue's own rules (app/queue-dispatch.cjs): the waiting items that ask nothing, and the
   // first-line markers of a decision.
   const UNHELD_WAITING = ['person-intervened', 'no-reply'];
@@ -102,6 +103,14 @@
 
   // A permission request or a native question keeps the member's turn until the person answers.
   const needsApproval = s => Boolean(s && (s.nativeApproval?.requests?.length || s.approvals?.length || s.approval || s.approvalOverflow || s.state === 'approval' || s.claudeQuestion));
+  const requests = s => Array.isArray(s?.approvals) ? s.approvals : s?.approval ? [s.approval] : [];
+  // A Codex question with isBlocking false is listed on its own with its text, until it is answered (pending) or
+  // native drops it. The rest of the session's requests keep the one approval row. Native may still report its turn
+  // as waiting on that question (Codex 0.168, Default mode: waitingOnUserInput); that state alone adds no second row.
+  const openQuestions = s => requests(s).filter(r => !r.pending && approvalPolicy.nonBlockingQuestion(r));
+  const onlyQuestions = s => requests(s).length > 0 && requests(s).every(r => approvalPolicy.nonBlockingQuestion(r));
+  const holdsTurn = s => Boolean(s && (s.nativeApproval?.requests?.length || requests(s).some(r => !approvalPolicy.nonBlockingQuestion(r)) ||
+    s.approvalOverflow || s.state === 'approval' && !onlyQuestions(s) || s.claudeQuestion));
 
   // The butler's newest reply asks for a decision and nothing came after it.
   function butlerQuestion(session) {
@@ -135,7 +144,9 @@
     if (question) list.push({ id: `butler:${butler.id}:${question.messageId}`, kind: 'butler-question', title: question.title, actorId: butler.id, actorName: plainName(butler.name),
       sessionId: butler.id, messageId: question.messageId, roomId: roomOf(butler.id), time: question.time });
     for (const s of live.values()) {
-      if (!needsApproval(s)) continue;
+      for (const r of openQuestions(s)) list.push({ id: `question:${s.id}:${r.requestId}`, kind: 'question', title: shortText(r.params.questions[0].question),
+        actorId: s.id, actorName: plainName(s.name), sessionId: s.id, requestId: r.requestId, roomId: roomOf(s.id), time: Number.isFinite(r.receivedAt) ? r.receivedAt : now });
+      if (!holdsTurn(s)) continue;
       list.push({ id: `approval:${s.id}`, kind: 'approval', title: '', actorId: s.id, actorName: plainName(s.name), sessionId: s.id, roomId: roomOf(s.id),
         time: Number.isFinite(s.nativeApproval?.observedAt) ? s.nativeApproval.observedAt : now });
     }
@@ -167,7 +178,7 @@
     return { sessionId, nativeId: row.nativeId || '', messageId: row.sharedStream ? row.nativeMessageId || '' :
       row.role === 'human' ? row.deliveries?.find(d => d.recipientId === sessionId)?.id || row.id || '' : '' };
   }
-  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, roomTasks, speech, needsApproval, butlerQuestion, waitingItems, records, originalTarget };
+  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, roomTasks, speech, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.nativeWorkspaceTaskStream = api;
 })(globalThis);

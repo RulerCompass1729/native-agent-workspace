@@ -4,7 +4,7 @@ const fs = require('node:fs'), path = require('node:path');
 const { createHash, randomUUID, randomBytes } = require('node:crypto');
 const { verifyTicket } = require('./mobile-access.cjs');
 const { readLayout } = require('./service-layout.cjs');
-const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { nativeApprovalPolicy, nonBlockingQuestion } = require('./approval-policy.js');
 const wake = require('./session-wake.cjs');
 const CAPABILITY = 'humanMobileV1', MAX_REQUESTS = 256, TEXT_BYTES = 65536;
 const PREPARED = 'humanMobilePreparedV1', PREPARE_MS = 40000;
@@ -194,7 +194,9 @@ function question(w, s) {
   }
   const queue = w.approvalRoutes.get(s.id), row = queue?.current;
   const qs = nativeApprovalPolicy(row?.approval).questions;
-  if (!row || !qs || qs.some(q => q.isSecret) || queue.overflow || row.approval.pending || s.state !== 'approval' || row.runtime !== w.runtimes.get(s.id) ||
+  // The same rule as Workspace.answer: a non-blocking question is open while its turn works or after it ended.
+  const waiting = s.state === 'approval' || nonBlockingQuestion(row?.approval) && ['working', 'idle'].includes(s.state);
+  if (!row || !qs || qs.some(q => q.isSecret) || queue.overflow || row.approval.pending || !waiting || row.runtime !== w.runtimes.get(s.id) ||
     !(row.rpc === w.host.rpc || row.runtime.currentRpc?.(row.rpc)) || row.runtime.transportDisconnected || row.runtime.backendExitConfirmed) return null;
   return { requestId: row.requestId, questions: qs.map(q => ({ id: q.id, header: q.header, question: q.question, isOther: Boolean(q.isOther), options: (q.options || []).map(o => ({ label: o.label, description: o.description })) })) };
 }

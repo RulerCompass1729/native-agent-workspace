@@ -3894,7 +3894,7 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
-    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls,
+    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, question: renderWaitingQuestion,
     cardTitle: message => message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : '',
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: async target => {
@@ -4577,6 +4577,7 @@ function appendQuestionForm(parent, questions, disabled, submit) {
   });
   form.onsubmit = event => { event.preventDefault(); if (!send.disabled) send.click(); };
   form.append(send); update(); parent.append(form);
+  return { setDisabled(value) { disabled = value; for (const input of form.querySelectorAll('input')) input.disabled = value; update(); } };
 }
 function nativeApprovalPreview(request) {
   const raw = typeof request.input === 'string' ? request.input : '', title = request.title || uiText('approval.nativeRequest');
@@ -4666,6 +4667,24 @@ function renderNativeOnlyApproval(el, s, stale) {
   for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }
   while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
 }
+// 「等你」 row for a Codex question that does not block its turn: the session view's form and answer path.
+function renderWaitingQuestion(parent, item) {
+  const s = state.sessions.find(x => x.id === item.sessionId), approval = (s?.approvals || []).find(a => a.requestId === item.requestId);
+  const questions = approval && window.nativeWorkspaceApproval.nativeApprovalPolicy(approval).questions;
+  if (!questions) return;
+  const answerable = s.provider === 'codex' && (s.serviceCapabilities || state.capabilities || []).includes('nativeQuestionAnswer') && !questions.some(q => q.isSecret);
+  const key = JSON.stringify([s.nativeId, item.requestId, questions, answerable]);
+  const open = ['approval', 'working', 'idle'].includes(s.state);
+  if (parent.waitingQuestion?.key === key) {
+    parent.waitingQuestion.form?.setDisabled(s.owner !== owner || Boolean(approval.pending) || !open || Boolean(s.approvalOverflow) || disconnected);
+    return;
+  }
+  while (parent.children.length > 1) parent.lastChild.remove();
+  parent.waitingQuestion = { key };
+  if (answerable) {
+    parent.waitingQuestion.form = appendQuestionForm(parent, questions, s.owner !== owner || Boolean(approval.pending) || !open || Boolean(s.approvalOverflow) || disconnected, answers => api.answer(s.id, item.requestId, answers));
+  } else appendNativeQuestions(parent, questions);
+}
 function renderApproval(s, own) {
   const el = $('approval');
   const requests = s?.approvals?.length ? s.approvals : s?.approval ? [s.approval] : [];
@@ -4718,7 +4737,9 @@ function renderApproval(s, own) {
       ui.display.text(heading, 'approval.namedStatus', () => ({ name: s.name, status: uiText(s.approval.params.isBlocking === false ? 'approval.nonBlocking' : 'approval.yourAnswer') }));
       const requestId = s.approval.requestId;
       if (s.provider === 'codex' && (s.serviceCapabilities || state.capabilities || []).includes('nativeQuestionAnswer') && !policy.questions.some(q => q.isSecret)) {
-        appendQuestionForm(el, policy.questions, !own || Boolean(s.approval.pending) || s.state !== 'approval' || Boolean(s.approvalOverflow), answers => api.answer(s.id, requestId, answers));
+        // A question that does not block the turn stays answerable while the turn works or after it ended (Workspace.answer).
+        const open = s.state === 'approval' || window.nativeWorkspaceApproval.nonBlockingQuestion(s.approval) && ['working', 'idle'].includes(s.state);
+        appendQuestionForm(el, policy.questions, !own || Boolean(s.approval.pending) || !open || Boolean(s.approvalOverflow), answers => api.answer(s.id, requestId, answers));
       } else appendNativeQuestions(el, policy.questions);
     } else if (policy.notice) el.append(policy.noticeKey ? uiNode('p', policy.noticeKey) : node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));

@@ -5,6 +5,7 @@ const { createHash } = require('node:crypto');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { validateEvent } = require('./butler-policy.cjs');
 const { storedReadySource, storedDoneSource } = require('./butler-ready.cjs');
+const { nonBlockingQuestion } = require('./approval-policy.js');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
@@ -62,9 +63,15 @@ function storedQueueSource(roomId, event) {
 class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
-    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map();
+    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
+      const question = /^native-question:([a-f0-9]{64}):(open|ended)$/.exec(event.eventId);
+      if (question && event.sourceRef === `native-question:${event.payload.memberId}`) {
+        if (event.kind === 'blocked' && event.payload.reason === 'native-question') this.nativeQuestions.set(question[1], { memberId: event.payload.memberId });
+        else if (event.kind === 'recovery' && event.payload.reason === 'native-question-ended') this.nativeQuestions.delete(question[1]);
+        continue;
+      }
       // Keep the saved payload immutable, including a member's former name.
       const match = /^terminal-dialog:([a-f0-9]{64}):(open|ended)$/.exec(event.eventId);
       if (!match || event.sourceRef !== `terminal-dialog:${event.payload.memberId}`) continue;
@@ -95,7 +102,7 @@ class ButlerIngress {
         if (reserved.shouldNotify) this.ledger.ackDelivery(reserved.deliveryId, 'unknown');
         questionReceipt = { questionId: reserved.question.questionId, deliveryId: reserved.deliveryId };
       }
-      if (['decision', 'failure', 'blocked'].includes(event.kind) || event.kind === 'recovery' && event.payload.reason === 'native-terminal-dialog-ended') this.ledger.consumeRecorded([event.eventId]);
+      if (['decision', 'failure', 'blocked'].includes(event.kind) || event.kind === 'recovery' && ['native-terminal-dialog-ended', 'native-question-ended'].includes(event.payload.reason)) this.ledger.consumeRecorded([event.eventId]);
       this.sourceStatus(event);
       return { status: 'recorded', eventId: event.eventId, ...questionReceipt };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
@@ -140,6 +147,37 @@ class ButlerIngress {
       this.record({ eventId: `terminal-dialog:${episode}:${current ? 'open' : 'ended'}`, sourceRef, kind: current ? 'blocked' : 'recovery', payload });
       if (current) this.terminalDialogs.set(session.id, { identity }); else this.terminalDialogs.delete(session.id);
     }
+  }
+  // Codex questions that do not block their turn (isBlocking false), read from the same state as 「等你」: the first
+  // question's header and text, requested for stewardEvents (11-15). No transcript or model call. A question ends
+  // when it is answered, when native drops it, or when NAW can no longer answer it: ending the session, losing its
+  // transport or its backend clears the session's requests (workspace.cjs), so that is recorded as ended too, unlike
+  // a terminal dialog that may still be on the native screen. A session missing from the state proves nothing.
+  observeNativeQuestions(sessions = []) {
+    const listed = new Map((Array.isArray(sessions) ? sessions : []).filter(s => typeof s?.id === 'string').map(s => [s.id, s])), open = new Map();
+    for (const s of listed.values()) for (const r of Array.isArray(s.approvals) ? s.approvals : []) {
+      if (!r?.pending && nonBlockingQuestion(r)) open.set(hash([s.id, s.nativeId, r.requestId, r.params.questions]), { session: s, question: r.params.questions[0] });
+    }
+    for (const [identity, { session, question }] of open) {
+      if (this.nativeQuestions.has(identity)) continue;
+      this.recordQuestion(identity, session, question);
+      this.nativeQuestions.set(identity, { memberId: session.id });
+    }
+    for (const [identity, { memberId }] of this.nativeQuestions) {
+      if (open.has(identity) || !listed.has(memberId)) continue;
+      this.recordQuestion(identity, listed.get(memberId), null);
+      this.nativeQuestions.delete(identity);
+    }
+  }
+  recordQuestion(identity, session, question) {
+    const sourceRef = `native-question:${session.id}`, kind = question ? 'blocked' : 'recovery';
+    const payload = { memberId: session.id, reason: question ? 'native-question' : 'native-question-ended' };
+    if (clipped(session.name, 200)) payload.memberName = clipped(session.name, 200);
+    if (clipped(question?.header, 400)) payload.title = clipped(question.header, 400);
+    if (clipped(question?.question, 2000)) payload.text = clipped(question.question, 2000);
+    try { validateEvent({ eventId: 'native-question-check', sourceRef, kind, payload }); }
+    catch { delete payload.title; delete payload.text; delete payload.memberName; }
+    this.record({ eventId: `native-question:${identity}:${question ? 'open' : 'ended'}`, sourceRef, kind, payload });
   }
   observeQueues(states) {
     let failed = false;

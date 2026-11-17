@@ -460,7 +460,7 @@ function reduce(state, record) {
       const active = state.activeBatchId ? state.batches.get(state.activeBatchId) : null;
       for (const eventId of data.eventIds) {
         const event = state.eventIndex.get(idString(eventId));
-        requireValue(event && (['decision', 'failure', 'blocked'].includes(event.kind) || event.kind === 'recovery' && event.payload.reason === 'native-terminal-dialog-ended'), 'Only rule-handled events can be recorded without a model');
+        requireValue(event && (['decision', 'failure', 'blocked'].includes(event.kind) || event.kind === 'recovery' && ['native-terminal-dialog-ended', 'native-question-ended'].includes(event.payload.reason)), 'Only rule-handled events can be recorded without a model');
         requireValue(!active?.eventIds.includes(eventId), 'An active batch owns this event', 'BUTLER_BATCH_STATE');
         requireValue(!state.quarantinedEvents.has(eventId), 'Quarantined events need separate recovery', 'BUTLER_EVENT_QUARANTINED');
       }

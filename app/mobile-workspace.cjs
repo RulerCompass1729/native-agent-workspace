@@ -5,6 +5,7 @@ const { roomIds } = require('./collaboration-spaces.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { createHash } = require('node:crypto');
 const presentation = card => 'sha256:' + createHash('sha256').update(JSON.stringify([card.title, card.detail])).digest('hex');
+const { nonBlockingQuestion } = require('./approval-policy.js');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -75,7 +76,8 @@ class MobileWorkspace {
     }
     const sessions = [...permitted.values()].map(s => {
       const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
-      return { id: s.id, name: s.name, provider: s.provider, state: s.state, roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
+      // question: a Codex question that does not block the turn is open; the home row says it needs you, as 等你 does.
+      return { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
         ...conversation((s.messages || []).slice(boundary + 1).filter(m => !m.nativeId || m.nativeId === s.nativeId), s.id) };
     });
     const rooms = (state.rooms || [state.room]).filter(r => r && grant.roomIds.includes(r.id) && !r.archived).map(r => ({

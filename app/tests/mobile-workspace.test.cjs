@@ -31,6 +31,17 @@ test('phone confirmation routing preserves opaque desktop operation ids and thei
     assert.equal(binding.operationId, operationId); assert.equal(binding.nativeId, 'native-a');
   }
 });
+test('question home indicator is only a boolean and never copies native approval fields', async t => {
+  const f = fixture(t), session = f.source.sessions[0];
+  session.approvals = [{ requestId: 'PRIVATE_NATIVE_REQUEST', method: 'item/tool/requestUserInput', nativeOnlyField: 'PRIVATE_NATIVE_FIELD',
+    params: { isBlocking: false, questions: [{ id: 'q', header: 'PRIVATE_HEADER', question: 'PRIVATE_QUESTION', isOther: true }] } }];
+  const view = await f.adapter.read(f.client, f.grant, f.scopes), row = view.sessions[0];
+  assert.equal(row.question, true);
+  assert.deepEqual(Object.keys(row).sort(), ['earlierMessagesOmitted', 'id', 'messages', 'name', 'provider', 'question', 'roomIds', 'state']);
+  for (const secret of ['PRIVATE_NATIVE_REQUEST', 'PRIVATE_NATIVE_FIELD', 'PRIVATE_HEADER', 'PRIVATE_QUESTION']) assert.equal(JSON.stringify(view).includes(secret), false);
+  session.approvals[0].pending = true;
+  assert.equal((await f.adapter.read(f.client, f.grant, f.scopes)).sessions[0].question, false);
+});
 test('phone projection contains only explicit native and room grants and the desktop reminder source', async t => {
   const f = fixture(t), view = await f.adapter.read(f.client, f.grant, f.scopes), raw = JSON.stringify(view);
   assert.equal(view.sessions.length, 1); assert.equal(view.rooms.length, 1);

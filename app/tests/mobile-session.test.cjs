@@ -404,3 +404,17 @@ test('older stored command-shaped receipts remain readable and cannot create ano
     assert.equal(JSON.stringify(f.w.mobileRequests), before); assert.equal(f.calls.length, 0);
   }
 });
+test('a Codex question that does not block its turn is read and answered on the phone while the turn works', async t => {
+  const f = await fixture(t), queue = new ApprovalQueue(randomUUID);
+  const params = isBlocking => ({ ...(isBlocking === undefined ? {} : { isBlocking }), questions: [{ id: 'q', header: 'Pick', question: 'Keep going?', options: [{ label: 'A', description: '' }] }] });
+  const route = queue.add({ requestId: 18, method: 'item/tool/requestUserInput', params: params(false) }, f.host.rpc, f.r);
+  f.w.approvalRoutes.set(f.id, queue); Object.assign(f.s, queue.snapshot(), { state: 'working' });
+  assert.equal(f.read().question.questions[0].question, 'Keep going?');
+  const receipt = f.w.mobileAnswer(f.ticket('answer'), { requestId: randomUUID(), proof: f.read().proof, questionId: route.requestId, answers: { q: ['A'] } });
+  assert.equal(receipt.status, 'reply-written'); assert.deepEqual(f.calls.at(-1), [18, { answers: { q: { answers: ['A'] } } }]);
+  assert.equal(f.read().question, null, 'answered');
+  // A question that holds its turn is answered only in the waiting state, as before.
+  const held = new ApprovalQueue(randomUUID); held.add({ requestId: 19, method: 'item/tool/requestUserInput', params: params(undefined) }, f.host.rpc, f.r);
+  f.w.approvalRoutes.set(f.id, held); Object.assign(f.s, held.snapshot(), { state: 'working' });
+  assert.equal(f.read().question, null);
+});
