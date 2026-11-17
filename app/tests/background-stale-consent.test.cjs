@@ -259,6 +259,45 @@ async function statusFixture(t, initial = {}) {
   await f.draw(statusDialog(initial));
   return { ...f, runtime, current: () => f.w.snapshot().sessions.find(s => s.id === f.target) };
 }
+// PF11: one PTY output batch may contain a dismissal followed by an
+// indistinguishable new choice. Exercise both approval gates, not a hand-made proof.
+for (const [label, data] of [['Enter', '\r'], ['option key', '1'], ['Escape', '\x1b']]) {
+  test(`PF11: a coalesced dismissal and identical replacement rejects old ${label} with zero bytes`, async t => {
+    const f = await statusFixture(t), before = f.current();
+    const card = await f.ask('input', [f.target, data]);
+    assert.equal(card.state, 'confirmation-required');
+    await f.draw('\x1b[2J\x1b[Hworking...\r\n' + statusDialog());
+    const after = f.current();
+    assert.deepEqual(after.nativeTerminalDialog, before.nativeTerminalDialog,
+      'The cooked-screen identity alone cannot distinguish the replacement');
+    assert.equal(after.terminalState.observationIndex, before.terminalState.observationIndex + 1,
+      'Both native screens arrived in one output observation');
+    const result = await f.confirm(card);
+    assert.equal(result.disposition, 'invalidated'); assert.equal(result.state, 'not-executed');
+    assert.deepEqual(f.bytes, [], 'No old-card bytes may reach the replacement instance');
+  });
+}
+test('PF11 control: an observed disappearance before identical reopening rejects the old card', async t => {
+  const f = await statusFixture(t), before = f.current(), card = await f.ask('input', [f.target, '\r']);
+  await f.draw('\x1b[2J\x1b[Hworking...'); assert.equal(f.current().nativeTerminalDialog, null);
+  await f.draw(statusDialog()); assert.notEqual(f.current().nativeTerminalDialog.since, before.nativeTerminalDialog.since);
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF11 control: a new native approval request refuses an otherwise identical dialog', async t => {
+  const f = await statusFixture(t);
+  f.runtime.nativeApproval = { nativeOnly: true, requests: [{ id: 'approval-a', title: 'Synthetic approval' }] };
+  const card = await f.ask('input', [f.target, '\r']), frame = f.current().terminalState.observationIndex;
+  f.runtime.nativeApproval = { nativeOnly: true, requests: [{ id: 'approval-b', title: 'Synthetic approval' }] };
+  assert.equal(f.current().terminalState.observationIndex, frame, 'A frame change cannot hide loss of the request-ID gate');
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
+test('PF11: an unchanged unrelated request ID cannot vouch for a replaced local TUI choice', async t => {
+  const f = await statusFixture(t);
+  f.runtime.nativeApproval = { nativeOnly: true, requests: [{ id: 'stable-tool-request', title: 'Synthetic tool approval' }] };
+  const card = await f.ask('input', [f.target, '\r']);
+  await f.draw('\x1b[2J\x1b[Hworking...\r\n' + statusDialog());
+  assert.equal((await f.confirm(card)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+});
 for (const wrapped of [false, true]) for (const data of ['\x1b', '\r', '2']) test(`PF12 real detector: status below ${wrapped ? 'wrapped' : 'single-line'} legend preserves ${JSON.stringify(data)} card`, async t => {
   const f = await statusFixture(t, { wrapped }), before = f.current();
   assert.ok(before.nativeTerminalDialog, 'The original screen must be a detected dialog');
