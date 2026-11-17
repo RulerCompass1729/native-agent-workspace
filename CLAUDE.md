@@ -6,7 +6,7 @@ This file is shared by Claude Code and Codex. `AGENTS.md` points to this file.
 
 All development serves the vision at the top of `docs/product.md`: 一个入口，用好所有 agent。你只管说要做什么，NAW 去找到或者新开对的 agent 接住它。
 - A new feature or design proposal states which part of the vision it serves: the problem, the approach, who it is for, its form, or a success marker. Repairs and maintenance need not.
-- When a feature, a requirement or the vision itself seems wrong or in conflict, do not choose silently. Add a row with the reason, evidence and a suggested resolution to 「与愿景的张力」 in `docs/product.md` (public-safe facts only), and ask the person on the task board. Like spending or publishing choices, this waits for the person's explicit answer; no default takes effect after a timeout. Existing requirements stay in force until the person decides.
+- When a feature, a requirement or the vision itself seems wrong or in conflict, do not choose silently. Add a row with the reason, evidence and a suggested resolution to 「与愿景的张力」 in `docs/product.md` (public-safe facts only), and ask the person on the task board. Like spending or publishing choices, this waits for the person's explicit answer; no default takes effect after a timeout, except for reversible local appearance or implementation-plan choices within existing authorization that the person allowed on 2026-11-16 to follow the five-minute recommendation process below. This exception does not authorize new features or permission changes. Existing requirements otherwise stay in force until the person decides.
 - The vision is direction, not implementation authorization. Privacy, cost and approval rules still apply.
 
 Read `README.md`, `docs/product.md`, and `docs/readiness.md` before changing scope.
@@ -261,8 +261,8 @@ local branch or main; not installed, pushed or published):
   before ending the turn. A background wait counts as background work and blocks
   moving the agent's backend: when the person asks to update it, end the wait
   first.
-- Questions for the person (the person, 2026-11-13: a question they have not
-  answered within 20 minutes goes ahead as recommended, since they can easily
+- Questions for the person (the person, 2026-11-16: a question they have not
+  answered within 5 minutes goes ahead as recommended, since they can easily
   miss one, but no agent may stall on it). For every agent in NAW, the butler
   included:
   1. A question may default only when the choice is reversible, affects only
@@ -272,20 +272,21 @@ local branch or main; not installed, pushed or published):
   2. Do not ask a question that may default through a prompt that blocks the
      turn (AskUserQuestion). Write one line in the reply and one on the board:
      「请你定：<问题>；推荐 <X>，因为 <一句理由>；<HH:MM> PT 前没回就按推荐做」,
-     with the deadline 20 minutes after sending. Do not start it with
+     with the deadline 5 minutes after sending. Do not start it with
      「需要你决定：」, which NAW records as an open decision for the person.
   3. While waiting, do not end the turn. First do the parts of the current item
      that do not depend on the answer (a queue member works only on items NAW
      sent it and on what the person asked it directly, and takes no other board
      work; an agent outside a queue works only within existing authorization).
-     When nothing is left, wait in the foreground inside the turn, at most 10
-     minutes per wait, with no background command or `/loop`, and check the
-     board for an answer after each wait. When the person answers in another
+     When nothing is left, wait in the foreground inside the turn, no longer
+     than the time remaining before the deadline, with no background command
+     or `/loop`. Handle a reply as soon as it arrives, and check the board for
+     an answer after each wait. When the person answers in another
      session, the butler writes the answer on the board at once.
   4. At the deadline, check the board and the agent's own conversation once
      more. If there is still no answer, do only the one thing the question
      named, not related switches or operations, and write on the board:
-     「<HH:MM> PT 20 分钟未答，按推荐做了 <具体哪件>；原问题 <…>；撤回办法 <…>」.
+     「<HH:MM> PT 5 分钟未答，按推荐做了 <具体哪件>；原问题 <…>；撤回办法 <…>」.
      If the person later decides otherwise, change it back their way; for
      something already installed in the daily app, changing back means the
      next version.
@@ -313,10 +314,11 @@ local branch or main; not installed, pushed or published):
      review and merges only after it passes. Installing it into the daily app
      then follows the person's standing install permission (2026-11-12, for
      the agent that installs daily builds), provided every pre-install check
-     passes. Changes to how the
-     interface looks (lines, color blocks, spacing, layout) are a hard gate:
-     the person looks at the pictures and agrees themselves (the person,
-     2026-11-11; a review does not stand in for them).
+     passes. Reversible local choices about how the interface looks (lines,
+     color blocks, spacing, layout) within existing authorization also follow
+     items 2–4 (the person, 2026-11-16). Send the pictures, state the
+     recommendation and how to undo it, and retain the required independent
+     review and pre-install checks.
   7. A question without a recommendation cannot default. First decide a
      recommendation with a reason, then ask; if you cannot, treat it as a hard
      gate.
