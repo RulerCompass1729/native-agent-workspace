@@ -143,6 +143,23 @@ test('close saves at once; a write still on its way and a checkpoint due meanwhi
   assert.ok(!f.w.storageWarning);
 });
 
+// A caller that removes the folder after close() must not race a checkpoint still on its way
+// (ENOTEMPTY when its temporary file appears during the removal).
+test('close() returns a promise that settles only after a write on its way has ended and removed its temporary file', async t => {
+  const f = fixture(t);
+  f.w.drafts.set('mark', 'A'); f.w.persistLater();
+  const held = await f.gate();
+  f.w.drafts.set('mark', 'B'); const closing = f.w.close();
+  assert.ok(closing instanceof Promise, 'close() hands back the in-flight checkpoint');
+  let done = false; closing.then(() => { done = true; });
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(done, false, 'not settled while the write is held');
+  held.resolve(); await closing;
+  assert.equal(f.w.saveWriting, false); assert.deepEqual(leftovers(f.directory), []);
+  assert.equal(f.disk('workspace.json').drafts.mark, 'B');
+  assert.ok((f.w.close()) instanceof Promise, 'with nothing on its way close() still returns a settled promise');
+});
+
 test('when close() could not save, a write still on its way renames nothing after it', async t => {
   const f = fixture(t);
   f.w.drafts.set('mark', 'A'); f.w.persist();

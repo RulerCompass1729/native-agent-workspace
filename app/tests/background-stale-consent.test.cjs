@@ -54,7 +54,8 @@ async function fixture(t, { realDetector = false } = {}) {
   handlers.set('backgroundWithdraw', (context, operationId) => controller.withdraw(context.actor, operationId, context));
   const config = { dataDir: dir, handlers, context: async () => c, now: () => clock, audit() {}, confirmation: () => ({ message: 'Send input?', buttons: ['Cancel', 'Confirm'], cancelId: 0 }) };
   controller = new BackgroundControl(config);
-  t.after(async () => { await controller.close(); w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  // A test longer than 150 ms starts a timed workspace checkpoint; wait for it to stop writing before removing the folder.
+  t.after(async () => { await controller.close(); await w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   let seq = 0;
   const ask = (method = 'input', args = [target, '\x1b'], sender = actor) => controller.call({ sender, identity: { turnId: 'turn', callId: 'call-' + (++seq) }, valid: () => true }, { action: 'invoke', method, arguments: args, operation_id: 'request-' + seq });
   const confirm = row => controller.decide(actor.id, actor.nativeId, row.id, 1);
@@ -532,15 +533,23 @@ test('inbox all retains completed, withdrawn and expired cards with full origina
   assert.equal(rows[0].state, 'complete'); assert.equal(rows[1].disposition, 'withdrawn'); assert.equal(rows[2].disposition, 'expired');
   assert.deepEqual(f.bytes, ['\x1b']);
 });
-test('inbox accepts redraws of the same dialog and rejects a new instance', async t => {
+// PF11 binds the output frame: a redraw with the same title/since/revision is
+// not proof of the same native popup, so the inbox stops offering the old card.
+test('inbox stops offering a card after a redraw of the same dialog (PF11) and after a new instance', async t => {
   const f = await fixture(t), runtime = f.runtimes.get(f.target);
   runtime.nativeTerminalDialog = { kind: 'choice', title: 'Synthetic choice?', since: 1, revision: 0 };
+  const row = id => f.controller.confirmations(f.c.client.snapshot()).find(r => r.operationId === id);
   const request = await f.ask();
+  assert.equal(row(request.id).actionable, true, 'Actionable before any redraw');
   runtime.terminal.journal.append('output', 'redraw', 100, 30, () => 'redraw');
-  assert.equal(f.controller.confirmations(f.c.client.snapshot())[0].actionable, true);
-  runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
-  assert.equal(f.controller.confirmations(f.c.client.snapshot())[0].state, 'unverifiable');
+  assert.equal(row(request.id).actionable, false); assert.equal(row(request.id).state, 'unverifiable');
+  assert.equal(f.controller.receipt(f.actor, request.id).state, 'confirmation-required', 'The projection settles nothing');
   assert.equal((await f.confirm(request)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
+  const fresh = await f.ask();
+  assert.equal(row(fresh.id).actionable, true, 'A card asked at the current frame is offered');
+  runtime.nativeTerminalDialog = { ...runtime.nativeTerminalDialog, since: 2 };
+  assert.equal(row(fresh.id).actionable, false); assert.equal(row(fresh.id).state, 'unverifiable');
+  assert.equal((await f.confirm(fresh)).disposition, 'invalidated'); assert.deepEqual(f.bytes, []);
 });
 test('inbox can verify after restart without opening a view; missing proof stays uncertain and never counted', async t => {
  const f=await fixture(t),request=await f.ask();

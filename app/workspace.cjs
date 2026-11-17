@@ -173,7 +173,7 @@ class Workspace extends EventEmitter {
     // this existing Workspace writer owns the additional-room history file.
     this.rooms = new Map([['shared', this.room]]);
     this.versions = { shellModelCalls: 0, dispatches: 0 };
-    this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false;
+    this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false; this.saveJob = null;
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
@@ -415,7 +415,7 @@ class Workspace extends EventEmitter {
     this.saveWriting = true;
     const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
     const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
-    (async () => {
+    const job = (async () => {
       await fs.promises.writeFile(temp, snapshot.workspace, { mode: 0o600 });
       // Check and rename in one turn of the event loop, so a persist() cannot land between them. After close
       // nothing is renamed: close() saved last, and another daemon may already own the directory.
@@ -427,7 +427,8 @@ class Workspace extends EventEmitter {
       if (this.renamedSeq !== snapshot.seq || this.closed) return fs.promises.rm(pending, { force: true });
       fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
     })().catch(() => { if (this.renamedSeq <= snapshot.seq && !this.storageWarning && !this.closed) this.saveFailed(); })
-      .finally(() => { this.saveWriting = false; if (this.saveAgain) { this.saveAgain = false; this.persistLater(); } });
+      .finally(() => { if (this.saveJob === job) this.saveJob = null; this.saveWriting = false; if (this.saveAgain) { this.saveAgain = false; this.persistLater(); } });
+    this.saveJob = job;
   }
   retrySave() {
     // A failed read may hide existing records. Never overwrite it with the
@@ -2227,6 +2228,9 @@ class Workspace extends EventEmitter {
     this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); clearTimeout(this.wakeHoldTimer);
     for (const wait of this.stuckWaits.values()) clearTimeout(wait.timer);
     this.stuckWaits.clear(); this.persist(); this.host.close();
+    // A timed checkpoint already on its way still ends off the event loop, then removes its temporary file. The
+    // returned promise settles once it has, so a caller that removes the folder does not race it (never rejects).
+    return this.saveJob || Promise.resolve();
   }
 }
 
