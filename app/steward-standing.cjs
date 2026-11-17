@@ -16,9 +16,7 @@ const localAction = command => {
 function creationCovered(options, peers, now = Date.now()) {
   if (!options || options.fork != null || options.gitWorktree != null || options.settings?.profile) return false;
   const mode = options.skipPermissions === true ? 'bypassPermissions' : options.settings?.permissionMode;
-  // Codex observations currently omit approval/sandbox changes. Its launch flag
-  // cannot prove today's permissions: keep creation behind human consent.
-  if (options.provider !== 'claude') return false;
+  if (!['claude', 'codex'].includes(options.provider)) return false;
   // Explicit cost settings must match current native observations, not old launch requests.
   // An omitted value keeps the person's provider default; no price inference is made.
   const settingMatches = (key, peer) => {
@@ -30,6 +28,21 @@ function creationCovered(options, peers, now = Date.now()) {
       Number.isSafeInteger(observed.observedAt) && observed.observedAt >= 0 && now >= observed.observedAt &&
       now - observed.observedAt <= CREATION_OBSERVATION_MAX_AGE_MS;
   };
+  if (options.provider === 'codex') {
+    // Only this existing launch option pins both permissions explicitly. Native
+    // defaults, named profiles and narrower/custom sandboxes are not inferred.
+    if (options.skipPermissions !== true) return false;
+    return peers.some(p => {
+      const observed = p.nativeCreationSettings, permission = observed?.permissions;
+      return p.provider === 'codex' && !p.archived && !p.nativeContextPending &&
+        typeof p.nativeId === 'string' && observed?.nativeId === p.nativeId &&
+        Number.isSafeInteger(observed.controlRevision) && observed.controlRevision >= 0 && observed.controlRevision === (p.controlRevision ?? 0) &&
+        permission?.modelProvider === 'openai' && permission.approvalPolicy === 'never' && permission.sandboxMode === 'dangerFullAccess' &&
+        Number.isSafeInteger(permission.observedAt) && permission.observedAt >= 0 && now >= permission.observedAt &&
+        now - permission.observedAt <= CREATION_OBSERVATION_MAX_AGE_MS &&
+        settingMatches('model', p) && settingMatches('effort', p);
+    });
+  }
   return peers.some(p => p.provider === options.provider && !p.archived &&
     settingMatches('model', p) && settingMatches('effort', p) &&
     ((p.nativePermissionMode ? p.nativePermissionMode === 'bypassPermissions' : p.skipPermissions === true)

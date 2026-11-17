@@ -1794,7 +1794,7 @@ class Codex extends EventEmitter {
         if (message.role === 'user' && ['human', 'room', 'agent-wake'].includes(message.origin)) this.ownInputs.add(message.id);
       }
       this.host.codexTargets.set(this.record.nativeId, this);
-      const revision = this.stateRevision, settings = this.nativeSettings;
+      const revision = this.stateRevision, settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
       let result;
       try {
         result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true, ...codexResumeParams(this.record) });
@@ -1810,7 +1810,7 @@ class Codex extends EventEmitter {
       if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
       this.hasHistory = true; this.addressedSendAvailable = this.record.addressedToolVersion === 1; this.finishRecoveryConnection?.(true);
       if (this.record.externalHistory && typeof result.thread.cwd === 'string' && path.isAbsolute(result.thread.cwd)) this.record.cwd = result.thread.cwd;
-      this.emit('pid', this.host.codexProcess.pid); this.observeReplySettings(result, settings, rpc);
+      this.emit('pid', this.host.codexProcess.pid); this.observeReplySettings(result, settings, rpc, creationTicket);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status, rpc);
       // The TUI can display native history while the graphical copy is loading.
       if (this.record.view === 'terminal') await this.openTerminal();
@@ -1830,7 +1830,7 @@ class Codex extends EventEmitter {
     if (!current()) throw uiError("error.backendChangedStartCancelled");
     // Native configuration/requirements choose permissions unless the person
     // chose to skip confirmations for this session when creating it.
-    const settings = this.nativeSettings;
+    const settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
     const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
       ...(this.record.operatorCreation?.permission === 'default' ? { approvalPolicy: 'on-request', sandbox: 'read-only' } : {}),
       ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}), ...codexRequestedParams(this.record) });
@@ -1838,7 +1838,7 @@ class Codex extends EventEmitter {
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id; this.nativeSessionId = r.thread.sessionId; this.emit('workspaceMcpProof');
     this.host.codexTargets.set(this.record.nativeId, this);
-    this.observeReplySettings(r, settings, rpc);
+    this.observeReplySettings(r, settings, rpc, creationTicket);
     this.emit('pid', this.host.codexProcess.pid); this.emit('state', 'idle');
     });
   }
@@ -1891,10 +1891,10 @@ class Codex extends EventEmitter {
       const nativeState = thread.status?.type;
       if (revision === this.eventRevision) this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
       if (!thread.preview || nativeState !== 'idle') continue;
-      const settings = this.nativeSettings;
+      const settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
       const result = await rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
       if (!current()) return;
-      this.observeReplySettings(result, settings, rpc);
+      this.observeReplySettings(result, settings, rpc, creationTicket);
       if (!await this.hydrateHistory(thread.id, lifecycle) || !current()) return;
       this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
@@ -1998,7 +1998,34 @@ class Codex extends EventEmitter {
   observeModelProvider(value) {
     if (typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)) this.emit('modelProvider', value);
   }
-  observeSettings(settings, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
+  creationSettingsTicket(sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
+    return { version: this.creationSettingsVersion || 0, control: this.record.controlRevision ?? 0, requestedAt: Date.now(),
+      lifecycle: this.lifecycleRevision, rpc: sourceRpc };
+  }
+  creationSettingsSnapshot() {
+    const value = this.creationSettingsObservation, rpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc;
+    if (!value || value.rpc !== rpc || !rpc || !this.currentRpc(rpc) || rpc.connected === false || rpc.closed ||
+      this.stopped || this.closed || this.backendExitConfirmed || this.transportDisconnected || this.nativeObservationPending ||
+      this.record.nativeContextPending || this.terminalSwitch || this.pendingTerminalContext || this.creationPermissionPending || this.terminal && !this.terminal.alive ||
+      value.nativeId !== this.record.nativeId || value.lifecycle !== this.lifecycleRevision || value.control !== (this.record.controlRevision ?? 0)) return null;
+    return { nativeId: value.nativeId, controlRevision: value.control,
+      model: { value: value.model, observedAt: value.observedAt },
+      effort: value.effort ? { value: value.effort, observedAt: value.observedAt } : null,
+      permissions: { modelProvider: 'openai', approvalPolicy: 'never', sandboxMode: 'dangerFullAccess', observedAt: value.observedAt } };
+  }
+  observeSettings(settings, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc, permissionCurrent = true, observedAt = Date.now()) {
+    this.creationSettingsVersion = (this.creationSettingsVersion || 0) + 1;
+    this.creationSettingsObservation = null;
+    // A legacy sandbox projection cannot establish a custom permission profile.
+    // Keep only the exact unprofiled, native full-access case; no paths/config.
+    if (permissionCurrent && sourceRpc && this.currentRpc(sourceRpc) && settings?.modelProvider === 'openai' &&
+      settings.approvalPolicy === 'never' && settings.sandboxPolicy?.type === 'dangerFullAccess' &&
+      Object.keys(settings.sandboxPolicy).length === 1 && settings.activePermissionProfile === null && settings.approvalsReviewer === 'user' &&
+      typeof settings.model === 'string' && settings.model && typeof this.record.nativeId === 'string' && this.record.nativeId) {
+      this.creationSettingsObservation = { nativeId: this.record.nativeId, control: this.record.controlRevision ?? 0,
+        lifecycle: this.lifecycleRevision, rpc: sourceRpc, observedAt, model: settings.model,
+        effort: typeof settings.effort === 'string' ? settings.effort : null };
+    }
     if (!settings || typeof settings.model !== 'string' || !settings.model) return;
     // Public effective settings only. Never copy developer instructions or the
     // wider settings object into the reader or room.
@@ -2010,7 +2037,7 @@ class Codex extends EventEmitter {
       lifecycle: this.lifecycleRevision, effortKnown: settings.effort === null || typeof settings.effort === 'string' && !!settings.effort };
     this.emit('model', settings.model); this.emit('capability');
   }
-  observeReplySettings(result, previous, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc) {
+  observeReplySettings(result, previous, sourceRpc = this.terminalNotificationSource ? this.terminalRpc : this.host?.rpc, ticket = null) {
     if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId) return;
     // The vendor Codex runs this thread's model with (openai, deepseek, ...): fixed for the thread.
     this.observeModelProvider(result.modelProvider || result.thread.modelProvider);
@@ -2019,7 +2046,11 @@ class Codex extends EventEmitter {
     // A reply has effective model/effort, but no collaboration-mode report.
     // Keep a separately observed mode for this same native identity only.
     const mode = previous?.nativeId === this.record.nativeId ? previous.mode : null;
-    this.observeSettings({ model, effort: result.reasoningEffort, collaborationMode: { mode } }, sourceRpc);
+    const current = ticket && ticket.version === (this.creationSettingsVersion || 0) && ticket.control === (this.record.controlRevision ?? 0) &&
+      ticket.lifecycle === this.lifecycleRevision && ticket.rpc === sourceRpc;
+    this.observeSettings({ model, effort: result.reasoningEffort, collaborationMode: { mode }, modelProvider: result.modelProvider,
+      approvalPolicy: result.approvalPolicy, sandboxPolicy: result.sandbox,
+      activePermissionProfile: result.activePermissionProfile, approvalsReviewer: result.approvalsReviewer }, sourceRpc, Boolean(current), ticket?.requestedAt);
   }
   rememberQuestion(params) {
     if (typeof params.turnId !== 'string' || typeof params.itemId !== 'string' || !Array.isArray(params.questions)) return;
@@ -2055,6 +2086,7 @@ class Codex extends EventEmitter {
     }
     if (event.kind === 'disconnected') {
       if (this.terminalRpc !== event.rpc) return;
+      this.creationSettingsObservation = null; this.creationPermissionPending = null;
       const ownedNotifications = this.terminalNotificationSource;
       if (ownedNotifications) this.invalidateNativeGoal();
       this.emit('approvalUnavailable', event.rpc);
@@ -2068,11 +2100,11 @@ class Codex extends EventEmitter {
       for (const row of this.record.messages || []) if (row.nativeId === this.record.nativeId && row.turnId === this.turnId && ['streaming', 'running'].includes(row.status)) row.incomplete = true;
       this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
       if (this.turnId && !this.nativeTurnFinished) this.emit('nativeBlock', { id: `gap:source:${crypto.randomUUID()}`, nativeId: this.record.nativeId, turnId: this.turnId, kind: 'gap', status: 'complete', text: '原生显示连接已断开，正在核对图形连接；此间的临时变化可能未同步，原会话继续保留。', uiMessage: uiNotice('notice.observation.displayDisconnected').uiMessage });
-      const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision, settings = this.nativeSettings;
+      const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision, settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
       this.observing = rpc.call('thread/resume', { threadId: id, excludeTurns: true }).then(async result => {
         if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected || this.host.rpc !== rpc || result.thread?.id !== id) return;
         this.nativeObservationPending = false;
-        this.observeReplySettings(result, settings, rpc);
+        this.observeReplySettings(result, settings, rpc, creationTicket);
         if (stateRevision === this.stateRevision) this.observeStatus(result.thread.status, rpc);
         // Identity is confirmed even while history is still loading. Newer live
         // settings/state may have suppressed both other publication paths.
@@ -2084,7 +2116,9 @@ class Codex extends EventEmitter {
     if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
     if (event.kind === 'request') {
       this.invalidateNativeGoal();
-      this.terminalSettingsRequest = { key: event.key, previous: this.nativeSettings };
+      this.terminalSettingsRequest = { key: event.key, previous: this.nativeSettings, creationTicket: this.creationSettingsTicket(event.rpc) };
+      this.creationPermissionPending = event.key;
+      this.creationSettingsObservation = null;
       if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) return;
       if (!this.record.nativeId) return;
       this.pendingTerminalContext = null; this.terminalSwitch = event.key; this.chatAvailable = false;
@@ -2093,11 +2127,13 @@ class Codex extends EventEmitter {
     }
     if (event.kind === 'uncertain') {
       this.invalidateNativeGoal();
+      this.creationSettingsObservation = null;
       this.chatAvailable = false;
       if (this.record.nativeId) this.emit('contextEnd', { nativeId: this.record.nativeId, reason: 'terminal-switch' });
       this.emit('capability'); return;
     }
     if (event.kind !== 'response') return;
+    if (this.creationPermissionPending === event.key) this.creationPermissionPending = null;
     if (event.error) {
       if (this.terminalSwitch === event.key) this.emit('activity', ...uiActivity("notice.activity.nativeSwitchUnconfirmed"));
       return;
@@ -2108,11 +2144,11 @@ class Codex extends EventEmitter {
       this.terminalNotificationSource = true; this.terminalRpc = event.rpc;
       const settings = this.terminalSettingsRequest?.key === event.key ? this.terminalSettingsRequest.previous : this.nativeSettings;
       this.initialTerminalThread?.(thread, event.result.model); this.initialTerminalThread = null;
-      this.observeReplySettings(event.result, settings, event.rpc); this.emit('capability'); return;
+      this.observeReplySettings(event.result, settings, event.rpc, this.terminalSettingsRequest?.key === event.key ? this.terminalSettingsRequest.creationTicket : null); this.emit('capability'); return;
     }
     if (event.method === 'thread/resume' && thread.id === this.record.nativeId && !this.terminalSwitch) {
       this.terminalRpc = event.rpc;
-      if (this.terminalSettingsRequest?.key === event.key) this.observeReplySettings(event.result, this.terminalSettingsRequest.previous, event.rpc);
+      if (this.terminalSettingsRequest?.key === event.key) this.observeReplySettings(event.result, this.terminalSettingsRequest.previous, event.rpc, this.terminalSettingsRequest.creationTicket);
       return;
     }
     if (this.terminalSwitch !== event.key) return;
@@ -2730,7 +2766,7 @@ class Codex extends EventEmitter {
   }
   async observeAcceptedTurn(turnId, inputTag) {
     if (this.stopped || !turnId) throw uiError("error.nativeObservationChanged");
-    const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc, settings = this.nativeSettings;
+    const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc, settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
     let result;
     try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
     catch (error) {
@@ -2754,7 +2790,7 @@ class Codex extends EventEmitter {
       return;
     }
     if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw uiError("error.nativeObservationChanged");
-    this.observeReplySettings(result, settings, rpc);
+    this.observeReplySettings(result, settings, rpc, creationTicket);
     this.needsSubscription = false; this.hasHistory = true;
     if (revision === this.stateRevision && this.latestState !== 'approval') this.observeStatus(result.thread.status, rpc);
     const page = await this.host.rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 20, itemsView: 'full' });
@@ -2854,7 +2890,7 @@ class Codex extends EventEmitter {
       if (!current()) throw uiError("error.nativeConnectionChangedNoReplay");
       rpc = this.host.rpc; child = this.host.codexProcess;
       this.transportDisconnected = false;
-      const settings = this.nativeSettings;
+      const settings = this.nativeSettings, creationTicket = this.creationSettingsTicket(rpc);
       let result;
       try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true, ...codexResumeParams(this.record) }); }
       catch (error) {
@@ -2872,7 +2908,7 @@ class Codex extends EventEmitter {
       if (!current()) throw uiError("error.nativeConnectionClosedNoReplay");
       this.hasHistory = true; this.needsSubscription = false;
       this.emit('pid', this.terminal?.alive && this.terminal.pid ? this.terminal.pid : this.host.codexProcess.pid);
-      this.observeReplySettings(result, settings, rpc);
+      this.observeReplySettings(result, settings, rpc, creationTicket);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status, rpc);
       if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw uiError("error.historySyncDisconnected");
       this.nativeObservationPending = false; this.chatAvailable = true; this.emit('capability');
