@@ -395,6 +395,17 @@ class BackgroundControl {
     if (this.closed) throw Error('Background control is closing');
     const key = this.key(sender) + ':' + viewId;
     if (viewId !== 'default' && !this.data.views[key]) throw Error('Independent view does not exist');
+    // A window whose connection to a backend ended answers every call with 「本地服务未连接。」: nothing in it
+    // reconnects, and while the agent keeps calling, retireIdle never finds it unused (E03, 2026-11-16). It is
+    // replaced now under the same saved view and owner, unless something of this agent runs in it or waits on it.
+    const open = this.opened.get(key);
+    if (open && open.context.client?.socket?.destroyed && this.mayReplace(sender)) {
+      try {
+        this.retireWindow(key, open.context, false);
+      } catch {
+        // The window stays; this call fails in it as before, and the next one tries again.
+      }
+    }
     if (!this.contexts.has(key)) {
       const kept = this.kept.get(key); this.kept.delete(key);
       const opening = Promise.resolve(this.context(sender, this.data.views[key] && clone(this.data.views[key]), kept));
@@ -484,21 +495,43 @@ class BackgroundControl {
       let stale = false;
       try { const record = context.confirmationActors?.().find(s => s.id === actor.id); stale = !!context.confirmationActors && (!record || record.nativeId !== actor.nativeId || record.archived); } catch {}
       if (!stale && this.now() - (this.used.get(key) ?? 0) < this.retireAfter) continue;
-      const kept = context.retain ? context.retain() : {};
-      if (kept === null || typeof context.client?.retire !== 'function') continue;
-      // The view is saved first: an agent that only ever looked keeps its owner when the window comes back.
-      if (!stale && context.view && !isDeepStrictEqual(this.data.views[key], context.view)) {
-        try { this.commit(d => { d.views[key] = clone(context.view); }); } catch { return retired; }
-      }
-      if (!context.client.retire()) continue;
-      this.contexts.delete(key); this.opened.delete(key); this.used.delete(key);
-      if (!stale) this.kept.set(key, kept);
-      retired++;
-      if (!context.win?.isDestroyed?.()) context.win?.destroy?.();
+      const outcome = this.retireWindow(key, context, stale);
+      if (outcome === 'unsaved') return retired;
+      if (outcome === 'retired') retired++;
     } catch {
       // This window stays, or its hidden window is left to app quit; the others are still looked at.
     }
     return retired;
+  }
+  // Closes one opened window: what it keeps goes to the next window of the same view, and retire() ends its
+  // connections without counting as a change of control for the other windows. 'kept': refused, nothing closed.
+  // 'unsaved': its view could not be saved, nothing closed.
+  retireWindow(key, context, stale) {
+    const kept = context.retain ? context.retain() : {};
+    if (kept === null || typeof context.client?.retire !== 'function') return 'kept';
+    // The view is saved first: an agent that only ever looked keeps its owner when the window comes back.
+    if (!stale && context.view && !isDeepStrictEqual(this.data.views[key], context.view)) {
+      try { this.commit(d => { d.views[key] = clone(context.view); }); } catch { return 'unsaved'; }
+    }
+    if (!context.client.retire()) return 'kept';
+    this.contexts.delete(key); this.opened.delete(key); this.used.delete(key);
+    if (!stale) this.kept.set(key, kept);
+    try {
+      if (!context.win?.isDestroyed?.()) context.win?.destroy?.();
+    } catch {
+      // Its hidden window is left to app quit.
+    }
+    return 'retired';
+  }
+  // retireIdle's protections, for one agent's window whose connection ended. Its busy and retireHold counts include
+  // the asking call itself, so they would never let it go: no outbox call binds an ended window (existingTransports
+  // skips it), and another call of this agent that holds the ended window fails in it either way.
+  mayReplace(sender) {
+    const key = this.key(sender);
+    if (this.inflight.has(key) || this.pendingDeliveries.size) {
+      return false;
+    }
+    return !this.data.records.some(r => ['running', 'confirmation-required'].includes(r.state) && this.key(r.actor) === key);
   }
   async newView(sender, selected, mode) {
     if (this.closed) throw Error('Background control is closing');
