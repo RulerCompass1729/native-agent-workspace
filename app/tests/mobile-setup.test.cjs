@@ -9,25 +9,30 @@ class Element {
   remove() { this.removed = true; }
   all() { return [this, ...this.children.flatMap(child => child.all())]; }
 }
-function fixture({ pending = false, fail = false, revoked = true } = {}) {
-  const root = new Element('container'), calls = [], timers = new Map(), records = [
+const rowsOf = root => root.all().filter(n => n.className === 'mobile-session');
+const inputsOf = row => row.all().filter(n => n.tag === 'input');
+// A person's click: the box changes, then its change listener runs.
+function tick(input, checked = true) { input.checked = checked; input.listeners.change?.(); }
+function fixture({ pending = false, fail = false, revoked = true, records: given, rooms = [], saved = null } = {}) {
+  const root = new Element('container'), calls = [], timers = new Map(), remembered = [], records = given || [
     { id: 'session-a', nativeId: 'native-a', name: '<script>literal member</script>' },
     { id: 'session-b', nativeId: 'native-b', name: 'Original second' },
     { id: 'archived', nativeId: 'native-c', archived: true },
   ]; let at = 1000, nextTimer = 0, release;
   const api = { async mobilePairing(value) { calls.push(['pair', value]); if (pending && calls.filter(c => c[0] === 'pair').length === 1) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { secret: 's'.repeat(43), expiresAt: at + 120000 }; },
     async mobileRevoke() { calls.push(['revoke']); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { authorizationRevoked: revoked, connectionClosed: true, committedWorkMayContinue: true }; } };
-  const setup = bind({ container: root, document: { createElement: tag => new Element(tag) }, api, getSessions: () => records,
+  const setup = bind({ container: root, document: { createElement: tag => new Element(tag) }, api, getSessions: () => records, getRooms: () => rooms,
+    remembered: () => saved, remember: value => { remembered.push(value); saved = value; },
     now: () => at, setTimer(fn, delay) { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; }, clearTimer(id) { timers.delete(id); } });
   const el = id => root.all().find(node => node.id === id), status = () => root.all().find(node => node.attributes.role === 'status').textContent;
   function valid() {
     el('mobile-origin').value = 'https://mobile.invalid'; el('mobile-actor').value = 'synthetic-human'; el('mobile-carrier').checked = true;
-    const fields = root.all().filter(n => n.tag === 'fieldset')[0]; fields.children[1].all().find(n => n.tag === 'input').checked = true;
+    tick(inputsOf(rowsOf(root)[0])[0]);
   }
-  return { root, calls, setup, el, valid, status, records, timers, release: () => release(), advance: value => { at += value; } };
+  return { root, calls, setup, el, valid, status, records, timers, remembered, rows: () => rowsOf(root), release: () => release(), advance: value => { at += value; } };
 }
 test('opening and closing the existing setup subsection grants nothing and leaves all scopes unselected', () => {
-  const f = fixture(); f.setup.open(); assert.equal(f.root.all().filter(n => n.tag === 'fieldset')[0].children.length, 3);
+  const f = fixture(); f.setup.open(); assert.equal(f.rows().length, 2);
   assert.ok(f.root.all().filter(n => n.tag === 'input' && n.type === 'checkbox').every(n => !n.checked));
   assert.deepEqual(f.calls, []); f.setup.close(); assert.deepEqual(f.calls, []); assert.equal(f.el('mobile-pair-link').value, '');
 });
@@ -45,7 +50,7 @@ test('missing carrier check, malformed endpoint and stale native context refuse 
 });
 test('send/answer and phone replacement require explicit independent local choices', async () => {
   const f = fixture(); f.setup.open(); f.valid();
-  const fields = f.root.all().find(n => n.tag === 'fieldset'), inputs = fields.children[1].all().filter(n => n.tag === 'input'); inputs[1].checked = true; inputs[2].checked = true;
+  const inputs = inputsOf(f.rows()[0]); tick(inputs[1]); tick(inputs[2]);
   f.el('mobile-replace').checked = true; await f.el('mobile-prepare').listeners.click();
   assert.deepEqual(f.calls[0][1].selection, [{ sessionId: 'session-a', actions: ['read', 'send', 'answer'] }]); assert.equal(f.calls[0][1].replace, true);
   const allText = f.root.all().map(n => n.textContent || '').join(' '); assert.match(allText, /待确认的交接需要重新确认/); assert.match(allText, /不含权限批准/);
@@ -104,4 +109,78 @@ test('the actual DSH builder includes the existing Setup slot and module before 
   const html = fs.readFileSync(path.resolve(__dirname, '../renderer/index.html'), 'utf8');
   assert.ok(html.indexOf('src="mobile-setup.js"') < html.indexOf('src="renderer.js"'));
   const renderer = fs.readFileSync(path.resolve(__dirname, '../renderer/renderer.js'), 'utf8'); assert.match(renderer, /mobileSetup\.open\(\)/); assert.match(renderer, /mobileSetup\.close\(\)/); assert.match(renderer, /mobileSetup\.dispose\(\)/);
+});
+
+// About 90 sessions, as in the person's report. Synthetic names only.
+function many() {
+  const records = Array.from({ length: 90 }, (_, i) => ({ id: `synthetic-${String(i).padStart(3, '0')}`, nativeId: `native-${i}`, name: `Synthetic member ${i}` }));
+  records.splice(57, 0, { id: 'q07-session', nativeId: 'native-q07', name: 'Q07 合成验收' });
+  return records;
+}
+const visible = f => f.rows().filter(row => !row.hidden);
+const rowName = row => row.all().find(n => n.tag === 'span').textContent;
+test('typing Q07 then ticking its box selects only that session, and the request matches the earlier format exactly', async () => {
+  const f = fixture({ records: many(), rooms: [{ id: 'room-a', name: 'Synthetic space' }, { id: 'room-b', name: 'Other space', archived: true }] });
+  f.setup.open(); assert.equal(f.rows().length, 91);
+  const search = f.el('mobile-session-filter'); search.value = 'q07'; search.listeners.input();
+  assert.deepEqual(visible(f).map(rowName), ['Q07 合成验收 · q07-se']);
+  tick(inputsOf(visible(f)[0])[0]);
+  f.el('mobile-origin').value = 'https://mobile.invalid'; f.el('mobile-actor').value = 'synthetic-human'; f.el('mobile-carrier').checked = true;
+  await f.el('mobile-prepare').listeners.click();
+  assert.deepEqual(f.calls[0][1], { actor: 'synthetic-human', origin: 'https://mobile.invalid', port: 0, carrierConfirmed: true, replace: false, selection: [{ sessionId: 'q07-session', actions: ['read'] }] });
+  // A granted space and record reminders add the same workspace field as before.
+  const space = f.root.all().find(n => n.className === 'mobile-spaces').all().find(n => n.tag === 'input'); tick(space); tick(f.el('mobile-records'));
+  const actions = inputsOf(visible(f)[0]); tick(actions[1]);
+  await f.el('mobile-prepare').listeners.click();
+  assert.deepEqual(f.calls[1][1], { actor: 'synthetic-human', origin: 'https://mobile.invalid', port: 0, carrierConfirmed: true, replace: false,
+    workspace: { roomIds: ['room-a'], records: true }, selection: [{ sessionId: 'q07-session', actions: ['read', 'send'] }] });
+});
+test('chosen sessions are listed first and stay visible while another search hides the rest', () => {
+  const f = fixture({ records: many() }); f.setup.open();
+  const search = f.el('mobile-session-filter'); search.value = 'Q07'; search.listeners.input(); tick(inputsOf(visible(f)[0])[0]);
+  search.value = ''; search.listeners.input();
+  assert.equal(rowName(f.rows()[0]), 'Q07 合成验收 · q07-se'); assert.equal(visible(f).length, 91);
+  search.value = 'no such member'; search.listeners.input();
+  assert.deepEqual(visible(f).map(rowName), ['Q07 合成验收 · q07-se']);
+  assert.equal(f.root.all().find(n => n.className === 'quiet mobile-count').textContent, '已选 1 个，共 91 个');
+  const noMatch = f.root.all().find(n => n.textContent === '没有匹配的会话'); assert.equal(noMatch.hidden, true);
+  tick(inputsOf(f.rows()[0])[0], false); search.listeners.input(); assert.equal(visible(f).length, 0); assert.equal(noMatch.hidden, false);
+});
+test('send and answer choices appear only for a chosen session, and unticking it clears them', () => {
+  const f = fixture(); f.setup.open();
+  const row = f.rows()[0], actions = row.all().find(n => n.className === 'mobile-session-actions'), [read, send, answer] = inputsOf(row);
+  assert.equal(actions.hidden, true); tick(read); assert.equal(actions.hidden, false);
+  tick(send); tick(answer); tick(read, false);
+  assert.equal(actions.hidden, true); assert.equal(send.checked, false); assert.equal(answer.checked, false);
+});
+test('every checkbox comes before its own words inside one label', () => {
+  const f = fixture({ rooms: [{ id: 'room-a', name: 'Synthetic space' }] }); f.setup.open();
+  const boxes = f.root.all().filter(n => n.tag === 'input' && n.type === 'checkbox'); assert.equal(boxes.length, 2 * 3 + 1 + 3 + 2);
+  for (const box of boxes) {
+    const label = f.root.all().find(n => n.children.includes(box));
+    assert.equal(label.tag, 'label'); assert.equal(label.className, 'mobile-check'); assert.equal(label.children[0], box); assert.equal(label.children.length, 2);
+  }
+});
+test('address, Tailscale user and port are remembered after a checked attempt; secrets, links and choices are not', async () => {
+  const f = fixture(); f.setup.open(); assert.equal(f.el('mobile-origin').value, '');
+  await f.el('mobile-prepare').listeners.click(); assert.deepEqual(f.remembered, []);
+  f.valid(); f.el('mobile-port').value = '8443'; await f.el('mobile-prepare').listeners.click();
+  assert.deepEqual(f.remembered, [{ origin: 'https://mobile.invalid', actor: 'synthetic-human', port: '8443' }]);
+  f.setup.close(); assert.equal(f.el('mobile-origin').value, ''); assert.equal(f.el('mobile-port').value, '0');
+  f.setup.open();
+  assert.equal(f.el('mobile-origin').value, 'https://mobile.invalid'); assert.equal(f.el('mobile-actor').value, 'synthetic-human'); assert.equal(f.el('mobile-port').value, '8443');
+  assert.equal(f.el('mobile-carrier').checked, false); assert.ok(f.rows().every(row => inputsOf(row).every(input => !input.checked)));
+});
+test('sensitive approvals start folded on every opening', () => {
+  const f = fixture(); f.setup.open(); const section = f.el('mobile-approval-section');
+  assert.equal(section.tag, 'details'); assert.equal(section.open, false); assert.equal(section.children[0].tag, 'summary');
+  section.open = true; f.setup.close(); f.setup.open(); assert.equal(section.open, false);
+});
+test('the saved window view accepts only an https address, a Tailscale user and a port for phone access', () => {
+  const { validViews } = require('../view-store.cjs'), base = { owner: 'synthetic-owner', selected: '', mode: 'chat' };
+  const ok = { origin: 'https://device.example.invalid', actor: 'synthetic-human', port: '0' };
+  assert.equal(validViews([{ ...base, mobileEndpoint: ok }]), true);
+  for (const bad of [{ ...ok, secret: 's'.repeat(43) }, { ...ok, link: 'https://device.example.invalid/mobile/#pair=x' }, { ...ok, origin: 'http://device.example.invalid' },
+    { ...ok, origin: 'https://device.example.invalid/path' }, { ...ok, port: '70000' }, { ...ok, port: 0 }, { ...ok, actor: 'x'.repeat(321) }, 'https://device.example.invalid'])
+    assert.equal(validViews([{ ...base, mobileEndpoint: bad }]), false, JSON.stringify(bad));
 });

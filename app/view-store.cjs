@@ -62,6 +62,10 @@ function validViews(views) {
           p.focusId !== undefined && !text(p.focusId, 100)) return false;
     }
     if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value, id)))) return false;
+    // Phone access remembers only the address, Tailscale user and port; never a secret, link or cookie.
+    if (view.mobileEndpoint !== undefined && (!object(view.mobileEndpoint) || Object.keys(view.mobileEndpoint).some(key => !['origin', 'actor', 'port'].includes(key)) ||
+        !text(view.mobileEndpoint.origin, 2048) || !/^https:\/\/[^/?#@\s]+$/.test(view.mobileEndpoint.origin) || !text(view.mobileEndpoint.actor, 320) ||
+        typeof view.mobileEndpoint.port !== 'string' || !/^\d{1,5}$/.test(view.mobileEndpoint.port) || Number(view.mobileEndpoint.port) > 65535)) return false;
     for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;
     for (const key of ['mode', 'preference'])

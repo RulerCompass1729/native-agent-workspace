@@ -913,6 +913,19 @@ main.settings-panel-open{margin-inline-end:340px}
   #setup-dialog:not(:has(#ui-language option[value="en"]:checked)) .setup-program:not(:has(.actions button:nth-child(3))) .program-path{grid-area:2/1/3/3;margin:0}
 }
 /* End compact setup dialog. */
+/* Phone access: each checkbox sits left of its own words on one line; the long session list scrolls in its own box. */
+#mobile-setup .mobile-check{display:flex;align-items:center;gap:8px;font-weight:400;margin:0 0 6px;cursor:pointer}
+#mobile-setup .mobile-check input[type=checkbox]{flex:none;width:16px;height:16px;margin:0}
+#mobile-setup .mobile-check span{min-width:0;overflow-wrap:anywhere}
+#mobile-setup fieldset{min-width:0;margin:0 0 12px;padding:6px 10px 8px;border:1px solid var(--border);border-radius:8px}
+#mobile-setup legend{font-weight:550;padding:0 4px}
+#mobile-setup #mobile-session-filter{width:100%;margin:4px 0 6px;padding:7px 10px}
+#mobile-setup .mobile-count{margin:0 0 6px}
+#mobile-setup .mobile-session-list{max-height:min(45vh,360px);overflow:auto;overscroll-behavior:contain}
+#mobile-setup .mobile-session-actions{margin:0 0 4px 24px}
+#mobile-setup #mobile-approval-section{margin:12px 0 0;padding:8px 10px;border:1px solid var(--border);border-radius:8px}
+#mobile-setup #mobile-approval-section>summary{cursor:pointer;font-weight:550}
+#mobile-setup #mobile-approval-section[open]>summary{margin-bottom:8px}
 /* Compact space files: keep every filename, path hint and existing action. */
 #space-files-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
 #space-files-dialog h2{margin-bottom:8px}
