@@ -93,7 +93,7 @@
       if (append(block)) coverage.includedSpaces++;
     }
     for (const { record, references, facts } of people.values()) {
-      const provider = record.provider === 'claude' ? 'Claude' : record.provider === 'codex' ? 'Codex' : t('context.providerUnreported');
+      const provider = record.provider === 'claude' ? 'Claude' : record.provider === 'codex' ? 'Codex' : record.provider === 'dsh' ? 'DSH' : t('context.providerUnreported');
       const block = t('context.snapshotMember', { name: label(record.name, language), provider, id: record.id, references: references.join(t('context.rosterSeparator')), state: facts.state, child: facts.child, freshness: facts.freshness, observedAt: facts.observedAt || t('version.unreported') });
       if (!append(block)) break;
       coverage.includedMembers++;

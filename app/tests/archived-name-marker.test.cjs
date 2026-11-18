@@ -25,7 +25,7 @@ function page(lang, state = { sessions: sessions() }) {
   const uiText = (key, params) => locale.format(lang, key, params);
   const context = vm.createContext({ state, uiText, window: { nativeWorkspaceLocale: locale },
     ui: { displayText: (raw, message) => locale.displayText(lang, raw, message), language: { getSnapshot: () => ({ active: lang }) } } });
-  vm.runInContext([declaration(renderer, 'sessionShortId'), take(renderer, 'function participantLabel(', 'function timeline()'),
+  vm.runInContext([declaration(renderer, 'providerName'), declaration(renderer, 'sessionShortId'), take(renderer, 'function participantLabel(', 'function timeline()'),
     declaration(renderer, 'queueMemberName'), declaration(readingList, 'readingDispatchMember'), declaration(readingList, 'readingOwnText')].join('\n'), context);
   return context;
 }

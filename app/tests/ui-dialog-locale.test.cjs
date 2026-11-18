@@ -57,7 +57,7 @@ function fixture() {
     window: { nativeWorkspaceSpaces: spaces, nativeWorkspaceContextSnapshot: require('../renderer/coordinator-context.js') },
     button: (text, action, cls) => { const el = node('button', text, cls); el.onclick = action; return el; },
     api: new Proxy({}, { get(_target, method) { calls.push(method); throw Error('Locale-only path reached product API: ' + method); } }),
-    members: () => people, participantLabel: value => value.name, sessionShortId: id => id.slice(0, 6),
+    members: () => people, participantLabel: value => value.name, sessionShortId: id => id.slice(0, 6), providerName: provider => provider === 'claude' ? 'Claude' : 'Codex',
     placementProof: record => ({nativeId:record.nativeId,placementRevision:spaces.placementRevision(record),connectionRevision:record.connectionRevision||0}), allSpaces: () => rooms, spaceRecord: id => rooms.find(room => room.id === id), inSpace: spaces.isMember,
     sharedSurface: () => true, current: () => people[0], spaceId: 'shared', mode: 'chat', disconnected: false,
     interruptPending: value => value?.interruptPending === true,

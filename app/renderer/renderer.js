@@ -943,7 +943,7 @@ function refreshRoomMemberStatus(people = orderedMembers()) {
       });
       context.rows.set(member.id, row);
     }
-    ui.display.computed(row.querySelector('.room-member-name'), 'text', () => `${member.name} · ${member.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(member.id)}`);
+    ui.display.computed(row.querySelector('.room-member-name'), 'text', () => `${member.name} · ${providerName(member.provider)} · ${sessionShortId(member.id)}`);
     ui.display.computed(row.querySelector('.room-member-state'), 'text', () => roomMemberStateText(member));
     row.setAttribute('aria-pressed', String(roomSession === member.id));
     row.classList.toggle('needs-attention', Boolean(member.nativeApproval?.requests?.length || member.approvals?.length || member.approval || member.approvalOverflow));
@@ -1935,7 +1935,7 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
 // Native-reported vendor identity is independent of the program running it.
 // Optional local PNGs stay outside the public repository; letters work without them.
 const VENDOR_MARKS = { anthropic: ['A', 'Anthropic'], openai: ['O', 'OpenAI'], deepseek: ['D', 'DeepSeek'] };
-const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex' };
+const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH' };
 function sessionMaker(record) {
   const shell = record?.shell || record?.provider;
   const vendor = typeof record?.vendor === 'string' && record.vendor ? record.vendor : shell === 'claude' ? 'anthropic' : null;
@@ -3340,7 +3340,7 @@ function sidebarPresentation(record) {
 }
 function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
-  const notice = backendVersionNotice(record, state.appVersion), provider = record.provider === 'claude' ? 'Claude' : 'Codex';
+  const notice = backendVersionNotice(record, state.appVersion), provider = providerName(record.provider);
   return [record.name, provider, 'NAW ' + record.id, provider + ' ' + (record.nativeId || uiText('advanced.establishing')), sidebarPresentation(record).full,
     memberships.length ? uiText('sidebar.membershipFacts', { names: memberships.map(room => spaceName(room)).join('、') }) : uiText('sidebar.independent'), sessionTimes(record),
     notice?.title || uiText('sidebar.versionFacts', { backend: versionValue(record.runtimeVersion) || uiText('version.unreported'), app: versionValue(state.appVersion) || uiText('version.unreported') })];
@@ -3451,6 +3451,12 @@ function sessionShortId(id) {
   let length = Math.min(6, id.length);
   while (length < id.length && state.sessions.some(s => s.id !== id && s.id.startsWith(id.slice(0, length)))) length++;
   return id.slice(0, length);
+}
+// The program a session runs, as its short name in labels.
+function providerName(provider) {
+  if (provider === 'claude') return 'Claude';
+  if (provider === 'dsh') return 'DSH';
+  return 'Codex';
 }
 async function moveSidebarSession(id, target, after) {
   if (!target || id === target) return;
@@ -3649,9 +3655,11 @@ function createReadiness() {
   if (!$('create-dialog').open) return;
   renderCreateSpaces();
   renderCreateProfiles();
+  renderDshProvider();
   const historyProvider = chosenProvider();
   // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
-  $('open-native-history').hidden = deepseekChosen() || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  // A DSH session has no history to continue here.
+  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
@@ -3683,7 +3691,8 @@ function createReadiness() {
   // A Claude session opens in the last-used tab; both views stay available.
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
-  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
+  // DSH keeps its own approvals; the service refuses bypass for it.
+  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
@@ -3695,7 +3704,9 @@ function createReadiness() {
     return;
   }
   const provider = chosenProvider();
-  const ready = state.preflight?.python && state.preflight?.[provider] && (!deepseekChosen() || Boolean($('create-profile').value));
+  // DSH is ready when the service found its pinned runtime and a Node.js to run it.
+  const programReady = provider === 'dsh' ? state.available?.dsh === true : state.preflight?.[provider];
+  const ready = state.preflight?.python && programReady && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
   ui.display.computed($('create-readiness'), 'text', () => readinessKey ? uiText(readinessKey) : '');
@@ -3709,6 +3720,13 @@ function deepseekProfiles() {
     ? state.codexProfiles.filter(profile => profile?.modelProvider === 'deepseek' && typeof profile.name === 'string' && typeof profile.model === 'string') : [];
 }
 function deepseekChosen() { return document.querySelector('input[name="provider"]:checked').value === 'deepseek'; }
+// DSH (the DeepSeek Harness TUI) is offered only when the service reports its runtime.
+function renderDshProvider() {
+  const offered = state.available?.dsh === true;
+  $('dsh-provider').hidden = !offered;
+  const chosen = document.querySelector('input[name="provider"]:checked').value === 'dsh';
+  if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+}
 function chosenProvider() { return deepseekChosen() ? 'codex' : document.querySelector('input[name="provider"]:checked').value; }
 function renderCreateProfiles() {
   const profiles = deepseekProfiles(), select = $('create-profile');
@@ -3766,7 +3784,7 @@ function renderArchives() {
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
-    const info = node('small'); ui.display.computed(info, 'text', () => `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
+    const info = node('small'); ui.display.computed(info, 'text', () => `${providerName(s.provider)} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
     const name = node('strong'); ui.display.computed(name, 'text', () => participantLabel(s, state.sessions));
     row.append(name, info);
     const actions = node('div', undefined, 'archive-session-actions');
@@ -3888,7 +3906,7 @@ function populateSelect(el, items) {
   el.title = el.selectedOptions[0]?.textContent || '';
 }
 function participantLabel(session, people = members()) {
-  return archivedName(session, people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(session.id)}` : session.name);
+  return archivedName(session, people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${providerName(session.provider)} · ${sessionShortId(session.id)}` : session.name);
 }
 // An archived session keeps its stored name. Only what people read gets the
 // marker, worked out from the archived flag, so restoring a session drops it.
@@ -4228,7 +4246,7 @@ function showMentions(force = false) {
   const query = match ? match[1].toLocaleLowerCase() : '';
   mentionOptions = members().filter(s => `${s.name} ${s.provider}`.toLocaleLowerCase().includes(query)); mentionIndex = 0;
   $('mention-list').replaceChildren(...mentionOptions.map((s, i) => {
-    const entry = button(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(s.id)}`, () => chooseMention(s.id), 'mention-option');
+    const entry = button(`${s.name} · ${providerName(s.provider)} · ${sessionShortId(s.id)}`, () => chooseMention(s.id), 'mention-option');
     entry.id = `mention-${i}`; entry.setAttribute('role', 'option'); entry.dataset.mentionId = s.id;
     entry.addEventListener('mousedown', event => event.preventDefault()); return entry;
   }));
@@ -5626,10 +5644,15 @@ $('create-form').onsubmit = event => { event.preventDefault();
   creatingSession = true; ui.display.unbind($('create-error')); $('create-error').textContent = ''; createReadiness();
   const submittedFolder = worktree?.cwd || folder, priorIds = new Set(state.sessions.map(s => s.id));
   let createdId = ''; // T-115: once the service returns the new session's id, a later failed read can't lose it
-  try { const provider = chosenProvider(), view = provider === 'codex' ? $('initial-view').value : preference; preference = view;
+  try { const provider = chosenProvider();
+    // A DSH session opens in its terminal (it has no conversation view yet) and leaves the remembered view alone.
+    let view = preference;
+    if (provider === 'codex') view = $('initial-view').value;
+    if (provider === 'dsh') view = 'terminal';
+    else preference = view;
     // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
     const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;
-    const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined, ...(settings ? { settings } : {}) }); updateState(await api.initial()); render();
+    const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: provider === 'dsh' ? undefined : $('skip-permissions').checked || undefined, ...(settings ? { settings } : {}) }); updateState(await api.initial()); render();
     if (choice.kind !== 'independent') { ticket.creation = { choice, sessionId: id, view, roomId: choice.roomId || '' }; creatingSession = false; await finishCreateSpace(ticket, revision); return; }
     // I160: the session exists from here on, so this opening creates no other, even if it stays open (the selection moved).
     ticket.created = id;
@@ -6596,7 +6619,7 @@ function renderRunChoices() {
     const label = node('label'), check = document.createElement('input'); check.type = 'checkbox';
     check.dataset.runMember = s.id; check.checked = ids.includes(s.id);
     check.disabled = s.id === runPreview.recipient || !eligible.some(m => m.id === s.id) || (!check.checked && !multi && ids.length >= 2);
-    label.append(check, document.createTextNode(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(s.id)}`));
+    label.append(check, document.createTextNode(`${s.name} · ${providerName(s.provider)} · ${sessionShortId(s.id)}`));
     check.onchange = () => {
       runPreview.ids = check.checked ? [...ids, s.id] : ids.filter(id => id !== s.id);
       $('run-consent').checked = false; renderRunChoices();

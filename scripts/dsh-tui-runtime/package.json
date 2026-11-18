@@ -1,0 +1,8 @@
+{
+  "name": "naw-dsh-tui-runtime",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@deepseek-harness-tui/dsh-tui": "0.18.0"
+  }
+}

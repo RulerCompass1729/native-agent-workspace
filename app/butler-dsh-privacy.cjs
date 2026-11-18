@@ -18,12 +18,16 @@ function patchSource(source, version) {
   if (source.includes('this.dependencies.resolveUserId(') || source.includes('"x-deepseek-harness-session-id"')) throw Error('DSH privacy patch incomplete');
   return source;
 }
-function install() {
+// `from`: the directory whose node_modules holds the DSH install (the DSH TUI
+// runtime). Without it, the package resolves next to this file, as before.
+function install({ from } = {}) {
   const fs = require('node:fs'), path = require('node:path');
   const { pathToFileURL } = require('node:url');
   const { registerHooks } = require('node:module');
   if (typeof registerHooks !== 'function') throw Error('DSH privacy patch: runtime unsupported');
-  const file = require.resolve('@deepseek-ai/dsh-llm-deepseek');
+  let file;
+  if (from === undefined) file = require.resolve('@deepseek-ai/dsh-llm-deepseek');
+  else file = require.resolve('@deepseek-ai/dsh-llm-deepseek', { paths: [from] });
   const version = JSON.parse(fs.readFileSync(path.join(path.dirname(file), '../package.json'), 'utf8')).version;
   const source = patchSource(fs.readFileSync(file, 'utf8'), version);
   const url = pathToFileURL(file).href;

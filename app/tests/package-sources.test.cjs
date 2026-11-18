@@ -18,7 +18,8 @@ function missingSources(entries) {
       if (!target.startsWith('..')) visit(target);
     }
   }
-  for (const root of ['main.cjs', 'butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs']) visit(root);
+  // dsh-tui-preload.mjs: loaded by path (--import) into the DSH TUI process.
+  for (const root of ['main.cjs', 'butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs', 'dsh-tui-preload.mjs']) visit(root);
   assert.ok(seen.size > 50, 'the require walk reached the application modules');
   return missing;
 }
@@ -26,7 +27,7 @@ test('every local module reachable from desktop and dedicated DSH entry points i
   assert.deepEqual(missingSources(sourceList().entries), []);
 });
 test('omitting any independently loaded DSH entry fails the package closure guard', () => {
-  for (const name of ['butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs']) {
+  for (const name of ['butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs', 'dsh-tui-preload.mjs']) {
     assert.ok(missingSources(sourceList().entries.filter(entry => entry !== name)).includes(name), name);
   }
 });

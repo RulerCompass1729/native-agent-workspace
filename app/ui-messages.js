@@ -3369,7 +3369,10 @@
     "butler.reads.olderFailed": "更早的记录现在读不到；上面是已经读到的。可以再点「更早的记录」试一次。",
     "butler.reads.older": "更早的记录",
     "butler.reads.refresh": "刷新",
-    "butler.reads.retry": "再读一次"
+    "butler.reads.retry": "再读一次",
+    "error.dsh.keyMissing": "还没有给 DSH 用的 DeepSeek key：请先在钥匙串里新建项目「NAW DSH TUI DeepSeek API key」（账户 deepseek），再新建会话。",
+    "error.dsh.runtimeUnqualified": "DSH TUI 运行时不是 NAW 核对过的版本，没有启动。",
+    "notice.activity.dshEgressBlocked": "外联被拦：{target}；会话已停止"
   },
   "en": {
     "background.card.reason.target-changed": "Not done: the target's identity, placement, or space changed. If it is still needed, the requesting agent sends a new request.",
@@ -6739,7 +6742,10 @@
     "butler.reads.olderFailed": "Earlier records cannot be read right now; what was read is above. You can choose Earlier records again.",
     "butler.reads.older": "Earlier records",
     "butler.reads.refresh": "Refresh",
-    "butler.reads.retry": "Read again"
+    "butler.reads.retry": "Read again",
+    "error.dsh.keyMissing": "No DeepSeek key for DSH yet. Add the Keychain item “NAW DSH TUI DeepSeek API key” (account deepseek), then create the session again.",
+    "error.dsh.runtimeUnqualified": "The DSH TUI runtime is not the version NAW checked, so it was not started.",
+    "notice.activity.dshEgressBlocked": "Blocked a connection to {target}; the session was stopped"
   }
 };
   Object.freeze(messages.zh); Object.freeze(messages.en); Object.freeze(messages);

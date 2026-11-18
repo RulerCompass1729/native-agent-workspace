@@ -31,7 +31,7 @@ function harness(){
   window:{nativeWorkspaceThreads:threads,nativeWorkspaceCollaboration:require('../renderer/collaboration-overview.js')},
   current:()=>ctx.state.sessions.find(s=>s.id===ctx.roomSession),activeSessionId:()=>ctx.selected==='room'?ctx.roomSession:ctx.selected,
   members:()=>ctx.state.sessions.filter(s=>spaces.isMember(s,ctx.spaceId)&&!s.archived),orderedMembers:()=>ctx.members(),focusedRoomMember:()=>ctx.selected==='room'&&ctx.roomSurface==='overview'&&Boolean(ctx.roomSession),
-  participantLabel:s=>s.name,sessionShortId:id=>id,disconnected:false,exhaustedRecovery:()=>null,recoveryStatusSuffix:()=>'',
+  participantLabel:s=>s.name,sessionShortId:id=>id,providerName:p=>p==='claude'?'Claude':'Codex',disconnected:false,exhaustedRecovery:()=>null,recoveryStatusSuffix:()=>'',
   pairRevision:s=>spaces.membershipRevision(s,'shared'),openTransientDialog:id=>$(id).showModal(),captureReadingViews(){},suspendColumnInputs(){},activateSoloComposer(){},render(){},persistView(){calls.persisted++;return ctx.captureRoomView()},attempt:fn=>fn(),toastMessage(){},normalizeRoomMention(){},populateSelect(){},roomRecipient:()=>$('recipient').value,
   nativeWorkspaceMentions:{editHistory:()=>({})},messageList(){},api:new Proxy({},{get:(_,name)=>(...args)=>{calls.native.push([name,args]);throw Error('Navigation reached native API')}})
  });

@@ -40,7 +40,7 @@ async function renderSearch() {
     row.dataset.searchKey = result.key;
     const metadata = node('small');
     ui.display.computed(metadata, 'text', () => {
-      const source = result.provider ? (result.provider === 'claude' ? 'Claude' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
+      const source = result.provider ? (result.provider === 'claude' ? 'Claude' : result.provider === 'dsh' ? 'DSH' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
       return [source, result.archived && uiText('search.archivedFlag'), result.role && uiText(['user', 'human'].includes(result.role) ? 'reading.you' : result.role === 'system' ? 'search.event' : 'search.agent')].filter(Boolean).join(' · ');
     });
     // A space's archived flag stays in the small line; an archived session's name carries the marker.

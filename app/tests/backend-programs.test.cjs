@@ -229,7 +229,8 @@ test('a backend started with entries of its own runs the current programs, and i
   try {
     const started = await ensureServiceAt(f.backend, process.execPath, path.join(f.base, 'workspace')); pid = started.servicePid;
     assert.ok(started.capabilities.includes('programAvailabilityV1'));
-    assert.deepEqual(started.available, { claude: true, codex: true, python: true }, 'The entries were taken out before the backend started');
+    // No DSH TUI runtime is installed in this data directory, so DSH is not offered (and raises no warning).
+    assert.deepEqual(started.available, { claude: true, codex: true, python: true, dsh: false }, 'The entries were taken out before the backend started');
     assert.deepEqual(f.read(f.own), {}); assert.deepEqual(f.read(f.record).removals.map(entry => entry.removed.map(item => [item.key, item.existed]).sort()), [[['claude', false], ['codex', false], ['python3', true]]]);
     // While it runs, a program that disappears or comes back is seen at the next initial state, not at the next restart.
     client = await connectService(f.backend, 'availability-check');

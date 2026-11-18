@@ -274,6 +274,7 @@ function createTerminalSerializeAddon() {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
+const dshTui = require('./dsh-tui.cjs');
 
 // Local receipt timing is an observation, never a native failure or authority
 // to cancel/replay work. Keep the original activity and its identity intact.
@@ -287,7 +288,9 @@ function withObservedTool(runtime, activity, marker, progressAt) {
 }
 
 class Terminal extends EventEmitter {
-  constructor(argv, cwd, env = {}) {
+  // options.isolatedEnv: the child gets only `env` (plus TERM and PWD), not
+  // NAW's environment. Claude and Codex sessions leave it off.
+  constructor(argv, cwd, env = {}, options = {}) {
     super();
     this.pid = null; this.alive = true; this.sequence = 0; this.nativeExited = false;
     this.screen = new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
@@ -322,7 +325,9 @@ class Terminal extends EventEmitter {
     // close follows stdout drainage, including the worker's waitpid result.
     this.worker.on('close', () => { this.alive = false; this.emit('closed', { confirmed: this.nativeExited }); });
     this.worker.stdin.on('error', () => {});
-    this.worker.stdin.write(JSON.stringify({ argv, cwd, env: { ...env, PWD: cwd } }) + '\n');
+    const launch = { argv, cwd, env: { ...env, PWD: cwd } };
+    if (options.isolatedEnv === true) launch.isolated = true;
+    this.worker.stdin.write(JSON.stringify(launch) + '\n');
     // Only the canonical screen answers device queries, even with no GUI open.
     this.screen.onData(data => { if (this.alive) this.input(data); });
   }
@@ -3069,6 +3074,7 @@ class NativeHost {
     this.privateDir = privateDir; this.dataDir = dataDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
+    this.dshTargets = new Set();
     // Automatic Codex version decisions (B3) are kept in the persistent data directory.
     this.codexQualificationFile = path.join(dataDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
     this.claudeModChecks = new Map();
@@ -3405,15 +3411,33 @@ class NativeHost {
   }
   // Where the native programs are now: resolved at start, before each session starts, and whenever a client
   // asks for the initial state, so that state's `available` is current and not the answer from the last start.
-  resolvePrograms() { this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() }; if (this.nativeStarted) this.watchClaudeLauncher(); return this.binaries; }
+  resolvePrograms() {
+    // dsh: the system Node.js that runs the DSH TUI, offered only once NAW's
+    // pinned TUI runtime is installed in this data directory (dsh-tui.cjs).
+    let dsh;
+    if (dshTui.installed(this.dataDir)) dsh = executable('node');
+    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable(), dsh };
+    if (this.nativeStarted) this.watchClaudeLauncher();
+    return this.binaries;
+  }
   create(record) {
     if (this.serviceBinding) throw require('./service-binding.cjs').failure('butler-qualification-required');
     this.resolvePrograms();
     if (!this.binaries[record.provider] || !this.binaries.python) throw uiError("error.nativeRuntimeMissing");
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
-    return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
+    if (record.provider === 'claude') return new Claude(record, this);
+    if (record.provider === 'dsh') return this.createDsh(record);
+    return new Codex(record, this);
   }
-  close() { this.closed = true; this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
+  createDsh(record) {
+    const runtime = new dshTui.DshTui(record, this, { Terminal });
+    this.dshTargets.add(runtime);
+    runtime.on('state', state => {
+      if (state === 'ended' || state === 'error') this.dshTargets.delete(runtime);
+    });
+    return runtime;
+  }
+  close() { this.closed = true; this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); for (const target of this.dshTargets) target.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
 module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle, promptTextTag };

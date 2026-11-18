@@ -46,7 +46,14 @@ def main():
         os.write(ready_write, b"1")
         os.close(ready_write)
         os.chdir(config["cwd"])
-        environment = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor")
+        # An isolated child gets only the variables its caller listed, not
+        # this host's environment (which can hold other agents' keys).
+        if config.get("isolated") is True:
+            environment = {}
+        else:
+            environment = dict(os.environ)
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
         environment.update(config.get("env", {}))
         os.execvpe(config["argv"][0], config["argv"], environment)
     os.close(ready_write)

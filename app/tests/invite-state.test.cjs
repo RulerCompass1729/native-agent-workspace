@@ -17,7 +17,7 @@ function fixture(language = 'zh') {
   const context = { state, $: id => ({ 'invite-dialog': dialog, 'invite-list': list, 'space-merge-dialog': { open: false } })[id], members: () => state.sessions,
     ui: { display: { text(element, key, params) { writes.push(key); element.textContent = locale.format(language, key, params); } } } };
   vm.createContext(context);
-  vm.runInContext(declaration('sessionShortId') + '\n' + declaration('participantLabel') + '\n' + declaration('archivedName'), context);
+  vm.runInContext(declaration('providerName') + '\n' + declaration('sessionShortId') + '\n' + declaration('participantLabel') + '\n' + declaration('archivedName'), context);
   function add(record, blocked) {
     state.sessions.push(record);
     const attributes = blocked ? { 'aria-disabled': 'true' } : {};

@@ -681,7 +681,7 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
     group.content.className = group.effective ? 'process-content' : '';
     group.summary.hidden = !group.effective;
     group.item.dataset.running = String(plan.active);
-    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : 'Codex');
+    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : view.session?.provider === 'dsh' ? 'DSH' : 'Codex');
     const caption = () => plan.captionRead ? plan.captionRead() : plan.caption, outcome = () => plan.outcomeRead ? plan.outcomeRead() : plan.outcome;
     ui.display.computed(group.author, 'text', author); ui.display.computed(group.caption, 'text', caption); ui.display.computed(group.outcome, 'text', outcome);
     const summary = () => `${author()} · ${plan.active ? uiText('process.active') : ''}${caption()}${outcome() ? ' · ' + outcome() : ''}`;
@@ -862,7 +862,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
       // NAW waking the butler (steward-wake.cjs) goes out as a NAW message like a queue item; said as what it is.
       if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-wake:')) return uiText('reading.stewardWake');
-      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : 'Codex');
+      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : sessionProvider === 'dsh' ? 'DSH' : 'Codex');
     };
     // Heading/action bindings share this synchronous author resolution. Release
     // it before painting content so retained getters stay live if painting fails.
