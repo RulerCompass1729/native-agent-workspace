@@ -217,6 +217,7 @@ async function build() {
       'renderer/local-search.js',
       'renderer/record-reminders.js',
       'renderer/steward-record.js',
+      'renderer/task-board.js',
       'room-mention.js',
       'room-state.cjs',
       'room-threads.js',

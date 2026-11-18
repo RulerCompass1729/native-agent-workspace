@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="collaboration-overview.css">
+  <link rel="stylesheet" href="task-board.css">
   <link rel="stylesheet" href="collaboration-panorama.css">
   <link rel="stylesheet" href="sidebar-layout.css">
   <link rel="stylesheet" href="butler-review.css">
@@ -53,6 +54,7 @@
     </div>
   </aside>
   <main>
+    <section id="task-board"></section>
     <header id="header"><div class="header-identity"><span id="steward-badge" class="steward-badge" hidden></span><h1 id="title" data-naw-text="header.workspace"></h1><button id="session-chain-chip" class="session-chain-chip" type="button" aria-haspopup="dialog" hidden></button><button id="switch-space" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-naw-aria-label="navigation.switchSpace" data-naw-title="navigation.switchSpace">⌄</button><p id="subtitle" data-naw-text="header.welcomeHelp"></p></div><div id="header-actions"></div></header>
     <div id="alert" role="status" hidden></div>
     <button id="reconnect-button" hidden data-naw-text="service.reconnect"></button>
@@ -178,6 +180,7 @@
   <script src="../butler-reads-view.js"></script>
   <script src="butler-reads.js"></script>
   <script src="record-reminders.js"></script>
+  <script src="task-board.js"></script>
   <script src="steward-record.js"></script>
   <script src="handoff-queue.js"></script>
   <script src="../task-stream.js"></script>

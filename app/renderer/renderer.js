@@ -212,8 +212,14 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
+const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id) });
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
+function updateTaskBoard() {
+  if (!state) return;
+  taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable, queue: r.queue })),
+    sessions: state.sessions.map(s => ({ id: s.id, name: s.name })), connected: !disconnected, activeSpace: spaceId });
+}
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
 const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
@@ -3895,6 +3901,7 @@ function renderInterfaceLanguage() {
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
   activityStream?.render();
+  updateTaskBoard();
 }
 async function changeInterfaceLanguage(value) {
   if (changingLanguage) { renderInterfaceLanguage(); return; }
@@ -5046,6 +5053,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
+    updateTaskBoard();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -5613,6 +5621,7 @@ function writeTerminal(entry, event) {
 }
 const disposers = [
   () => recordReminders?.dispose(),
+  () => taskBoard.dispose(),
   () => mobileSetup.dispose(),
   () => butlerEntry.dispose(),
   disposeButlerReview,
@@ -5944,8 +5953,8 @@ $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace
 // Space task queue: the person adds items; NAW sends each idle member its next one.
 let queueSpace = null;
 const QUEUE_FINISHED_SHOWN = 10;
-function openQueue() {
-  queueSpace = spaceId;
+function openQueue(requested) {
+  queueSpace = typeof requested === 'string' ? requested : spaceId;
   queueOrder = null; queueOrderFresh = false; queueOpens += 1; queueDropping = '';
   queueHandoffError(null);
   $('queue-list').dataset.signature = '';
