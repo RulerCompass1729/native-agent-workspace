@@ -17,7 +17,7 @@ const { execFile, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const { uiError, uiActivity } = require('./ui-errors.cjs');
-const { validNonce } = require('./dsh-witness.cjs');
+const { validNonce, CANARY_PORT } = require('./dsh-witness.cjs');
 
 const TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
 const TUI_VERSION = '0.18.0';
@@ -151,18 +151,33 @@ function ownFolder(where, dir) {
   }
 }
 
-// Replaces a file NAW owns in the TUI home. Anything there that is not a
-// plain file refuses the launch.
+// Replaces a file NAW owns in the TUI home. Anything there NAW did not
+// write refuses the launch: a symlink, a folder, or a file with another
+// name elsewhere (a hard link). The text goes into a new file of NAW's own,
+// which then takes the old one's place: whatever is put at `file` after the
+// check, a link included, is replaced and never written through.
 function writeOwnFile(file, text) {
   const found = lstatOrNull(file);
-  if (found !== null && !found.isFile()) throw homeUnsafe();
-  // O_NOFOLLOW: a symlink put here after the check is refused, not followed.
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
-  const descriptor = fs.openSync(file, flags, 0o600);
+  if (found !== null && (!found.isFile() || found.nlink !== 1)) throw homeUnsafe();
+  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.naw-${randomBytes(8).toString('hex')}`);
+  // O_EXCL with O_CREAT: a new file, never one already there or a link.
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  const descriptor = fs.openSync(temporary, flags, 0o600);
   try {
-    fs.writeSync(descriptor, text);
-  } finally {
-    fs.closeSync(descriptor);
+    try {
+      fs.writeSync(descriptor, text);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    // Removes only the name made above; unlink never empties a folder.
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // Already gone.
+    }
+    throw error;
   }
 }
 
@@ -251,13 +266,13 @@ function sandboxProfile({ proxyPort, nonce, injectDir, personHome = os.homedir()
 }
 
 // One sandboxed process that makes a refused connection, so the witness can
-// see a report for this exact profile before the session starts.
+// see a report for this exact profile before the session starts. It exits
+// by itself; the witness ends any that still run with SIGTERM and waits.
 function runCanary(profile, execPath) {
-  const code = "require('node:net').connect(1, '127.0.0.1').on('error', () => process.exit(0))";
+  const code = `require('node:net').connect(${CANARY_PORT}, '127.0.0.1').on('error', () => process.exit(0))`;
   const child = spawn(SANDBOX_EXEC, ['-p', profile, execPath, '-e', code], { stdio: 'ignore', env: { PATH: '/usr/bin:/bin' } });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
-  child.on('exit', () => clearTimeout(timer));
-  child.on('error', () => clearTimeout(timer));
+  // A canary that cannot start never reports, and the witness is refused.
+  child.on('error', () => {});
   return child;
 }
 

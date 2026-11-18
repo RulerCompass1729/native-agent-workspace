@@ -16,7 +16,10 @@
 //    real TUI starts and answers without a refused connection.
 // 2. Block: a CONNECT to another host through the same proxy reports that
 //    target and stops the session.
-// After each session no process of the runtime remains.
+// 3. Lost: the witness's log reader ending stops the session.
+// Each of the three stops (stop, blocked, witness lost) ends the TUI within
+// the PTY host's SIGTERM grace, so its SIGKILL fallback never runs, and
+// after each session no process of the runtime remains.
 const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
@@ -29,6 +32,8 @@ const dshTui = require('../app/dsh-tui.cjs');
 const FAKE_KEY = 'sk-naw-offline-check-not-a-key';
 const REPLY = 'FAKE-REPLY-OK';
 const BLOCKED_TARGET = 'example.com:443';
+// pty_host.py sends SIGKILL only once this long has passed since its SIGTERM.
+const PTY_TERM_GRACE_MS = 5000;
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -181,12 +186,52 @@ function runtimeProcesses(where) {
   return found;
 }
 
+// NAW's PTY, timed: when the first stop was asked for, and when and how the
+// PTY host reported the TUI's exit (a negative code is the signal).
+class TimedTerminal extends Terminal {
+  constructor(argv, cwd, env, options) {
+    super(argv, cwd, env, options);
+    this.profile = argv[2];
+    this.stopAskedAt = null;
+    this.exitAt = null;
+    this.exitCode = undefined;
+    let lines = '';
+    this.worker.stdout.on('data', chunk => {
+      lines += chunk;
+      const parts = lines.split('\n');
+      lines = parts.pop();
+      for (const line of parts) {
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (message.type === 'exit' && this.exitAt === null) {
+          this.exitAt = Date.now();
+          this.exitCode = message.code;
+        }
+      }
+    });
+  }
+  stop(...args) {
+    if (this.stopAskedAt === null) this.stopAskedAt = Date.now();
+    return super.stop(...args);
+  }
+}
+
+function checkGrace(name, terminal) {
+  const elapsed = terminal.exitAt !== null && terminal.stopAskedAt !== null ? terminal.exitAt - terminal.stopAskedAt : null;
+  const within = elapsed !== null && elapsed < PTY_TERM_GRACE_MS && terminal.exitCode !== -9;
+  check(`${name}: the TUI exits within the SIGTERM grace, without SIGKILL`, within, `${elapsed} ms, exit ${terminal.exitCode}`);
+}
+
 function newSession(options) {
   const events = { states: [], activities: [] };
   const host = { dataDir: options.dataDir, binaries: { dsh: process.execPath } };
   const record = { id: options.id, cwd: options.work };
   const session = new dshTui.DshTui(record, host, {
-    Terminal,
+    Terminal: TimedTerminal,
     key: async () => FAKE_KEY,
     testOnly: {
       route: () => ['127.0.0.1', options.fake.port],
@@ -258,6 +303,7 @@ async function checkChat(options, where) {
   await session.stop();
   await waitFor(() => events.states.includes('ended'), 15);
   check('chat: stop ends the session with a confirmed exit', events.states.at(-1) === 'ended' && terminal.nativeExited === true, events.states.join('>'));
+  checkGrace('chat', terminal);
   await waitFor(() => runtimeProcesses(where).length === 0, 10);
   check('chat: no runtime process remains', runtimeProcesses(where).length === 0);
 }
@@ -289,10 +335,45 @@ async function checkBlock(options, where) {
   const notice = events.activities.find(activity => activity[1]?.key === 'notice.activity.dshEgressBlocked');
   check('block: the session reported the target', notice !== undefined && notice[1].params?.target === BLOCKED_TARGET, notice ? notice[0] : 'no notice');
   check('block: the session stopped by itself', ended === true && terminal.alive === false && terminal.nativeExited === true, events.states.join('>'));
+  checkGrace('block', terminal);
   const after = await connectThrough(session.proxy.port, 'api.deepseek.com:443');
   check('block: nothing passes after the violation, the allowed host included', after !== 'HTTP/1.1 200 Connection Established', after || 'closed');
   await waitFor(() => runtimeProcesses(where).length === 0, 10);
   check('block: no runtime process remains', runtimeProcesses(where).length === 0);
+  await session.stop();
+}
+
+// The witness's own log reader: a child of this process streaming the
+// session's nonce. Found by parent and command line, never by name alone.
+function witnessReader(terminal) {
+  const nonce = /\(with message "(naw-dsh-[0-9a-f]+)"\)/.exec(terminal.profile)?.[1];
+  if (!nonce) return null;
+  const out = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' });
+  const found = [];
+  for (const line of out.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!match || Number(match[2]) !== process.pid) continue;
+    if (match[3].startsWith('/usr/bin/log stream ') && match[3].includes(nonce)) found.push(Number(match[1]));
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
+async function checkLost(options, where) {
+  const { session, events } = newSession({ ...options, id: 'offline-lost' });
+  await session.start();
+  const terminal = session.openTerminal();
+  const ready = await waitFor(() => /Esc skip the guide|Say something/.test(screenText(terminal)), 60);
+  check('lost: the TUI is running before its witness ends', ready === true && terminal.alive === true);
+  const reader = witnessReader(terminal);
+  check('lost: the witness log reader is found', reader !== null, String(reader));
+  if (reader !== null) process.kill(reader, 'SIGTERM');
+  const ended = await waitFor(() => events.states.includes('ended'), 15);
+  const notice = events.activities.some(activity => activity[1]?.key === 'notice.activity.dshWitnessLost');
+  check('lost: the session reported the lost witness', notice === true);
+  check('lost: the session stopped by itself', ended === true && terminal.alive === false && terminal.nativeExited === true, events.states.join('>'));
+  checkGrace('lost', terminal);
+  await waitFor(() => runtimeProcesses(where).length === 0, 10);
+  check('lost: no runtime process remains', runtimeProcesses(where).length === 0);
   await session.stop();
 }
 
@@ -310,6 +391,7 @@ async function main() {
     const options = { dataDir, work, fake, certificate };
     await checkChat(options, where);
     await checkBlock(options, where);
+    await checkLost(options, where);
   } finally {
     if (fake) await fake.close();
     fs.rmSync(dir, { recursive: true, force: true });

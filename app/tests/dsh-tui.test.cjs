@@ -261,19 +261,33 @@ class FakeReader extends EventEmitter {
   }
 }
 
+// A canary process. It exits on SIGTERM, unless `stubborn`.
+class FakeCanary extends EventEmitter {
+  constructor(pid, stubborn = false) {
+    super();
+    this.pid = pid;
+    this.stubborn = stubborn;
+    this.signals = [];
+  }
+  kill(signal) {
+    this.signals.push(signal);
+    if (!this.stubborn) setImmediate(() => this.emit('exit', null, signal));
+    return true;
+  }
+}
+
 function fakeWitness(options = {}) {
   const reader = new FakeReader();
   const spawned = [];
   const denials = [];
   let lost = 0;
-  let canaryPid = 900;
   const canaries = [];
   const started = witness.startWitness({
     nonce: NONCE,
     runCanary: () => {
-      canaryPid++;
-      canaries.push(canaryPid);
-      return { pid: canaryPid };
+      const canary = new FakeCanary(901 + canaries.length, options.stubborn === true);
+      canaries.push(canary);
+      return canary;
     },
     onDenial: denial => denials.push(denial),
     onLost: () => lost++,
@@ -282,6 +296,8 @@ function fakeWitness(options = {}) {
       return reader;
     },
     armTimeoutMs: options.armTimeoutMs || 2000,
+    canaryExitMs: options.canaryExitMs || 2000,
+    canaryReportMs: options.canaryReportMs || 2000,
   });
   return { reader, spawned, denials, canaries, started, lost: () => lost };
 }
@@ -312,15 +328,17 @@ test('the witness arms only on its canary report and then passes every other ref
   await tick();
   assert.equal(run.canaries.length, 1, 'the header starts the first canary');
   run.reader.report('Sandbox: curl(55) deny(1) network-outbound remote:*:443');
-  run.reader.report(`Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
   const armed = await run.started;
   assert.equal(armed.armed, true);
   // A report that came before arming is still a refusal.
   assert.deepEqual(run.denials.map(denial => denial.pid), [55]);
-  run.reader.report(`1 duplicate report for Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  run.reader.report(`1 duplicate report for Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
   run.reader.report('Sandbox: python3(66) deny(1) network-bind local:*:8000');
   await tick();
   assert.deepEqual(run.denials.map(denial => denial.pid), [55, 66]);
+  // The canary was ended with SIGTERM before the witness armed.
+  assert.deepEqual(run.canaries.map(canary => canary.signals), [['SIGTERM']]);
   armed.close();
   await tick();
   assert.deepEqual(run.reader.signals, ['SIGTERM']);
@@ -336,6 +354,8 @@ test('without a canary report, or with the reader gone, the witness refuses to a
   await assert.rejects(silent.started, /no canary report/);
   assert.deepEqual(silent.reader.signals, ['SIGTERM']);
   assert.ok(silent.canaries.length >= 1);
+  // Canaries still running are ended with SIGTERM.
+  assert.ok(silent.canaries.every(canary => canary.signals.join() === 'SIGTERM'), JSON.stringify(silent.canaries.map(canary => canary.signals)));
   const ended = fakeWitness();
   ended.reader.emit('exit', 1, null);
   await assert.rejects(ended.started, /the log reader ended/);
@@ -346,11 +366,50 @@ test('the log reader ending after arming is reported as lost', async () => {
   const run = fakeWitness();
   run.reader.stdout.write('header\n');
   await tick();
-  run.reader.report(`Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
   await run.started;
   run.reader.emit('exit', 0, null);
   run.reader.emit('error', Error('gone'));
   assert.equal(run.lost(), 1);
+});
+
+// R2-B1: a canary's PID is exempt only while it is that canary: its own probe
+// report, while it runs or just after it exits. Anything else from that PID,
+// and anything at all once the PID may belong to another process, is a refusal.
+test('a refusal from a canary PID is recorded unless it is the canary probe, and always once the canary is gone', async () => {
+  const run = fakeWitness({ canaryReportMs: 50 });
+  run.reader.stdout.write('header\n');
+  await tick();
+  const pid = run.canaries[0].pid;
+  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
+  await run.started;
+  // The canary's own repeated report, right after it exited: still the canary.
+  run.reader.report(`1 duplicate report for Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
+  // The same PID refused elsewhere is not the canary's probe.
+  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:443`);
+  await wait(100);
+  // Later the PID can belong to another process, whatever it connects to.
+  run.reader.report(`Sandbox: curl(${pid}) deny(1) network-outbound remote:*:443`);
+  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
+  await tick();
+  const seen = run.denials.map(denial => [denial.process, denial.pid, denial.target]);
+  assert.deepEqual(seen, [
+    ['node', pid, 'remote:*:443'],
+    ['curl', pid, 'remote:*:443'],
+    ['node', pid, 'remote:*:1'],
+  ]);
+});
+
+// R2-B2: no SIGKILL. A canary that outlives SIGTERM keeps the witness from
+// arming, so the session does not start.
+test('canaries are ended with SIGTERM and the witness does not arm while one keeps running', async () => {
+  const run = fakeWitness({ stubborn: true, canaryExitMs: 100 });
+  run.reader.stdout.write('header\n');
+  await tick();
+  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
+  await assert.rejects(run.started, /a canary did not exit/);
+  assert.deepEqual(run.canaries.map(canary => canary.signals), [['SIGTERM']]);
+  assert.deepEqual(run.reader.signals, ['SIGTERM']);
 });
 
 // --- runtime checks -----------------------------------------------------------
@@ -409,34 +468,55 @@ test('the home patch turns off the sign-in web server and is rewritten on every 
   assert.deepEqual(rows, ['- id: dsh-tui-webserver', "  name: '@deepseek-ai/dsh-host-webserver'", '  disabled: true']);
   writeFile(patch, '- id: dsh-tui-webserver\n  disabled: false\n');
   writeFile(path.join(profileDir, 'cordis.patch.yml'), 'settings saved by the TUI\n');
+  const manifest = path.join(profileDir, 'package.json');
+  const before = [fs.statSync(patch).ino, fs.statSync(manifest).ino];
   dshTui.prepareHome(where);
   assert.equal(fs.readFileSync(patch, 'utf8'), dshTui.HOME_PATCH);
   assert.equal(fs.readFileSync(path.join(profileDir, 'cordis.patch.yml'), 'utf8'), 'settings saved by the TUI\n');
+  // R2-B3: each file is replaced by a new one, never written in place, and
+  // no temporary file is left behind.
+  assert.notEqual(fs.statSync(patch).ino, before[0]);
+  assert.notEqual(fs.statSync(manifest).ino, before[1]);
+  assert.deepEqual(fs.readdirSync(where.dshHome).sort(), ['cordis.patch.yml', 'profiles']);
+  assert.deepEqual(fs.readdirSync(profileDir).sort(), ['cordis.patch.yml', 'node_modules', 'package.json']);
 });
 
 // A synthetic person folder stands outside the TUI home; a link put in the
 // home's place must not let NAW write into it, or delete from it.
+// R2-B3: a hard link is a plain file too; it is refused, and the person's
+// file it shares stays as it was. So is a folder where a file belongs.
 test('a link in the TUI home refuses the launch and nothing outside is written or removed', t => {
-  const cases = {
-    home: where => [where.home],
-    dshHome: where => [where.dshHome],
-    scope: where => [path.join(where.dshHome, 'profiles/dsh-tui/node_modules/@deepseek-harness-tui')],
-    packageJson: where => [path.join(where.dshHome, 'profiles/dsh-tui/package.json'), 'file'],
-    homePatch: where => [path.join(where.dshHome, 'cordis.patch.yml'), 'file'],
-    tmp: where => [where.tmp],
-  };
-  for (const [name, place] of Object.entries(cases)) {
+  const packageJson = where => path.join(where.dshHome, 'profiles/dsh-tui/package.json');
+  const homePatch = where => path.join(where.dshHome, 'cordis.patch.yml');
+  const cases = [
+    ['home', where => where.home, 'folder link'],
+    ['dshHome', where => where.dshHome, 'folder link'],
+    ['scope', where => path.join(where.dshHome, 'profiles/dsh-tui/node_modules/@deepseek-harness-tui'), 'folder link'],
+    ['tmp', where => where.tmp, 'folder link'],
+    ['packageJson', packageJson, 'file link'],
+    ['homePatch', homePatch, 'file link'],
+    ['packageJson hard link', packageJson, 'hard link'],
+    ['homePatch hard link', homePatch, 'hard link'],
+    ['packageJson folder', packageJson, 'folder'],
+    ['homePatch folder', homePatch, 'folder'],
+  ];
+  for (const [name, place, kind] of cases) {
     const { where } = fakeRuntime(t);
     const outside = temporaryDirectory(t, 'dsh-person-');
-    writeFile(path.join(outside, 'keep.txt'), 'person file');
+    const keep = path.join(outside, 'keep.txt');
+    writeFile(keep, 'person file');
     writeFile(path.join(outside, 'dsh-tui/work.txt'), 'person work');
-    const [at, kind] = place(where);
+    const at = place(where);
     fs.mkdirSync(path.dirname(at), { recursive: true });
-    fs.symlinkSync(kind === 'file' ? path.join(outside, 'keep.txt') : outside, at);
+    if (kind === 'folder link') fs.symlinkSync(outside, at);
+    if (kind === 'file link') fs.symlinkSync(keep, at);
+    if (kind === 'hard link') fs.linkSync(keep, at);
+    if (kind === 'folder') writeFile(path.join(at, 'work.txt'), 'kept');
     assert.throws(() => dshTui.prepareHome(where), error => error.code === 'dsh-home-unsafe' && error.uiMessage.key === 'error.dsh.homeUnsafe', name);
     assert.deepEqual(fs.readdirSync(outside).sort(), ['dsh-tui', 'keep.txt'], name);
-    assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'person file', name);
+    assert.equal(fs.readFileSync(keep, 'utf8'), 'person file', name);
     assert.deepEqual(fs.readdirSync(path.join(outside, 'dsh-tui')), ['work.txt'], name);
+    if (kind === 'folder') assert.equal(fs.readFileSync(path.join(at, 'work.txt'), 'utf8'), 'kept', name);
   }
   // A real folder where the TUI link belongs is not removed either.
   const { where } = fakeRuntime(t);
@@ -542,7 +622,7 @@ test('a blocked connection reports its target once and stops the terminal', asyn
 
 // launch() with fake guards: what the session does with each refusal. The
 // real kernel, log and PTY are scripts/dsh-tui-sandbox-check.cjs.
-function launched(t, { witnessFails = false } = {}) {
+function launched(t, { witnessFails = false, witnessModule = null } = {}) {
   const { where } = fakeRuntime(t);
   const guards = { proxyClosed: 0, witnessClosed: 0, egress: null, witness: null };
   const fakeEgress = {
@@ -570,7 +650,7 @@ function launched(t, { witnessFails = false } = {}) {
     Terminal: RecordingTerminal,
     key: async () => 'sk-synthetic',
     egress: fakeEgress,
-    witness: fakeWitnessModule,
+    witness: witnessModule || fakeWitnessModule,
   });
   const activities = [];
   runtime.on('activity', (text, uiMessage) => activities.push(uiMessage));
@@ -612,6 +692,28 @@ test('a session stops when its witness is lost and does not start without one', 
   });
   assert.equal(failing.terminals.length, 0);
   assert.equal(failing.guards.proxyClosed, 1);
+});
+
+// R2-B1 end to end: the real witness over a fake log and canary. Once the
+// canary has exited, its PID refused anywhere stops the session.
+test('a refusal from a reused canary PID is recorded and stops the session', async t => {
+  const reader = new FakeReader();
+  const canary = new FakeCanary(901);
+  const realWitness = {
+    startWitness: options => witness.startWitness({ ...options, runCanary: () => canary, spawn: () => reader, canaryReportMs: 30 }),
+  };
+  const { runtime, where, terminals, activities } = launched(t, { witnessModule: realWitness });
+  reader.stdout.write('header\n');
+  reader.report('Sandbox: node(901) deny(1) network-outbound remote:*:1');
+  await runtime.launch(where, '/synthetic/node');
+  assert.equal(terminals.length, 1);
+  await wait(80);
+  reader.report('Sandbox: node(901) deny(1) network-outbound remote:*:443');
+  await tick();
+  assert.equal(terminals[0].stops, 1);
+  assert.deepEqual(runtime.violations.map(found => [found.source, found.pid, found.target]), [['sandbox', 901, 'remote:*:443 (node)']]);
+  assert.deepEqual(activities.map(message => message.key), ['notice.activity.dshEgressBlocked']);
+  await runtime.stop();
 });
 
 // --- PTY environment ------------------------------------------------------------
