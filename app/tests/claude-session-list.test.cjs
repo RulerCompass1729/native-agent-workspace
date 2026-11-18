@@ -83,6 +83,18 @@ test('rows of another session, or without an absolute folder, are not this sessi
   assert.equal(clean('一二三四五六七八九十'.repeat(7)).length, 60);
 });
 
+test('an ID and folder without a known message row fall back to the pasted ID', async t => {
+  const env = fixture(t);
+  const cwd = '/work/alpha';
+  // Reviewer B's counterexamples: an unknown row type, and a user row without its message.
+  write(path.join(env.root, '-work-alpha', A + '.jsonl'), [{ type: 'future-record-v9', sessionId: A, cwd, version: QUALIFIED_VERSION, futurePayload: { renamed: true } }]);
+  write(path.join(env.root, '-work-beta', B + '.jsonl'), [{ type: 'custom-title', customTitle: 'Only a title', sessionId: B }, { type: 'user', sessionId: B, cwd: '/work/beta', version: QUALIFIED_VERSION }]);
+  write(path.join(env.root, '-work-gamma', C + '.jsonl'), [{ ...user(C, '/work/gamma', 'x'), message: { role: 'assistant', content: 'x' } }]);
+  assert.deepEqual(await sessions(env).list({}), { data: [], nextCursor: null, unavailable: { reason: 'format', count: 3 } });
+  write(path.join(env.root, '-work-gamma', C + '.jsonl'), [assistant(C, '/work/gamma', 'Reply only')]);
+  assert.deepEqual((await sessions(env).list({})).data.map(row => row.nativeId), [C]);
+});
+
 test('lists newest first with folder, time and running state from claude agents', async t => {
   const env = fixture(t);
   write(path.join(env.root, '-work-alpha', A + '.jsonl'), [{ type: 'custom-title', customTitle: 'Synthetic Alpha budget', sessionId: A }, user(A, '/work/alpha', 'Alpha task')], new Date('2026-11-18T09:00:00Z'));

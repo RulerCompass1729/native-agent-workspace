@@ -69,6 +69,14 @@ function typedText(row) {
   return text;
 }
 
+// A user or assistant row in the shape Claude writes; IDs and a folder alone prove no format.
+function conversational(row) {
+  if (row.type !== 'user' && row.type !== 'assistant') return false;
+  const message = row.message;
+  if (!message || typeof message !== 'object' || Array.isArray(message) || message.role !== row.type) return false;
+  return typeof message.content === 'string' || Array.isArray(message.content);
+}
+
 function readText(fd, start, length) {
   const buffer = Buffer.alloc(length);
   const count = fs.readSync(fd, buffer, 0, length, start);
@@ -108,7 +116,7 @@ function describe(file, id, size) {
     let cwd = null, customTitle = null, aiTitle = null, firstTyped = null;
     for (const row of [...head, ...tail]) {
       if (typeof row.sessionId !== 'string' || row.sessionId.toLowerCase() !== id) continue;
-      if (!cwd && typeof row.cwd === 'string' && path.isAbsolute(row.cwd)) cwd = row.cwd;
+      if (!cwd && conversational(row) && typeof row.cwd === 'string' && path.isAbsolute(row.cwd)) cwd = row.cwd;
       if (row.type === 'custom-title' && clean(row.customTitle)) customTitle = clean(row.customTitle);
       if (row.type === 'ai-title' && clean(row.aiTitle)) aiTitle = clean(row.aiTitle);
     }

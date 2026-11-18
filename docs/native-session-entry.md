@@ -156,13 +156,21 @@ remain.
   the folder from that session's own rows, the modification time and a title (the
   newest `custom-title`, else `ai-title`, else the first typed message, cut to 60
   characters). Subagent files, symlinks and files owned by another user are skipped.
+  A file counts as recognized only when a user or assistant row of that session
+  has its message and an absolute folder; an ID and folder alone are not enough.
 - Running state comes from `claude agents --json --all`. A running row is labelled
   「正在别处运行，先在那边退出再接」 but stays selectable; the existing import guard
   (`claude agents --json` and the process check) still refuses it, so no second
   writer starts. A row already open in NAW shows 「已在工作台中」 instead.
-- The list sits behind the Claude qualification gate: an unqualified or unknown
-  version reads no files and says to paste the ID; records whose format is not
-  recognized are counted and the dialog says to paste the ID.
-- Verified on Claude 2.1.327 by `scripts/test-native-claude-session-list.cjs`
-  (isolated HOME and config, real CLI under the loopback sandbox, zero requests).
-  Other versions are not verified.
+- The list sits behind the existing Claude qualification gate: it opens for every
+  version in `claude-pin.cjs` `QUALIFIED` and for a version with a passed
+  `claude-qualification` record. An unqualified or unknown version reads no files
+  and says to paste the ID; records whose format is not recognized are counted and
+  the dialog says to paste the ID.
+- Verified end to end only on Claude 2.1.327 by
+  `scripts/test-native-claude-session-list.cjs` (isolated HOME and config, real CLI
+  under the loopback sandbox, zero requests). The gate also opens the list on the
+  other qualified versions, whose transcript format this journey did not check;
+  an unrecognized format there falls back to the pasted ID. The journey keeps
+  Claude's records out of its exported evidence and fails if any evidence file
+  holds a listed title, first message or reply.

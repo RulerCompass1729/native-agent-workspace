@@ -25,7 +25,8 @@ const A = crypto.randomUUID(), B = crypto.randomUUID();
 const TITLES = { [A]: 'Synthetic Alpha notes', [B]: 'Synthetic Beta notes' };
 const REPLIES = { [A]: 'SYNTHETIC_ALPHA_REPLY', [B]: 'SYNTHETIC_BETA_REPLY' };
 const PROMPTS = { [A]: 'SYNTHETIC_ALPHA_PROMPT', [B]: 'SYNTHETIC_BETA_PROMPT' };
-let fixture, application, page, client, outside, outsideIdentity;
+const SESSION_TEXT = [...Object.values(TITLES), ...Object.values(PROMPTS), ...Object.values(REPLIES)];
+let fixture, application, page, client, outside, outsideIdentity, nativeIdentities = [];
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
@@ -64,9 +65,17 @@ async function cleanup() {
   let failure;
   try { if (outside?.alive) await outside.stop(10000); } catch (error) { failure = error; }
   if (application) await application.close().catch(() => {});
-  if (client) { try { for (const s of (await snapshot()).sessions) await client.call('stop', s.id); await client.call('shutdown'); } finally { client.close(); } }
+  if (client) { try {
+    const open = (await snapshot()).sessions; nativeIdentities = open.filter(s => s.pid).map(s => processIdentity(s.pid)).filter(Boolean);
+    for (const s of open) await client.call('stop', s.id); await client.call('shutdown');
+  } finally { client.close(); } }
   if (fixture) await fixture.stop();
   if (outsideIdentity && processMayBeAlive(outsideIdentity)) failure ||= Error('Owned outside session exit is unconfirmed');
+  await until(() => nativeIdentities.every(id => !processMayBeAlive(id)), 'Native sessions exited', 5000).catch(error => { failure ||= error; });
+  // testScratch exports this whole base as evidence: transcripts and Claude's records stay out of it.
+  fs.rmSync(config, { recursive: true, force: true });
+  const failureText = path.join(base, 'failure.txt');
+  if (fs.existsSync(failureText)) fs.writeFileSync(failureText, SESSION_TEXT.reduce((text, marker) => text.split(marker).join('[synthetic session text]'), fs.readFileSync(failureText, 'utf8')));
   if (failure) throw failure;
 }
 (async () => {
@@ -160,4 +169,11 @@ async function cleanup() {
 })().catch(async error => {
   if (page && !page.isClosed()) { await shot('failure').catch(() => {}); if (evidence) fs.writeFileSync(path.join(evidence, 'failure-status.txt'), await page.locator('#native-history-status').innerText().catch(() => '')); }
   console.error(error.stack); process.exitCode = 1;
-}).finally(testScratch.cleanup(cleanup));
+}).finally(testScratch.cleanup(cleanup)).then(() => {
+  if (!evidence) return;
+  const holders = [];
+  const scan = dir => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const file = path.join(dir, entry.name); if (entry.isDirectory()) scan(file); else if (entry.isFile() && SESSION_TEXT.some(text => fs.readFileSync(file).includes(text))) holders.push(path.relative(evidence, file)); } };
+  scan(evidence);
+  if (holders.length) { console.error(JSON.stringify({ evidenceHoldsSessionText: holders })); process.exitCode = 1; }
+  else console.log(JSON.stringify({ evidenceSessionTextScan: 'clean', markers: SESSION_TEXT.length }));
+});
