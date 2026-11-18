@@ -60,16 +60,22 @@
   }
   function alignedColumnWidths(count, width, saved = []) {
     width = Number.isFinite(width) ? Math.max(1, width) : 1;
-    const capacity = Math.max(1, Math.floor(width / 260)), total = count ? width * count / Math.min(count, capacity) : 0;
-    const floor = Math.min(260, width), widths = Array(count).fill(0), free = new Set(widths.keys());
+    const capacity = Math.max(1, Math.floor(width / 260)), widths = Array(count).fill(0);
     const weights = widths.map((_, i) => Number.isFinite(saved[i]) && saved[i] > 0 ? saved[i] : 1);
-    let remaining = total;
-    while (free.size) {
-      const sum = [...free].reduce((n, i) => n + weights[i], 0), low = [...free].filter(i => remaining * weights[i] / sum < floor);
-      if (!low.length) { for (const i of free) widths[i] = remaining * weights[i] / sum; break; }
-      for (const i of low) { widths[i] = floor; remaining -= floor; free.delete(i); }
+    const grouped = count > capacity && weights.some(n => Math.abs(n - weights[0]) > 1e-8);
+    const groupSize = grouped ? capacity : count, floor = Math.min(260, width);
+    // Unequal resized columns cannot fit every sliding window. Keep each
+    // complete page at the viewport width, retaining the person's width ratios.
+    for (let start = 0; start < count; start += groupSize) {
+      const stop = Math.min(count, start + groupSize), free = new Set(Array.from({ length: stop - start }, (_, i) => start + i));
+      let remaining = grouped ? width : width * count / Math.min(count, capacity);
+      while (free.size) {
+        const sum = [...free].reduce((n, i) => n + weights[i], 0), low = [...free].filter(i => remaining * weights[i] / sum < floor);
+        if (!low.length) { for (const i of free) widths[i] = remaining * weights[i] / sum; break; }
+        for (const i of low) { widths[i] = floor; remaining -= floor; free.delete(i); }
+      }
     }
-    return { capacity, total, widths };
+    return { capacity, total: widths.reduce((a, b) => a + b, 0), widths };
   }
   function columnWindow(widths, left, width) {
     let offset = 0; const starts = [], ends = [];
@@ -78,6 +84,20 @@
     const first = Math.max(0, ends.findIndex(x => x > left + 1)), capacity = Math.max(1, Math.floor(width / Math.min(...widths)));
     const next = ends.findIndex(x => x > left + width + 1);
     return { before, after, previous: before ? starts[Math.max(0, first - capacity)] : 0, next: after ? (starts[next] > left + 1 ? starts[next] : left + width) : 0 };
+  }
+  function columnSnap(widths, left, width, origin) {
+    const end = Math.max(0, widths.reduce((a, b) => a + b, 0) - width), clamp = n => Math.max(0, Math.min(end, n));
+    const ends = []; let offset = 0;
+    for (const value of widths) { offset += value; ends.push(offset); }
+    const points = [0, ...ends.filter(n => n < end && ends.some(right => Math.abs(right - n - width) < 1)), end];
+    left = clamp(left); origin = clamp(origin);
+    if (Math.abs(left - origin) <= .5) return left;
+    let target = points.reduce((a, b) => Math.abs(b - left) < Math.abs(a - left) ? b : a);
+    // A small real gesture must escape its starting snap, rather than bounce
+    // back forever. No outer movement (e.g. a nested code block) stays put.
+    if (left > origin + .5 && target <= origin + 1) target = points.find(n => n > origin + 1) ?? target;
+    if (left < origin - .5 && target >= origin - 1) target = points.findLast(n => n < origin - 1) ?? target;
+    return target;
   }
   // Progressive reveal is remembered per space for the app session, so switching
   // spaces keeps how many member columns the person had expanded.
@@ -90,7 +110,7 @@
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
     const aligned = options.alignedTabs === true, alignedGrid = () => aligned && layout === 'grid' && !focused && contentVisible;
-    let alignedWidths = [], activeMember = '', pagerFrame = 0, disposed = false, measuredWidth = 0;
+    let alignedWidths = [], activeMember = '', pagerFrame = 0, disposed = false, measuredWidth = 0, snapOrigin = null, snapTimer = 0, lastLeft = 0;
     const roomKey = options.roomId || 'shared';
     let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false, progressive = false;
     const orderType = 'application/x-native-room-member-order';
@@ -133,12 +153,37 @@
     pagePrevious.hidden = pageNext.hidden = true;
     if (aligned) strip.append(readers, pagePrevious, pageNext);
     function schedulePager() { if (!pagerFrame) pagerFrame = requestAnimationFrame(() => { pagerFrame = 0; if (!disposed) updatePager(); }); }
-    if (aligned) readers.addEventListener('scroll', schedulePager, { passive: true });
+    function cancelColumnSnap() { clearTimeout(snapTimer); snapTimer = 0; snapOrigin = null; lastLeft = readers.scrollLeft; }
+    function settleColumns() {
+      const origin = snapOrigin;
+      if (origin === null) return;
+      const target = columnSnap(alignedWidths, readers.scrollLeft, readers.clientWidth, origin);
+      cancelColumnSnap();
+      if (!disposed && alignedGrid()) { readers.scrollLeft = target; schedulePager(); }
+    }
+    function deferColumnSnap() { clearTimeout(snapTimer); snapTimer = setTimeout(settleColumns, 120); }
+    if (aligned) {
+      readers.addEventListener('scroll', () => {
+        schedulePager(); if (snapOrigin !== null) deferColumnSnap(); else lastLeft = readers.scrollLeft;
+      }, { passive: true });
+      readers.addEventListener('wheel', event => {
+        if (!alignedGrid() || !event.deltaX || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+        if (snapOrigin === null) snapOrigin = lastLeft;
+        // Keep native pixel input and nested scrollers. Only a direct gesture
+        // settles to columns; restoring a recorded reading position does not.
+        deferColumnSnap();
+      }, { passive: true });
+      readers.addEventListener('keydown', event => {
+        if (!alignedGrid() || event.defaultPrevented || !['ArrowLeft', 'ArrowRight'].includes(event.key) || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        cancelColumnSnap(); snapOrigin = readers.scrollLeft; deferColumnSnap();
+      });
+    }
     function markActive(id) {
       activeMember = id;
       for (const [key, pane] of panes) { pane.header.dataset.active = String(key === id); if (key === id) pane.name.setAttribute('aria-current', 'true'); else pane.name.removeAttribute('aria-current'); }
     }
     function pageColumns(forward) {
+      cancelColumnSnap();
       if (!alignedGrid()) return;
       const w = columnWindow(alignedWidths, readers.scrollLeft, readers.clientWidth);
       readers.scrollLeft = forward ? w.next : w.previous; schedulePager();
@@ -198,6 +243,7 @@
       }
     }
     function focus(id) {
+      cancelColumnSnap();
       if (id === focused) return;
       if (id && !records.some(s => s.id === id)) return;
       options.beforeInputLayout?.(); options.beforeLayout?.();
@@ -211,7 +257,7 @@
       }
       options.onLayout?.();
     }
-    function setLayout(value) { options.beforeInputLayout?.(); options.beforeLayout?.(); layout = value; render(); options.onLayout?.(); }
+    function setLayout(value) { cancelColumnSnap(); options.beforeInputLayout?.(); options.beforeLayout?.(); layout = value; render(); options.onLayout?.(); }
     function refreshStatus() {
       for (const record of records) {
         const pane = panes.get(record.id); if (!pane) continue;
@@ -254,6 +300,7 @@
       if (aligned) schedulePager();
     }
     function resize(index, delta, total) {
+      cancelColumnSnap();
       const values = records.map(r => weights.get(r.id) || 1), next = alignedGrid()
         ? adjustedWidths(values, index, delta, alignedWidths.reduce((a, b) => a + b, 0), 260)
         : adjustedWidths(values, index, delta, total);
@@ -502,15 +549,17 @@
     }
     return {
       update(people, isConnected = true, showContent = true, focusId = focused) {
-        if (!isConnected || records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n')) { options.beforeInputLayout?.(); dragging = null; clearOrderMarkers(); }
+        const membershipChanged = records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n');
+        if (!isConnected || !showContent || focusId !== focused || membershipChanged) cancelColumnSnap();
+        if (!isConnected || membershipChanged) { options.beforeInputLayout?.(); dragging = null; clearOrderMarkers(); }
         records = people; connected = isConnected; contentVisible = showContent;
         if (!focusId || records.some(r => r.id === focusId)) { if (focusId !== focused) originSelection = null; focused = focusId; }
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { disposed = true; if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
+      dispose() { disposed = true; cancelColumnSnap(); if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
-  return { create, statusFacts, excerpt, adjustedWidths, alignedColumnWidths, columnWindow };
+  return { create, statusFacts, excerpt, adjustedWidths, alignedColumnWidths, columnWindow, columnSnap };
 });

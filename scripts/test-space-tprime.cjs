@@ -65,24 +65,39 @@ async function run() {
       }
     }
   }
-  // Edge states stay readable beside paging controls; use the same real input
-  // path as the reviewer's wheel counterexample rather than setting scrollLeft.
-  await app.evaluate(({BrowserWindow,nativeTheme})=>{BrowserWindow.getAllWindows().forEach(win=>win.setContentSize(1280,900));nativeTheme.themeSource='light';});await page.emulateMedia({colorScheme:'light'});
+  // Actual wheel input must settle on readable columns, including narrow windows.
   for(const lang of ['zh','en']){
     await page.locator('#setup-button').click();await page.locator('#ui-language').selectOption(lang);await page.waitForFunction(v=>document.querySelector('#new-session').getAttribute('aria-label')===v,locale.format(lang,'sidebar.newSession'));await page.keyboard.press('Escape');
-    await page.locator('.collaboration-readers').evaluate(e=>e.scrollLeft=e.firstElementChild.getBoundingClientRect().width);await settle();
-    const edgeIds=await page.evaluate(()=>['page-start','page-end'].map(c=>document.querySelector('.collaboration-member-status.'+c)?.dataset.memberId));assert.ok(edgeIds.every(Boolean));
-    await fixture('native-activity',edgeIds[0],{turnId:'synthetic-edge-busy',label:'Working',observedAt:Date.now()});await fixture('native-permission',edgeIds[1],{requests:[{id:'synthetic-edge-permission'}],observedAt:Date.now()});
-    await until(async()=>{const rows=(await client.call('initial')).sessions;return rows.find(s=>s.id===edgeIds[0]).state==='working'&&rows.find(s=>s.id===edgeIds[1]).state==='approval';},'Busy and approval edge states');await settle();
-    const states=await page.evaluate(()=>[...document.querySelectorAll('.collaboration-member-status.page-start,.collaboration-member-status.page-end')].map(h=>{
-      const el=h.querySelector('.collaboration-member-state'),r=el.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(el);const text=range.getBoundingClientRect();
-      return{state:h.dataset.state,text:el.textContent,width:r.width,height:r.height,clip:getComputedStyle(el).clipPath,textWidth:text.width,visible:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===el};
-    }));
-    await page.screenshot({path:path.join(evidence,'images',lang+'-busy-approval-edges.png'),scale:'css'});fs.writeFileSync(path.join(evidence,lang+'-edge-states.json'),JSON.stringify(states,null,2));
-    for(const state of states){assert.ok(state.text.includes(locale.format(lang,state.state==='working'?'state.working':'state.approval')));assert.ok(state.height>=10&&state.width>=20&&state.clip==='none'&&state.visible,'Edge state must be directly readable, not a clipped accessibility-only node');assert.ok(state.textWidth<=state.width+1,'Busy/approval words fit without truncation');}
-    for(const id of edgeIds){await fixture('native-permission',id,null);await fixture('native-activity',id,null);await fixture('state',id);}await settle();
-    check(lang+': busy and approval edge words remain visible beside both paging buttons');
+    for(const theme of ['light','dark']){
+      await app.evaluate(({nativeTheme},v)=>nativeTheme.themeSource=v,theme);await page.emulateMedia({colorScheme:theme});
+      for(const width of [850,1280,1600]){
+        await app.evaluate(({BrowserWindow},w)=>BrowserWindow.getAllWindows().forEach(win=>win.setContentSize(w,900)),width);await settle();
+        await page.locator('.collaboration-readers').evaluate(e=>e.scrollLeft=0);await settle();
+        const bodyBox=await page.locator('.collaboration-messages').first().boundingBox();await page.mouse.move(bodyBox.x+bodyBox.width/2,bodyBox.y+100);await page.mouse.wheel(380,0);await delay(350);
+        const edgeIds=await page.evaluate(()=>['page-start','page-end'].map(c=>document.querySelector('.collaboration-member-status.'+c)?.dataset.memberId));assert.ok(edgeIds.every(Boolean));assert.notEqual(edgeIds[0],edgeIds[1]);
+        await fixture('native-activity',edgeIds[0],{turnId:'synthetic-edge-busy',label:'Working',observedAt:Date.now()});await fixture('native-permission',edgeIds[1],{requests:[{id:'synthetic-edge-permission'}],observedAt:Date.now()});
+        await until(async()=>{const rows=(await client.call('initial')).sessions;return rows.find(s=>s.id===edgeIds[0]).state==='working'&&rows.find(s=>s.id===edgeIds[1]).state==='approval';},'Busy and approval edge states');await settle();
+        const states=await page.evaluate(()=>[...document.querySelectorAll('.collaboration-member-status.page-start,.collaboration-member-status.page-end')].map(h=>{
+          const el=h.querySelector('.collaboration-member-state'),r=el.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(el);const text=range.getBoundingClientRect(),view=h.closest('.collaboration-readers').getBoundingClientRect(),name=h.querySelector('.collaboration-member-name');
+          return{state:h.dataset.state,text:el.textContent,rect:r.toJSON(),clip:getComputedStyle(el).clipPath,textWidth:text.width,inside:r.left>=view.left-1&&r.right<=view.right+1,hits:[.06,.5,.94].map(f=>document.elementFromPoint(r.left+r.width*f,r.top+r.height/2)===el),accessible:name.getAttribute('aria-label'),title:name.title};
+        }));
+        const key=`${lang}-${theme}-${width}-busy-approval-edges`;await page.screenshot({path:path.join(evidence,'images',key+'.png'),scale:'css'});fs.writeFileSync(path.join(evidence,key+'.json'),JSON.stringify(states,null,2));const ax=await page.locator('#collaboration-overview').ariaSnapshot();
+        for(const state of states){assert.equal(state.text,locale.format(lang,state.state==='working'?'state.working':'state.approval'));assert.ok(state.rect.height>=12&&state.rect.width>=20&&state.clip==='none'&&state.inside&&state.hits.every(Boolean),'Whole edge word must be inside the viewport and clear of paging buttons');assert.ok(state.textWidth<=state.rect.width+1,'Busy/approval words fit without truncation');assert.ok(ax.includes(state.accessible)&&state.title.includes('共同工作 · '),'The full original name remains accessible');}
+        for(const id of edgeIds){await fixture('native-permission',id,null);await fixture('native-activity',id,null);await fixture('state',id);}await settle();check(key+': both state words and full accessible names');
+      }
+    }
   }
+  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().forEach(win=>win.setContentSize(1280,900)));
+  const smallWheel=[];
+  for(const amount of [8,20,-8]){
+    const strip=page.locator('.collaboration-readers');await strip.evaluate((e,n)=>e.scrollLeft=n<0?e.scrollWidth:0,amount);await settle();const before=await strip.evaluate(e=>e.scrollLeft),box=await strip.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+100);
+    for(let n=0;n<6;n++){await page.mouse.wheel(amount,0);await delay(25);}await delay(350);const after=await strip.evaluate(e=>e.scrollLeft);smallWheel.push({amount,before,after});fs.writeFileSync(path.join(evidence,'small-wheel.json'),JSON.stringify(smallWheel,null,2));assert.ok((after-before)*amount>0,'Small horizontal wheel gestures must escape the starting column in either direction');
+  }
+  fs.writeFileSync(path.join(evidence,'small-wheel.json'),JSON.stringify(smallWheel,null,2));check('Small forward and backward wheel gestures make progress');
+  await fixture('history',ids[1],[{id:'nested-scroll',type:'agentMessage',turnId:'synthetic-code',text:['```text','abcdefghij'.repeat(160),'```'].join(String.fromCharCode(10))}]);
+  const nestedStrip=page.locator('.collaboration-readers');await nestedStrip.evaluate(e=>e.scrollLeft=160);await settle();const code=page.locator('.collaboration-messages').nth(1).locator('pre').first();await code.waitFor();assert.ok(await code.evaluate(e=>e.scrollWidth>e.clientWidth));
+  const codeBox=await code.boundingBox(),stripBox=await nestedStrip.boundingBox();await page.mouse.move(codeBox.x+codeBox.width/2,codeBox.y+codeBox.height/2);await page.mouse.wheel(80,0);await delay(350);assert.ok(await code.evaluate(e=>e.scrollLeft)>0,'The nested code scroller receives the horizontal input');assert.equal(await nestedStrip.evaluate(e=>e.scrollLeft),160,'Nested scrolling must preserve an untouched restored outer position');check('Nested horizontal code scrolling keeps the outer reading position');
+  await nestedStrip.evaluate(e=>e.scrollLeft=0);await settle();await page.mouse.move(stripBox.x+stripBox.width/2,stripBox.y+100);await page.mouse.wheel(8,0);await page.locator('.collaboration-layout-controls button').nth(1).click();const listLeft=await nestedStrip.evaluate(e=>e.scrollLeft);await delay(250);assert.equal(await nestedStrip.evaluate(e=>e.scrollLeft),listLeft,'Switching layout cancels the pending alignment');assert.equal(await page.locator('.collaboration-page:visible').count(),0);await page.locator('.collaboration-layout-controls button').first().click();check('Leaving the grid cancels pending alignment without moving the list');
   await fixture('history',ids[0],[{id:'scroll-regression',type:'agentMessage',turnId:'synthetic-scroll',text:'Synthetic scrolling paragraph.\n\n'.repeat(160)}]);
   const strip=page.locator('.collaboration-readers'),body=page.locator('.collaboration-messages').first();await strip.evaluate(e=>e.scrollLeft=0);
   await until(()=>body.evaluate(e=>e.scrollHeight>e.clientHeight+500),'Scrollable synthetic body');await body.evaluate(e=>e.scrollTop=0);await settle();
