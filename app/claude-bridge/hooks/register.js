@@ -32,7 +32,7 @@ let nativeBlocks = false;
 let addressedTool = false;
 const operatorSchemas = {
   workspace_sessions: [],
-  workspace_open: ['action_id', 'provider', 'cwd', 'name', 'task', 'permission', 'grant_id'],
+  workspace_open: ['action_id', 'provider', 'cwd', 'name', 'view', 'task', 'permission', 'grant_id'],
   workspace_report: ['request_id', 'dispatch_id', 'state', 'body', 'question'],
 };
 let operatorTools = [];

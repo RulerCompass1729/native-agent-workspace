@@ -27,7 +27,15 @@ test('catalog rejects loops and read rejects identity substitution; children can
 function fixture(t, mode) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-import-test-')), calls = [];
   const host = { binaries: {}, codexTargets: new Map(), codexProcess: { pid: process.pid }, startCodex: async () => {}, close() {},
-    create(record) { return new Codex(record, this); }, rpc: { call: async (method, params) => {
+    create(record) {
+      const runtime = new Codex(record, this);
+      runtime.makeTerminal = argv => {
+        calls.push({ method: 'terminal/resume', argv });
+        runtime.terminal = new (require('node:events').EventEmitter)(); runtime.terminal.alive = true;
+        return runtime.terminal;
+      };
+      return runtime;
+    }, rpc: { call: async (method, params) => {
       calls.push({ method, params });
       if (method === 'thread/resume') {
         if (mode === 'writer') { const error = Error('仍有活动连接'); error.nativeActiveWriter = true; throw error; }
@@ -45,6 +53,17 @@ function fixture(t, mode) {
   t.after(() => { w.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   return { w, host, calls, directory };
 }
+test('history import defaults to the same native terminal and honors explicit chat', async t => {
+  for (const view of [undefined, 'chat']) {
+    const f = fixture(t), local = await f.w.importHistory(id, 'owner', view ? { view } : {});
+    assert.equal(f.w.get(local).view, view || 'terminal');
+    const terminals = f.calls.filter(c => c.method === 'terminal/resume');
+    assert.equal(terminals.length, view ? 0 : 1);
+    if (terminals.length) assert.equal(terminals[0].argv.at(-1), id);
+    assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, 1);
+    assert.equal(f.calls.some(c => ['thread/start', 'turn/start'].includes(c.method)), false);
+  }
+});
 test('selected history preserves native identity/settings, is saved before resume and imports once under concurrency', async t => {
   const f = fixture(t); const call = f.host.rpc.call;
   f.host.rpc.call = async (method, params) => {
@@ -71,7 +90,8 @@ for (const failure of ['uncertain', 'page-failure']) test('import retains one re
   assert.equal(f.w.get(local).nativeId, id); assert.equal(f.w.snapshot().sessions[0].chatAvailable, failure === 'page-failure' ? false : true);
   if (failure === 'page-failure') { assert.ok(f.w.runtimes.get(local).hasHistory); assert.match(f.w.get(local).activity, /同步未完成/); }
   else { assert.equal(f.w.get(local).state, 'error'); assert.equal(f.w.runtimes.size, 0); }
-  assert.ok(f.calls.every(c => ['thread/resume', 'thread/items/list'].includes(c.method)));
+  assert.equal(f.calls.filter(c => c.method === 'terminal/resume').length, failure === 'page-failure' ? 1 : 0);
+  assert.ok(f.calls.filter(c => c.method !== 'terminal/resume').every(c => ['thread/resume', 'thread/items/list'].includes(c.method)));
 });
 test('failed durable reservation prevents native resume', async t => {
   const f = fixture(t); t.mock.method(fs, 'renameSync', () => { throw Error('Disk full'); });

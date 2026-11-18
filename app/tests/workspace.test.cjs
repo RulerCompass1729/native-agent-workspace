@@ -4,16 +4,25 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { Workspace } = require('../workspace.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t, count = 1) {
+async function fixture(t, count = 1, view) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-test-'));
   const runtimes = [];
   const host = { binaries: {}, close() {}, create() { const runtime = new EventEmitter(); runtime.start = async () => runtime.emit('state', 'idle'); runtime.send = async () => {}; runtime.finishTurn = () => {}; runtimes.push(runtime); return runtime; } };
   const workspace = new Workspace(host, directory);
   t.after(() => { workspace.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const ids = [];
-  for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
+  for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`, view));
   return { workspace, runtimes, ids, directory };
 }
+test('Codex creation defaults to terminal while explicit chat and Claude defaults remain available', async t => {
+  const { workspace: w, directory } = await fixture(t, 0);
+  const tui = await w.create('codex', directory, 'owner', 'Default TUI');
+  const chat = await w.create('codex', directory, 'owner', 'Explicit chat', 'chat');
+  const claude = await w.create('claude', directory, 'owner', 'Claude default');
+  assert.equal(w.get(tui).view, 'terminal'); assert.equal(w.get(tui).skipPermissions, undefined);
+  assert.equal(w.get(chat).view, 'chat'); assert.equal(w.get(claude).view, 'chat');
+  assert.equal(w.sessions.size, 3);
+});
 // The real runtime binds its host. Omitting that link masks the shared-server bug.
 async function processRecoveryFixture(t, provider = 'claude') {
   const cp = require('node:child_process'), { once } = require('node:events');
@@ -1188,7 +1197,9 @@ for (const item of [
   { type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'inProgress' },
   { type: 'collabAgentToolCall', tool: 'followupTask', status: 'inProgress' },
 ]) test(`native Codex fleet protocol blocks subsequent handoff: ${item.type}/${item.kind || item.tool}`, async t => {
-  const { workspace: w, ids } = await fixture(t, 2), { Codex } = require('../adapters.cjs');
+  // This protocol-only fixture attaches an already usable chat runtime; it
+  // does not perform native terminal startup or a first thread handshake.
+  const { workspace: w, ids } = await fixture(t, 2, 'chat'), { Codex } = require('../adapters.cjs');
   const s = w.get(ids[1]), runtime = new Codex(s, { codexTargets: new Map() });
   w.runtimes.set(s.id, runtime); w.bind(s, runtime); ids.forEach(id => w.join(id, true));
   await w.startRun(ids, 'shared question', 3, 'replies');

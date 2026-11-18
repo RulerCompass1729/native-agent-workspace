@@ -41,7 +41,9 @@ server.listen(endpoint,()=>{if(${symlink})fs.symlinkSync(endpoint,requested);});
     if (child && child.exitCode === null && child.signalCode === null) await once(child, 'exit');
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  const id = await w.create('codex', dir, 'window', 'Synthetic continuity');
+  // This app-server protocol fixture has no TUI client. Terminal startup is
+  // covered with a real PTY in codex-tui-default.test.cjs.
+  const id = await w.create('codex', dir, 'window', 'Synthetic continuity', 'chat');
   // Replace the control file whole: the server may read it mid-write, and an
   // empty read would crash it and leave its socket behind (T-156 review).
   const configure = value => { fs.writeFileSync(controlFile + '.next', JSON.stringify(value)); fs.renameSync(controlFile + '.next', controlFile); };
@@ -115,7 +117,7 @@ test('explicit transport recovery retains the same live backend, terminal and th
   assert.equal(JSON.stringify(w.snapshot()),good);
 });
 for (const concurrent of [false,true]) test('shared transport reconnect subscribes only explicitly selected threads: '+concurrent,async t=>{
-  const f=await fixture(t),second=await f.w.create('codex',f.dir,'window','Other session'),child=f.host.codexProcess,old=f.host.rpc;
+  const f=await fixture(t),second=await f.w.create('codex',f.dir,'window','Other session','chat'),child=f.host.codexProcess,old=f.host.rpc;
   await old.call('test/close',{});await until(()=>old.ws.readyState===3);
   if(concurrent)await Promise.all([f.w.resume(f.id,'window'),f.w.resume(second,'window')]);
   else{
@@ -206,7 +208,7 @@ test('previously accepted sharing stays private after transport reconnect and na
   assert.equal(f.calls().filter(c=>c.method==='turn/start').length,1);
 });
 test('a sleeping first-turn observer cannot subscribe an unselected peer through a replacement transport',async t=>{
-  const f=await fixture(t),second=await f.w.create('codex',f.dir,'window','Unselected terminal-first peer');
+  const f=await fixture(t),second=await f.w.create('codex',f.dir,'window','Unselected terminal-first peer','chat');
   const r=f.w.runtime(second);r.chatAvailable=false;
   const observing=r.observeFirstTurn();
   const old=f.host.rpc;await old.call('test/close',{});await until(()=>old.ws.readyState===3);
@@ -310,7 +312,7 @@ test('backend exit cancels native setup and its queued slot before a later termi
   const lateStarted=host.pendingCodex;
   await crash(host);await until(()=>w.get(id).state==='ended');
   assert.equal(host.pendingCodex,null);assert.equal(w.get(id).nativeId,null);
-  const next=await w.create('codex',dir,'window','Next session');
+  const next=await w.create('codex',dir,'window','Next session','chat');
   lateStarted({id:'obsolete-native'});await tick();
   assert.equal(w.get(id).nativeId,null);assert.equal(w.get(id).state,'ended');
   assert.equal(w.get(next).state,'idle');assert.equal(host.codexTargets.has('obsolete-native'),false);

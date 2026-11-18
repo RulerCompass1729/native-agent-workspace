@@ -1872,7 +1872,7 @@ class Codex extends EventEmitter {
       this.host.pendingCodexRuntime = this;
       this.initialTerminalThread = started;
       try {
-        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), ...codexRequestedArgs(this.record), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', ...(this.record.operatorCreation?.permission === 'default' ? ['-a', 'on-request', '-s', 'read-only'] : []), ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), ...codexRequestedArgs(this.record), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }
@@ -1974,6 +1974,13 @@ class Codex extends EventEmitter {
     return this.terminal;
   }
   async terminalEndpoint() {
+    // A new version is qualified without a model during host startup. Choosing
+    // its raw socket before that check finishes would strand a terminal-first
+    // empty thread without the event connection needed for its real handoff.
+    // Undecidable versions still keep the existing closed capability gates.
+    const rpc = this.host.rpc;
+    await this.host.codexQualifying?.done;
+    if (this.stopped || this.host.closed || rpc !== this.host.rpc) throw uiError("error.backendChangedStartCancelled");
     // Native 0.166/0.167 use the same transparent terminal event stream. Observe it
     // from the first turn so native MCP provenance is not lost before a later
     // history attachment. This does not qualify unrelated history/steer APIs.

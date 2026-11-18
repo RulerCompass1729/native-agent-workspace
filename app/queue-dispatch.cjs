@@ -717,10 +717,11 @@ function carrySettings(session) {
       settings.profile = profile;
     }
   }
-  // A Codex successor starts in chat view: a new native Codex terminal starts its thread only
-  // after native prompts (trust, sign-in) that no one is there to answer, and chat view runs no
-  // terminal process. The person's terminal tab then resumes the same thread.
-  let view = 'chat';
+  // Start Codex through its native TUI. Trust/sign-in remain native human
+  // decisions: joining exposes that terminal, but queue transfer and the real
+  // handoff wait for its identity, live PTY and input capability below. Never
+  // manufacture a first turn or use chat creation to bypass onboarding.
+  let view = session.provider === 'codex' ? 'terminal' : 'chat';
   if (session.provider === 'claude' && session.view === 'terminal') {
     view = 'terminal';
   }
@@ -3602,7 +3603,7 @@ class QueueDispatcher {
           if (newWorktree) record.newWorktree = newWorktree;
           this.save();
         }
-        const options = { provider: record.provider, cwd: record.newWorktree?.source || record.newCwd, name, view: record.view || 'chat' };
+        const options = { provider: record.provider, cwd: record.newWorktree?.source || record.newCwd, name, view: record.view || (record.provider === 'codex' ? 'terminal' : 'chat') };
         if (record.newWorktree) options.gitWorktree = record.newWorktree;
         if (record.skipPermissions) {
           options.skipPermissions = true;
@@ -3619,15 +3620,25 @@ class QueueDispatcher {
       await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     }
     if (record.phase === 'joining') {
-      const latest = record.newCwd && record.newCwd !== record.cwd ? this.client.snapshot().sessions.find(session => session.id === record.newId) : null;
+      const terminalFirst = record.provider === 'codex' && record.view !== 'chat';
+      const latest = (terminalFirst || record.newCwd && record.newCwd !== record.cwd) ? this.client.snapshot().sessions.find(session => session.id === record.newId) : null;
+      if (terminalFirst && latest && ['ended', 'background', 'recoverable', 'error'].includes(latest.state)) throw Error('new-session-not-ready');
       if (record.newCwd && record.newCwd !== record.cwd && latest?.nativeStartupPrompt?.kind === 'directory-trust' &&
           latest.nativeStartupPrompt.source === 'native-terminal' && latest.nativeStartupPrompt.provider === record.provider) {
         await this.waitForDirectoryTrust(oldId, record, now, latest); return;
       }
       for (const roomId of record.roomIds) {
-        await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
-        this.roomState.queueReassign(roomId, oldId, record.newId);
+        if (!terminalFirst || !roomIds(latest || {}).includes(roomId)) await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
       }
+      if (terminalFirst && (!latest?.nativeId || latest.terminalState?.alive !== true || latest.nativeStartupPrompt || !sessionReady(latest, snapshot.wakePolicy).ready)) {
+        // The original member and queued task stay put, even across an
+        // unattended login/trust wait. The person can use the new native
+        // terminal in the grid; no answer, input or permission change is sent.
+        await this.broadcast();
+        return;
+      }
+      for (const roomId of record.roomIds) this.roomState.queueReassign(roomId, oldId, record.newId);
+      if (terminalFirst) record.createdNewAt = now;
       record.phase = 'created';
       this.save();
       await this.broadcast();
@@ -3638,7 +3649,8 @@ class QueueDispatcher {
       if (!fresh) {
         throw Error('new-session-missing');
       }
-      if (!sessionReady(fresh, snapshot.wakePolicy).ready || !settled(fresh.id, this.idleSince, now, this.settleMs)) {
+      const waitingTerminal = record.provider === 'codex' && record.view !== 'chat' && (!fresh.nativeId || fresh.terminalState?.alive !== true || fresh.nativeStartupPrompt);
+      if (waitingTerminal || !sessionReady(fresh, snapshot.wakePolicy).ready || !settled(fresh.id, this.idleSince, now, this.settleMs)) {
         if (now - (record.createdNewAt || now) > NEW_SESSION_READY_MS) {
           throw Error('new-session-not-ready');
         }

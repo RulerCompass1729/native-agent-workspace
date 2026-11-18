@@ -14,7 +14,7 @@ const tools = [
   { name: names[0], description: 'Read local top-level session metadata and authorized requests. No private conversation text. Does not deliver messages.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: names[1], description: 'Create at most one native session per action_id under an explicit human grant. Creation only: the initial task remains pending delivery. No model selection or inherited general control.',
-    inputSchema: { type: 'object', properties: { action_id: string(), provider: { enum: ['claude', 'codex'] }, cwd: string(4096), name: string(60), task: string(8000), permission: { enum: ['default', 'bypass'] }, grant_id: string() }, required: ['action_id', 'provider', 'cwd', 'task', 'permission'], additionalProperties: false } },
+    inputSchema: { type: 'object', properties: { action_id: string(), provider: { enum: ['claude', 'codex'] }, cwd: string(4096), name: string(60), view: { enum: ['chat', 'terminal'] }, task: string(8000), permission: { enum: ['default', 'bypass'] }, grant_id: string() }, required: ['action_id', 'provider', 'cwd', 'task', 'permission'], additionalProperties: false } },
   { name: names[2], description: 'Durably save a report for your immutable dispatch. A report does not finish a request or deliver a notification. question: string asks the person, null withdraws, omission preserves; ready clears and cannot include question.',
     inputSchema: { type: 'object', properties: { request_id: string(), dispatch_id: string(), state: { enum: STATES }, body: string(8000), question: { anyOf: [string(2000), { type: 'null' }] } }, required: ['request_id', 'dispatch_id', 'state', 'body'], additionalProperties: false } },
 ];
@@ -30,6 +30,7 @@ function validate(name, args) {
   for (const key of ['request_id', 'dispatch_id', 'action_id', 'grant_id']) if (args[key] !== undefined) text(args[key], 160, key);
   if (name === names[1]) {
     if (!['claude', 'codex'].includes(args.provider) || !['default', 'bypass'].includes(args.permission)) fail('Invalid provider or permission');
+    if (args.view !== undefined && !['chat', 'terminal'].includes(args.view)) fail('Invalid view');
     text(args.cwd, 4096, 'directory'); if (!path.isAbsolute(args.cwd)) fail('An absolute existing directory is required');
     text(args.task, 8000, 'task'); if (args.name !== undefined) text(args.name, 60, 'name');
   }
@@ -517,7 +518,7 @@ class OperatorControl {
       data.requests[requestId] = { id: requestId, domainId: domain.id, initiatorId: s.id, initiatorNativeId: s.nativeId, version: 1, task: action.args.task, at: a.startedAt, question: null };
     });
     try {
-      const id = await this.w.create(action.args.provider, action.args.cwd, null, action.args.name, 'chat', action.args.permission === 'bypass' ? { skipPermissions: true } : {}, session => {
+      const id = await this.w.create(action.args.provider, action.args.cwd, null, action.args.name, action.args.view, action.args.permission === 'bypass' ? { skipPermissions: true } : {}, session => {
         // Reserve the exact session before any host/runtime allocation. If the
         // writer dies after this point the action remains unconfirmed, never replayed.
         this.initiator(s);

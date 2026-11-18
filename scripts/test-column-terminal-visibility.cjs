@@ -1,6 +1,7 @@
 // T135/T166: a live member terminal remains visible while its input route is chat.
 // Real source GUI/service, existing synthetic provider; no real native engine/model.
 const preflightOnly = process.argv[2] === '--preflight';
+const defaultCodex = process.env.NAW_TEST_CODEX_DEFAULT_TUI === '1';
 if (!['--run', '--preflight'].includes(process.argv[2]) || (!preflightOnly && !process.env.NAW_EVIDENCE_DIR)) {
   console.error('Supply --run with external NAW_EVIDENCE_DIR, or --preflight; nothing started.'); process.exit(64);
 }
@@ -76,7 +77,7 @@ async function main() {
     client = await op(() => require(path.join(code, 'app/service-client.cjs')).connectService(profile, 'live-column-setup'));
     const ids = [];
     for (let i = 0; i < 2; i++) {
-      const id = await op(() => client.call('create', { provider: i ? 'claude' : 'codex', name: i ? 'Synthetic peer' : 'Synthetic Main', view: 'chat', cwd }));
+      const id = await op(() => client.call('create', { provider: i ? 'claude' : 'codex', name: i ? 'Synthetic peer' : 'Synthetic Main', ...(i || !defaultCodex ? { view: 'chat' } : {}), cwd }));
       ids.push(id); await op(() => client.call('join', id, true)); await op(() => client.call('draft', id, 'POSITIVE_PRIVATE_DRAFT_' + i));
       await fixture('history', id, [{ id: 'original-' + i, type: 'agentMessage', turnId: 'original-turn-' + i, text: 'Original conversation remains above the same native terminal.' }]);
       await fixture('output', id, { cols: 80, rows: 24, data: '\x1bcORIGINAL_NATIVE_' + i + '\r\nSecond original line\x1b[4;7H' });
@@ -118,7 +119,7 @@ async function main() {
       await until(() => page.evaluate(id => window.__liveColumn.read(id).lines.some(line => line.includes('ORIGINAL_NATIVE_')), id), 'Original native screen content');
     }
     const passive = await snapshot(); assert.deepEqual(identities(passive), result.beforeGUI);
-    assert.ok(passive.sessions.every(s => s.view === 'chat' && s.terminalState.alive === true));
+    assert.ok(passive.sessions.every(s => s.view === (defaultCodex && s.id === target ? 'terminal' : 'chat') && s.terminalState.alive === true));
     result.passiveStats = await fixture('stats');
     assert.equal(result.passiveStats.overviewCalls.claim, 0, 'A visible native screen does not claim a view');
     assert.equal(result.passiveStats.stats.inputs, 0); assert.equal(result.passiveStats.stats.resizes, 0);
@@ -169,12 +170,24 @@ async function main() {
     note('The complete member chat view and its existing overview return reuse the same native instance and private draft');
 
     await op(() => win.evaluate(w => w.setContentSize(850, 600)));
+    const visibleNarrow = [];
     for (const id of ids) {
+      // The current progressive grid can hide a later member at this width.
+      // A hidden pane has zero geometry; assert its terminal when admitted,
+      // retaining the full geometry/input checks for every visible pane.
+      if (!await op(() => reader(id).isVisible())) continue;
+      visibleNarrow.push(id);
       const geometry = await op(() => reader(id).evaluate(el => {
         const r = el.getBoundingClientRect(), host = el.querySelector('.column-native-host').getBoundingClientRect(), form = el.querySelector('form[data-composer-session]').getBoundingClientRect();
         return { paneBottom: r.bottom, terminalHeight: host.height, formBottom: form.bottom };
       }));
       assert.ok(geometry.terminalHeight >= 64 && geometry.formBottom <= geometry.paneBottom + 1);
+    }
+    assert.ok(visibleNarrow.includes(target)); result.visibleNarrow = visibleNarrow;
+    if (visibleNarrow.length < ids.length) {
+      await op(() => page.locator('.collaboration-show-more').click());
+      for (const id of ids) await op(() => reader(id).locator('.terminal-surface').waitFor({ state: 'visible' }));
+      assert.deepEqual(identities(await snapshot()), stable);
     }
     await capture('03-narrow-live-chat', target);
     note('Narrow columns retain a visible terminal and whole private input without taking control');
@@ -196,7 +209,7 @@ async function main() {
     assert.deepEqual(result.errors, []); assert.deepEqual(Object.fromEntries(Object.keys(sourcePins).map(file => [file, sha(file)])), sourcePins);
     await capture('04-explicit-native-control', target);
     note('Only the explicit native button plus one Escape reaches the original synthetic target; no message/model/provider call or peer input');
-    result.outcome = 'PASS_LIVE_CHAT_COLUMN_TERMINAL_USER_JOURNEY';
+    result.outcome = defaultCodex ? 'PASS_DEFAULT_CODEX_TUI_COLUMN_USER_JOURNEY' : 'PASS_LIVE_CHAT_COLUMN_TERMINAL_USER_JOURNEY';
   } catch (error) {
     result.failure = error.stack; result.outcome = 'INCOMPLETE_NOT_PASS'; process.exitCode = 1;
     if (page && !page.isClosed()) await op(() => page.screenshot({ path: path.join(evidence, 'failure.png') })).catch(() => {});

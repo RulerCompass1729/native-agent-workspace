@@ -472,7 +472,7 @@ class Workspace extends EventEmitter {
     throw Error('Unknown operator action');
   }
   operatorHuman(id) { try { this.operator.human(id); } catch { /* A failed operator journal must never block the person's input. */ } }
-  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan, settings } = {}, reserve = null) {
+  async create(provider, cwd, owner, name, view = provider === 'codex' ? 'terminal' : 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan, settings } = {}, reserve = null) {
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     const requestedSettings = createSettings(provider, settings);
     // The model vendor the session will run, until Codex reports the one it uses: a missing or
@@ -556,6 +556,8 @@ class Workspace extends EventEmitter {
     if (!options || typeof options !== 'object' || Array.isArray(options)) throw uiError("error.client.invalidHistoryImport");
     const provider = options.provider ?? 'codex';
     if (!['codex', 'claude'].includes(provider)) throw uiError("error.client.invalidNativeProvider");
+    const view = options.view ?? 'terminal';
+    if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     nativeId(id);
     const claude = provider === 'claude' ? claudeMetadata(id, options) : null;
     if (claude) id = claude.nativeId;
@@ -574,7 +576,7 @@ class Workspace extends EventEmitter {
       const localId = randomUUID();
       const record = { id: localId, nativeId: id, externalHistory: true, name: info.name || 'Codex 历史会话', provider, cwd: info.cwd,
         ...(claude ? { autoName: claude.autoName, nativePermissionMode: claude.skipPermissions ? 'bypassPermissions' : undefined } : {}),
-        roomId: null, memberRevision: 0, controlRevision: 0, owner, view: claude ? 'terminal' : 'chat', state: 'recoverable', messages: [], fleet: [], background: null,
+        roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'recoverable', messages: [], fleet: [], background: null,
         scheduled: null, model: info.model, modelUiMessage: displayMessage(info.modelUiMessage, 'notice.', info.model) || undefined, usage: null, pendingTag: null, activity: '', approval: null, pid: null };
       // Reserve and locally persist the identity before crossing the native side
       // effect boundary. An uncertain ACK is never retried or turned into a fork.

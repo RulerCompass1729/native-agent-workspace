@@ -1823,14 +1823,14 @@ test('a successor carries the old model, effort, permission mode and view; what 
   // Like the person's older Codex records: one space in roomId, no roomIds field.
   const codex = member('c', { provider: 'codex', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'ultra', mode: null }, roomId: 'shared', view: 'terminal' });
   delete codex.roomIds;
-  assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'chat' }, 'a Codex successor starts in chat view');
+  assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' }, 'a Codex successor starts in its native TUI');
   const planning = member('c', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'plan' } });
   assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
   const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });
   assert.deepEqual(rules.carrySettings(twoSpaces), { reason: 'several-spaces' });
   // DeepSeek through Codex: the successor starts from the same Codex profile, and must run the same vendor.
   const deepseek = member('d', { provider: 'codex', model: 'deepseek-v4-pro', modelProvider: 'deepseek', requestedSettings: { profile: 'deepseek-pro' }, nativeSettings: { model: 'deepseek-v4-pro', effort: 'high', mode: null } });
-  assert.deepEqual(rules.carrySettings(deepseek), { settings: { model: 'deepseek-v4-pro', effort: 'high', profile: 'deepseek-pro' }, view: 'chat', modelProvider: 'deepseek' });
+  assert.deepEqual(rules.carrySettings(deepseek), { settings: { model: 'deepseek-v4-pro', effort: 'high', profile: 'deepseek-pro' }, view: 'terminal', modelProvider: 'deepseek' });
   assert.equal(rules.settingsMismatch({ model: 'deepseek-v4-pro', profile: 'deepseek-pro' }, member('n', { provider: 'codex', modelProvider: 'openai', nativeSettings: { model: 'deepseek-v4-pro', effort: 'high' } }), 'deepseek'), 'model-provider');
   assert.equal(rules.settingsMismatch({ model: 'deepseek-v4-pro', profile: 'deepseek-pro' }, member('n', { provider: 'codex', modelProvider: 'deepseek', nativeSettings: { model: 'deepseek-v4-pro', effort: 'high' } }), 'deepseek'), null);
   // The carried settings are what the backend accepts.
@@ -2514,6 +2514,55 @@ for (const recordedDirectory of [false, true]) test(`B2: joining ${recordedDirec
 });
 
 const trustPrompt = provider => ({ kind: 'directory-trust', provider, source: 'native-terminal' });
+test('Codex TUI successor waits for native identity, live PTY and input readiness before queue transfer or handoff', async t => {
+  const old = member('a', { provider: 'codex', cwd: '/synthetic/unchanged' });
+  const fresh = member('made', { provider: 'codex', cwd: old.cwd, nativeId: null, state: 'starting', chatAvailable: false, view: 'terminal', roomIds: [], roomId: null });
+  const { client, dispatcher, room } = dispatcherSetup(t, [old, fresh]); fakeMembership(room, client);
+  const queued = room.queueAdd('keep this task exactly once', old.id);
+  const record = { phase: 'joining', oldNativeId: old.nativeId, oldControl: 0, provider: 'codex', view: 'terminal', cwd: old.cwd, name: old.name, roomIds: ['shared'], newId: fresh.id, newName: fresh.name, createdNewAt: NOW, handoff: 'Actual handoff' };
+  dispatcher.client = client; dispatcher.rotations[old.id] = record;
+  for (const state of [
+    {},
+    { terminalState: { alive: true, epoch: 'owned-pty' }, nativeStartupPrompt: trustPrompt('codex') },
+    { nativeId: 'new-native', nativeStartupPrompt: null, state: 'idle', chatAvailable: true, terminalState: { alive: false } },
+    { terminalState: { alive: true, epoch: 'owned-pty' }, chatAvailable: false },
+    { chatAvailable: true, nativeStartupPrompt: trustPrompt('codex') },
+    { chatAvailable: false, nativeStartupPrompt: null },
+  ]) {
+    Object.assign(fresh, state);
+    await dispatcher.advanceRotation(old.id, record, client.snapshot(), NOW);
+    assert.equal(record.phase, 'joining');
+    assert.equal(room.queueItems('shared').find(i => i.id === queued).assignee, old.id);
+    assert.equal(client.calls.some(c => ['create', 'dispatch', 'stop', 'input', 'approve', 'answer'].includes(c[0])), false);
+    assert.deepEqual(plan(room.apply(client.snapshot()).rooms, client.state.sessions, { rotations: dispatcher.rotations }), [], 'neither member can take a second task during native startup');
+  }
+  dispatcher.save();
+  assert.equal(rules.readRotations(dispatcher.file, NOW)[old.id].phase, 'joining', 'a restart preserves the pending native wait and successor identity');
+  await dispatcher.advanceRotation(old.id, record, client.snapshot(), NOW + HOUR);
+  assert.equal(record.phase, 'joining', 'an unattended native wait has no model-request deadline');
+  Object.assign(fresh, { chatAvailable: true });
+  dispatcher.idleSince.set(fresh.id, NOW - 1);
+  await dispatcher.advanceRotation(old.id, record, client.snapshot(), NOW + HOUR);
+  assert.equal(record.phase, 'created'); assert.equal(room.queueItems('shared').find(i => i.id === queued).assignee, fresh.id);
+  assert.equal(record.createdNewAt, NOW + HOUR, 'post-login readiness gets its own settle/model-observation deadline');
+  await dispatcher.advanceRotation(old.id, record, client.snapshot(), NOW + HOUR);
+  await dispatcher.advanceRotation(old.id, record, client.snapshot(), NOW + HOUR);
+  assert.equal(client.sends(fresh.id).length, 1, 'the actual handoff is the only input, never a seed turn');
+  assert.equal(client.state.sessions.length, 2); assert.equal(fresh.nativeId, 'new-native');
+  assert.equal(room.queueItems('shared').filter(i => i.id === queued).length, 1);
+});
+test('a failed Codex TUI successor leaves the old task intact instead of waiting forever', async t => {
+  const old = member('a', { provider: 'codex', cwd: '/synthetic/unchanged' });
+  const fresh = member('made', { provider: 'codex', nativeId: null, state: 'error', view: 'terminal', roomIds: [], roomId: null });
+  const { client, dispatcher, room } = dispatcherSetup(t, [old, fresh]); fakeMembership(room, client);
+  const queued = room.queueAdd('Original task', old.id);
+  const record = dispatcher.rotations[old.id] = { phase: 'joining', oldNativeId: old.nativeId, provider: 'codex', view: 'terminal', cwd: old.cwd, name: old.name, roomIds: ['shared'], newId: fresh.id, newName: fresh.name };
+  dispatcher.client = client;
+  await dispatcher.advanceRotations(client.snapshot(), NOW);
+  assert.equal(record.phase, 'failed'); assert.equal(record.reason, 'new-session-not-ready');
+  assert.equal(old.state, 'idle'); assert.equal(room.queueItems('shared').find(i => i.id === queued).assignee, old.id);
+  assert.equal(client.calls.some(c => c[0] === 'dispatch' || c[0] === 'create' || c[0] === 'stop' && c[1] === old.id), false);
+});
 test('B2: a migrated successor asking directory trust pauses before joining, does not accept or send, and announces once', async t => {
   const notices = [];
   const { client, dispatcher, record } = await projectRotation(t, { directoryTrustTimeoutMs: 48 * HOUR, notify: (kind, value) => notices.push([kind, value.newId]), record: { oldControl: 0 }, afterCreate(fresh) { fresh.state = 'starting'; fresh.nativeStartupPrompt = trustPrompt('claude'); } });

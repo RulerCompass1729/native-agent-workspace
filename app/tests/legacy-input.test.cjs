@@ -470,6 +470,9 @@ test('recently committed compatibility hooks can upgrade to this working tree', 
   const prior=git(['show',`${commit}:app/claude-bridge/hooks/register.js`]).replace('const legacyOnly = false;','const legacyOnly = true;');
   if(prior===current)continue;
   fs.writeFileSync(file,prior);installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current,commit);checked++;
+  const edited=prior+'\n// Synthetic user customization\n';fs.writeFileSync(file,edited);
+  assert.throws(()=>installPlugin(cwd),error=>error.uiMessage?.key==='error.legacy.pluginConflict');
+  assert.equal(fs.readFileSync(file,'utf8'),edited,'a known previous version plus an edit still belongs to the person');
  }
  assert.ok(checked>=5,'At least five earlier committed hooks were checked');
 });

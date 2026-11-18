@@ -98,3 +98,16 @@ test('a new Codex terminal session starts the native terminal with the requested
   assert.ok(options.includes('model_reasoning_effort="ultra"'));
   assert.equal(options[options.indexOf('model_reasoning_effort="ultra"') - 1], '-c');
 });
+
+for (const permission of ['default', 'bypass', undefined]) test(`Codex terminal creation preserves ${permission || 'native'} permission policy`, async () => {
+  const host = codexHost([]), record = { cwd: '/tmp', view: 'terminal', messages: [],
+    ...(permission ? { operatorCreation: { permission } } : {}), ...(permission === 'bypass' ? { skipPermissions: true } : {}) };
+  const runtime = new Codex(record, host); let argv;
+  runtime.terminalEndpoint = async () => '/synthetic/native.sock'; runtime.observeFirstTurn = async () => {};
+  runtime.makeTerminal = args => { argv = args; return new EventEmitter(); };
+  const started = runtime.startFromTerminal(); await new Promise(resolve => setImmediate(resolve));
+  host.pendingCodex({ id: 'same-native', model: 'synthetic-model' }); await started;
+  const policy = permission === 'default' ? ['on-request', 'read-only'] : ['never', 'danger-full-access'];
+  if (permission) assert.deepEqual([argv[argv.indexOf('-a') + 1], argv[argv.indexOf('-s') + 1]], policy);
+  else { assert.equal(argv.includes('-a'), false); assert.equal(argv.includes('-s'), false); }
+});

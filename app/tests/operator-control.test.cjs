@@ -30,6 +30,17 @@ async function fixture(t, options = {}) {
   return { w, root, id, s, r, identity, call, enable, grant, open, report, runtimes, writes };
 }
 
+test('workspace_open defaults Codex to terminal and preserves explicit chat without delivering its task', async t => {
+  const f = await fixture(t); f.enable(); const grant_id = f.grant();
+  for (const view of [undefined, 'chat']) {
+    const opened = await f.open({ provider: 'codex', grant_id, ...(view ? { view } : {}) });
+    const s = f.w.get(opened.sessionId);
+    assert.equal(s.view, view || 'terminal'); assert.equal(s.skipPermissions, undefined);
+    assert.deepEqual(s.operatorCreation, { permission: 'default' });
+  }
+  assert.equal(f.runtimes.length, 3); assert.deepEqual(f.writes, []);
+});
+
 test('default disabled; explicit complete grant; creation is idempotent and never delivers initial task', async t => {
   const f = await fixture(t);
   await assert.rejects(f.open(), /not enabled/); f.enable();

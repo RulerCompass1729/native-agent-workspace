@@ -49,6 +49,17 @@ export function changeForTest() { activeTurn = 'new-turn'; }
   mod.register((event, match, handler) => { if (typeof match === 'function') handler = match; else if (match?.tool) hooks.set(event + ':' + match.tool, handler); return { catch() {} }; });
   return { mod, hooks };
 }
+test('workspace_open native hook preserves an explicit chat selection through native approval', async () => {
+  const { mod, hooks } = await bridge(), hook = hooks.get('tool.call:mcp__native_workspace__workspace_open');
+  mod.prepareForTest();
+  const args = { action_id: 'explicit-chat', provider: 'codex', cwd: '/synthetic', task: 'Pending task', permission: 'default', view: 'chat' };
+  const next = async () => ({ text: JSON.stringify({ approved: true, operator: 'workspace_open', arguments: args }) });
+  next.origin = { plugin: 'engine' }; let calls = 0;
+  const $ = { http: { fetch: async (_url, spec) => { calls++; assert.deepEqual(JSON.parse(spec.body).arguments, args); return { ok: true, text: JSON.stringify({ status: 'created' }) }; } } };
+  const result = await hook($, { ...args, tool_use_id: 'open-call' }, next);
+  assert.equal(result.deny, undefined); assert.equal(calls, 1);
+});
+
 test('actual named root hook rejects child/ambiguous/wrong prompt/non-engine/gap and keeps native approval on the path', async () => {
   const { mod, hooks } = await bridge(), hook = hooks.get('tool.call:mcp__native_workspace__workspace_report');
   let nativeCalls = 0, saves = 0;

@@ -73,3 +73,16 @@ test('unknown and prerelease native versions retain the unqualified terminal fal
     assert.equal(r.terminalBridge, undefined);
   }
 });
+
+test('terminal startup waits for the running version qualification before choosing its event connection', async t => {
+  const qualification = require('../codex-qualification.cjs');
+  let finish; const done = new Promise(resolve => { finish = resolve; });
+  const host = { codexSocket: '/synthetic/native.sock', rpc: { nativeVersion: '0.168.0' }, codexQualifying: { done } };
+  const r = new Codex({ view: 'terminal' }, host); let settled = false;
+  const endpoint = r.terminalEndpoint().then(value => { settled = true; return value; });
+  await new Promise(resolve => setImmediate(resolve));
+  t.after(() => { finish(); qualification.setAutomatic({}); });
+  assert.equal(settled, false, 'do not permanently choose the unobserved fallback while qualification is still pending');
+  // An undecidable version stays closed after the wait; this never opens a gate.
+  finish(); assert.equal(await endpoint, host.codexSocket); assert.equal(r.terminalBridge, undefined);
+});
