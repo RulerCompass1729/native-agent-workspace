@@ -717,11 +717,11 @@ function carrySettings(session) {
       settings.profile = profile;
     }
   }
-  // Start Codex through its native TUI. Trust/sign-in remain native human
+  // Default Codex to its native TUI unless chat was recorded. Trust/sign-in stay human
   // decisions: joining exposes that terminal, but queue transfer and the real
   // handoff wait for its identity, live PTY and input capability below. Never
   // manufacture a first turn or use chat creation to bypass onboarding.
-  let view = session.provider === 'codex' ? 'terminal' : 'chat';
+  let view = session.provider === 'codex' && session.view !== 'chat' ? 'terminal' : 'chat';
   if (session.provider === 'claude' && session.view === 'terminal') {
     view = 'terminal';
   }

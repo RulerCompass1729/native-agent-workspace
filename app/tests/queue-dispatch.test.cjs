@@ -1812,6 +1812,20 @@ test('only one rotation runs at a time; the largest quiet session goes first', (
   assert.deepEqual(plan(queued, [a], { rotations: running }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }]);
 });
 
+test('an explicitly selected and persisted Codex chat view survives automatic successor settings', async t => {
+  const { Workspace } = require('../workspace.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-explicit-chat-'));
+  const record = { id: 'explicit-chat', nativeId: 'synthetic-native', provider: 'codex', view: 'chat', name: 'Synthetic member', cwd: dir,
+    roomId: 'shared', messages: [], fleet: [], state: 'idle', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: null } };
+  fs.writeFileSync(path.join(dir, 'workspace.json'), JSON.stringify({ sessions: [record] }));
+  const w = new Workspace({ close() {} }, dir);
+  t.after(async () => { await w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  assert.equal(w.get(record.id).view, 'chat', 'load preserves explicit chat');
+  const carry = rules.carrySettings(w.get(record.id));
+  console.log('OBSERVED', JSON.stringify({ savedView: record.view, loadedView: w.get(record.id).view, successorView: carry.view, carry }));
+  assert.equal(carry.view, 'chat', 'an explicit saved chat selection must not be replaced by the default TUI selection');
+});
+
 test('a successor carries the old model, effort, permission mode and view; what cannot be carried is named', () => {
   const claude = member('a', { model: 'claude-opus-5-5', nativeEffort: 'xhigh', nativePermissionMode: 'auto', view: 'terminal', roomIds: ['shared'] });
   assert.deepEqual(rules.carrySettings(claude), { settings: { model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'auto' }, view: 'terminal' });
@@ -1824,6 +1838,8 @@ test('a successor carries the old model, effort, permission mode and view; what 
   const codex = member('c', { provider: 'codex', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'ultra', mode: null }, roomId: 'shared', view: 'terminal' });
   delete codex.roomIds;
   assert.deepEqual(rules.carrySettings(codex), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' }, 'a Codex successor starts in its native TUI');
+  const unspecified = { ...codex }; delete unspecified.view;
+  assert.deepEqual(rules.carrySettings(unspecified), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' }, 'a missing view still defaults Codex to terminal');
   const planning = member('c', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'plan' } });
   assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
   const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });
