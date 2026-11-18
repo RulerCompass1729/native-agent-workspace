@@ -80,14 +80,19 @@ async function scenario(lang) {
     await until(() => fs.existsSync(path.join(profile, 'connection.json'))); testScratch.ownService(profile);
     owner = await connectService(profile, 'synthetic-desktop-owner');
     const id = await owner.call('create', { provider: 'codex', cwd, name: lang === 'zh' ? '界面开发' : 'Interface' }); await owner.call('join', id, true);
-    const record = (await owner.call('initial')).sessions.find(s => s.id === id), room = new RoomState(profile), labels = new SessionLabels(profile);
+    const initial = await owner.call('initial'), record = initial.sessions.find(s => s.id === id), room = new RoomState(profile), labels = new SessionLabels(profile);
     const options = { message: lang === 'zh' ? '允许读取项目文档？' : 'Allow access to project docs?', detail: 'demo-project/docs/ · Read only', buttons: ['Cancel', 'Approve'], cancelId: 0 };
-    background = new BackgroundControl({ dataDir: profile, handlers: new Map([['synthetic', async c => { await require('../app/background-control.cjs').dialog(c, 'message', options); calls++; return true; }]]),
-      context: async () => ({ background: true, view: {}, checkActor: async () => { if (hold) await hold.promise; }, client: { close() {} }, win: { destroy() {} } }) });
+    const fingerprint = (command, state = initial) => require('../app/background-operation.cjs').controlFingerprint(command,
+      { state, actor: { id, nativeId: record.nativeId }, context: { view: {} }, roomState: room, sessionLabels: labels });
+    background = new BackgroundControl({ dataDir: profile, confirmationFingerprint: (row, state) => fingerprint(row.command, state), handlers: new Map([['synthetic', async c => { await require('../app/background-control.cjs').dialog(c, 'message', options); calls++; return true; }]]),
+      context: async () => ({ background: true, view: {}, fingerprint, checkActor: async () => { if (hold) await hold.promise; }, client: { close() {} }, win: { destroy() {} } }) });
     function card() {
       const operationId = 'approval.stage:' + randomUUID(), actor = { id, nativeId: record.nativeId, provider: 'codex', name: record.name, operationId, callId: 'fixture-call', turnId: 'fixture-turn' };
-      background.commit(d => d.records.push({ id: operationId, actor, command: { action: 'invoke', operation_id: operationId, method: 'synthetic', arguments: [operationId] }, state: 'confirmation-required', at: Date.now(), confirmation: { kind: 'message', options } }));
-      return { id: id + ':' + operationId, operationId };
+      const command = { action: 'invoke', operation_id: operationId, method: 'synthetic', arguments: [operationId] };
+      // Seed the same current-state guard required by the production inbox.
+      background.commit(d => d.records.push({ id: operationId, actor, command, guard: fingerprint(command), state: 'confirmation-required', at: Date.now(), confirmation: { kind: 'message', options } }));
+      // The inbox key includes the native session; operation IDs can contain ':'.
+      return { id: [id, record.nativeId, operationId].join(':'), operationId };
     }
     const first = card(); app = mainMobile(profile, room, labels, background); const invoke = desktopAPI(app);
     // Test-only TLS, never installed or trusted by the OS. No real Serve or CA.
@@ -109,7 +114,12 @@ async function scenario(lang) {
     await page.goto(site + '/mobile/#pair=' + pairing.secret);
     await page.waitForFunction(() => globalThis.nawPhone?.client.state.session);
     const post = (url, value) => page.evaluate(async ({ url, value }) => { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-NAW-Mobile': '1', 'X-NAW-CSRF': globalThis.nawPhone.client.state.session.csrf }, body: JSON.stringify(value) }); return { status: response.status, body: await response.json() }; }, { url, value });
-    async function projected(target = first) { const view = await app.broker().workspaceRead({ token: (await context.cookies()).find(c => c.name === '__Host-naw-mobile').value, actor: 'synthetic-person', origin: site }); return view.confirmations.find(c => c.id === target.id); }
+    async function projected(target = first) {
+      const view = await app.broker().workspaceRead({ token: (await context.cookies()).find(c => c.name === '__Host-naw-mobile').value, actor: 'synthetic-person', origin: site });
+      const card = view.confirmations.find(c => c.id === target.id);
+      assert.ok(card, lang + ' exact native-session confirmation must be projected');
+      return card;
+    }
     const before = lang === 'zh' ? await projected() : { canDecide: false, version: background.mobileBinding(id, record.nativeId, first.operationId, 1).version };
     check(lang + ' default canDecide false', () => assert.equal(before.canDecide, false));
     check(lang + ' cookie-only approval rejected', () => {});

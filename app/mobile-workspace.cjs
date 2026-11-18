@@ -66,7 +66,12 @@ class MobileWorkspace {
       if (!record || card.nativeId !== record.nativeId) continue;
       const id = card.key || [card.sessionId, card.nativeId, card.operationId].join(':');
       cards.set(id, { ...confirmationSummary(card), id, messageId: card.id });
-      originals.set(id, { title: text(card.title, 2000), detail: text(card.detail, 16000) });
+      // Only this scoped decision view reads the complete original prompt.
+      // The shared inbox/bell summary deliberately has no top-level detail.
+      const original = card.message?.backgroundOperation;
+      const options = original?.id === card.operationId && original.nativeId === record.nativeId ? original.confirmation?.options : null;
+      originals.set(id, options ? { title: text(options.message, 2000), detail: text(options.detail, 16000) }
+        : { title: text(card.title, 2000), detail: text(card.detail, 16000) });
     }
     for (const card of cards.values()) {
       try {
