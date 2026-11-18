@@ -5,16 +5,16 @@
 // scripts/install-dsh-tui.cjs in a test data directory (not the daily one:
 // the session writes its own home under <data-dir>/dsh-tui/home).
 //   node scripts/dsh-tui-offline-check.cjs --data-dir <test data directory>
+// The sandbox rules and what a session does with a refused connection are
+// checked without a runtime by scripts/dsh-tui-sandbox-check.cjs.
 // Checks:
-// 1. Sandbox rules (the generated profile): a DNS lookup fails without a
-//    kill, a direct IP connection and any loopback port but the proxy's are
-//    killed, the proxy's port connects. The IP is TEST-NET-1 (192.0.2.1), so
-//    even a failing sandbox reaches no real host.
-// 2. Chat: the TUI in NAW's PTY sends one turn through the egress proxy to a
+// 1. Chat: the TUI in NAW's PTY sends one turn through the egress proxy to a
 //    loopback stand-in for api.deepseek.com (a certificate trusted for this
 //    run only). The turn uses deepseek-flash and the fake key, carries no
-//    anonymous harness identifiers, and the reply reaches the screen.
-// 3. Block: a CONNECT to another host through the same proxy reports that
+//    anonymous harness identifiers, and the reply reaches the screen. The
+//    session's sandbox refuses anything else, so the turn also shows that the
+//    real TUI starts and answers without a refused connection.
+// 2. Block: a CONNECT to another host through the same proxy reports that
 //    target and stops the session.
 // After each session no process of the runtime remains.
 const fs = require('node:fs');
@@ -22,7 +22,7 @@ const os = require('node:os');
 const net = require('node:net');
 const path = require('node:path');
 const https = require('node:https');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const { Terminal } = require('../app/adapters.cjs');
 const dshTui = require('../app/dsh-tui.cjs');
 
@@ -148,50 +148,7 @@ function startFakeDeepSeek(certificate) {
   });
 }
 
-function listen() {
-  return new Promise(resolve => {
-    const server = net.createServer(socket => socket.destroy());
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
-
-// --- 1. sandbox rules ----------------------------------------------------
-
-const PROBE = `
-const what = process.argv[2];
-const done = result => { console.log('RESULT ' + result); process.exit(0); };
-if (what === 'dns') require('node:dns').lookup('api.deepseek.com', error => done(error ? 'error ' + error.code : 'resolved'));
-if (what === 'ip') require('node:net').connect({ host: '192.0.2.1', port: 443, timeout: 3000 }).on('connect', () => done('connected')).on('timeout', () => done('timeout')).on('error', error => done('error ' + error.code));
-if (what === 'local') require('node:net').connect(Number(process.argv[3]), '127.0.0.1').on('connect', () => done('connected')).on('error', error => done('error ' + error.code));
-`;
-
-function runProbe(profile, probeFile, what, port) {
-  const args = ['-p', profile, process.execPath, probeFile, what];
-  if (port !== undefined) args.push(String(port));
-  const run = spawnSync('/usr/bin/sandbox-exec', args, { encoding: 'utf8', timeout: 15000 });
-  const line = String(run.stdout || '').split('\n').find(text => text.startsWith('RESULT ')) || '';
-  return { signal: run.signal, status: run.status, result: line.slice('RESULT '.length) };
-}
-
-async function checkSandbox(dir) {
-  const proxy = await listen();
-  const other = await listen();
-  const probeFile = path.join(dir, 'probe.cjs');
-  fs.writeFileSync(probeFile, PROBE);
-  const profile = dshTui.sandboxProfile({ proxyPort: proxy.address().port });
-  const dns = runProbe(profile, probeFile, 'dns');
-  check('sandbox: DNS lookup refused, process not killed', dns.signal === null && dns.result.startsWith('error '), JSON.stringify(dns));
-  const ip = runProbe(profile, probeFile, 'ip');
-  check('sandbox: direct IP connection kills the process', ip.signal === 'SIGKILL' && ip.result === '', JSON.stringify(ip));
-  const allowed = runProbe(profile, probeFile, 'local', proxy.address().port);
-  check('sandbox: the proxy port connects', allowed.signal === null && allowed.result === 'connected', JSON.stringify(allowed));
-  const otherPort = runProbe(profile, probeFile, 'local', other.address().port);
-  check('sandbox: another loopback port kills the process', otherPort.signal === 'SIGKILL' && otherPort.result === '', JSON.stringify(otherPort));
-  proxy.close();
-  other.close();
-}
-
-// --- 2 and 3. sessions ---------------------------------------------------
+// --- sessions ------------------------------------------------------------
 
 // The visible screen only: scrollback keeps frames the TUI has replaced.
 function screenText(terminal) {
@@ -346,7 +303,6 @@ async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-dsh-tui-check-'));
   let fake = null;
   try {
-    await checkSandbox(dir);
     const certificate = makeCertificate(dir);
     fake = await startFakeDeepSeek(certificate);
     const work = path.join(dir, 'work');

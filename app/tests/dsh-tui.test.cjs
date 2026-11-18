@@ -9,15 +9,18 @@ const os = require('node:os');
 const net = require('node:net');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const { pathToFileURL } = require('node:url');
 const dshTui = require('../dsh-tui.cjs');
 const egress = require('../dsh-egress.cjs');
+const witness = require('../dsh-witness.cjs');
 const updateOff = require('../dsh-tui-update-off.cjs');
 const installer = require('../../scripts/install-dsh-tui.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { pythonExecutable } = require('../platform.cjs');
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const NONCE = 'naw-dsh-0123456789abcdef';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function temporaryDirectory(t, prefix) {
@@ -159,16 +162,18 @@ test('the privacy patch resolves the DeepSeek LLM package from the TUI runtime i
 
 test('the launch keeps the key out of argv and passes exactly the listed environment', () => {
   const where = dshTui.paths('/synthetic/data');
+  const profile = dshTui.sandboxProfile({ proxyPort: 40123, nonce: NONCE, injectDir: '/synthetic/data/dsh-tui/session-home/.dsh-tui/inject', personHome: '/synthetic/person' });
   const spec = dshTui.launchSpec({
     where,
     proxyPort: 40123,
+    profile,
     apiKey: 'sk-synthetic-key',
     execPath: '/usr/local/bin/node',
     lang: 'zh_CN.UTF-8',
-    personHome: '/synthetic/person',
   });
   assert.equal(spec.argv[0], '/usr/bin/sandbox-exec');
   assert.equal(spec.argv[1], '-p');
+  assert.equal(spec.argv[2], profile);
   assert.deepEqual(spec.argv.slice(3), [
     '/usr/local/bin/node',
     '--disable-sigusr1',
@@ -203,27 +208,149 @@ test('the launch keeps the key out of argv and passes exactly the listed environ
   assert.equal(spec.env.DSH_HOME, where.dshHome);
   assert.equal(spec.env.LANG, 'zh_CN.UTF-8');
   assert.ok(!spec.env.PATH.split(':').some(dir => dir.includes('/usr/local')), 'no other Node.js or dsh on PATH');
-  const unsafe = dshTui.launchSpec({ where, proxyPort: 1, apiKey: 'k', execPath: '/n', lang: 'C; rm -rf /' });
+  const unsafe = dshTui.launchSpec({ where, proxyPort: 1, profile, apiKey: 'k', execPath: '/n', lang: 'C; rm -rf /' });
   assert.equal(unsafe.env.LANG, 'en_US.UTF-8');
-  const offline = dshTui.launchSpec({ where, proxyPort: 1, apiKey: 'k', execPath: '/n', caFile: '/synthetic/ca.pem' });
+  const offline = dshTui.launchSpec({ where, proxyPort: 1, profile, apiKey: 'k', execPath: '/n', caFile: '/synthetic/ca.pem' });
   assert.equal(offline.env.NODE_EXTRA_CA_CERTS, '/synthetic/ca.pem');
-  assert.throws(() => dshTui.launchSpec({ where, proxyPort: 1, apiKey: '', execPath: '/n' }), /no DeepSeek key/);
-  assert.throws(() => dshTui.launchSpec({ where, proxyPort: 1, apiKey: 'k', execPath: 'node' }), /no Node\.js program/);
+  assert.throws(() => dshTui.launchSpec({ where, proxyPort: 1, profile, apiKey: '', execPath: '/n' }), /no DeepSeek key/);
+  assert.throws(() => dshTui.launchSpec({ where, proxyPort: 1, profile, apiKey: 'k', execPath: 'node' }), /no Node\.js program/);
+  assert.throws(() => dshTui.launchSpec({ where, proxyPort: 1, apiKey: 'k', execPath: '/n' }), /no sandbox profile/);
 });
 
-test('the sandbox refuses outbound quietly, kills IP connections, allows only the proxy port', () => {
-  const profile = dshTui.sandboxProfile({ proxyPort: 40123, personHome: '/synthetic/a "b"' }).split('\n');
-  const quiet = profile.indexOf('(deny network-outbound)');
-  const kill = profile.indexOf('(deny network-outbound (with send-signal SIGKILL) (remote ip "*:*"))');
-  const allow = profile.indexOf('(allow network-outbound (remote ip "localhost:40123"))');
+// The rules themselves are checked against the real kernel by
+// scripts/dsh-tui-sandbox-check.cjs; this pins their text and order.
+test('the sandbox records every refusal, allows only IPv4 TCP to the proxy, and refuses listening', () => {
+  const injectDir = '/synthetic/session-home/.dsh-tui/inject';
+  const profile = dshTui.sandboxProfile({ proxyPort: 40123, nonce: NONCE, injectDir, personHome: '/synthetic/a "b"' }).split('\n');
+  const outbound = profile.indexOf(`(deny network-outbound (with message "${NONCE}"))`);
+  const proxy = profile.indexOf('(allow network-outbound (remote tcp4 "localhost:40123"))');
+  const inbound = profile.indexOf(`(deny network-inbound (with message "${NONCE}"))`);
+  const inject = profile.indexOf(`(deny network-bind (local unix-socket (subpath "${injectDir}")))`);
   // The last matching rule wins, so the order is the policy.
-  assert.ok(quiet > 0 && kill > quiet && allow > kill, profile.join('\n'));
+  assert.ok(outbound > 0 && proxy > outbound && inbound > proxy && inject > inbound, profile.join('\n'));
+  // No rule kills: the witness records the refusal before the session stops.
+  assert.ok(!profile.some(line => line.includes('send-signal')));
+  assert.ok(!profile.some(line => line.includes('remote ip')), 'no exception that also admits UDP or IPv6');
   const homes = profile.find(line => line.startsWith('(deny file-read* file-write*'));
   assert.ok(homes.includes('(subpath "/synthetic/a \\"b\\"/.dsh")'));
   assert.ok(homes.includes('(subpath "/synthetic/a \\"b\\"/.dsh-tui")'));
   for (const port of [0, 65536, 1.5, '443']) {
-    assert.throws(() => dshTui.sandboxProfile({ proxyPort: port }), /invalid proxy port/);
+    assert.throws(() => dshTui.sandboxProfile({ proxyPort: port, nonce: NONCE, injectDir }), /invalid proxy port/);
   }
+  for (const nonce of [undefined, 'short', 'naw-dsh-"quoted"-0123', 'NAW-DSH-UPPER-0123']) {
+    assert.throws(() => dshTui.sandboxProfile({ proxyPort: 1, nonce, injectDir }), /invalid nonce/);
+  }
+  assert.throws(() => dshTui.sandboxProfile({ proxyPort: 1, nonce: NONCE, injectDir: 'relative' }), /invalid inject folder/);
+});
+
+// --- witness ------------------------------------------------------------------
+
+class FakeReader extends EventEmitter {
+  constructor() {
+    super();
+    this.stdout = new PassThrough();
+    this.signals = [];
+  }
+  kill(signal) {
+    this.signals.push(signal);
+    setImmediate(() => this.emit('exit', null, signal));
+  }
+  // One unified-log event, as `log stream --style ndjson` prints it.
+  report(message) {
+    this.stdout.write(JSON.stringify({ senderImagePath: '/S/Sandbox', eventMessage: `${message}\n${NONCE}` }) + '\n');
+  }
+}
+
+function fakeWitness(options = {}) {
+  const reader = new FakeReader();
+  const spawned = [];
+  const denials = [];
+  let lost = 0;
+  let canaryPid = 900;
+  const canaries = [];
+  const started = witness.startWitness({
+    nonce: NONCE,
+    runCanary: () => {
+      canaryPid++;
+      canaries.push(canaryPid);
+      return { pid: canaryPid };
+    },
+    onDenial: denial => denials.push(denial),
+    onLost: () => lost++,
+    spawn: (program, args, spawnOptions) => {
+      spawned.push({ program, args, spawnOptions });
+      return reader;
+    },
+    armTimeoutMs: options.armTimeoutMs || 2000,
+  });
+  return { reader, spawned, denials, canaries, started, lost: () => lost };
+}
+
+test('a denial report is parsed from the first line of the kernel message', () => {
+  assert.deepEqual(witness.parseDenial(`Sandbox: node(4242) deny(1) network-outbound /private/var/run/mDNSResponder\n${NONCE}`), {
+    process: 'node',
+    pid: 4242,
+    operation: 'network-outbound',
+    target: '/private/var/run/mDNSResponder',
+  });
+  assert.deepEqual(witness.parseDenial('1 duplicate report for Sandbox: Python Helper(7) deny(1) network-bind local:*:5000'), {
+    process: 'Python Helper',
+    pid: 7,
+    operation: 'network-bind',
+    target: 'local:*:5000',
+  });
+  assert.equal(witness.parseDenial('something else'), null);
+  assert.equal(witness.parseDenial(undefined), null);
+});
+
+test('the witness arms only on its canary report and then passes every other refusal on', async () => {
+  const run = fakeWitness();
+  assert.equal(run.spawned[0].program, '/usr/bin/log');
+  assert.deepEqual(run.spawned[0].args.slice(0, 3), ['stream', '--style', 'ndjson']);
+  assert.ok(run.spawned[0].args[4].includes(`eventMessage CONTAINS "${NONCE}"`));
+  run.reader.stdout.write('Filtering the log data using ...\n');
+  await tick();
+  assert.equal(run.canaries.length, 1, 'the header starts the first canary');
+  run.reader.report('Sandbox: curl(55) deny(1) network-outbound remote:*:443');
+  run.reader.report(`Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  const armed = await run.started;
+  assert.equal(armed.armed, true);
+  // A report that came before arming is still a refusal.
+  assert.deepEqual(run.denials.map(denial => denial.pid), [55]);
+  run.reader.report(`1 duplicate report for Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  run.reader.report('Sandbox: python3(66) deny(1) network-bind local:*:8000');
+  await tick();
+  assert.deepEqual(run.denials.map(denial => denial.pid), [55, 66]);
+  armed.close();
+  await tick();
+  assert.deepEqual(run.reader.signals, ['SIGTERM']);
+  assert.equal(run.lost(), 0, 'closing is not a loss');
+  run.reader.report('Sandbox: curl(77) deny(1) network-outbound remote:*:443');
+  await tick();
+  assert.deepEqual(run.denials.map(denial => denial.pid), [55, 66]);
+});
+
+test('without a canary report, or with the reader gone, the witness refuses to arm', async () => {
+  const silent = fakeWitness({ armTimeoutMs: 100 });
+  silent.reader.stdout.write('Filtering the log data using ...\n');
+  await assert.rejects(silent.started, /no canary report/);
+  assert.deepEqual(silent.reader.signals, ['SIGTERM']);
+  assert.ok(silent.canaries.length >= 1);
+  const ended = fakeWitness();
+  ended.reader.emit('exit', 1, null);
+  await assert.rejects(ended.started, /the log reader ended/);
+  assert.throws(() => witness.startWitness({ nonce: 'bad' }), /invalid nonce/);
+});
+
+test('the log reader ending after arming is reported as lost', async () => {
+  const run = fakeWitness();
+  run.reader.stdout.write('header\n');
+  await tick();
+  run.reader.report(`Sandbox: node(${run.canaries[0]}) deny(1) network-outbound remote:*:1`);
+  await run.started;
+  run.reader.emit('exit', 0, null);
+  run.reader.emit('error', Error('gone'));
+  assert.equal(run.lost(), 1);
 });
 
 // --- runtime checks -----------------------------------------------------------
@@ -268,6 +395,38 @@ test('the TUI home is NAW-owned: its profile is rewritten and linked to this run
   dshTui.prepareHome(where);
   assert.equal(fs.readlinkSync(link), where.tui);
   assert.equal((fs.statSync(where.home).mode & 0o777), 0o700);
+});
+
+// A synthetic person folder stands outside the TUI home; a link put in the
+// home's place must not let NAW write into it, or delete from it.
+test('a link in the TUI home refuses the launch and nothing outside is written or removed', t => {
+  const cases = {
+    home: where => [where.home],
+    dshHome: where => [where.dshHome],
+    scope: where => [path.join(where.dshHome, 'profiles/dsh-tui/node_modules/@deepseek-harness-tui')],
+    packageJson: where => [path.join(where.dshHome, 'profiles/dsh-tui/package.json'), 'file'],
+    tmp: where => [where.tmp],
+  };
+  for (const [name, place] of Object.entries(cases)) {
+    const { where } = fakeRuntime(t);
+    const outside = temporaryDirectory(t, 'dsh-person-');
+    writeFile(path.join(outside, 'keep.txt'), 'person file');
+    writeFile(path.join(outside, 'dsh-tui/work.txt'), 'person work');
+    const [at, kind] = place(where);
+    fs.mkdirSync(path.dirname(at), { recursive: true });
+    fs.symlinkSync(kind === 'file' ? path.join(outside, 'keep.txt') : outside, at);
+    assert.throws(() => dshTui.prepareHome(where), error => error.code === 'dsh-home-unsafe' && error.uiMessage.key === 'error.dsh.homeUnsafe', name);
+    assert.deepEqual(fs.readdirSync(outside).sort(), ['dsh-tui', 'keep.txt'], name);
+    assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'person file', name);
+    assert.deepEqual(fs.readdirSync(path.join(outside, 'dsh-tui')), ['work.txt'], name);
+  }
+  // A real folder where the TUI link belongs is not removed either.
+  const { where } = fakeRuntime(t);
+  const link = path.join(dshTui.prepareHome(where), 'node_modules/@deepseek-harness-tui/dsh-tui');
+  fs.unlinkSync(link);
+  writeFile(path.join(link, 'work.txt'), 'kept');
+  assert.throws(() => dshTui.prepareHome(where), error => error.code === 'dsh-home-unsafe');
+  assert.equal(fs.readFileSync(path.join(link, 'work.txt'), 'utf8'), 'kept');
 });
 
 test('the key is read from its own Keychain item and a missing item refuses the session', async t => {
@@ -361,6 +520,80 @@ test('a blocked connection reports its target once and stops the terminal', asyn
   assert.deepEqual(await runtime.stop(), { state: 'ended' });
   assert.equal(terminal.stops, 2);
   assert.equal(proxyClosed, 1);
+});
+
+// launch() with fake guards: what the session does with each refusal. The
+// real kernel, log and PTY are scripts/dsh-tui-sandbox-check.cjs.
+function launched(t, { witnessFails = false } = {}) {
+  const { where } = fakeRuntime(t);
+  const guards = { proxyClosed: 0, witnessClosed: 0, egress: null, witness: null };
+  const fakeEgress = {
+    startEgress: async options => {
+      guards.egress = options;
+      return { port: 40123, close: async () => { guards.proxyClosed++; } };
+    },
+  };
+  const fakeWitnessModule = {
+    startWitness: async options => {
+      guards.witness = options;
+      if (witnessFails) throw Error('DSH witness: no canary report');
+      return { close: () => { guards.witnessClosed++; } };
+    },
+  };
+  const terminals = [];
+  class RecordingTerminal extends FakeTerminal {
+    constructor(argv) {
+      super();
+      this.argv = argv;
+      terminals.push(this);
+    }
+  }
+  const runtime = new dshTui.DshTui({ id: 's', cwd: '/synthetic' }, { dataDir: '/synthetic/none' }, {
+    Terminal: RecordingTerminal,
+    key: async () => 'sk-synthetic',
+    egress: fakeEgress,
+    witness: fakeWitnessModule,
+  });
+  const activities = [];
+  runtime.on('activity', (text, uiMessage) => activities.push(uiMessage));
+  return { runtime, where, guards, terminals, activities };
+}
+
+test('a refusal anywhere in the sandbox is recorded with its program and stops the session', async t => {
+  const { runtime, where, guards, terminals, activities } = launched(t);
+  await runtime.launch(where, '/synthetic/node');
+  assert.equal(terminals.length, 1);
+  const profile = terminals[0].argv[2];
+  assert.ok(profile.includes(`(with message "${guards.witness.nonce}")`), 'the session profile carries the witness nonce');
+  assert.ok(profile.includes(`(subpath "${path.join(fs.realpathSync(where.home), '.dsh-tui/inject')}")`));
+  assert.equal(typeof guards.witness.runCanary, 'function');
+  guards.witness.onDenial({ process: 'curl', pid: 77, operation: 'network-outbound', target: 'remote:*:443' });
+  guards.witness.onDenial({ process: 'node', pid: 78, operation: 'network-outbound', target: '/private/var/run/mDNSResponder' });
+  guards.egress.onViolation({ at: 3, target: 'example.com:443' });
+  await tick();
+  assert.equal(terminals[0].stops, 1);
+  assert.deepEqual(activities, [{ version: 1, key: 'notice.activity.dshEgressBlocked', params: { target: 'remote:*:443 (curl)' } }]);
+  const sources = runtime.violations.map(found => [found.source, found.pid ?? found.target]);
+  assert.deepEqual(sources, [['sandbox', 77], ['sandbox', 78], ['proxy', 'example.com:443']]);
+  terminals[0].emit('closed', { confirmed: true });
+  await tick();
+  assert.equal(guards.witnessClosed, 1);
+  assert.equal(guards.proxyClosed, 1);
+});
+
+test('a session stops when its witness is lost and does not start without one', async t => {
+  const lost = launched(t);
+  await lost.runtime.launch(lost.where, '/synthetic/node');
+  lost.guards.witness.onLost();
+  await tick();
+  assert.equal(lost.terminals[0].stops, 1);
+  assert.deepEqual(lost.activities.map(message => message.key), ['notice.activity.dshWitnessLost']);
+  const failing = launched(t, { witnessFails: true });
+  await assert.rejects(failing.runtime.launch(failing.where, '/synthetic/node'), error => {
+    return error.code === 'dsh-witness-unavailable' && error.uiMessage.key === 'error.dsh.witnessUnavailable';
+  });
+  assert.equal(failing.terminals.length, 0);
+  assert.equal(failing.guards.proxyClosed, 1);
 });
 
 // --- PTY environment ------------------------------------------------------------

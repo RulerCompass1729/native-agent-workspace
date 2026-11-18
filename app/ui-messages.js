@@ -3372,7 +3372,10 @@
     "butler.reads.retry": "再读一次",
     "error.dsh.keyMissing": "还没有给 DSH 用的 DeepSeek key：请先在钥匙串里新建项目「NAW DSH TUI DeepSeek API key」（账户 deepseek），再新建会话。",
     "error.dsh.runtimeUnqualified": "DSH TUI 运行时不是 NAW 核对过的版本，没有启动。",
-    "notice.activity.dshEgressBlocked": "外联被拦：{target}；会话已停止"
+    "error.dsh.witnessUnavailable": "NAW 读不到 DSH 沙盒的拦截记录，没有启动会话。",
+    "error.dsh.homeUnsafe": "DSH 的会话目录里有链接或文件挡在 NAW 自己的文件夹位置上，没有启动会话。",
+    "notice.activity.dshEgressBlocked": "外联被拦：{target}；会话已停止",
+    "notice.activity.dshWitnessLost": "沙盒拦截记录中断；会话已停止"
   },
   "en": {
     "background.card.reason.target-changed": "Not done: the target's identity, placement, or space changed. If it is still needed, the requesting agent sends a new request.",
@@ -6745,7 +6748,10 @@
     "butler.reads.retry": "Read again",
     "error.dsh.keyMissing": "No DeepSeek key for DSH yet. Add the Keychain item “NAW DSH TUI DeepSeek API key” (account deepseek), then create the session again.",
     "error.dsh.runtimeUnqualified": "The DSH TUI runtime is not the version NAW checked, so it was not started.",
-    "notice.activity.dshEgressBlocked": "Blocked a connection to {target}; the session was stopped"
+    "error.dsh.witnessUnavailable": "NAW cannot read the DSH sandbox's refusal records, so the session was not started.",
+    "error.dsh.homeUnsafe": "A link or file sits where NAW's own folder belongs in the DSH session home, so the session was not started.",
+    "notice.activity.dshEgressBlocked": "Blocked a connection to {target}; the session was stopped",
+    "notice.activity.dshWitnessLost": "The sandbox refusal record stopped; the session was stopped"
   }
 };
   Object.freeze(messages.zh); Object.freeze(messages.en); Object.freeze(messages);

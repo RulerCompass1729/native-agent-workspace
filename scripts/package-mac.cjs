@@ -147,6 +147,7 @@ async function build() {
       'dsh-tui-preload.mjs',
       'dsh-tui-update-off.cjs',
       'dsh-tui.cjs',
+      'dsh-witness.cjs',
       'dsh/client.js',
       'dsh/host.js',
       'dsh/package.json',

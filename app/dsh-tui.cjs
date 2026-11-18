@@ -5,16 +5,19 @@
 // - Its own HOME and DSH_HOME; the person's ~/.dsh is never read.
 // - Telemetry off, update check off, anonymous identifiers removed (preload).
 // - Network: only the loopback egress proxy, which passes api.deepseek.com.
+//   Any other attempt, by any process of the session, is refused, recorded
+//   and stops the session (dsh-egress.cjs, dsh-witness.cjs).
 // - The DeepSeek key comes from its own Keychain item into the child's
 //   environment; never into argv, files or logs.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { createHash, randomBytes } = require('node:crypto');
+const { execFile, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const { uiError, uiActivity } = require('./ui-errors.cjs');
+const { validNonce } = require('./dsh-witness.cjs');
 
 const TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
 const TUI_VERSION = '0.18.0';
@@ -28,6 +31,7 @@ const KEYCHAIN_SERVICE = 'NAW DSH TUI DeepSeek API key';
 const KEYCHAIN_ACCOUNT = 'deepseek';
 const SECURITY = '/usr/bin/security';
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
+const MAX_VIOLATIONS = 200;
 
 function paths(dataDir) {
   const base = path.join(dataDir, 'dsh-tui');
@@ -116,60 +120,124 @@ function verifyRuntime(dataDir) {
   return where;
 }
 
+function homeUnsafe() {
+  return Object.assign(uiError('error.dsh.homeUnsafe'), { code: 'dsh-home-unsafe' });
+}
+
+function lstatOrNull(file) {
+  try {
+    return fs.lstatSync(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+// Each folder from `where.base` down to `dir` is a real folder NAW made
+// (0700). A symlink or a file anywhere on the way refuses the launch: the
+// TUI and its tools can write in this home, and nothing NAW writes or
+// replaces here may land outside it.
+function ownFolder(where, dir) {
+  const parts = path.relative(where.base, dir).split(path.sep).filter(part => part !== '');
+  let current = where.base;
+  for (const part of ['', ...parts]) {
+    current = path.join(current, part);
+    const stat = lstatOrNull(current);
+    if (stat === null) {
+      fs.mkdirSync(current, { mode: 0o700 });
+      continue;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw homeUnsafe();
+  }
+}
+
 // The profile the TUI host entry loads: the base bundle and the TUI bundle.
 // DSH finds a non-built-in bundle only as a declared dependency under the
 // profile's node_modules, so the TUI package is linked there from this
 // runtime. NAW owns this profile and rewrites it on every launch; nothing is
 // fetched.
 function prepareHome(where) {
-  for (const dir of [where.home, where.dshHome, where.tmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ownFolder(where, where.dshHome);
+  ownFolder(where, where.tmp);
   const profileDir = path.join(where.dshHome, 'profiles', PROFILE);
   const scopeDir = path.join(profileDir, 'node_modules', '@deepseek-harness-tui');
-  fs.mkdirSync(scopeDir, { recursive: true, mode: 0o700 });
+  ownFolder(where, scopeDir);
   const body = {
     name: `dsh-profile-${PROFILE}`,
     private: true,
     dependencies: { [TUI_PACKAGE]: TUI_VERSION },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', TUI_PACKAGE] } },
   };
-  fs.writeFileSync(path.join(profileDir, 'package.json'), JSON.stringify(body, null, 2) + '\n', { mode: 0o600 });
-  const link = path.join(scopeDir, 'dsh-tui');
-  let current = null;
+  const file = path.join(profileDir, 'package.json');
+  const found = lstatOrNull(file);
+  if (found !== null && !found.isFile()) throw homeUnsafe();
+  // O_NOFOLLOW: a symlink put here after the check is refused, not followed.
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
+  const descriptor = fs.openSync(file, flags, 0o600);
   try {
-    current = fs.readlinkSync(link);
-  } catch {
-    current = null;
+    fs.writeSync(descriptor, JSON.stringify(body, null, 2) + '\n');
+  } finally {
+    fs.closeSync(descriptor);
   }
-  if (current !== where.tui) {
-    fs.rmSync(link, { recursive: true, force: true });
-    fs.symlinkSync(where.tui, link, 'dir');
-  }
+  const link = path.join(scopeDir, 'dsh-tui');
+  const current = lstatOrNull(link);
+  if (current !== null && !current.isSymbolicLink()) throw homeUnsafe();
+  if (current !== null && fs.readlinkSync(link) === where.tui) return profileDir;
+  // Removes the link itself, never what it points to.
+  if (current !== null) fs.unlinkSync(link);
+  fs.symlinkSync(where.tui, link, 'dir');
   return profileDir;
+}
+
+// The TUI's injection sockets live in ~/.dsh-tui/inject under its HOME. The
+// sandbox matches real paths, so the home is resolved first.
+function injectDirectory(where) {
+  return path.join(fs.realpathSync(where.home), '.dsh-tui', 'inject');
 }
 
 function sbplString(value) {
   return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
-// macOS sandbox rules for the TUI process tree. Outbound network is denied
-// except TCP to the egress proxy's loopback port; an IP connection anywhere
-// else kills the process. The person's own DSH homes stay unreadable even
-// though HOME points elsewhere.
-function sandboxProfile({ proxyPort, personHome = os.homedir() }) {
+// macOS sandbox rules for the TUI process tree. The last matching rule wins.
+// - Outbound: only IPv4 TCP to the egress proxy's loopback port. Everything
+//   else is refused: other ports, UDP, IPv6, the DNS resolver's socket and
+//   every other Unix socket.
+// - Inbound: no listening on any port or Unix socket, so nothing outside the
+//   sandbox can connect in.
+// Each refusal reaches the unified log with the session's nonce, where the
+// witness records it and the session is stopped. Nothing is killed by the
+// kernel, so the record always comes before the stop.
+// One refusal is quiet: at every start the TUI opens an injection socket in
+// its home, through which any local program could type into the session.
+// Refusing it turns that channel off, which the TUI treats as non-fatal.
+// The person's own DSH homes stay unreadable even though HOME points elsewhere.
+function sandboxProfile({ proxyPort, nonce, injectDir, personHome = os.homedir() }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('DSH TUI sandbox: invalid proxy port');
+  if (!validNonce(nonce)) throw Error('DSH TUI sandbox: invalid nonce');
+  if (typeof injectDir !== 'string' || !path.isAbsolute(injectDir)) throw Error('DSH TUI sandbox: invalid inject folder');
+  const recorded = `(with message ${sbplString(nonce)})`;
   const lines = [
     '(version 1)',
     '(allow default)',
-    // Last match wins. Non-IP outbound (the system DNS resolver's socket) is
-    // refused without a kill: the model client looks the host up before it
-    // uses the proxy, and that lookup must fail quietly, not end the session.
-    '(deny network-outbound)',
-    // Any IP connection except the egress proxy kills the process.
-    '(deny network-outbound (with send-signal SIGKILL) (remote ip "*:*"))',
-    `(allow network-outbound (remote ip ${sbplString(`localhost:${proxyPort}`)}))`,
+    `(deny network-outbound ${recorded})`,
+    `(allow network-outbound (remote tcp4 ${sbplString(`localhost:${proxyPort}`)}))`,
+    `(deny network-inbound ${recorded})`,
+    `(deny network-bind (local unix-socket (subpath ${sbplString(injectDir)})))`,
     `(deny file-read* file-write* (subpath ${sbplString(path.join(personHome, '.dsh'))}) (subpath ${sbplString(path.join(personHome, '.dsh-tui'))}))`,
   ];
   return lines.join('\n');
+}
+
+// One sandboxed process that makes a refused connection, so the witness can
+// see a report for this exact profile before the session starts.
+function runCanary(profile, execPath) {
+  const code = "require('node:net').connect(1, '127.0.0.1').on('error', () => process.exit(0))";
+  const child = spawn(SANDBOX_EXEC, ['-p', profile, execPath, '-e', code], { stdio: 'ignore', env: { PATH: '/usr/bin:/bin' } });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
+  child.on('exit', () => clearTimeout(timer));
+  child.on('error', () => clearTimeout(timer));
+  return child;
 }
 
 // argv and the complete child environment. Nothing from NAW's environment
@@ -178,15 +246,17 @@ function sandboxProfile({ proxyPort, personHome = os.homedir() }) {
 // `execPath`: a system Node.js (^22.19 or >=24). Not Electron: DSH's native
 // addon refuses Electron 44.9, and the host entry would then fall back to an
 // unpatched `dsh` CLI (which the PATH below cannot find).
+// `profile`: the session's sandboxProfile() text.
 // `caFile` exists for offline tests only (a fake api.deepseek.com certificate).
-function launchSpec({ where, proxyPort, apiKey, execPath, lang = process.env.LANG, personHome = os.homedir(), caFile = null }) {
+function launchSpec({ where, proxyPort, profile, apiKey, execPath, lang = process.env.LANG, caFile = null }) {
   if (typeof apiKey !== 'string' || apiKey === '') throw Error('DSH TUI: no DeepSeek key');
   if (typeof execPath !== 'string' || !path.isAbsolute(execPath)) throw Error('DSH TUI: no Node.js program');
+  if (typeof profile !== 'string' || !profile.startsWith('(version 1)')) throw Error('DSH TUI: no sandbox profile');
   const preload = pathToFileURL(path.join(__dirname, 'dsh-tui-preload.mjs')).href;
   const argv = [
     SANDBOX_EXEC,
     '-p',
-    sandboxProfile({ proxyPort, personHome }),
+    profile,
     execPath,
     '--disable-sigusr1',
     '--import',
@@ -237,25 +307,42 @@ function readKey({ program = SECURITY } = {}) {
   });
 }
 
+// A sandbox refusal as a session record. The target names what was refused
+// and which program tried, e.g. "remote:*:443 (curl)".
+function sandboxViolation(denial) {
+  const what = denial.target || denial.operation;
+  return {
+    at: Date.now(),
+    source: 'sandbox',
+    target: `${what} (${denial.process})`,
+    operation: denial.operation,
+    pid: denial.pid,
+  };
+}
+
 // The runtime NativeHost hands to the workspace for provider `dsh`: one
-// terminal, no conversation channel. Closing the egress proxy and the
-// terminal is all a stop needs; a blocked connection stops the session.
+// terminal, no conversation channel. Closing the egress proxy, the witness
+// and the terminal is all a stop needs. Any refused connection, at the proxy
+// or in the sandbox, is recorded and stops the session.
 class DshTui extends EventEmitter {
   // `testOnly` ({ route, caFile, execPath }) points an offline test at a fake
   // DeepSeek; NativeHost never passes it.
-  constructor(record, host, { Terminal, key = readKey, egress = require('./dsh-egress.cjs'), testOnly = {} } = {}) {
+  constructor(record, host, { Terminal, key = readKey, egress = require('./dsh-egress.cjs'), witness = require('./dsh-witness.cjs'), testOnly = {} } = {}) {
     super();
     this.record = record;
     this.host = host;
     this.Terminal = Terminal;
     this.key = key;
     this.egress = egress;
+    this.witnessModule = witness;
     this.testOnly = testOnly;
     this.terminal = null;
     this.proxy = null;
+    this.witness = null;
     this.stopped = false;
     this.chatAvailable = false;
     this.violation = null;
+    this.violations = [];
   }
   async start() {
     let where;
@@ -266,18 +353,48 @@ class DshTui extends EventEmitter {
     }
     const execPath = this.testOnly.execPath || this.host.binaries?.dsh;
     if (!execPath) throw uiError('error.nativeRuntimeMissing');
+    await this.launch(where, execPath);
+  }
+  // Everything after the runtime check. The sandbox check script calls it
+  // with a synthetic runtime; start() always verifies the real one first.
+  async launch(where, execPath) {
     prepareHome(where);
     const apiKey = await this.key();
-    const proxy = await this.egress.startEgress({ route: this.testOnly.route || null, onViolation: found => this.blocked(found) });
+    const proxy = await this.egress.startEgress({
+      route: this.testOnly.route || null,
+      onViolation: found => this.blocked({ ...found, source: 'proxy' }),
+    });
     this.proxy = proxy;
     if (this.stopped) {
-      await proxy.close();
+      await this.closeGuards();
       return;
     }
-    const options = { where, proxyPort: proxy.port, apiKey, execPath };
+    const nonce = `naw-dsh-${randomBytes(12).toString('hex')}`;
+    const profile = sandboxProfile({ proxyPort: proxy.port, nonce, injectDir: injectDirectory(where) });
+    try {
+      this.witness = await this.witnessModule.startWitness({
+        nonce,
+        runCanary: () => runCanary(profile, execPath),
+        onDenial: denial => this.blocked(sandboxViolation(denial)),
+        onLost: () => this.witnessLost(),
+      });
+    } catch (error) {
+      await this.closeGuards();
+      // Without the record a refused connection would not stop the session.
+      throw Object.assign(uiError('error.dsh.witnessUnavailable'), { code: 'dsh-witness-unavailable', cause: error });
+    }
+    if (this.stopped || this.violation) {
+      await this.closeGuards();
+      return;
+    }
+    const options = { where, proxyPort: proxy.port, profile, apiKey, execPath };
     if (this.testOnly.caFile) options.caFile = this.testOnly.caFile;
     const spec = launchSpec(options);
     this.attach(new this.Terminal(spec.argv, this.record.cwd, spec.env, { isolatedEnv: true }));
+  }
+  async closeGuards() {
+    this.witness?.close();
+    await this.proxy?.close().catch(() => {});
   }
   attach(terminal) {
     this.terminal = terminal;
@@ -287,7 +404,7 @@ class DshTui extends EventEmitter {
       this.emit('state', 'idle');
     });
     terminal.on('closed', result => {
-      this.proxy?.close().catch(() => {});
+      this.closeGuards().catch(() => {});
       // As for Claude: an exit the PTY host could not confirm is not an end.
       if (!result?.confirmed) {
         this.emit('activity', ...uiActivity('notice.activity.terminalDisconnectedExitUnconfirmed'));
@@ -297,10 +414,23 @@ class DshTui extends EventEmitter {
       this.emit('state', 'ended');
     });
   }
+  // Every refusal is kept (the newest 200); the first one is reported and
+  // stops the session.
   blocked(found) {
+    this.violations.push(found);
+    if (this.violations.length > MAX_VIOLATIONS) this.violations.shift();
     if (this.violation) return;
     this.violation = found;
     this.emit('activity', ...uiActivity('notice.activity.dshEgressBlocked', { target: found.target }));
+    this.terminal?.stop().catch(() => {});
+  }
+  // The log reader ended: refusals would no longer be recorded, so the
+  // session does not go on without them.
+  witnessLost() {
+    if (this.stopped || this.violation) return;
+    this.violation = { at: Date.now(), source: 'witness', target: 'witness-lost' };
+    this.violations.push(this.violation);
+    this.emit('activity', ...uiActivity('notice.activity.dshWitnessLost'));
     this.terminal?.stop().catch(() => {});
   }
   openTerminal() {
@@ -315,7 +445,7 @@ class DshTui extends EventEmitter {
     try {
       if (this.terminal?.alive) await this.terminal.stop();
     } finally {
-      await this.proxy?.close().catch(() => {});
+      await this.closeGuards();
     }
     return { state: 'ended' };
   }
@@ -336,7 +466,9 @@ module.exports = {
   packageCopies,
   verifyRuntime,
   prepareHome,
+  injectDirectory,
   sandboxProfile,
+  runCanary,
   launchSpec,
   readKey,
   DshTui,
