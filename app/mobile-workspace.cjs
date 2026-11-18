@@ -12,18 +12,36 @@ const denied = () => Object.assign(Error('Mobile workspace authorization or stat
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
 const text = (s, limit = 65536) => typeof s === 'string' ? s.slice(0, limit) : '';
-function conversation(rows = [], sessionId) {
+function conversation(rows = [], sessionId, budget) {
   let bytes = 0, omitted = 0;
   const result = [];
+  const limit = budget ?? 128 * 1024;
+  const prefix = (value, count) => {
+    const data = Buffer.from(value); let end = Math.min(count, data.length);
+    while (end > 0 && (data[end] & 0xc0) === 0x80) end--;
+    return data.subarray(0, end).toString('utf8');
+  };
   for (const m of rows.slice().reverse()) {
     if (!m || !['user', 'human', 'assistant', 'system'].includes(m.role)) continue;
-    const content = m.backgroundOperation ? '' : text(m.text), size = Buffer.byteLength(content);
-    if (result.length >= 200 || bytes + size > 128 * 1024) { omitted++; continue; }
-    bytes += size;
-    result.push({ id: text(m.id, 200), role: m.role, text: content, name: text(m.name, 200), time: m.time,
+    let content = m.backgroundOperation ? '' : text(m.text);
+    if (budget !== undefined && /[\ud800-\udbff]$/.test(content)) content = content.slice(0, -1);
+    const row = { id: text(m.id, 200), role: m.role, text: content, name: text(m.name, 200), time: m.time,
       status: text(m.status, 80), kind: text(m.kind, 80), textOmitted: typeof m.text === 'string' && m.text.length > content.length,
       ...(sessionId && m.backgroundOperation?.id ? { confirmationId: [sessionId, m.backgroundOperation.nativeId, m.backgroundOperation.id].join(':') } : {}),
-      attachments: Array.isArray(m.images) ? m.images.length : 0 });
+      attachments: Array.isArray(m.images) ? m.images.length : 0 };
+    let size = budget === undefined ? Buffer.byteLength(content) : Buffer.byteLength(JSON.stringify(row));
+    if (budget !== undefined && size > limit - bytes) {
+      row.textOmitted = true; row.text = '';
+      const overhead = Buffer.byteLength(JSON.stringify(row));
+      let low = 0, high = Math.min(Buffer.byteLength(content), Math.max(0, limit - bytes - overhead));
+      while (low < high) {
+        const mid = Math.ceil((low + high) / 2); row.text = prefix(content, mid);
+        if (Buffer.byteLength(JSON.stringify(row)) <= limit - bytes) low = mid; else high = mid - 1;
+      }
+      row.text = prefix(content, low); size = Buffer.byteLength(JSON.stringify(row));
+    }
+    if (result.length >= 200 || bytes + size > limit) { omitted++; continue; }
+    bytes += size; result.push(row);
   }
   return { messages: result.reverse(), earlierMessagesOmitted: omitted };
 }
@@ -43,6 +61,7 @@ class MobileWorkspace {
   async read(client, grant, scopes) {
     await client.refresh();
     const state = this.snapshot(client), permitted = new Map(), cards = new Map(), originals = new Map();
+    const all = exact(grant, ['allRooms','records']) && grant.allRooms === true;
     grant = this.resolveGrant(grant, state);
     for (const scope of scopes.filter(s => s.actions.includes('read'))) {
       const record = state.sessions.find(s => s.id === scope.sessionId);
@@ -86,18 +105,23 @@ class MobileWorkspace {
         }
       } catch { /* Readable cards without complete, current proof remain disabled. */ }
     }
+    const roomRows = (state.rooms || [state.room]).filter(r => r && grant.roomIds.includes(r.id) && !r.archived);
+    // Share a body budget across all threads; leave the existing response cap
+    // for metadata, exact confirmation content and reminders. Selected mode
+    // keeps its original per-thread contract. Native data is never modified.
+    const bodyBudget = all ? Math.min(128 * 1024, Math.floor(4 * 1024 * 1024 / Math.max(1, permitted.size + roomRows.length))) : undefined;
     const sessions = [...permitted.values()].map(s => {
       const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
       // question: a Codex question that does not block the turn is open; the home row says it needs you, as 等你 does.
       return { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
         ...conversation((s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
-          (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id) };
+          (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget) };
     });
-    const rooms = (state.rooms || [state.room]).filter(r => r && grant.roomIds.includes(r.id) && !r.archived).map(r => ({
+    const rooms = roomRows.map(r => ({
       id: r.id, name: r.name, queue: (r.queue || []).map(i => ({ id: i.id, text: i.text, status: i.status,
         assignee: i.assignee, sentTo: i.sentTo, reply: i.reply, reason: i.reason, question: i.question })),
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
-      ...conversation(r.messages),
+      ...conversation(r.messages, undefined, bodyBudget),
     }));
     const shared = grant.records ? this.records.status(state, client) : null;
     const reminders = shared && { ...shared,

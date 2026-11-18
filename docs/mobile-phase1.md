@@ -30,6 +30,14 @@ and human-input checks still apply. New trusted backend membership invalidates
 old read contexts before rebinding. Scope storage remains bounded; no silent
 truncation is permitted.
 
+All-scope conversation previews share a four-MiB encoded-body budget rather than
+each reserving the old per-thread maximum. Session/space metadata is retained;
+recent text is shortened only at UTF-8 boundaries and uses the existing omission
+flags. This prevents long histories across many sessions from making the entire
+eight-MiB response unavailable. The original native records, confirmation content
+and selected-mode limits are unchanged. Metadata itself still has the existing
+hard response bound.
+
 This stage keeps sensitive enrollment separate and **forbids push on the server**
 for an all-scope pairing, even with records access. The phone also omits its push
 controls in this mode. The next stage owns QR-authorized first-key enrollment and

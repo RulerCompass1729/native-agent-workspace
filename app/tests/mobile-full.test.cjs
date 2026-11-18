@@ -121,3 +121,14 @@ test('all-scope read cannot disclose its late result after the trusted backend m
   const key='backends/'+'c'.repeat(20);fs.mkdirSync(path.join(f.root,'backends'),{mode:0o700});fs.mkdirSync(path.join(f.root,key),{mode:0o700});fs.writeFileSync(path.join(f.root,'services.json'),JSON.stringify({format:1,active:'.',entries:['.',key]}),{mode:0o600});
   f.releaseRead();await assert.rejects(pending);assert.equal(f.calls.length,1);
 });
+test('all-scope workspace stays readable with many long histories and labels omissions without losing session metadata', async () => {
+  const {MobileWorkspace}=require('../mobile-workspace.cjs'), bodies=['Synthetic long reply. '.repeat(4000),'合成🙂"\\\n'.repeat(20000)];
+  const sessions=Array.from({length:70},(_,i)=>({id:'session-'+i,nativeId:'native-'+i,name:'Synthetic member',provider:'codex',state:'idle',messages:[0,1].map(n=>({id:'message-'+i+'-'+n,nativeId:'native-'+i,role:'assistant',text:bodies[i%2],time:1}))}));
+  const client={refresh:async()=>{},route:()=>({key:'.'})}, workspace=new MobileWorkspace({snapshot:()=>({sessions,rooms:[{id:'shared',messages:[],queue:[]}]}),roomState:{},records:{status:()=>({count:0,records:[]}),acknowledge(){}}});
+  const result=await workspace.read(client,workspace.grant(client,{allRooms:true,records:true}),sessions.map(s=>({serviceKey:'.',sessionId:s.id,nativeId:s.nativeId,actions:['read','send','answer']})));
+  assert.equal(result.sessions.length,70);assert.ok(Buffer.byteLength(JSON.stringify(result))<=8*1024*1024);
+  assert.ok(result.sessions.every(s=>s.messages.some(m=>m.text.length>0)),'each session retains readable recent content');
+  assert.ok(result.sessions.every(s=>s.earlierMessagesOmitted>0||s.messages.some(m=>m.textOmitted)),'bounded content is explicitly labelled');
+  assert.ok(result.sessions.every(s=>s.messages.every(m=>!m.text.includes('\ufffd'))),'UTF-8 boundaries do not invent replacement characters');
+  assert.ok(sessions.every((s,i)=>s.messages[0].text===bodies[i%2]),'native source content is unchanged');
+});
