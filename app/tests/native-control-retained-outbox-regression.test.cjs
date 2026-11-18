@@ -15,7 +15,7 @@ async function fixture(t, mode) {
   const records = [
     { id: 'caller', name: 'Caller', nativeId: identity.nativeId, pid: 201, owner: 'caller-view', memberRevision: 1 },
     { id: 'receiver', name: 'Receiver', nativeId: 'receiver-native', pid: 202, owner: 'receiver-view', memberRevision: 2 },
-  ].map(record => ({ ...record, provider: 'codex', roomId: 'shared', controlRevision: 4,
+  ].map(record => ({ ...record, provider: 'codex', view: 'chat', roomId: 'shared', controlRevision: 4,
     draft: 'UNSENT_PRIVATE_DRAFT_' + record.id, messages: [] }));
   const bridge = new LegacyInput(root), calls = [], goalReads = [], starts = [], natives = [], bindings = [];
   let release;

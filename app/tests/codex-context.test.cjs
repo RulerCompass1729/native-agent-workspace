@@ -5,7 +5,7 @@ const {applyCodexHistory,applyCodexMessage,applyCodexDelta}=require('../native-b
 function fixture(t){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-context-unit-')),replies=[];
  const host={binaries:{},codexTargets:new Map(),rpc:{call:async()=>({data:[]}),reply:(...args)=>replies.push(args)},close(){}};
- const w=new Workspace(host,dir),s={id:'synthetic',provider:'codex',nativeId:randomUUID(),cwd:dir,messages:[],state:'idle',owner:'window',controlRevision:0,memberRevision:0,roomId:'shared'};
+ const w=new Workspace(host,dir),s={id:'synthetic',provider:'codex',view:'chat',nativeId:randomUUID(),cwd:dir,messages:[],state:'idle',owner:'window',controlRevision:0,memberRevision:0,roomId:'shared'};
  const r=new Codex(s,host);w.sessions.set(s.id,s);w.runtimes.set(s.id,r);w.bind(s,r);host.codexTargets.set(s.nativeId,r);
  t.after(()=>{w.close();fs.rmSync(dir,{recursive:true,force:true});});
  return {dir,w,s,r,host,replies};

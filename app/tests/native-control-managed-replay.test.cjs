@@ -28,7 +28,7 @@ test('a completed unknown managed broker operation cannot replay its consumed na
       views, closedViews, scopedRequests: scopedCalls.length, scopesLeft: workspace.scopedOutboxProducer?.scopes.size || 0 }));
     fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false);
   });
-  const records = ['sender', 'receiver'].map(id => ({ id, provider: 'codex', name: id, nativeId: randomUUID(), pid: process.pid,
+  const records = ['sender', 'receiver'].map(id => ({ id, provider: 'codex', view: 'chat', name: id, nativeId: randomUUID(), pid: process.pid,
     owner: 'human-' + id, controlRevision: 7, connectionRevision: 3, peerRevision: 0, memberRevision: 2,
     roomId: 'shared', state: 'idle', messages: [], autoName: false }));
   const args = { recipient_id: 'receiver', space_id: 'shared', message: '  Synthetic scoped replay task.\r\n\tPreserve exact body.  ' };

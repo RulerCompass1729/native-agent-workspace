@@ -14,7 +14,7 @@ async function backend(t) {
   native.rpc = { nativeVersion: '0.166.0', ws: { readyState: 1 }, call(method, params) { calls.push({ method, params }); return new Promise((yes, no) => { ack = yes; reject = no; }); } };
   const host = { binaries: {}, close() {}, create(record) { const runtime = native.create(record); runtime.start = async () => { record.nativeId = randomUUID(); runtime.emit('state', 'idle'); }; return runtime; } };
   const w = new Workspace(host, root); t.after(() => w.close());
-  const id = await w.create('codex', root, 'owner', 'Explicit recipient'); w.join(id, true);
+  const id = await w.create('codex', root, 'owner', 'Explicit recipient', 'chat'); w.join(id, true);
   const runtime = w.runtime(id), images = packet(root);
   const echo = () => runtime.event({ method: 'item/completed', params: { threadId: w.get(id).nativeId, turnId: 'owned-turn',
     item: { type: 'userMessage', id: 'native-user-item', clientId: calls[0].params.clientUserMessageId,

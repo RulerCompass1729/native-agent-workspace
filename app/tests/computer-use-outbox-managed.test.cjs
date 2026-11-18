@@ -48,7 +48,7 @@ async function fixture(t, options = {}) {
   for (const [i, record] of records.entries()) {
     const root = path.join(dir, record.id); fs.mkdirSync(root, { mode: 0o700 });
     const host = { binaries: {}, codexTargets: new Map(), close() {} };
-    const workspace = new Workspace(host, root), nativeRecord = { ...record, messages: [], goal: 'PRIVATE_GOAL_UNCHANGED' };
+    const workspace = new Workspace(host, root), nativeRecord = { ...record, view: 'chat', messages: [], goal: 'PRIVATE_GOAL_UNCHANGED' };
     const runtime = new Codex(nativeRecord, host); runtime.nativeSessionId = i ? 'receiver-session' : identity.sessionId;
     workspace.sessions.set(record.id, nativeRecord); workspace.runtimes.set(record.id, runtime); workspace.bind(nativeRecord, runtime);
     workspace.drafts.set(record.id, 'PRIVATE_DRAFT_UNCHANGED');

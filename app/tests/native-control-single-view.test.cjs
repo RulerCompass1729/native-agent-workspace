@@ -14,7 +14,7 @@ async function fixture(t, unknownRPC = false) {
   const records = [
     { id: 'sender', name: 'Sender', nativeId: identity.nativeId, pid: 201, owner: 'observer-view', memberRevision: 1 },
     { id: 'recipient', name: 'Recipient', nativeId: 'recipient-native', pid: 202, owner: 'original-human-view', memberRevision: 2 },
-  ].map(record => ({ ...record, provider: 'codex', roomId: 'shared', controlRevision: 4,
+  ].map(record => ({ ...record, provider: 'codex', view: 'chat', roomId: 'shared', controlRevision: 4,
     liveDraft: 'PRIVATE UNSENT ' + record.id, messages: [] }));
   const saved = structuredClone(records), sharedDraft = { text: 'SHARED UNSENT', recipient: 'sender' };
   const sharedBefore = structuredClone(sharedDraft), calls = [], goalReads = [], starts = [], natives = [], bindings = [];

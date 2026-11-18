@@ -11,7 +11,7 @@ function fixture(t) {
   const host = { binaries: {}, codexBinary: '/synthetic/codex', codexTargets: new Map(), close() {}, rpc: {
     nativeVersion: '0.167.0', ws: { readyState: 1 }, async call(method, params) { calls.push({ method, params }); throw Error('Unexpected RPC: ' + method); },
   } };
-  const w = new Workspace(host, dir), s = { id: 'synthetic', nativeId: randomUUID(), provider: 'codex', cwd: dir,
+  const w = new Workspace(host, dir), s = { id: 'synthetic', nativeId: randomUUID(), provider: 'codex', view: 'chat', cwd: dir,
     owner: 'window', state: 'idle', messages: [], fleet: [], controlRevision: 0, memberRevision: 0 };
   const r = new Codex(s, host); w.sessions.set(s.id, s); w.runtimes.set(s.id, r); w.bind(s, r);
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });

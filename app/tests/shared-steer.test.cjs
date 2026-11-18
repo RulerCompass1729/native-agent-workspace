@@ -11,7 +11,7 @@ async function fixture(t) {
   host.create = record => { record.nativeId = 'native-thread'; runtime = create(record); runtime.start = async () => runtime.emit('state', 'idle'); return runtime; };
   const w = new Workspace(host, dir);
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  const id = await w.create('codex', dir, 'owner', 'Synthetic Codex'); w.join(id, true);
+  const id = await w.create('codex', dir, 'owner', 'Synthetic Codex', 'chat'); w.join(id, true);
   const s = w.get(id), events = [];
   for (const name of ['replyBound', 'complete']) runtime.on(name, info => events.push({ name, info }));
   const emit = (method, params) => runtime.event({ method, params: { threadId: s.nativeId, ...params } });
@@ -26,6 +26,17 @@ async function fixture(t) {
   return { w, s, runtime, id, calls, events, emit, user, start, delta, finish, end,
     ack: (turnId = 'active') => resolve({ turnId }), reject: () => reject(Error('Lost acknowledgement')) };
 }
+test('Codex without an explicit view still defaults to terminal and disables chat RPC', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-steer-default-'));
+  const host = new NativeHost(dir), create = host.create.bind(host);
+  host.close = () => {};
+  host.create = record => { const runtime = create(record); runtime.start = async () => runtime.emit('state', 'idle'); return runtime; };
+  const w = new Workspace(host, dir);
+  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const id = await w.create('codex', dir, 'owner', 'Default Codex');
+  assert.equal(w.get(id).view, 'terminal');
+  assert.equal(w.runtime(id).chatAvailable, false);
+});
 for (const order of ['ack-first', 'echo-first', 'complete-first']) test(`shared steer ${order}: exact native input, late private output excluded, one final`, async t => {
   const f = await fixture(t), { w, s, runtime, id } = f;
   w.setDraft(id, 'Private unsent draft', 'owner');
