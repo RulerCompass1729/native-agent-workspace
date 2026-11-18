@@ -197,6 +197,7 @@ let activityStream;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
+let spaceNavigationMenu = null, spaceRailBefore = null;
 let sidebarCollapsedGroups = new Set();
 let sidebarCollapsedFolders = new Set();
 // T-135: each grid column's terminal height, by session, saved with this window's view.
@@ -874,20 +875,20 @@ function memberTabClick(id, event) {
   roomOverview?.focus('');
   if (focusedRoomMember()) focusRoomMember('', id, roomOverview?.key(id));
 }
+function roomMemberStateText(member) {
+  const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
+  return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
+}
 function refreshRoomMemberTabs(people = orderedMembers()) {
   const tabs = $('room-member-tabs');
-  let attention = 0;
+  let attention = people.filter(member => member.nativeApproval?.requests?.length || member.approvals?.length || member.approval || member.approvalOverflow).length;
   for (const tab of tabs.children) {
     const member = people.find(m => m.id === tab.dataset.roomSession);
     if (!member) continue;
     const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
-    if (count) attention++;
-    ui.display.computed(tab.querySelector('.room-member-name'), 'text', () => tab.querySelector('.room-member-id') ? member.name : participantLabel(member, people));
+    ui.display.computed(tab.querySelector('.room-member-name'), 'text', () => spaceMemberLabel(member, people));
     if (tab.querySelector('.room-member-id')) ui.display.computed(tab.querySelector('.room-member-id'), 'text', () => sessionShortId(member.id));
-    ui.display.computed(tab.querySelector('.room-member-state'), 'text', () => {
-      const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
-      return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
-    });
+    ui.display.computed(tab.querySelector('.room-member-state'), 'text', () => roomMemberStateText(member));
     const mark = tab.querySelector('.vendor-mark'); if (mark) paintVendorMark(mark, member);
     ui.display.attribute(tab, 'title', tab.getAttribute('aria-pressed') === 'true' ? 'room.tabRestoreHint' : 'room.tabHint', () => ({ label: `${member.name} · ${makerLabel(member)} · ${sessionShortId(member.id)}` }));
     ui.display.computed(tab, 'aria-label', () => `${member.name} · ${makerLabel(member)} · ${sessionShortId(member.id)} · ${tab.querySelector('.room-member-state').textContent}`);
@@ -923,11 +924,10 @@ function refreshRoomMemberStatus(people = orderedMembers()) {
       });
       context.rows.set(member.id, row);
     }
-    const tab = [...$('room-member-tabs').children].find(el => el.dataset.roomSession === member.id);
     ui.display.computed(row.querySelector('.room-member-name'), 'text', () => `${member.name} · ${member.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(member.id)}`);
-    ui.display.computed(row.querySelector('.room-member-state'), 'text', () => tab?.querySelector('.room-member-state').textContent || '');
+    ui.display.computed(row.querySelector('.room-member-state'), 'text', () => roomMemberStateText(member));
     row.setAttribute('aria-pressed', String(roomSession === member.id));
-    row.classList.toggle('needs-attention', Boolean(tab?.classList.contains('needs-attention')));
+    row.classList.toggle('needs-attention', Boolean(member.nativeApproval?.requests?.length || member.approvals?.length || member.approval || member.approvalOverflow));
     if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
   }
   for (const [id, row] of retained) {
@@ -945,7 +945,8 @@ function openRoomMemberStatus() {
 }
 function renderRoomMemberTabs(people = orderedMembers()) {
   const tabs = $('room-member-tabs'), retained = new Map([...tabs.children].map(tab => [tab.dataset.roomSession, tab]));
-  for (const [index, member] of people.entries()) {
+  const focused = roomSurface === 'overview' ? people.filter(member => !member.archived && member.id === roomSession) : [];
+  for (const [index, member] of focused.entries()) {
     let tab = retained.get(member.id); retained.delete(member.id);
     if (!tab) {
       tab = node('button'); tab.type = 'button'; tab.addEventListener('click', event => attempt(() => memberTabClick(member.id, event))); tab.dataset.roomSession = member.id;
@@ -960,13 +961,13 @@ function renderRoomMemberTabs(people = orderedMembers()) {
   }
   for (const tab of retained.values()) tab.remove();
   refreshRoomMemberTabs(people);
-  const routes = [$('room-overview'), $('room-record'), ...tabs.children];
-  const active = routes.includes(document.activeElement) ? document.activeElement : roomSurface === 'records' ? $('room-record') : roomSession ? [...tabs.children].find(tab => tab.dataset.roomSession === roomSession) || $('room-overview') : $('room-overview');
+  const routes = [$('room-overview'), $('room-record')];
+  const active = routes.includes(document.activeElement) ? document.activeElement : roomSurface === 'records' ? $('room-record') : $('room-overview');
   routes.forEach(route => { route.tabIndex = route === active ? 0 : -1; });
 }
 function roomNavigationKey(event) {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return;
-  const routes = [$('room-overview'), $('room-record'), ...($('room-member-tabs').hidden ? [] : $('room-member-tabs').children)], index = routes.indexOf(event.target);
+  const routes = [$('room-overview'), $('room-record')], index = routes.indexOf(event.target);
   if (index < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? routes.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + routes.length) % routes.length;
@@ -1037,12 +1038,12 @@ function renderRoomOverview() {
   const oldIndex = oldHeader ? [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')].indexOf(oldHeader) : -1;
   const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
-    host: $('collaboration-overview'), roomId: state.room.id,
+    host: $('collaboration-overview'), roomId: state.room.id, memberIndex: false,
     display: ui.display, language: ui.language, showError: ui.showError,
     onMove: moveRoomMember,
     onOrderError: error => error.message ? toastError(error) : toastMessage('collab.orderUnchanged'),
     // A member whose messages have not arrived yet keeps its column as it was; its excerpt comes from the summary.
-    label: s => participantLabel(s, state.sessions), messages: s => s.messagesOmitted ? undefined : sessionMessages(s),
+    label: s => spaceMemberLabel(s), fullLabel: s => participantLabel(s, state.sessions), messages: s => s.messagesOmitted ? undefined : sessionMessages(s),
     renderMessages: (el, s, rows, key) => { if (rows) messageList(el, rows, false, key, { session: s, passive: true }); },
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
     renderInput: renderColumnInput, disposeInput: removeColumnInput,
@@ -1066,7 +1067,7 @@ function renderRoomOverview() {
   roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
   renderHeaderLayout(current(), selected === 'room');
   $('room-overview').setAttribute('aria-pressed', String(!records && !focused)); $('room-record').setAttribute('aria-pressed', String(records));
-  $('room-member-tabs').hidden = !focused && !records;
+  $('room-member-tabs').hidden = !focused;
   if (roomOverview) roomOverview.toolbar.hidden = focused || records;
   // The header's row now holds what this page shows of it.
   fitRoomTabs();
@@ -2523,6 +2524,7 @@ $('confirm-native-history').onclick = async () => {
 };
 function openRename(id, origin, roomId = spaceId) {
   const record = id === 'room' ? spaceRecord(roomId) : state.sessions.find(s => s.id === id); if (!record) return;
+  const spaceHeading = id === 'room' && selected === 'room' && roomId === spaceId;
   if (renaming) return toastMessage("toast.nameSaving");
   if (renameTarget) {
     if (renameTarget.id === id && (id !== 'room' || renameTarget.roomId === roomId) || $('rename-name').value !== renameTarget.originalName) {
@@ -2532,7 +2534,7 @@ function openRename(id, origin, roomId = spaceId) {
   }
   // A space's editor opens in its row in the 协作空间 section, which is hidden while that section is folded; the heading's
   // and the header's ⋯ are reachable then. Unfold the section first, as the person would (T-155).
-  if (id === 'room' && state.sidebar?.workspaceCollapsed) {
+  if (id === 'room' && !spaceHeading && state.sidebar?.workspaceCollapsed) {
     const revision = ++renameRevision;
     return attempt(async () => {
       await api.sidebar({ type: 'collapse', section: 'workspace', collapsed: false });
@@ -2541,9 +2543,9 @@ function openRename(id, origin, roomId = spaceId) {
       openRename(id, origin, roomId);
     });
   }
-  const row = id === 'room' ? spaceRows.get(roomId)?.element : origin?.closest('.session-row') || sessionRow(id)?.element;
+  const row = spaceHeading ? $('title').parentElement : id === 'room' ? spaceRows.get(roomId)?.element : origin?.closest('.session-row') || sessionRow(id)?.element;
   if (!row || record.archived || id === 'room' && spaceRecord(roomId)?.archived) return;
-  renameTarget = { id, roomId, origin, originalName: record.name, row, label: id === 'room' ? spaceRows.get(roomId).name : [...sessionRows.values()].find(r => r.element === row).name };
+  renameTarget = { id, roomId, origin, originalName: record.name, row, label: spaceHeading ? $('title') : id === 'room' ? spaceRows.get(roomId).name : [...sessionRows.values()].find(r => r.element === row).name };
   renameRevision++; renameComposing = false; $('rename-name').value = record.name;
   ui.display.text($('rename-label'), id === 'room' ? 'rename.workspace' : 'rename.session');
   $('rename-error').hidden = true; ui.display.unbind($('rename-error')); $('rename-error').textContent = '';
@@ -2552,6 +2554,7 @@ function openRename(id, origin, roomId = spaceId) {
   render(); $('rename-name').focus(); $('rename-name').select();
 }
 function revealRenameRow(row) {
+  if (row === $('title').parentElement) return;
   const group = row.closest('.session-space-group');
   if (group && sidebarCollapsedGroups.has(group.dataset.sessionGroup)) toggleSidebarGroup(group.dataset.sessionGroup);
   const folder = row.closest('.hier-folder-group');
@@ -3188,6 +3191,39 @@ function openMemberMenu(id, anchor) {
   });
   sessionMenu = { id, anchor, key, kind: 'member', close };
 }
+// A member is identified where its content is shown; menus below only choose spaces or independent sessions.
+function spaceMemberLabel(record, people = orderedMembers()) {
+  const prefix = typeof state.room?.name === 'string' ? state.room.name + ' · ' : '';
+  const short = person => prefix && person.name.startsWith(prefix) && person.name.slice(prefix.length).trim() ? person.name.slice(prefix.length) : person.name;
+  const name = short(record);
+  return people.some(person => person.id !== record.id && short(person) === name) ? participantLabel(record, people) : name;
+}
+function independentNavigationSessions() {
+  return sidebarSessions().filter(record => !allSpaces().some(room => !room.archived && inSpace(record, room.id)));
+}
+function openSpaceNavigation(kind, anchor) {
+  if (spaceNavigationMenu) { spaceNavigationMenu(); return; }
+  const rooms = () => allSpaces().filter(room => !room.archived);
+  const rows = kind === 'spaces' ? rooms().map(room => ({ id: room.id, label: uiText('navigation.spaceItem', { name: spaceName(room), count: members(room.id).length }) }))
+    : independentNavigationSessions().map(record => ({ id: record.id, label: participantLabel(record, state.sessions) + ' · ' + sidebarPresentation(record).full }));
+  const items = rows.length ? rows : [{ id: 'empty', label: uiText(kind === 'spaces' ? 'sidebar.noSpaces' : 'navigation.noIndependent'), disabled: true }];
+  anchor.setAttribute('aria-expanded', 'true');
+  spaceNavigationMenu = ui.menu({ items, getAnchorRect: () => anchor.getBoundingClientRect(), onClose: () => {
+    spaceNavigationMenu = null; anchor.setAttribute('aria-expanded', 'false');
+    if (anchor.isConnected && anchor.getClientRects().length) anchor.focus({ preventScroll: true });
+  }, onSelect: id => {
+    if (kind === 'spaces' ? !rooms().some(room => room.id === id) : !independentNavigationSessions().some(record => record.id === id)) { toastMessage('navigation.changed'); return; }
+    attempt(() => kind === 'spaces' ? selectSpace(id) : select(id));
+  } });
+}
+function renderSpaceRail() {
+  const active = selected === 'room', surface = $('sidebar-toggle').closest('.naw[data-native-surface="sidebar"]');
+  $('space-rail-routes').hidden = $('switch-space').hidden = !active;
+  if (!surface) return;
+  const collapsed = surface.dataset.collapsed === 'true';
+  if (active && spaceRailBefore === null) { spaceRailBefore = collapsed; if (!collapsed) ui.toggleSidebar(); }
+  else if (!active && spaceRailBefore !== null) { const before = spaceRailBefore; spaceRailBefore = null; if (before !== collapsed) ui.toggleSidebar(); }
+}
 // Every unarchived session but the butler the person talks to, which has its own place above the lists.
 function sidebarSessions() {
   const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index])), butler = state.steward?.sessionId;
@@ -3393,8 +3429,10 @@ async function moveSidebarSession(id, target, after) {
   await api.sidebar({ type: 'move', id, target, after });
 }
 function renderSidebarGroups() {
-  const grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
-  $('workspace-group').hidden = grouped && renameTarget?.id !== 'room';
+  const spaceView = selected === 'room', grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
+  $('sessions-group').hidden = spaceView;
+  $('workspace-group').hidden = spaceView || grouped && renameTarget?.id !== 'room';
+  document.querySelector('.session-view-switch').hidden = spaceView;
   $('workspace-group').dataset.groupedSessions = String(grouped);
   const createSlot = $(grouped ? 'sessions-create-slot' : 'workspace-create-slot');
   if ($('new-space').parentElement !== createSlot) createSlot.append($('new-space'));
@@ -3407,7 +3445,7 @@ function renderSidebarGroups() {
   ui.display.computed($('session-group-summary'), 'text', () => grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
   ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
   // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
-  document.querySelector('.drop-hint').hidden = !allSpaces().some(r => !r.archived);
+  document.querySelector('.drop-hint').hidden = spaceView || !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
     const name = () => uiText({ sessions: grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
@@ -4894,7 +4932,7 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
-    renderArchives(); renderSpaceNavigation(); renderSpaceFiles(); renderQueue(); noteHandoffState();
+    renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -6772,6 +6810,9 @@ function syncSidebarToggle() {
   ui.display.computed(toggle, 'title', () => uiText('sidebar.panelShortcut', { action: uiText(key) }));
 }
 $('sidebar-toggle').onclick = () => ui.toggleSidebar();
+$('spaces-nav').onclick = () => openSpaceNavigation('spaces', $('spaces-nav'));
+$('switch-space').onclick = () => openSpaceNavigation('spaces', $('switch-space'));
+$('independent-nav').onclick = () => openSpaceNavigation('sessions', $('independent-nav'));
 syncSidebarToggle();
 // The selected card hierarchy is the only production sidebar look.
 document.documentElement.dataset.sidebarLook = 'b';

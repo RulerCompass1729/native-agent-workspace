@@ -1255,3 +1255,19 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 .records-confirmation-link > strong, .records-confirmation-link > span, .records-confirmation-link > time { display: block; overflow-wrap: anywhere; }
 .records-dialog:modal { overscroll-behavior: contain; }
 .records-dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
+
+/* A space has one member list: the headings of its content columns. */
+#space-rail-routes { display: grid; gap: 5px; margin-block: 5px; }
+#space-rail-routes button { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 0; background: transparent; text-align: left; }
+#space-rail-routes button > span:first-child { font-size: 17px; }
+&[data-native-surface="sidebar"][data-collapsed="true"] #space-rail-routes button { display: grid; justify-items: center; gap: 2px; padding: 4px 0; font-size: 10px; white-space: nowrap; }
+#switch-space { padding: 1px 5px; min-height: 24px; border: 0; background: transparent; }
+.header-identity:has(> #switch-space:not([hidden])) { position: relative; padding-right: 28px; }
+#switch-space { position: absolute; right: 0; top: 0; }
+#collaboration-overview .collaboration-member-unit > .collaboration-member-status { position: sticky; top: 0; z-index: 2; align-self: start; }
+/* In a focused member view this is a single current-member heading, not a roster. */
+.conversation-pane-toolbar #room-member-tabs { display: flex; flex: 0 1 auto; min-width: 0; max-width: 55%; margin-right: 5px; }
+.conversation-pane-toolbar #room-member-tabs > button { display: flex; flex: 0 1 auto; min-width: 0; padding: 3px 0; border: 0; background: transparent; }
+.conversation-pane-toolbar #room-member-tabs .room-member-heading { min-width: 0; align-items: center; }
+.conversation-pane-toolbar #room-member-tabs .room-member-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; }
+.conversation-pane-toolbar #room-member-tabs :is(.room-member-id, .room-member-state) { display: none; }

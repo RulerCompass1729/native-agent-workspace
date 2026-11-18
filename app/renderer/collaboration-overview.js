@@ -360,7 +360,7 @@
       capacity = columnCapacity();
       progressive = records.length > capacity;
       host.dataset.progressive = String(progressive);
-      const chipIndex = progressive && layout === 'grid' && !focused && contentVisible;
+      const chipIndex = options.memberIndex !== false && progressive && layout === 'grid' && !focused && contentVisible;
       headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);
       // List already scrolls; grid's row limit must not hide list members.
       if (!progressive || layout === 'list') visibleLimit = records.length;
@@ -374,7 +374,7 @@
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
-        const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
+        const label = options.label(record), fullLabel = options.fullLabel?.(record) || label, suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
         options.renderIdentity?.(pane.name, record);
         setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix);
         if (chipIndex) {
@@ -383,8 +383,8 @@
           if (headers.children[i] !== pane.chip) headers.insertBefore(pane.chip, headers.children[i] || null);
         } else pane.chip.remove();
         pane.name.dataset.orderHandle = String(canOrder());
-        display.computed(pane.name, 'title', () => label + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
-        display.attribute(pane.name, 'aria-label', 'collab.focus', { name: label }); pane.name.setAttribute('aria-pressed', String(focused === record.id));
+        display.computed(pane.name, 'title', () => fullLabel + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
+        display.attribute(pane.name, 'aria-label', 'collab.focus', { name: fullLabel }); pane.name.setAttribute('aria-pressed', String(focused === record.id));
         if (options.onMove) {
           display.attribute(pane.name, 'aria-description', 'collab.orderPosition', () => ({ index: i + 1, count: records.length, help: canOrder() ? locale.format(language(), 'collab.orderHelp') : '' }));
           if (canOrder()) pane.name.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');

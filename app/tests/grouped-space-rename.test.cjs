@@ -22,9 +22,9 @@ function fixture(view = 'grouped') {
   const room = { id: 'A', name: 'Room A' }, session = { id: 'S', name: 'Member', nativeId: 'original-native', liveDraft: 'UNSENT private' };
   $('workspace-group').append($('workspace-group-body')); $('workspace-group-body').append($('room-A')); $('room-A').append($('room-label-A'));
   $('sessions-group').append($('session-list')); $('session-list').append($('session-S')); $('session-S').append($('session-label-S'));
-  $('header').parentElement = $('header-parent'); $('rename-editor').hidden = true;
+  $('header').parentElement = $('header-parent'); $('header-identity').append($('title')); $('rename-editor').hidden = true;
   const state = { sidebar: { workspaceCollapsed: false }, room, sessions: [session] };
-  const context = vm.createContext({ $, document, state, sidebarView: view, spaceId: 'A', allSpaces: () => [room], members: () => [session], spaceRecord: () => room,
+  const context = vm.createContext({ $, document, state, selected: '', sidebarView: view, spaceId: 'A', allSpaces: () => [room], members: () => [session], spaceRecord: () => room,
     spaceRows: new Map([['A', { element: $('room-A'), name: $('room-label-A') }]]), sessionRows: new Map([['S', { element: $('session-S'), name: $('session-label-S'), more: $('session-more-S') }]]),
     sessionRow: () => ({ element: $('session-S'), name: $('session-label-S'), more: $('session-more-S') }),
     ui: { revealSidebar() {}, display: { text() {}, computed() {}, attribute() {}, unbind() {} } }, uiText: key => key,
@@ -72,3 +72,13 @@ for (const changed of [{ servicePid: 42, runtimeVersion: 'test-version' }, { ser
     await assert.rejects(context.create('Never created', 'claude'), { name: 'AssertionError' }); assert.equal(touches, 0);
   });
 }
+
+test('an open space reuses the inline name editor in its title without reviving the hidden member sidebar', () => {
+  const f = fixture(); f.context.selected = 'room'; f.state.sidebar.workspaceCollapsed = true;
+  f.context.renderSidebarGroups(); f.open('room', null, 'A');
+  assert.equal(f.target().row, f.$('header-identity'));
+  assert.equal(f.$('rename-editor').getClientRects().length, 1);
+  assert.equal(f.$('workspace-group').hidden, true); assert.equal(f.$('sessions-group').hidden, true);
+  assert.equal(f.$('title').hidden, true); assert.deepEqual(f.writes, []);
+  f.close(); assert.equal(f.$('title').hidden, false); assert.equal(f.$('rename-editor').hidden, true);
+});
