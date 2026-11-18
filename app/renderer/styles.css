@@ -346,6 +346,23 @@ header h1, header p { overflow-wrap: anywhere; }
 #search-preview { min-height: 0; overflow: auto; }
 #search-preview-body { font-size: 13px; }
 #search-dialog .dialog-actions { margin-top: 10px; }
+#search-send { flex: none; align-self: flex-start; max-width: 100%; margin: 8px 0 2px; padding: 7px 12px; overflow-wrap: anywhere; text-align: left; }
+#search-send.primary { font-weight: 600; }
+#send-dialog { width: 520px; max-width: calc(100vw - 32px); padding: 20px; }
+#send-dialog h2 { margin: 0 0 8px; }
+#send-dialog textarea { width: 100%; margin-bottom: 12px; }
+#send-targets { border: 0; padding: 0; margin: 0; min-width: 0; }
+#send-targets legend { padding: 0; margin-bottom: 4px; font-size: 12px; color: var(--muted); }
+#send-list { display: grid; gap: 4px; }
+#send-list label { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 6px; font-size: 13px; }
+#send-list label strong { overflow-wrap: anywhere; }
+#send-list label small, #send-list .send-detail { grid-column: 2; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+#send-list .send-detail:empty { display: none; }
+#send-list label.blocked strong { color: var(--muted); }
+#send-list input[type="radio"] { width: auto; margin: 0; }
+#send-note { margin: 8px 0 0; font-size: 12px; }
+#send-note:empty { display: none; }
+#send-dialog .dialog-actions { margin-top: 12px; }
 [data-search-target] { outline: 2px solid var(--accent, #527564); outline-offset: 7px; border-radius: 4px; }
 #retry-save { align-self: flex-start; margin: 0 20px 10px; }
 .reading-return { align-self: flex-start; margin: 5px 20px; font-size: 12px; padding: 4px 8px; }

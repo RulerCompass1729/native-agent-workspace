@@ -23,6 +23,7 @@
     "test:draft-ownership": "npm run build:ui && node scripts/test-draft-ownership.cjs",
     "test:reading": "npm run build:ui && node scripts/test-reading.cjs",
     "test:search": "npm run build:ui && node scripts/test-search.cjs",
+    "test:search-send": "npm run build:ui && node scripts/test-search-send.cjs",
     "test:reconnect": "npm run build:ui && node scripts/test-reconnect.cjs",
     "test:progress-reading": "npm run build:ui && node scripts/test-progress-reading.cjs",
     "test:codex-usability": "npm run build:ui && node scripts/test-codex-usability.cjs"

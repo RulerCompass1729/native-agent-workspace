@@ -812,6 +812,8 @@ function shownSessionIds(pending = true) {
   if (active) ids.add(active);
   if (selected === 'room') for (const s of members()) ids.add(s.id);
   for (const id of queuedInputs.keys()) ids.add(id);
+  // A sent sentence whose notice still follows its row, or a new session waiting for it.
+  if (typeof searchSendShownId === 'function' && searchSendShownId()) ids.add(searchSendShownId());
   return [...ids].filter(id => state?.sessions.some(s => s.id === id)).sort();
 }
 function reportShown() {
@@ -1149,6 +1151,7 @@ function updateState(next) {
   }
   for (const [queuedId, mark] of queuedInputs) followQueuedInput(queuedId, mark);
   for (const [queuedId, mark] of queuedRoomInputs) followQueuedRoomInput(queuedId, mark);
+  if (typeof followSearchSend === 'function') followSearchSend();
 }
 // Like a native TUI queue, a queued Claude message leaves the composer once
 // the service records it. Only a proven non-send comes back, and only into an
@@ -1620,11 +1623,15 @@ function renderComposer(s) {
   renderDraftRecovery(s?.id);
   if (s) updateSessionComposer(activateSoloComposer(s.id), s, false);
 }
+// The one send gate for typed text: the solo/column composer and the search send dialog.
+function sessionSendDisabled(s, action, text, changing) {
+  return action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !text.trim() || pendingMode?.id === s.id || changing || inputRecoveries.get(s.id)?.text.value));
+}
 function updateSessionComposer(binding, s, column) {
   if (state.rotationChains?.length || binding.chainNotice) renderSessionHandoff(binding, s);
   const action = soloAction(s, { column, mode: column ? 'chat' : mode });
   const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
-  const disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !binding.ui.input.value.trim() || pendingMode?.id === s.id || binding.changing || inputRecoveries.get(s.id)?.text.value));
+  const disabled = sessionSendDisabled(s, action, binding.ui.input.value, binding.changing);
   const identity = participantLabel(s, state.sessions);
   const placeholderKey = column ? 'composer.placeholderName' : action.kind === 'send' ? 'composer.placeholder' : legacyDraft ? 'composer.editableDraft' : 'composer.preservedDraft';
   const inputKey = column ? 'composer.inputName' : 'composer.input';
@@ -6928,8 +6935,17 @@ $('session-chain-dialog').addEventListener('close', () => {
 $('close-search').onclick = () => $('search-dialog').close();
 $('search-preview-back').onclick = renderSearch;
 $('search-dialog').addEventListener('close', finishSearch);
-$('search-input').oninput = event => { clearTimeout(searchTimer); if (!event.isComposing) searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
-$('search-input').oncompositionend = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
+$('search-dialog').addEventListener('close', () => { if (!$('search-dialog').open) updateSearchSend(); });
+$('search-input').oninput = event => { clearTimeout(searchTimer); if (!event.isComposing) { updateSearchSend(); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); } };
+$('search-input').oncompositionend = () => { clearTimeout(searchTimer); updateSearchSend(); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
+$('search-send').onclick = () => openSearchSend($('search-input').value.trim());
+$('send-list').onchange = searchSendChoose;
+$('send-text').oninput = () => renderSearchSend();
+$('send-cancel').onclick = () => $('send-dialog').close();
+$('send-confirm').onclick = () => attempt(confirmSearchSend);
+$('send-dialog').addEventListener('close', finishSearchSend);
+// 新开一个 waits for the create dialog (and anything opened over it) to close; a close event does not bubble.
+document.addEventListener('close', () => { if (searchSendNew) setTimeout(resumeSearchSendNew, 0); }, true);
 $('search-input').onkeydown = searchInputKey;
 $('search-results').onkeydown = searchResultKey;
 $('search-scope').onchange = $('search-archived').onchange = () => { searchLimit = 60; renderSearch(); };
