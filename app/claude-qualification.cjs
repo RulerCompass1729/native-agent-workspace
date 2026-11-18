@@ -3,6 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { fork } = require('node:child_process');
 const mod = require('./claude-mod-check.cjs');
 const REFERENCE = '2.1.327';
+const WORK_TIMEOUT_MS = 300000, CLEANUP_GRACE_MS = 20000;
 const JOURNEYS = Object.freeze(['solo-queue', 'shared-queue', 'shared-model']);
 const exact = value => typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
 function identity(binary) {
@@ -50,30 +51,50 @@ function launch({ launcher, file }) {
     check: record ? { status: record.status, reason: record.reason || record.status } : { status: 'checking', reason: 'checking' } };
 }
 
+// The parent retains this exact short-path root so a forced worker exit cannot
+// bypass its finally cleanup. Never remove a replaced directory or symlink.
+function nativeRoot(owner) {
+  const root = owner?.root;
+  if (typeof root !== 'string' || path.dirname(root) !== fs.realpathSync('/tmp') || !/^ncq-[A-Za-z0-9]{6}$/.test(path.basename(root))) throw Error('Invalid native check directory');
+  const stat = fs.lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || stat.uid !== owner.uid || stat.dev !== owner.dev || stat.ino !== owner.ino) throw Error('Native check directory identity changed');
+  return root;
+}
+function removeNativeRoot(owner) {
+  try { fs.rmSync(nativeRoot(owner), { recursive: true, force: true }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
 // The worker owns its native sessions and handles cancellation before it exits. The IPC channel also
 // closes when its daemon goes away, so a parent crash cannot leave an unattended qualification.
-function nativeJourneys({ binary, version, privateDir, signal, timeoutMs = 300000 }) {
+function nativeJourneys({ binary, version, privateDir, signal, timeoutMs = WORK_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(Error('cancelled'));
     const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin', LANG: 'en_US.UTF-8', ELECTRON_RUN_AS_NODE: '1' };
-    const child = fork(path.join(__dirname, 'claude-native-journeys.cjs'), [binary, version, privateDir], { env, silent: true });
-    let result, stopped = false, force;
+    const root = fs.realpathSync(fs.mkdtempSync('/tmp/ncq-')), stat = fs.lstatSync(root);
+    const owner = { root, uid: stat.uid, dev: stat.dev, ino: stat.ino };
+    let child;
+    try { child = fork(path.join(__dirname, 'claude-native-journeys.cjs'), [binary, version, JSON.stringify(owner)], { env, silent: true }); }
+    catch (error) { removeNativeRoot(owner); return reject(error); }
+    let result, stopped = false, force, failure;
     const cancel = () => {
       if (stopped) return; stopped = true;
       if (child.connected) child.send({ cancel: true });
       // The native PTY supervisor also stops its owned group on stdin EOF.
-      force = setTimeout(() => child.kill('SIGKILL'), 20000);
+      force = setTimeout(() => child.kill('SIGKILL'), CLEANUP_GRACE_MS);
     };
     const timer = setTimeout(cancel, timeoutMs);
     signal?.addEventListener('abort', cancel, { once: true });
     child.on('message', message => { if (message?.type === 'result') result = message.result; });
     child.stdout.resume(); child.stderr.resume();
     const finish = () => { clearTimeout(timer); clearTimeout(force); signal?.removeEventListener('abort', cancel); };
-    child.once('error', error => { finish(); reject(error); });
+    child.once('error', error => { failure = error; if (child.pid) cancel(); });
     child.once('close', code => {
       finish();
-      if (stopped || signal?.aborted) reject(Error('cancelled'));
-      else if (code !== 0 || !result) resolve(result || { passed: false, reason: 'native-startup', journeys: {} });
+      try { removeNativeRoot(owner); } catch (error) { return reject(error); }
+      if (failure) reject(failure);
+      else if (stopped || signal?.aborted) reject(Error('cancelled'));
+      else if (code !== 0 || !result) resolve({ passed: false, reason: result?.passed === false ? result.reason : 'native-startup', journeys: result?.journeys || {} });
       else resolve(result);
     });
   });
@@ -85,18 +106,34 @@ async function checkOnce({ file, binary, version, privateDir, signal, runMod = m
   const record = { version, reference: REFERENCE, binary: identity(binary), basis: basis(), at: new Date().toISOString(), status: 'checking', journeys: {} };
   if (!record.binary) return null;
   save(file, record);
+  const work = new AbortController(), deadline = performance.now() + WORK_TIMEOUT_MS;
+  let timedOut = false;
+  const expire = () => { timedOut = true; work.abort(); };
+  const cancel = () => work.abort();
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  const timer = setTimeout(expire, WORK_TIMEOUT_MS);
+  const remaining = () => {
+    const ms = Math.max(0, Math.ceil(deadline - performance.now()));
+    if (!ms) expire();
+    if (work.signal.aborted) throw Error('cancelled');
+    return ms;
+  };
   try {
-    record.mod = await runMod({ binary, version, privateDir, signal });
+    record.mod = await runMod({ binary, version, privateDir, signal: work.signal, timeoutMs: Math.min(60000, remaining()) });
+    remaining();
     if (!mod.passed(record.mod)) { record.status = 'failed'; record.reason = 'mod-tests'; }
     else {
-      const result = await runJourneys({ binary, version, privateDir, signal });
+      const result = await runJourneys({ binary, version, privateDir, signal: work.signal, timeoutMs: remaining() });
+      remaining();
       record.journeys = Object.fromEntries(JOURNEYS.map(name => [name, result.journeys?.[name] === true]));
       record.status = result.passed && JOURNEYS.every(name => record.journeys[name]) ? 'passed' : 'failed';
       if (record.status === 'failed') record.reason = JOURNEYS.includes(result.reason) ? result.reason : 'native-startup';
     }
-  } catch { record.status = 'failed'; record.reason = signal?.aborted ? 'cancelled' : 'native-startup'; }
+  } catch { record.status = 'failed'; record.reason = timedOut ? 'timed-out' : signal?.aborted ? 'cancelled' : 'native-startup'; }
+  finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   if (signal?.aborted) return null;
   if (!current(record, binary)) { record.status = 'failed'; record.reason = 'binary-changed'; }
   save(file, record); return record;
 }
-module.exports = { REFERENCE, JOURNEYS, identity, basis, load, current, passed, decision, save, approvedVersions, launch, nativeJourneys, checkOnce };
+module.exports = { REFERENCE, JOURNEYS, WORK_TIMEOUT_MS, CLEANUP_GRACE_MS, identity, basis, load, current, passed, decision, save, approvedVersions, launch, nativeRoot, removeNativeRoot, nativeJourneys, checkOnce };

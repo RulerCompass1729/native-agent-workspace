@@ -2,8 +2,9 @@
 // The same three contracts as test-native-queue: solo queue, shared queue, shared model changes.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const [binary, version] = process.argv.slice(2);
-const root = fs.realpathSync(fs.mkdtempSync('/tmp/ncq-'));
+const [binary, version, receipt] = process.argv.slice(2);
+const { nativeRoot, removeNativeRoot } = require('./claude-qualification.cjs');
+const owner = JSON.parse(receipt), root = nativeRoot(owner);
 const home = path.join(root, 'home'); fs.mkdirSync(home, { mode: 0o700 });
 Object.assign(process.env, { HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: path.join(root, 'config'), NAW_DATA_DIR: path.join(root, 'data'), NAW_RUNTIME_CONFIG: path.join(root, 'locations.json') });
 const { NativeHost } = require('./adapters.cjs'), { Workspace } = require('./workspace.cjs');
@@ -133,7 +134,7 @@ async function journey(name) {
     process.send?.({ type: 'result', result: { passed: false, reason, journeys } });
     process.exitCode = 1;
   } finally {
-    await cleanup(); fs.rmSync(root, { recursive: true, force: true });
+    await cleanup(); removeNativeRoot(owner);
     if (process.connected) process.disconnect();
   }
 })();

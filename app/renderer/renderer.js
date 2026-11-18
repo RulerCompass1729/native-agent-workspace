@@ -2170,7 +2170,7 @@ function claudePinText(s, detail = false) {
   const text = uiText(`native.claudePin${pin.expired ? 'Expired' : 'ned'}${detail ? 'Detail' : ''}`, { pinned: pin.pinned, requested: pin.requested, date });
   const check = pin.check;
   if (!check) return text;
-  const reasons = ['mod-tests', 'solo-queue', 'shared-queue', 'shared-model', 'native-startup', 'binary-changed', 'cancelled'];
+  const reasons = ['mod-tests', 'solo-queue', 'shared-queue', 'shared-model', 'native-startup', 'binary-changed', 'cancelled', 'timed-out'];
   const reason = reasons.includes(check.reason) ? check.reason : 'native-startup';
   return text + ' · ' + uiText(check.status === 'passed' ? 'native.claudeCheckPassed' : check.status === 'failed' ? 'native.claudeCheckFailed' : 'native.claudeCheckPending', { reason: uiText('native.claudeCheckReason.' + reason) });
 }
