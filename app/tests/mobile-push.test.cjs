@@ -148,3 +148,28 @@ test('an expired old request cannot expire its replacement subscription', async 
   now += 100; release(); await old;
   assert.equal(f.push.status().enabled, true); assert.equal(f.push.status().state, 'subscribed');
 });
+
+
+test('VAPID subject and generated JWT carry no account, contact address or application host', async t => {
+  const source = require('node:fs').readFileSync(require.resolve('../mobile-push.cjs'), 'utf8');
+  const subject = source.match(/const SUBJECT = '([^']*)';/)[1];
+  for (const host of ['web.push.apple.com', 'fcm.googleapis.com', 'updates.push.services.mozilla.com']) {
+    const f = fixture(t, { authority: () => 'synthetic-person@example.invalid' });
+    f.sub.endpoint = `https://${host}/synthetic`;
+    f.push.configuration(); f.push.subscribe(f.sub); await f.push.refresh();
+    assert.equal(f.messages.length, 1, 'generate the actual request with an offline transport');
+    const details = f.messages[0], token = details.headers.Authorization.match(/^vapid t=([^,]+), k=/)[1];
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    assert.doesNotMatch(JSON.stringify(payload), /github|rulercompass|@|synthetic-mac/i);
+    // RFC 8292 requires the push service origin in aud. No other claim may carry a host.
+    assert.equal(payload.aud, `https://${host}`);
+    assert.ok(Number.isSafeInteger(payload.exp) && payload.exp > Math.floor(Date.now() / 1000));
+    assert.deepEqual({ ...payload, exp: 0 }, { aud: `https://${host}`, exp: 0, sub: 'mailto:' });
+    assert.equal(subject, 'mailto:'); assert.equal(payload.sub, subject);
+    const contact = new URL(subject); assert.equal(contact.protocol, 'mailto:');
+    assert.deepEqual([contact.hostname, contact.username, contact.password, contact.pathname, contact.search, contact.hash], ['', '', '', '', '', '']);
+    assert.ok(Object.keys(details.headers).every(key => !/user-agent|referer|referrer/i.test(key)));
+    const plain = require('http_ece').decrypt(details.body, { version: 'aes128gcm', privateKey: f.key, authSecret: f.sub.keys.auth });
+    assert.deepEqual(JSON.parse(plain), { count: 7 });
+  }
+});

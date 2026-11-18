@@ -4,7 +4,8 @@
 const https = require('node:https'), dns = require('node:dns'), net = require('node:net');
 const crypto = require('node:crypto');
 const HOSTS = new Set(['web.push.apple.com', 'fcm.googleapis.com', 'updates.push.services.mozilla.com']);
-const SUBJECT = 'https://github.com/RulerCompass1729/native-agent-workspace';
+// RFC 6068 permits an empty recipient. No contact identity; provider acceptance is unverified.
+const SUBJECT = 'mailto:';
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const denied = () => Object.assign(Error('Mobile push unavailable'), { code: 'MOBILE_PUSH_DENIED' });
 function library() {
