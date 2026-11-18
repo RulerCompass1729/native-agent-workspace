@@ -1,3 +1,6 @@
+const evidence = process.env.NAW_EVIDENCE_DIR;
+// Native transcripts must never enter the generic scratch export.
+delete process.env.NAW_EVIDENCE_DIR;
 const testScratch = require('./fixtures/test-scratch.cjs');
 // The Claude session list in 新建会话, end to end: isolated HOME/config, the real
 // native CLI under the loopback sandbox, two synthetic transcripts. A has exited;
@@ -16,7 +19,6 @@ const base = testScratch.directory(path.join(os.tmpdir(), 'naw-claude-session-li
 const profile = path.join(base, 'profile'), config = path.join(base, 'claude'), userHome = path.join(base, 'home');
 const alphaDir = path.join(base, 'alpha-notes'), betaDir = path.join(base, 'beta-notes');
 for (const dir of [profile, config, userHome, alphaDir, betaDir]) fs.mkdirSync(dir, { mode: 0o700 });
-const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
@@ -26,6 +28,7 @@ const TITLES = { [A]: 'Synthetic Alpha notes', [B]: 'Synthetic Beta notes' };
 const REPLIES = { [A]: 'SYNTHETIC_ALPHA_REPLY', [B]: 'SYNTHETIC_BETA_REPLY' };
 const PROMPTS = { [A]: 'SYNTHETIC_ALPHA_PROMPT', [B]: 'SYNTHETIC_BETA_PROMPT' };
 const SESSION_TEXT = [...Object.values(TITLES), ...Object.values(PROMPTS), ...Object.values(REPLIES)];
+const redactSessionText = value => SESSION_TEXT.reduce((text, marker) => text.split(marker).join('[synthetic session text]'), String(value));
 let fixture, application, page, client, outside, outsideIdentity, nativeIdentities = [];
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -72,11 +75,10 @@ async function cleanup() {
   if (fixture) await fixture.stop();
   if (outsideIdentity && processMayBeAlive(outsideIdentity)) failure ||= Error('Owned outside session exit is unconfirmed');
   await until(() => nativeIdentities.every(id => !processMayBeAlive(id)), 'Native sessions exited', 5000).catch(error => { failure ||= error; });
-  // testScratch exports this whole base as evidence: transcripts and Claude's records stay out of it.
+  if (failure) throw failure;
   fs.rmSync(config, { recursive: true, force: true });
   const failureText = path.join(base, 'failure.txt');
-  if (fs.existsSync(failureText)) fs.writeFileSync(failureText, SESSION_TEXT.reduce((text, marker) => text.split(marker).join('[synthetic session text]'), fs.readFileSync(failureText, 'utf8')));
-  if (failure) throw failure;
+  if (fs.existsSync(failureText)) fs.writeFileSync(failureText, redactSessionText(fs.readFileSync(failureText, 'utf8')));
 }
 (async () => {
   fixture = loopback.create({ directory: base, provider: 'claude', respond: (req, res) => { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'session list journey sends no message' } })); } });
@@ -167,13 +169,16 @@ async function cleanup() {
   if (evidence) fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
 })().catch(async error => {
-  if (page && !page.isClosed()) { await shot('failure').catch(() => {}); if (evidence) fs.writeFileSync(path.join(evidence, 'failure-status.txt'), await page.locator('#native-history-status').innerText().catch(() => '')); }
-  console.error(error.stack); process.exitCode = 1;
-}).finally(testScratch.cleanup(cleanup)).then(() => {
+  if (page && !page.isClosed()) { await shot('failure').catch(() => {}); if (evidence) fs.writeFileSync(path.join(evidence, 'failure-status.txt'), redactSessionText(await page.locator('#native-history-status').innerText().catch(() => ''))); }
+  console.error(redactSessionText(error.stack || error)); process.exitCode = 1;
+}).finally(testScratch.cleanup(cleanup)).finally(() => {
   if (!evidence) return;
   const holders = [];
   const scan = dir => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const file = path.join(dir, entry.name); if (entry.isDirectory()) scan(file); else if (entry.isFile() && SESSION_TEXT.some(text => fs.readFileSync(file).includes(text))) holders.push(path.relative(evidence, file)); } };
   scan(evidence);
   if (holders.length) { console.error(JSON.stringify({ evidenceHoldsSessionText: holders })); process.exitCode = 1; }
   else console.log(JSON.stringify({ evidenceSessionTextScan: 'clean', markers: SESSION_TEXT.length }));
+}).catch(error => {
+  console.error(redactSessionText(error.stack || error));
+  process.exitCode = 1;
 });
