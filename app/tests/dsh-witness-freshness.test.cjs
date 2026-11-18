@@ -79,16 +79,17 @@ test('duplicate and out-of-order reports do not renew the latest confirmed seque
 });
 
 test('an old timestamp cannot acknowledge a reused port', async t => {
-  const run = await fixture(t, { beatMs: 1, beatReportMs: 2500 });
-  const originalStamp = run.sent[0].stamp;
-  const deadline = Date.now() + 2200;
-  while (run.sent.length < 1000 && Date.now() < deadline) await wait(10);
+  const run = await require('./helpers/dsh-witness-clock.cjs').fixture();
+  t.after(() => run.close());
+  run.auto = true; run.advance(249500); run.auto = false;
+  const confirmed = run.armed.beats;
+  run.advance(250);
   assert.ok(run.sent.length >= 1000, 'the port actually wrapped');
-  run.report(1, originalStamp);
-  assert.equal(run.armed.beats, 1, 'stale report must not acknowledge the new use of port 1');
-  const latest = run.sent.at(-1);
-  run.report(latest.port);
-  assert.equal(run.armed.beats, 2, 'a current report of a newer sequence renews');
+  assert.equal(run.sent[999].port, run.sent[0].port);
+  run.report(1); // original wire timestamp, default 250ms beat
+  assert.equal(run.armed.beats, confirmed, 'stale report must not acknowledge the new use of port 1');
+  run.report(1000);
+  assert.equal(run.armed.beats, confirmed + 1, 'a current report of a newer sequence renews');
   assert.deepEqual(run.lost, []);
 });
 

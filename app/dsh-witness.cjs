@@ -127,12 +127,26 @@ function startWitness({
       }
       lose(reason);
     };
+    let clockFloor = -Infinity;
+    const trustedClock = () => {
+      // Bound clock offset across the wall read; allow 1ms rounding and one beat.
+      // A backward mapping makes reused ports ambiguous: fail closed.
+      const before = performance.now(), wall = Date.now(), at = performance.now();
+      if (!Number.isFinite(wall) || !Number.isFinite(at) || at < before || wall + 1 - before + beatMs < clockFloor) {
+        broken('the clock mapping moved backwards', 'witness-silent');
+        return null;
+      }
+      clockFloor = Math.max(clockFloor, wall - at);
+      return { wall, at };
+    };
     armDeadline = setTimeout(() => fail(Error('DSH witness: no canary report')), armTimeoutMs);
     // Timers use monotonic send time. Neither a new send nor a replay renews
     // the lease; a report must advance the confirmed sequence before expiry.
     const judge = () => {
       if (phase === 'closed') return;
-      const now = performance.now();
+      const clock = trustedClock();
+      if (!clock) return;
+      const now = clock.at;
       if (phase === 'armed') {
         if (now - confirmed.at >= beatReportMs) lose('witness-silent');
         else {
@@ -149,8 +163,10 @@ function startWitness({
     };
     const beat = () => {
       if (phase === 'closed') return;
+      const clock = trustedClock();
+      if (!clock) return;
       port = (port % BEAT_PORTS) + 1;
-      waiting.set(port, { seq: ++sequence, at: performance.now(), wall: Date.now() });
+      waiting.set(port, { seq: ++sequence, ...clock });
       canary.child.stdin.write(`${port}\n`);
       setImmediate(judge);
     };
@@ -174,7 +190,7 @@ function startWitness({
         broken('the canary ended', 'witness-silent');
       });
       beat();
-      beatTimer = setInterval(beat, beatMs);
+      if (phase !== 'closed') beatTimer = setInterval(beat, beatMs);
     };
     // The port of a beat, if this is the running canary's report of one.
     const beatOf = denial => {
@@ -187,7 +203,9 @@ function startWitness({
     };
     const handle = (denial, stamp) => {
       if (phase === 'closed') return;
-      if (phase === 'armed' && performance.now() - confirmed.at >= beatReportMs) {
+      const clock = trustedClock();
+      if (!clock) return;
+      if (phase === 'armed' && clock.at - confirmed.at >= beatReportMs) {
         lose('witness-silent');
         return;
       }
