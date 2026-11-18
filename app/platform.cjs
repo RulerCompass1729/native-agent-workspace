@@ -90,6 +90,13 @@ function processIdentity(pid) {
     return started ? { pid, started } : null;
   } catch { return null; }
 }
+function processGroup(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 2) return null;
+  try {
+    const group = Number(execFileSync('/bin/ps', ['-p', String(pid), '-o', 'pgid='], { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+    return Number.isSafeInteger(group) && group > 1 ? group : null;
+  } catch { return null; }
+}
 function processMayBeAlive(identity) {
   if (!identity?.pid) return false;
   try { process.kill(identity.pid, 0); } catch (error) { return error.code !== 'ESRCH'; }
@@ -97,4 +104,4 @@ function processMayBeAlive(identity) {
   return !identity.started || !current || current.started === identity.started;
 }
 
-module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processMayBeAlive, backendPrograms };
+module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processGroup, processMayBeAlive, backendPrograms };

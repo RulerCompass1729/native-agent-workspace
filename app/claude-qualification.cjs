@@ -2,6 +2,7 @@
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { fork } = require('node:child_process');
 const mod = require('./claude-mod-check.cjs');
+const { processIdentity, processGroup } = require('./platform.cjs');
 const REFERENCE = '2.1.327';
 const WORK_TIMEOUT_MS = 300000, CLEANUP_GRACE_MS = 20000;
 const JOURNEYS = Object.freeze(['solo-queue', 'shared-queue', 'shared-model']);
@@ -65,6 +66,51 @@ function removeNativeRoot(owner) {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 
+function ownedWorkerGroup(child) {
+  const identity = processIdentity(child.pid);
+  return identity && identity.pid !== process.pid && processGroup(identity.pid) === identity.pid ? identity : null;
+}
+function forceWorker(child, owned) {
+  // A spawn failure has no OS PID. This also leaves the existing process-free
+  // clock fixtures usable; it never turns a missing PID into a group signal.
+  if (!child.pid) return child.kill('SIGKILL');
+  if (!owned || typeof owned.started !== 'string' || !owned.started || owned.pid !== child.pid || child.exitCode !== null || child.signalCode !== null) return false;
+  const current = processIdentity(owned.pid);
+  if (current?.started !== owned.started || processGroup(owned.pid) !== owned.pid || owned.pid === process.pid) return false;
+  // Do not signal a released/reused leader. Kill only the worker: its PTY
+  // supervisors must remain able to finish their own groups after stdin EOF.
+  if (child.exitCode !== null || child.signalCode !== null) return false;
+  try { process.kill(owned.pid, 'SIGKILL'); return true; }
+  catch (error) { if (error.code !== 'ESRCH') throw error; return false; }
+}
+function stopVersionProcess(owned) {
+  if (!owned || !Number.isSafeInteger(owned.pid) || owned.pid < 2 || owned.pid === process.pid || typeof owned.started !== 'string' || !owned.started || processIdentity(owned.pid)?.started !== owned.started) return false;
+  try { process.kill(owned.pid, 'SIGKILL'); return true; }
+  catch (error) { if (error.code !== 'ESRCH') throw error; return false; }
+}
+async function versionProcessExited(owned, killed = false) {
+  while (owned) {
+    try { process.kill(owned.pid, 0); }
+    catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
+    const current = processIdentity(owned.pid);
+    if (current && current.started !== owned.started) return;
+    // A failed identity query is unknown, not exit. Retry observation; signal
+    // only once a fresh identity matches, and never a reused or unknown PID.
+    if (!killed && current) killed = stopVersionProcess(owned);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+async function workerGroupExited(owned) {
+  if (!owned) return;
+  for (;;) {
+    try { process.kill(-owned.pid, 0); }
+    catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error; }
+    // After close the leader is reaped: only observe, never signal its old
+    // group number. Keep both the root and caller pending until exit is proven.
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
 // The worker owns its native sessions and handles cancellation before it exits. The IPC channel also
 // closes when its daemon goes away, so a parent crash cannot leave an unattended qualification.
 function nativeJourneys({ binary, version, privateDir, signal, timeoutMs = WORK_TIMEOUT_MS }) {
@@ -74,24 +120,51 @@ function nativeJourneys({ binary, version, privateDir, signal, timeoutMs = WORK_
     const root = fs.realpathSync(fs.mkdtempSync('/tmp/ncq-')), stat = fs.lstatSync(root);
     const owner = { root, uid: stat.uid, dev: stat.dev, ino: stat.ino };
     let child;
-    try { child = fork(path.join(__dirname, 'claude-native-journeys.cjs'), [binary, version, JSON.stringify(owner)], { env, silent: true }); }
+    try { child = fork(path.join(__dirname, 'claude-native-journeys.cjs'), [binary, version, JSON.stringify(owner)], { env, silent: true, detached: true }); }
     catch (error) { removeNativeRoot(owner); return reject(error); }
-    let result, stopped = false, force, failure;
+    const owned = ownedWorkerGroup(child);
+    let result, stopped = false, force, failure, versionProcess, versionExitConfirmed = false, versionKilled = false;
     const cancel = () => {
       if (stopped) return; stopped = true;
       if (child.connected) child.send({ cancel: true });
-      // The native PTY supervisor also stops its owned group on stdin EOF.
-      force = setTimeout(() => child.kill('SIGKILL'), CLEANUP_GRACE_MS);
+      force = setTimeout(() => {
+        try { if (!versionExitConfirmed) versionKilled = stopVersionProcess(versionProcess); forceWorker(child, owned); } catch (error) { failure = error; }
+      }, CLEANUP_GRACE_MS);
     };
     const timer = setTimeout(cancel, timeoutMs);
     signal?.addEventListener('abort', cancel, { once: true });
-    child.on('message', message => { if (message?.type === 'result') result = message.result; });
+    child.on('message', message => {
+      if (message?.type === 'qualification-ready') {
+        // No version executable can start until this detached group has been
+        // identified. A failed ownership observation refuses the launch.
+        if (owned && !stopped) child.send({ type: 'qualification-start' });
+        else cancel();
+      }
+      if (message?.type === 'version-ready') {
+        const identity = message.identity;
+        // The version process is still in its pre-exec gate. Register its
+        // exact identity before allowing provider code to run or change groups.
+        if (owned && !stopped && Number.isSafeInteger(identity?.pid) && identity.pid > 1 && identity.pid !== child.pid && typeof identity.started === 'string' && identity.started &&
+            processIdentity(identity.pid)?.started === identity.started && processGroup(identity.pid) === owned.pid) {
+          versionProcess = { pid: identity.pid, started: identity.started };
+          child.send({ type: 'version-start' });
+        } else cancel();
+      }
+      if (message?.type === 'version-exited' && versionProcess && message.identity?.pid === versionProcess.pid && message.identity.started === versionProcess.started) versionExitConfirmed = true;
+      if (message?.type === 'result') result = message.result;
+    });
     child.stdout.resume(); child.stderr.resume();
     const finish = () => { clearTimeout(timer); clearTimeout(force); signal?.removeEventListener('abort', cancel); };
     child.once('error', error => { failure = error; if (child.pid) cancel(); });
-    child.once('close', code => {
+    child.once('close', async code => {
       finish();
-      try { removeNativeRoot(owner); } catch (error) { return reject(error); }
+      try {
+        // A worker crash cannot turn its registered version process into an
+        // unowned orphan, even if that process has changed its own group.
+        if (!versionExitConfirmed) await versionProcessExited(versionProcess, versionKilled);
+        await workerGroupExited(owned);
+        removeNativeRoot(owner);
+      } catch (error) { return reject(error); }
       if (failure) reject(failure);
       else if (stopped || signal?.aborted) reject(Error('cancelled'));
       else if (code !== 0 || !result) resolve({ passed: false, reason: result?.passed === false ? result.reason : 'native-startup', journeys: result?.journeys || {} });
