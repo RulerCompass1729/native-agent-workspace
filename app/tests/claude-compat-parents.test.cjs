@@ -39,3 +39,41 @@ test('PF08 integration: fresh install and edited-current protection stay intact'
     error => error.uiMessage?.key === 'error.legacy.pluginConflict');
   assert.equal(fs.readFileSync(file, 'utf8'), edited);
 });
+
+// The installed alpha.261 commit has the byte-identical hook from c08b56a3.
+// Use that main ancestor so this fixture survives a clone without release refs.
+// These digests were obtained from the historical outputs, not the working tree.
+for (const parent of [
+  { commit: '907f10a06a2880c15d4e4ef1f1e5a348548ad832', digest: 'c41614cb3c81aa10d7a7b7efe2068ce73aa1546edb1a72fac5ce03d352b1b0ca', label: 'main with workspace_open view' },
+  { commit: 'c08b56a3bb49b1f59ca21acee6ea28909df29490', digest: 'eaaa169a4620cd888fbba1d0663b9aa094ff92bbf19b3b78cc56d5451df98991', label: 'installed alpha.261 output' },
+]) for (const existingOnly of [false, true])
+test(`automatic qualification integration: ${parent.label} upgrades with existingOnly=${existingOnly}; one byte edits stay`, t => {
+  const { cwd, file } = fixture(t);
+  installPlugin(cwd); const current = fs.readFileSync(file);
+  const prior = Buffer.from(execFileSync('git', ['show', `${parent.commit}:app/claude-bridge/hooks/register.js`],
+    { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' })
+    .replace('const legacyOnly = false;', 'const legacyOnly = true;'));
+  assert.equal(require('node:crypto').createHash('sha256').update(prior).digest('hex'), parent.digest);
+  assert.notDeepEqual(prior, current);
+  fs.writeFileSync(file, prior);
+  assert.equal(installPlugin(cwd, { existingOnly }), true);
+  assert.deepEqual(fs.readFileSync(file), current);
+
+  const edited = Buffer.concat([prior, Buffer.from(' ')]);
+  assert.equal(edited.length, prior.length + 1);
+  fs.writeFileSync(file, edited);
+  assert.throws(() => installPlugin(cwd, { existingOnly }),
+    error => error.uiMessage?.key === 'error.legacy.pluginConflict');
+  assert.deepEqual(fs.readFileSync(file), edited);
+});
+
+for (const existingOnly of [false, true])
+test(`automatic qualification integration: unknown hook code is refused with existingOnly=${existingOnly}`, t => {
+  const { cwd, file } = fixture(t);
+  installPlugin(cwd);
+  const unknown = Buffer.from('// Synthetic unknown hook, not a managed historical output\n');
+  fs.writeFileSync(file, unknown);
+  assert.throws(() => installPlugin(cwd, { existingOnly }),
+    error => error.uiMessage?.key === 'error.legacy.pluginConflict');
+  assert.deepEqual(fs.readFileSync(file), unknown);
+});
