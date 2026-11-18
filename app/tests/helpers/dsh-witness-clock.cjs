@@ -3,7 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
 
-async function fixture() {
+async function fixture({ wallClock } = {}) {
   const clock = { mono: 0, wall: 1700000000000 }, timers = new Map(), immediates = [];
   const sent = [], lost = [], gaps = [], denials = [];
   let id = 0, auto = false;
@@ -13,8 +13,8 @@ async function fixture() {
     return key;
   };
   class ClockDate extends Date {
-    constructor(...args) { super(...(args.length ? args : [clock.wall])); }
-    static now() { return clock.wall; }
+    constructor(...args) { super(...(args.length ? args : [ClockDate.now()])); }
+    static now() { return wallClock ? wallClock(clock) : clock.wall; }
   }
   const reader = new EventEmitter(), canary = new EventEmitter();
   reader.stdout = new PassThrough(); reader.signals = [];
@@ -35,7 +35,7 @@ async function fixture() {
       eventMessage: `Sandbox: node(901) deny(1) network-outbound remote:*:${row.port}\nnaw-dsh-clock-test` }) + '\n');
   };
   canary.stdin.on('data', chunk => {
-    const row = { seq: sent.length + 1, port: Number(String(chunk).trim()), wall: clock.wall, at: clock.mono };
+    const row = { seq: sent.length + 1, port: Number(String(chunk).trim()), wall: ClockDate.now(), at: clock.mono };
     sent.push(row);
     if (auto) report(row.seq);
   });

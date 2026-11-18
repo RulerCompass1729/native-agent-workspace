@@ -57,3 +57,12 @@ test('millisecond clock rounding stays live across two port cycles', async t => 
   assert.equal(f.armed.beats, 2001);
   assert.equal(f.lost.length, 0);
 });
+
+test('a frozen wall clock cannot reuse the timestamp namespace', async t => {
+  const f = await fixture({ wallClock: () => 1700000000000 });
+  t.after(() => f.close());
+  f.auto = true; f.advance(300000);
+  assert.ok(f.sent.length < 1000, 'retire before the first ambiguous port reuse');
+  assert.equal(f.armed.beats, f.sent.length);
+  assert.equal(f.lost.length, 1);
+});

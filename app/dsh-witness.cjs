@@ -127,16 +127,15 @@ function startWitness({
       }
       lose(reason);
     };
-    let clockFloor = -Infinity;
+    let wallFloor = -Infinity, beatWall = -Infinity;
     const trustedClock = () => {
-      // Bound clock offset across the wall read; allow 1ms rounding and one beat.
-      // A backward mapping makes reused ports ambiguous: fail closed.
+      // A slower clock still moves forward; its lifetime offset is not a step.
       const before = performance.now(), wall = Date.now(), at = performance.now();
-      if (!Number.isFinite(wall) || !Number.isFinite(at) || at < before || wall + 1 - before + beatMs < clockFloor) {
-        broken('the clock mapping moved backwards', 'witness-silent');
+      if (!Number.isFinite(wall) || !Number.isFinite(at) || at < before || wall + 1 + beatMs < wallFloor) {
+        broken('the wall clock moved backwards', 'witness-silent');
         return null;
       }
-      clockFloor = Math.max(clockFloor, wall - at);
+      wallFloor = Math.max(wallFloor, wall);
       return { wall, at };
     };
     armDeadline = setTimeout(() => fail(Error('DSH witness: no canary report')), armTimeoutMs);
@@ -165,6 +164,12 @@ function startWitness({
       if (phase === 'closed') return;
       const clock = trustedClock();
       if (!clock) return;
+      // Reused ports need advancing timestamps, including under a frozen clock.
+      if (clock.wall <= beatWall) {
+        broken('the wall clock stopped advancing', 'witness-silent');
+        return;
+      }
+      beatWall = clock.wall;
       port = (port % BEAT_PORTS) + 1;
       waiting.set(port, { seq: ++sequence, ...clock });
       canary.child.stdin.write(`${port}\n`);
