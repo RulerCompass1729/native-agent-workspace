@@ -397,6 +397,23 @@ test('the TUI home is NAW-owned: its profile is rewritten and linked to this run
   assert.equal((fs.statSync(where.home).mode & 0o777), 0o700);
 });
 
+// The sandbox refuses every listening socket, so the TUI's sign-in callback
+// server stays off: the home-level patch outranks the profile's own patch,
+// where the TUI's /settings saves, and is restored on every launch.
+test('the home patch turns off the sign-in web server and is rewritten on every launch', t => {
+  const { where } = fakeRuntime(t);
+  const profileDir = dshTui.prepareHome(where);
+  const patch = path.join(where.dshHome, 'cordis.patch.yml');
+  assert.equal(fs.readFileSync(patch, 'utf8'), dshTui.HOME_PATCH);
+  const rows = dshTui.HOME_PATCH.split('\n').filter(line => line !== '' && !line.startsWith('#'));
+  assert.deepEqual(rows, ['- id: dsh-tui-webserver', "  name: '@deepseek-ai/dsh-host-webserver'", '  disabled: true']);
+  writeFile(patch, '- id: dsh-tui-webserver\n  disabled: false\n');
+  writeFile(path.join(profileDir, 'cordis.patch.yml'), 'settings saved by the TUI\n');
+  dshTui.prepareHome(where);
+  assert.equal(fs.readFileSync(patch, 'utf8'), dshTui.HOME_PATCH);
+  assert.equal(fs.readFileSync(path.join(profileDir, 'cordis.patch.yml'), 'utf8'), 'settings saved by the TUI\n');
+});
+
 // A synthetic person folder stands outside the TUI home; a link put in the
 // home's place must not let NAW write into it, or delete from it.
 test('a link in the TUI home refuses the launch and nothing outside is written or removed', t => {
@@ -405,6 +422,7 @@ test('a link in the TUI home refuses the launch and nothing outside is written o
     dshHome: where => [where.dshHome],
     scope: where => [path.join(where.dshHome, 'profiles/dsh-tui/node_modules/@deepseek-harness-tui')],
     packageJson: where => [path.join(where.dshHome, 'profiles/dsh-tui/package.json'), 'file'],
+    homePatch: where => [path.join(where.dshHome, 'cordis.patch.yml'), 'file'],
     tmp: where => [where.tmp],
   };
   for (const [name, place] of Object.entries(cases)) {

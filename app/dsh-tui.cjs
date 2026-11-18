@@ -151,11 +151,40 @@ function ownFolder(where, dir) {
   }
 }
 
+// Replaces a file NAW owns in the TUI home. Anything there that is not a
+// plain file refuses the launch.
+function writeOwnFile(file, text) {
+  const found = lstatOrNull(file);
+  if (found !== null && !found.isFile()) throw homeUnsafe();
+  // O_NOFOLLOW: a symlink put here after the check is refused, not followed.
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
+  const descriptor = fs.openSync(file, flags, 0o600);
+  try {
+    fs.writeSync(descriptor, text);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+// DSH's home-level patch layer, applied over the profile's own patch (where
+// the TUI's /settings saves). It turns off the TUI's loopback web server,
+// which exists only for the DeepSeek account sign-in callback: NAW sessions
+// use the Keychain key, and the sandbox refuses every listening socket, so
+// leaving it on would stop each session as it starts. Nothing in DSH writes
+// this file.
+const HOME_PATCH = [
+  '# Written by NAW on every launch.',
+  '- id: dsh-tui-webserver',
+  "  name: '@deepseek-ai/dsh-host-webserver'",
+  '  disabled: true',
+  '',
+].join('\n');
+
 // The profile the TUI host entry loads: the base bundle and the TUI bundle.
 // DSH finds a non-built-in bundle only as a declared dependency under the
 // profile's node_modules, so the TUI package is linked there from this
-// runtime. NAW owns this profile and rewrites it on every launch; nothing is
-// fetched.
+// runtime. NAW owns this profile and the home-level patch and rewrites both
+// on every launch; nothing is fetched.
 function prepareHome(where) {
   ownFolder(where, where.dshHome);
   ownFolder(where, where.tmp);
@@ -168,17 +197,8 @@ function prepareHome(where) {
     dependencies: { [TUI_PACKAGE]: TUI_VERSION },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', TUI_PACKAGE] } },
   };
-  const file = path.join(profileDir, 'package.json');
-  const found = lstatOrNull(file);
-  if (found !== null && !found.isFile()) throw homeUnsafe();
-  // O_NOFOLLOW: a symlink put here after the check is refused, not followed.
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
-  const descriptor = fs.openSync(file, flags, 0o600);
-  try {
-    fs.writeSync(descriptor, JSON.stringify(body, null, 2) + '\n');
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  writeOwnFile(path.join(profileDir, 'package.json'), JSON.stringify(body, null, 2) + '\n');
+  writeOwnFile(path.join(where.dshHome, 'cordis.patch.yml'), HOME_PATCH);
   const link = path.join(scopeDir, 'dsh-tui');
   const current = lstatOrNull(link);
   if (current !== null && !current.isSymbolicLink()) throw homeUnsafe();
@@ -204,7 +224,8 @@ function sbplString(value) {
 //   else is refused: other ports, UDP, IPv6, the DNS resolver's socket and
 //   every other Unix socket.
 // - Inbound: no listening on any port or Unix socket, so nothing outside the
-//   sandbox can connect in.
+//   sandbox can connect in. (The TUI's only listening port, the sign-in
+//   callback server, is turned off by the home patch in prepareHome.)
 // Each refusal reaches the unified log with the session's nonce, where the
 // witness records it and the session is stopped. Nothing is killed by the
 // kernel, so the record always comes before the stop.
@@ -459,6 +480,7 @@ module.exports = {
   TUI_INTEGRITY,
   TUI_TARBALL_SHA256,
   PROFILE,
+  HOME_PATCH,
   KEYCHAIN_SERVICE,
   KEYCHAIN_ACCOUNT,
   paths,
