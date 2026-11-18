@@ -627,7 +627,7 @@ function updateProcessTail(entry) {
   }
   // Like the native TUIs: a folded command keeps two one-line rows of output (the
   // newest while it runs, the first once done) and says how many more there are.
-  const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
+  const lines = m.role === 'tool' && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
   const shown = ['running', 'streaming'].includes(m.status) ? lines.slice(-2) : lines.slice(0, 2), more = lines.length - shown.length, tail = shown.join('\n');
   ui.display.unbind(entry.tail); entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
   entry.more.hidden = !more; ui.display.computed(entry.more, 'text', () => uiText('reading.moreLines', { count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(more) }));
@@ -775,7 +775,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       body.id = `reading-payload-${++readingPayloadId}`;
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
-      if ((wake || m.role === 'tool' || m.kind === 'summary') && !(Array.isArray(m.images) && m.images.length)) {
+      if ((wake || m.role === 'tool' || m.kind === 'summary') && (m.role === 'tool' || !(Array.isArray(m.images) && m.images.length))) {
         const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
         entry.wakeDisclosure = Boolean(wake); entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
         entry.more = node('button', undefined, 'process-more'); entry.more.type = 'button';
@@ -951,7 +951,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       const savedOpen = typeof choice === 'boolean' ? choice : choice?.open;
       const failedTool = m.role === 'tool' && (m.status === 'failed' || entry.exploration?.error === 'failed');
       const searchReveal = wake && entry.item.dataset.searchTarget === 'true';
-      const open = Boolean(searchReveal || (savedOpen !== undefined ? savedOpen : reveal || (wake ? entry.wakeExpanded || entry.disclosure.open && readingWakeHeld(view, entry) : error && !failedTool)));
+      // Missing media is still announced in the heading; it must not force a
+      // complete tool log open. Manual choices and search retain precedence.
+      const open = Boolean(searchReveal || (savedOpen !== undefined ? savedOpen : reveal || (wake ? entry.wakeExpanded || entry.disclosure.open && readingWakeHeld(view, entry) : error && !failedTool && !(m.role === 'tool' && m.incomplete))));
       if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
       entry.item.dataset.running = String(entry.exploration ? entry.exploration.active : ['running', 'streaming'].includes(m.status));
       let inputPreview = m.input;
@@ -1074,7 +1076,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       }
     } else if (entry.footer) { entry.footer.remove(); delete entry.footer; delete entry.footerKey; }
     const hasImages = Array.isArray(m.images) && m.images.length > 0;
-    if (hasImages && entry.disclosure) {
+    if (hasImages && entry.disclosure && m.role !== 'tool') {
       // A late image reference is explicit native content. Keep its original
       // nodes while taking it out of the process disclosure.
       const disclosure = entry.disclosure;
@@ -1084,7 +1086,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.item.classList.remove('process');
     }
     if (hasImages && !entry.images) {
-      const host = node('div', undefined, 'message-images'); entry.body.after(host);
+      // Images keep their independent preview controls outside the folded log.
+      const host = node('div', undefined, 'message-images'); (entry.more || entry.body).after(host);
       // Assistive activation may click without a preceding pointer/key event.
       host.addEventListener('click', event => {
         if (view.key === key && event.target.closest('.native-image-toggle')) view.intent = null;

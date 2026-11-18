@@ -32,6 +32,11 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const emit = (id, value) => fixture('inlineObservation', id, value);
 const image = (id, source, kind, payload) => emit(id, { id: source, kind, status: 'complete', mediaOnly: true, imagePayload: payload });
 const check = text => { checks.push(text); console.log('PASS:', text); };
+async function copied(button, key) {
+  const before = await app.evaluate((_electron, key) => globalThis[key].length, key);
+  await button.click();
+  await until(async () => await app.evaluate((_electron, key) => globalThis[key].length, key) === before + 1, 'Clipboard capture completed');
+}
 const identity = state => state.sessions.map(s => [s.id, s.nativeId, s.owner, s.model]).sort();
 async function capture(name) { if (process.env.NAW_SCREENSHOTS_DIR) { fs.mkdirSync(process.env.NAW_SCREENSHOTS_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_SCREENSHOTS_DIR, name + '.png') }); } }
 async function create(name) {
@@ -75,9 +80,10 @@ async function run() {
   await image(a, 'tool:read-original', 'tool', { index: 0, mime: 'image/png', data: pixels[0].data, sourcePath });
   const widget = row.locator('.native-image'); await until(async () => await widget.locator('img').count() && await widget.locator('img').evaluate(el => el.complete && el.naturalWidth === 256), 'Native image thumb');
   assert.equal(await page.evaluate(() => getSelection().toString()), selected); assert.equal(await handle.evaluate(el => el.isConnected), true);
-  assert.equal(await row.evaluate(el => el.classList.contains('process')), false);
+  assert.equal(await row.locator('details.process-details').count(), 1);
+  assert.equal(await widget.evaluate(el => Boolean(el.closest('details.process-details'))), false, 'Image controls stay outside the folded tool text');
   assert.equal(await row.locator('.message-body').textContent(), 'ORIGINAL_NATIVE_READ_TEXT');
-  await widget.getByRole('button', { name: '复制图片（Claude Image A）native-original.png', exact: true }).click();
+  await copied(widget.getByRole('button', { name: '复制图片（Claude Image A）native-original.png', exact: true }), 'nativeImageCopies');
   assert.deepEqual(await app.evaluate(() => globalThis.nativeImageCopies.at(-1)), { size: { width: 640, height: 360 }, hash: pixels[0].hash });
   assert.notEqual(pixels[0].hash, pixels[1].hash);
   await widget.getByRole('button', { name: '查看图片（Claude Image A）native-original.png', exact: true }).click();
@@ -86,7 +92,7 @@ async function run() {
   await row.hover();
   console.log('Original row action evidence:', JSON.stringify(await row.evaluate(el => [...el.querySelectorAll('.message-actions button')].map(button => ({ text: button.textContent, hidden: button.hidden, parent: button.parentElement.className })))));
   assert.equal(await row.getByRole('button', { name: /^复制：/ }).isVisible(), true);
-  await row.getByRole('button', { name: /^复制：/ }).click();
+  await copied(row.getByRole('button', { name: /^复制：/ }), 'nativeTextCopies');
   assert.equal(await app.evaluate(() => globalThis.nativeTextCopies.at(-1)), 'ORIGINAL_NATIVE_READ_TEXT');
   check('Accepted native pixels A are previewed/copied despite source file B; late media preserves selected original text and body identity, with in-place expand/Esc and exact text copy');
   const input = 'prompt:' + randomUUID(); await emit(a, { id: input, kind: 'input', inputMode: 'native-prompt', text: 'ORIGINAL_NATIVE_IMAGE_INPUT', status: 'complete' });
@@ -94,8 +100,9 @@ async function run() {
   await image(a, input, 'input', { index: 0, mime: 'image/png', data: pixels[1].data });
   await image(a, input, 'input', { index: 0, mime: 'image/png', data: pixels[1].data });
   const user = page.locator(`#messages [data-message-id="native:${nativeId}:${input}"] .native-image`);
+  await user.scrollIntoViewIfNeeded();
   await until(async () => await user.locator('img').count() && await user.locator('img').evaluate(el => el.complete), 'Accepted image-only source without path');
-  await user.getByRole('button', { name: '复制图片（Claude Image A）原生图片 1', exact: true }).click(); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[1].hash);
+  await copied(user.getByRole('button', { name: '复制图片（Claude Image A）原生图片 1', exact: true }), 'nativeImageCopies'); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[1].hash);
   const state = await snapshot(), record = state.sessions.find(s => s.id === a);
   assert.equal(record.messages.filter(m => m.id.endsWith(input)).length, 1); assert.equal(record.controlRevision, revision);
   assert.ok(!JSON.stringify(state).includes(pixels[0].data)); assert.ok(!JSON.stringify(state).includes(pixels[1].data));
@@ -108,30 +115,37 @@ async function run() {
   await fillRoomMessage(page, 'UNSENT_NATIVE_IMAGE_ROOM_DRAFT'); await page.locator('#room-record').click();
   await until(async () => (await snapshot()).room.messages.some(m => m.nativeMessageId?.endsWith('tool:shared-image') && m.images?.length), 'Shared original image ref');
   const shared = (await snapshot()).room.messages.find(m => m.nativeMessageId?.endsWith('tool:shared-image'));
-  const sharedWidget = page.locator(`#room-messages [data-message-id="${shared.id}"] .native-image`);
+  // The current record stream links to the original session; the retained
+  // #room-messages reader is hidden and cannot trigger lazy image previews.
+  await page.locator(`#activity-stream [data-record-id="${shared.id}"] .stream-record-link`).click();
+  const sharedWidget = page.locator(`#messages [data-message-id="${shared.nativeMessageId}"] .native-image`);
   await until(async () => await sharedWidget.locator('img').count() && await sharedWidget.locator('img').evaluate(el => el.complete), 'Shared record actual image');
-  await sharedWidget.locator('.native-image-copy').click(); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[0].hash);
+  await copied(sharedWidget.locator('.native-image-copy'), 'nativeImageCopies'); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[0].hash);
+  await page.locator('#room-nav').click();
   await emit(a, { id: 'control:input', kind: 'control', status: 'complete' }); await tool(a, 'tool:private-after-input', send.turnId);
   await image(a, 'tool:private-after-input', 'tool', { index: 0, mime: 'image/png', data: pixels[1].data });
   assert.ok(!(await snapshot()).room.messages.some(m => m.nativeMessageId?.endsWith('tool:private-after-input'))); assert.equal(await roomBody(page), 'UNSENT_NATIVE_IMAGE_ROOM_DRAFT');
   await page.locator('#room-overview').click(); await capture('02-native-images-three-members');
-  for (const name of ['Claude Image A', 'Claude Image B', 'Claude Image C']) assert.equal(await page.getByRole('button', { name: `放大 ${name} 的会话`, exact: true }).isVisible(), true);
-  check('Actual shared-record image copies its own accepted pixels; human input closes the old grant and later private media stays private, preserving room draft and all member identities');
+  for (const name of ['Claude Image A', 'Claude Image B', 'Claude Image C']) assert.equal(await page.locator('.collaboration-member-chip').and(page.getByRole('button', { name: `放大 ${name} 的会话`, exact: true })).isVisible(), true);
+  check('Shared-record link opens its own accepted native pixels; human input closes the old grant and later private media stays private, preserving room draft and all member identities');
   await page.locator(`[data-session-id="${a}"]`).click(); await page.reload(); await page.locator('#new-session').waitFor(); await page.locator(`[data-session-id="${a}"]`).click();
   const reloaded = page.locator(`#messages [data-message-id="native:${nativeId}:tool:read-original"] .native-image`);
+  await reloaded.scrollIntoViewIfNeeded();
   await until(async () => await reloaded.locator('img').count() && await reloaded.locator('img').evaluate(el => el.complete), 'Cached image survives reload');
-  await reloaded.locator('.native-image-copy').click(); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[0].hash);
+  await copied(reloaded.locator('.native-image-copy'), 'nativeImageCopies'); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[0].hash);
   assert.deepEqual(identity(await snapshot()), originalIdentity); assert.equal(await page.locator('#message-input').inputValue(), 'UNSENT_NATIVE_IMAGE_PRIVATE_DRAFT');
   const blob = (await snapshot()).sessions.find(s => s.id === a).messages.find(m => m.id.endsWith('tool:read-original')).images[0].cachedPath;
   assert.ok(fs.realpathSync(blob).startsWith(fs.realpathSync(profile) + path.sep)); fs.unlinkSync(blob);
   await page.reload(); await page.locator('#new-session').waitFor(); await page.locator(`[data-session-id="${a}"]`).click();
   const lost = page.locator(`#messages [data-message-id="native:${nativeId}:tool:read-original"] .native-image`);
+  await lost.scrollIntoViewIfNeeded();
   await until(async () => (await lost.innerText()).includes('图片不可用'), 'Lost blob shown honestly');
   assert.equal(await lost.locator('.native-image-caption').innerText(), sourcePath); assert.equal(await lost.locator('.native-image-copy').isDisabled(), true);
   assert.equal(await lost.locator('img').count(), 0); await capture('03-lost-cache-no-private-fallback');
   check('Reload retains accepted pixels, native identities and private draft; a missing cache reports original path/unavailable and never falls back to the private replacement file');
   await tool(a, 'tool:bad-media', 'bad-media-turn', 'ORIGINAL_BAD_MEDIA_TEXT'); await image(a, 'tool:bad-media', 'tool', { index: 0, mime: 'image/png', data: 'AAA' });
   const bad = page.locator(`#messages [data-message-id="native:${nativeId}:tool:bad-media"]`);
+  await bad.locator('.native-image').scrollIntoViewIfNeeded();
   await until(async () => (await bad.innerText()).includes('图片不可用'), 'Corrupt accepted bytes unavailable'); assert.equal(await bad.locator('.message-body').textContent(), 'ORIGINAL_BAD_MEDIA_TEXT');
   assert.deepEqual(errors, []); const stats = (await fixture('stats')).stats; assert.equal(stats.sends, 1); assert.equal(stats.inputs, 0);
   check('Corrupt image data preserves the exact original native result and shows failure with no native send/input or model side effect');
