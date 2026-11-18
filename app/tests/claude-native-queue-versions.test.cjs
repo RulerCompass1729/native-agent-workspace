@@ -14,11 +14,12 @@ async function binding(version, legacyOnly = false) {
     heartbeat() {}, observeModel() {}, observeUsage() {}, listen: async () => {},
     nativeMediaVersion: () => false,
   });
+  vm.runInContext(source.slice(source.indexOf('let qualifiedNativeVersion'), source.indexOf('let foreignRevision')), scope);
   vm.runInContext(source.slice(start, end), scope);
   await scope.bindRoot({ session: { version: async () => ({ version }) }, clock: { after() {} } }, 1);
   return JSON.parse(JSON.stringify(offered));
 }
-for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323']) test(`${version}: the separately qualified native queue is available to an established root`, async () => {
+for (const version of ['2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327']) test(`${version}: the separately qualified native queue is available to an established root`, async () => {
   const result = await binding(version);
   assert.equal(result.nativeQueue, true);
 });
@@ -28,10 +29,10 @@ for (const version of ['2.1.320', '2.1.324', '2.1.322-beta', '2.1.322+local']) t
 test('317 and retained302 queue support is preserved; retained new versions remain off', async () => {
   assert.equal((await binding('2.1.317')).nativeQueue, true);
   assert.equal((await binding('2.1.302', true)).nativeQueue, true);
-  for (const version of ['2.1.322', '2.1.323']) assert.equal((await binding(version, true)).nativeQueue, false, version);
+  for (const version of ['2.1.322', '2.1.323', '2.1.327']) assert.equal((await binding(version, true)).nativeQueue, false, version);
 });
-test('2.1.322 and 2.1.323 alone offer mid-turn delivery (measured); other versions and the retained mod do not', async () => {
-  for (const version of ['2.1.322', '2.1.323']) assert.equal((await binding(version)).nativeMidturnAppend, true, version);
+test('2.1.322, 2.1.323 and 2.1.327 alone offer mid-turn delivery (measured); other versions and the retained mod do not', async () => {
+  for (const version of ['2.1.322', '2.1.323', '2.1.327']) assert.equal((await binding(version)).nativeMidturnAppend, true, version);
   for (const version of ['2.1.321', '2.1.319', '2.1.317', '2.1.324', '2.1.322-beta', '2.1.323-beta']) assert.equal((await binding(version)).nativeMidturnAppend, false, version);
-  for (const version of ['2.1.322', '2.1.323']) assert.equal((await binding(version, true)).nativeMidturnAppend, false, version);
+  for (const version of ['2.1.322', '2.1.323', '2.1.327']) assert.equal((await binding(version, true)).nativeMidturnAppend, false, version);
 });

@@ -1,0 +1,102 @@
+// Automatic qualification changes only future launches. No real credentials, model, or external network.
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+const { fork } = require('node:child_process');
+const mod = require('./claude-mod-check.cjs');
+const REFERENCE = '2.1.327';
+const JOURNEYS = Object.freeze(['solo-queue', 'shared-queue', 'shared-model']);
+const exact = value => typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
+function identity(binary) {
+  try {
+    const file = fs.realpathSync(binary), s = fs.statSync(file);
+    return s.isFile() ? { file, dev: s.dev, ino: s.ino, size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs } : null;
+  } catch { return null; }
+}
+function basis() {
+  const hash = crypto.createHash('sha256').update(mod.modHash());
+  for (const name of ['claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'adapters.cjs', 'workspace.cjs', 'claude-mod-check.cjs', 'claude-pin.cjs', 'claude-compat-plugin.cjs', 'record-history.cjs', 'claude_hook.py', 'claude-submit.cjs', 'shared-replies.cjs', 'platform.cjs', 'pty_host.py']) hash.update(fs.readFileSync(path.join(__dirname, name)));
+  return hash.digest('hex');
+}
+function load(file) {
+  try { const data = JSON.parse(fs.readFileSync(file, 'utf8')); return data.format === 1 && data.checks && !Array.isArray(data.checks) ? data.checks : {}; } catch { return {}; }
+}
+function current(record, binary, fingerprint = basis()) {
+  const id = identity(binary);
+  return Boolean(id && record?.basis === fingerprint && record.reference === REFERENCE && JSON.stringify(record.binary) === JSON.stringify(id));
+}
+function passed(record) {
+  return record?.status === 'passed' && mod.passed(record.mod) && JOURNEYS.every(name => record.journeys?.[name] === true);
+}
+function decision({ file, binary, version }) {
+  const record = load(file)[version];
+  return record?.version === version && current(record, binary) ? record : null;
+}
+function save(file, record) {
+  const checks = { ...load(file), [record.version]: record };
+  const retained = Object.fromEntries(Object.entries(checks).sort((a, b) => String(b[1]?.at).localeCompare(String(a[1]?.at))).slice(0, 20));
+  const temp = `${file}.${process.pid}.tmp`;
+  try { fs.writeFileSync(temp, JSON.stringify({ format: 1, checks: retained }), { mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { fs.rmSync(temp, { force: true }); }
+}
+function approvedVersions(file, dir) {
+  const fingerprint = basis();
+  return Object.entries(load(file)).filter(([version, record]) => exact(version) && record?.version === version && passed(record) && current(record, path.join(dir, version), fingerprint)).map(([version]) => version);
+}
+function launch({ launcher, file }) {
+  const current = require('./claude-pin.cjs').installed(launcher);
+  if (!current || require('./claude-pin.cjs').QUALIFIED.includes(current.version)) return { approvedVersions: [], check: null, qualifiedVersion: '' };
+  const binary = path.join(current.dir, current.version), record = decision({ file, binary, version: current.version });
+  const versions = approvedVersions(file, current.dir);
+  return { approvedVersions: versions, qualifiedVersion: versions.includes(current.version) ? current.version : '',
+    check: record ? { status: record.status, reason: record.reason || record.status } : { status: 'checking', reason: 'checking' } };
+}
+
+// The worker owns its native sessions and handles cancellation before it exits. The IPC channel also
+// closes when its daemon goes away, so a parent crash cannot leave an unattended qualification.
+function nativeJourneys({ binary, version, privateDir, signal, timeoutMs = 300000 }) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(Error('cancelled'));
+    const env = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin', LANG: 'en_US.UTF-8', ELECTRON_RUN_AS_NODE: '1' };
+    const child = fork(path.join(__dirname, 'claude-native-journeys.cjs'), [binary, version, privateDir], { env, silent: true });
+    let result, stopped = false, force;
+    const cancel = () => {
+      if (stopped) return; stopped = true;
+      if (child.connected) child.send({ cancel: true });
+      // The native PTY supervisor also stops its owned group on stdin EOF.
+      force = setTimeout(() => child.kill('SIGKILL'), 20000);
+    };
+    const timer = setTimeout(cancel, timeoutMs);
+    signal?.addEventListener('abort', cancel, { once: true });
+    child.on('message', message => { if (message?.type === 'result') result = message.result; });
+    child.stdout.resume(); child.stderr.resume();
+    const finish = () => { clearTimeout(timer); clearTimeout(force); signal?.removeEventListener('abort', cancel); };
+    child.once('error', error => { finish(); reject(error); });
+    child.once('close', code => {
+      finish();
+      if (stopped || signal?.aborted) reject(Error('cancelled'));
+      else if (code !== 0 || !result) resolve(result || { passed: false, reason: 'native-startup', journeys: {} });
+      else resolve(result);
+    });
+  });
+}
+async function checkOnce({ file, binary, version, privateDir, signal, runMod = mod.run, runJourneys = nativeJourneys }) {
+  if (!exact(version)) return null;
+  const existing = decision({ file, binary, version });
+  if (existing && ['passed', 'failed'].includes(existing.status)) return existing;
+  const record = { version, reference: REFERENCE, binary: identity(binary), basis: basis(), at: new Date().toISOString(), status: 'checking', journeys: {} };
+  if (!record.binary) return null;
+  save(file, record);
+  try {
+    record.mod = await runMod({ binary, version, privateDir, signal });
+    if (!mod.passed(record.mod)) { record.status = 'failed'; record.reason = 'mod-tests'; }
+    else {
+      const result = await runJourneys({ binary, version, privateDir, signal });
+      record.journeys = Object.fromEntries(JOURNEYS.map(name => [name, result.journeys?.[name] === true]));
+      record.status = result.passed && JOURNEYS.every(name => record.journeys[name]) ? 'passed' : 'failed';
+      if (record.status === 'failed') record.reason = JOURNEYS.includes(result.reason) ? result.reason : 'native-startup';
+    }
+  } catch { record.status = 'failed'; record.reason = signal?.aborted ? 'cancelled' : 'native-startup'; }
+  if (signal?.aborted) return null;
+  if (!current(record, binary)) { record.status = 'failed'; record.reason = 'binary-changed'; }
+  save(file, record); return record;
+}
+module.exports = { REFERENCE, JOURNEYS, identity, basis, load, current, passed, decision, save, approvedVersions, launch, nativeJourneys, checkOnce };

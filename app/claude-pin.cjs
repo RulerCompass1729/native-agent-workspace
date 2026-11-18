@@ -17,7 +17,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 // Versions the managed mod is qualified for: root binding and native blocks, the base
 // of every other capability. Equal to the managed nativeBlocks list in
 // claude-bridge/hooks/register.js; a test compares the two.
-const QUALIFIED = Object.freeze(['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323']);
+const QUALIFIED = Object.freeze(['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327']);
 const LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
 const exact = v => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
 const compare = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
@@ -32,8 +32,8 @@ function installed(launcher) {
   } catch { return null; }
 }
 // The newest qualified version still installed: a regular executable file owned by this user.
-function newestQualified(dir) {
-  for (const version of [...QUALIFIED].sort(compare).reverse()) {
+function newestQualified(dir, approvedVersions = []) {
+  for (const version of [...new Set([...QUALIFIED, ...approvedVersions.filter(exact)])].sort(compare).reverse()) {
     const file = path.join(dir, version);
     try {
       const stat = fs.lstatSync(file);
@@ -61,12 +61,12 @@ function writeState(file, state) {
 // Returns { binary, version, pin }: version is null when the layout is not the vendor's;
 // pin is null, or { requested, pinned, since, until } while the fallback applies, or the same
 // with expired: true once its time limit has passed (the launcher is used again).
-function choose({ launcher, fresh, lastVersion, lastWritten, stateFile, now = Date.now() }) {
+function choose({ launcher, fresh, lastVersion, lastWritten, stateFile, now = Date.now(), approvedVersions = [], check = null }) {
   const current = installed(launcher);
   if (!current) return { binary: launcher, version: null, pin: null };
   const direct = pin => ({ binary: launcher, version: current.version, pin });
-  if (QUALIFIED.includes(current.version)) return direct(null);
-  const older = newestQualified(current.dir);
+  if (QUALIFIED.includes(current.version) || approvedVersions.includes(current.version)) return direct(null);
+  const older = newestQualified(current.dir, approvedVersions);
   // Only ever fall back to an older qualified version, never sideways or forward.
   if (!older || compare(older.version, current.version) >= 0) return direct(null);
   // Never reopen a session with an older version than the one that last ran it: both NAW's own launch
@@ -83,7 +83,7 @@ function choose({ launcher, fresh, lastVersion, lastWritten, stateFile, now = Da
     state = { pinned: older.version, since: now };
     try { writeState(stateFile, state); } catch (error) { console.error(`[NAW] Claude fallback could not be recorded; the launcher is used: ${String(error?.message).slice(0, 160)}`); return direct(null); }
   }
-  const pin = { requested: current.version, pinned: older.version, since: new Date(state.since).toISOString(), until: new Date(state.since + LIMIT_MS).toISOString() };
+  const pin = { requested: current.version, pinned: older.version, since: new Date(state.since).toISOString(), until: new Date(state.since + LIMIT_MS).toISOString(), ...(check ? { check } : {}) };
   if (now - state.since >= LIMIT_MS) return direct({ ...pin, expired: true });
   return { binary: older.file, version: older.version, pin };
 }

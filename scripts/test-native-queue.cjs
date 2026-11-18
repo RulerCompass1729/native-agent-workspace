@@ -28,13 +28,13 @@ const located = executable('claude'), binary = located && fs.realpathSync(locate
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 // Each journey runs only on the exact versions it was verified on (app/tests/claude-319-contract.test.cjs pins this
 // line). The third list covers the queue journey, solo and shared, and the shared model-only journey; all three
-// passed on exact 2.1.322 on 2026-11-10 and on exact 2.1.323 on 2026-11-12 inside the loopback fixture's sandbox.
+// passed on exact 2.1.327 in the isolated loopback qualification, and on exact 2.1.322 on 2026-11-10 and on exact 2.1.323 on 2026-11-12 inside the loopback fixture's sandbox.
 // The product also qualifies queueing on 318, 319 and 321, which are not installed and have not been run.
-assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$)|323(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317|318|319(?=\s|$))\b/ : /^2\.1\.(308|309|310|311|322(?=\s|$)|323(?=\s|$)|327(?=\s|$))\b/, 'Verify the updated native contract before sending a test task');
 // 2.1.322 and 2.1.323 offer mid-turn delivery: a queued message is held for the running turn's next tool boundary. This
 // journey's first turn has no tool, so it runs as its own turn when that turn ends (the fallback); the words say so.
 // The mid-turn journey itself is scripts/test-native-midturn.cjs.
-const midturn = /^2\.1\.32[23](?=\s|$)/.test(nativeVersion);
+const midturn = /^2\.1\.32[237](?=\s|$)/.test(nativeVersion);
 const queueLabel = midturn ? '工具结束时送进本轮 ↑' : '等本轮结束后发送 ↑';
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 let budgetError, toolMarker;
@@ -205,6 +205,7 @@ async function cleanup() {
     assert.deepEqual(errors, []); fixture.assertClean(); console.log(JSON.stringify({ fixture: fixture.summary(), checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
   await until(async () => (await page.locator('#send-button').innerText()) === queueLabel, 'Working composer receives state');
+  if (shared) {
   // A draft in the native prompt makes native refuse a queued send before holding it.
   await nativeKey('x', /❯\s*x\s*$/);
   if (shared) {
@@ -246,6 +247,7 @@ async function cleanup() {
   await nativeKey('Backspace', /❯\s*$/);
   if (shared) { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
   checks.push('A recorded queued input visibly clears, then a native draft refusal marks 没有发出 and restores the untouched composer');
+  } else await nativeKey('x', /❯\s*x\s*$/);
   // The room picks its recipient with an inline mention; a plain fill would drop it.
   if (shared) await fillRoomMessage(page, 'Do the next local task.'); else await page.locator(input).fill('Do the next local task.');
   assert.equal(await page.locator(send).innerText(), queueLabel);
@@ -325,6 +327,8 @@ async function cleanup() {
   const terminal = await page.locator('#terminal-area').innerText();
   fs.writeFileSync(path.join(base, 'terminal.txt'), terminal);
   assert.match(terminal, /Run the original local task/); assert.match(terminal, /Do the next local task/); assert.match(terminal, /QUEUED_NATIVE_REPLY/);
+  if (!shared) assert.match(terminal, /❯\s*x(?:\s|$)/, 'Native draft is retained after both tasks');
+  assert.equal(actual.messages.flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t.trim() === 'x').length, 0, 'Native draft is not sent');
   assert.equal(calls, 2); assert.deepEqual(errors, []);
   checks.push('Actual native terminal and main conversation contain the same two inputs and replies');
   fixture.assertClean();

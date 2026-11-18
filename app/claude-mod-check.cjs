@@ -1,10 +1,6 @@
-// Background check of a Claude Code version NAW has not qualified (B3, the person 2026-11-10:
-// 「后台自动跑 plugin test 写进核验记录」). When the launcher points at such a version, NAW runs
-// the managed mod's own tests once with that version's `claude plugin test` and keeps the result
-// for the manual qualification. It decides nothing: the hand-qualified list and the fallback
-// (claude-pin.cjs) are unchanged, and a pass does not qualify the version. A pass says only that
-// every engine interface those tests reach still exists in that version; a failure names the
-// tests, and the engine's own message when it gives one.
+// Offline engine self-tests for an unqualified Claude version. Their result alone is not a qualification:
+// claude-qualification.cjs also requires the real native queue and model-switch journeys before opening
+// either the launch selection or the mod's version gates. The diagnostic record remains compatible.
 //
 // The run starts no session and sends nothing. `plugin test` runs under a system sandbox that
 // denies all network (local sockets included) and the keychain, allows no write outside the run's

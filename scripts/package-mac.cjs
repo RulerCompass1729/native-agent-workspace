@@ -117,7 +117,7 @@ async function build() {
       'claude-bridge/turn-records.test.ts',
       'claude-compat-plugin.cjs',
       'claude-message-tool.cjs',
-      'claude-mod-check.cjs',
+      'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs',
       'claude-pin.cjs',
       'claude-submit.cjs',
       'claude_hook.py',

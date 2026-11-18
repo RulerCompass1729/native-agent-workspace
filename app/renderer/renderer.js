@@ -2167,7 +2167,12 @@ function claudePinText(s, detail = false) {
   const pin = s?.provider === 'claude' ? s.nativePin : null;
   if (!pin) return '';
   const date = new Date(pin.until).toLocaleDateString(ui.language.getSnapshot().active, { month: 'numeric', day: 'numeric' });
-  return uiText(`native.claudePin${pin.expired ? 'Expired' : 'ned'}${detail ? 'Detail' : ''}`, { pinned: pin.pinned, requested: pin.requested, date });
+  const text = uiText(`native.claudePin${pin.expired ? 'Expired' : 'ned'}${detail ? 'Detail' : ''}`, { pinned: pin.pinned, requested: pin.requested, date });
+  const check = pin.check;
+  if (!check) return text;
+  const reasons = ['mod-tests', 'solo-queue', 'shared-queue', 'shared-model', 'native-startup', 'binary-changed', 'cancelled'];
+  const reason = reasons.includes(check.reason) ? check.reason : 'native-startup';
+  return text + ' · ' + uiText(check.status === 'passed' ? 'native.claudeCheckPassed' : check.status === 'failed' ? 'native.claudeCheckFailed' : 'native.claudeCheckPending', { reason: uiText('native.claudeCheckReason.' + reason) });
 }
 function nativeVersionText(s) {
   if (s?.provider === 'claude') return claudePinText(s, true);

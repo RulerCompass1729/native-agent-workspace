@@ -103,7 +103,7 @@ test('the check that asks Claude for its live sessions runs it without the launc
 // NAW's own per-session values: the token and sockets through which a native Claude's hooks and bridge speak to
 // the backend as that session. A NAW started from a NAW session's command tool finds that session's in its own
 // environment.
-const launcherNaw = { NAW_HOOK_TOKEN: 'launcher-hook-token', NAW_HOOK_SOCKET: '/tmp/launcher-hook.sock', NAW_SUBMIT_SOCKET: '/tmp/launcher-submit.sock' };
+const launcherNaw = { NAW_HOOK_TOKEN: 'launcher-hook-token', NAW_HOOK_SOCKET: '/tmp/launcher-hook.sock', NAW_SUBMIT_SOCKET: '/tmp/launcher-submit.sock', NAW_CLAUDE_QUALIFIED_VERSION: '2.1.999' };
 test('a hook token inherited from the NAW session that started this NAW is not passed on', { timeout: 15000 }, async t => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const { Terminal } = require('../adapters.cjs'), { pythonExecutable } = require('../platform.cjs');
@@ -117,6 +117,7 @@ test('a hook token inherited from the NAW session that started this NAW is not p
     // A native Claude is given its own three, and gets exactly those.
     const own = nativeEnvironment({ NAW_HOOK_TOKEN: 'own-token', NAW_HOOK_SOCKET: '/own/hook.sock', NAW_SUBMIT_SOCKET: '/own/submit.sock' });
     assert.deepEqual([own.NAW_HOOK_TOKEN, own.NAW_HOOK_SOCKET, own.NAW_SUBMIT_SOCKET], ['own-token', '/own/hook.sock', '/own/submit.sock']);
+    assert.equal(nativeEnvironment({ NAW_CLAUDE_QUALIFIED_VERSION: '2.1.328' }).NAW_CLAUDE_QUALIFIED_VERSION, '2.1.328');
     // A launch given only one of them does not fall back to the launching session's for the others.
     const partial = nativeEnvironment({ NAW_HOOK_TOKEN: 'own-token' });
     assert.deepEqual([partial.NAW_HOOK_TOKEN, partial.NAW_HOOK_SOCKET, partial.NAW_SUBMIT_SOCKET], ['own-token', undefined, undefined]);

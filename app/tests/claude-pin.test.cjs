@@ -19,7 +19,7 @@ const T0 = Date.parse('2026-11-10T00:00:00Z');
 
 test('the host list equals the managed native-blocks list in the mod', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'claude-bridge', 'hooks', 'register.js'), 'utf8');
-  const managed = source.match(/nativeBlocks = legacyOnly \? \[[^\]]*\]\.includes\(nativeVersion\)\s*: \[([^\]]*)\]\.includes\(nativeVersion\);/);
+  const managed = source.match(/nativeBlocks = legacyOnly \? qualifiedVersion\(\[[^\]]*\], nativeVersion\)\s*: qualifiedVersion\(\[([^\]]*)\], nativeVersion\);/);
   assert.ok(managed, 'The managed nativeBlocks list is where this test expects it');
   assert.deepEqual([...pin.QUALIFIED], managed[1].split(',').map(s => s.trim().replace(/'/g, '')));
 });

@@ -670,7 +670,9 @@ class Claude extends EventEmitter {
       : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
     // An unqualified new Claude version: start with the newest qualified one still installed (claude-pin.cjs).
     const claudePin = require('./claude-pin.cjs'), fresh = !record.recovering && !record.forkPicker;
-    const launch = claudePin.choose({ launcher: host.binaries.claude, fresh, lastVersion: record.nativeLaunchVersion,
+    const qualification = require('./claude-qualification.cjs');
+    const selected = qualification.launch({ launcher: host.binaries.claude, file: path.join(host.dataDir || host.privateDir, 'claude-qualification.json') });
+    const launch = claudePin.choose({ ...selected, launcher: host.binaries.claude, fresh, lastVersion: record.nativeLaunchVersion,
       // Someone may have resumed this session elsewhere since: its own transcript says which version wrote last.
       lastWritten: fresh ? undefined : claudePin.lastWrittenVersion({ cwd: record.cwd, nativeId: record.nativeId, transcript: record.nativeTranscript }),
       stateFile: path.join(host.dataDir || host.privateDir, 'claude-pin.json') });
@@ -679,6 +681,7 @@ class Claude extends EventEmitter {
     host.checkClaudeVersion?.();
     this.terminal = new Terminal([launch.binary, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
+      NAW_CLAUDE_QUALIFIED_VERSION: host.qualificationTrialVersion || (selected.approvedVersions.includes(launch.version) ? launch.version : ''),
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
     });
@@ -3108,7 +3111,7 @@ class NativeHost {
       });
     });
   }
-  async start() { await new Promise((resolve, reject) => { this.hooks.once('error', reject); this.hooks.listen(this.hookSocket, resolve); }); fs.chmodSync(this.hookSocket, 0o600); await this.submissions.start(); }
+  async start() { await new Promise((resolve, reject) => { this.hooks.once('error', reject); this.hooks.listen(this.hookSocket, resolve); }); fs.chmodSync(this.hookSocket, 0o600); await this.submissions.start(); this.nativeStarted = true; this.watchClaudeLauncher(); this.checkClaudeVersion(); }
   createCodex(operation) {
     const rpc = this.rpc, child = this.codexProcess;
     const next = (this.creationQueue || Promise.resolve()).then(() => {
@@ -3237,21 +3240,50 @@ class NativeHost {
     }).finally(() => { this.reconnecting = null; });
     return this.reconnecting;
   }
-  // An unqualified Claude version gets the managed mod's own tests run once in the background, without
-  // network or a session (B3, claude-mod-check.cjs). The result is kept in the data directory for the
-  // manual qualification; it opens nothing and does not change the fallback. The record file is the
-  // only output in daily use: the service runs with its output discarded, so the line below shows
-  // only when the service is started by hand.
+  // The native updater replaces the launcher link. Watch that exact entry, without a polling timer,
+  // so checking can finish before the person opens their next conversation.
+  watchClaudeLauncher() {
+    if (this.closed || this.serviceBinding) return;
+    const launcher = this.binaries.claude;
+    if (this.watchedClaudeLauncher === launcher) return;
+    this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null;
+    this.watchedClaudeLauncher = launcher;
+    if (!launcher) return;
+    try {
+      const watch = fs.watch(path.dirname(launcher), { persistent: false }, (_event, name) => {
+        if (!name || String(name) === path.basename(launcher)) this.checkClaudeVersion();
+      });
+      watch.on('error', () => { watch.close(); if (this.claudeLauncherWatch === watch) { this.claudeLauncherWatch = null; this.watchedClaudeLauncher = null; } });
+      this.claudeLauncherWatch = watch;
+    } catch { this.watchedClaudeLauncher = null; /* Session creation still checks directly. */ }
+  }
+  // Both the launcher and mod gates use this exact completed offline qualification.
   checkClaudeVersion() {
     if (this.serviceBinding || this.closed) return;
-    const claudePin = require('./claude-pin.cjs'), current = claudePin.installed(this.binaries.claude);
-    if (!current || claudePin.QUALIFIED.includes(current.version) || this.claudeModChecks.has(current.version)) return;
-    const version = current.version, stop = new AbortController();
-    const done = claudeModCheck.checkOnce({ file: path.join(this.dataDir, 'claude-mod-check.json'), binary: path.join(current.dir, version), version, privateDir: this.privateDir, signal: stop.signal })
-      .then(record => { if (record) console.error(`[NAW] Claude ${version} is not qualified; its mod tests ran in the background: ${claudeModCheck.describe(record)}`); })
-      .catch(error => console.error(`[NAW] Claude ${version} mod tests could not be recorded: ${String(error?.message).slice(0, 200)}`));
-    // Once per version for this start; a run that did not finish is tried again after the next start.
-    this.claudeModChecks.set(version, { stop, done });
+    const pin = require('./claude-pin.cjs'), qualification = require('./claude-qualification.cjs');
+    const current = pin.installed(this.binaries.claude);
+    if (!current || pin.QUALIFIED.includes(current.version)) return;
+    const binary = path.join(current.dir, current.version), version = current.version;
+    const key = JSON.stringify(qualification.identity(binary));
+    if (this.claudeModChecks.get(version)?.key === key) return;
+    this.claudeModChecks.get(version)?.stop.abort();
+    const stop = new AbortController(), file = path.join(this.dataDir, 'claude-qualification.json');
+    const done = qualification.checkOnce({ file, binary, version, privateDir: this.privateDir, signal: stop.signal })
+      .then(record => {
+        if (this.closed || !record) return;
+        if (record.mod) claudeModCheck.save(path.join(this.dataDir, 'claude-mod-check.json'), record.mod);
+        for (const target of this.hookTargets.values()) if (target.record.nativePin?.requested === version) {
+          target.record.nativePin.check = { status: record.status, reason: record.reason || record.status };
+          target.emit('capability');
+        }
+        console.error(`[NAW] Claude ${version} offline qualification: ${record.status} (${record.reason || 'all checks passed'})`);
+      }).catch(() => {
+        if (!this.closed) for (const target of this.hookTargets.values()) if (target.record.nativePin?.requested === version) {
+          target.record.nativePin.check = { status: 'failed', reason: 'native-startup' }; target.emit('capability');
+        }
+        console.error(`[NAW] Claude ${version} qualification could not be recorded`);
+      });
+    this.claudeModChecks.set(version, { stop, done, key });
   }
   // A Codex version newer than the qualified baseline is compared in the background (B3);
   // its gates stay closed until a decision opens them, and targets then recheck.
@@ -3373,7 +3405,7 @@ class NativeHost {
   }
   // Where the native programs are now: resolved at start, before each session starts, and whenever a client
   // asks for the initial state, so that state's `available` is current and not the answer from the last start.
-  resolvePrograms() { this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() }; return this.binaries; }
+  resolvePrograms() { this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() }; if (this.nativeStarted) this.watchClaudeLauncher(); return this.binaries; }
   create(record) {
     if (this.serviceBinding) throw require('./service-binding.cjs').failure('butler-qualification-required');
     this.resolvePrograms();
@@ -3381,7 +3413,7 @@ class NativeHost {
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
-  close() { this.closed = true; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
+  close() { this.closed = true; this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
 module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle, promptTextTag };
