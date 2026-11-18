@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
 const root=path.resolve(__dirname,'..'),scratch=require('./fixtures/test-scratch.cjs'),{_electron}=scratch.playwright(require('playwright'));
 const {prepareComputerUse,createComputerUseGate}=require('../app/native-computer-use.cjs'),{processIdentity}=require('../app/platform.cjs');
+const {acquireAccessibility}=require('../app/native-accessibility.cjs');
 const evidence=process.env.NAW_EVIDENCE_DIR,slot=process.env.NAW_GUI_SLOT,pictures=process.env.NAW_SCREENSHOTS_DIR;
 assert(evidence&&slot&&pictures,'Explicit private evidence, pictures and canonical GUI slot are required');
 fs.mkdirSync(evidence,{recursive:true,mode:0o700});fs.mkdirSync(pictures,{recursive:true,mode:0o700});
@@ -15,7 +16,7 @@ function save(name,result){
 async function run(){
  fs.mkdirSync(slot);claimed=true;fs.writeFileSync(path.join(slot,'owner.json'),JSON.stringify({owner:'NAW AX test',task:'isolated native accessibility',pid:process.pid,token}));
  const config=prepareComputerUse();
- profile=scratch.directory(path.join(os.tmpdir(),'naw-ax-test-'));const work=path.join(profile,'work'),home=path.join(profile,'home');fs.mkdirSync(work);fs.mkdirSync(home);
+ profile=fs.realpathSync(scratch.directory(path.join(os.tmpdir(),'naw-ax-test-')));const work=path.join(profile,'work'),home=path.join(profile,'home');fs.mkdirSync(work);fs.mkdirSync(home);
  const env={...process.env,HOME:home,NAW_TEST_APP_ROOT:root,NAW_WORKSPACE:work,NAW_APP_VERSION:require('../package.json').version};
  scratch.childProcess.fork(path.join(root,'app/daemon.cjs'),[profile],{execArgv:['--require',path.join(__dirname,'fixtures/loading-terminal.cjs')],env,stdio:['ignore','ignore','inherit','ipc']});
  for(let n=0;n<200&&!fs.existsSync(path.join(profile,'connection.json'));n++)await delay(50);
@@ -31,13 +32,15 @@ async function run(){
  for(let n=0;n<3;n++){await delay(1000);cpu.push(await app.evaluate(({app})=>app.getAppMetrics().map(m=>({type:m.type,cpu:m.cpu.percentCPUUsage}))));}
  save('idle-cpu',{samples:cpu,note:'Empty synthetic window only; not a production performance claim.'});
  save('features-start',await app.evaluate(({app})=>({enabled:app.isAccessibilitySupportEnabled(),features:app.getAccessibilitySupportFeatures(),force:app.commandLine.getSwitchValue('force-renderer-accessibility')})));
+ check('no permanent AX switch or tree is enabled while idle',await app.evaluate(({app})=>!app.commandLine.hasSwitch('force-renderer-accessibility')&&!app.isAccessibilitySupportEnabled()));
  const pid=app.process().pid,id=await win.evaluate(w=>w.getMediaSourceId()),match=/^window:([0-9]+):/.exec(id);assert(match);const windowId=Number(match[1]);
  save('target',{pid,windowId,profile,focusable:true});
  const {JsonRpcLineTransport}=await import('@deepseek-ai/dsh-sdk-protocol');
  peer=scratch.childProcess.spawn(config.command,config.args,{env:config.env,stdio:['pipe','pipe','inherit']});bridge=new JsonRpcLineTransport(peer.stdout,peer.stdin);bridge.start();
  await bridge.request('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'naw-native-ax-test',version:'1'}},AbortSignal.timeout(10000));bridge.notify('notifications/initialized',{});
  const invoke=async p=>{const result=await bridge.request('tools/call',p,AbortSignal.timeout(25000));if(p.name==='click')save('wire-click',{request:p,result});return result;};
- const gate=createComputerUseGate({identity:p=>p===pid?processIdentity(p):null}); // Only this owned source fixture, never another application.
+ const gate=createComputerUseGate({identity:p=>p===pid?processIdentity(p):null,
+  acquireAccessibility:target=>acquireAccessibility(target,path.join(profile,'outbox-owner.json'))}); // Only this owned source fixture, never another application.
  const request=depth=>({name:'inspect_ui',arguments:{app_target:`PID:${pid}`,window_id:windowId,fresh:true,include_elements:true,max_depth:depth,max_elements:1500,max_children:150}});
  for(const depth of [13,30]){
   const result=await gate(request(depth),invoke);save('inspect-'+depth,result);
@@ -46,12 +49,20 @@ async function run(){
  const seen=await gate({name:'see',arguments:{app_target:`PID:${pid}`,window_id:windowId,fresh:true,ocr:false,include_elements:true,max_depth:13}},invoke);save('see-13',seen);
  check('fresh see succeeds at the formerly failing depth',seen.isError===false&&seen._meta?.used_cache===false);
  const before=await gate(request(13),invoke),settings=before._meta.ui_elements.filter(e=>e.ax_role==='AXButton'&&e.label==='设置'&&e.is_actionable&&e.is_enabled);assert.equal(settings.length,1);
+ // A model can think between tools. The snapshot must survive a real AX-off
+ // interval, rather than relying on immediate release/reacquire coalescing.
+ await delay(5000);
+ check('AX is off during the pause between observing and clicking',await app.evaluate(({app})=>!app.isAccessibilitySupportEnabled()&&app.getAccessibilitySupportFeatures().length===0));
  const clicked=await gate({name:'click',arguments:{snapshot:before._meta.snapshot_id,pid,on:settings[0].id,expect:{label:'重新检查'}}},invoke);save('click-result',clicked);
  check('one background AXPress satisfies its fresh same-window page postcondition',clicked.isError===false&&clicked.structuredContent?.outcome==='postcondition_observed'&&clicked.structuredContent?.deliveryVerified===false);
  check('the real renderer setup dialog opened',await page.locator('#setup-dialog').isVisible());
+ const next=await gate(request(30),invoke);save('next-observation',next);
+ check('the verified unconfirmed click leaves future input unlocked',next.isError===false&&next._meta?.naw_input_blocked!==true);
  check('owned window remains inactive',!await win.evaluate(w=>w.isFocused()));
  check('synthetic profile has no native session or model task',await page.evaluate(async()=>!(await workspace.initial()).sessions.length));
  save('features',await app.evaluate(({app})=>({enabled:app.isAccessibilitySupportEnabled(),features:app.getAccessibilitySupportFeatures()})));
+ for(let n=0;n<50&&await app.evaluate(({app})=>app.isAccessibilitySupportEnabled());n++)await delay(20);
+ check('the final operation releases its complete AX tree',await app.evaluate(({app})=>!app.isAccessibilitySupportEnabled()&&app.getAccessibilitySupportFeatures().length===0));
 }
 let timer;Promise.race([run(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Native AX test exceeded 120 seconds')),120000);})]).catch(e=>{failure=e.stack;if(!checks.some(c=>!c.pass))checks.push({name:'native workflow completed without protocol failure',pass:false});console.error(failure);process.exitCode=1;}).finally(async()=>{
  clearTimeout(timer);

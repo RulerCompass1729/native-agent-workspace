@@ -58,7 +58,7 @@ async function operateOutbox(binding, createView, signal) {
 // Each connection is answered within this limit or dropped; tests shorten it. Waiting
 // for cleanup stops a second earlier, so a control answer still reaches its caller.
 const CONNECTION_MS = 100000, ANSWER_MARGIN_MS = 1000;
-async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, connectionMs = CONNECTION_MS }) {
+async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, acquireAccessibility, accessibilityMs = 60000, connectionMs = CONNECTION_MS }) {
   if (!path.isAbsolute(descriptorFile) || ![bind, createView].every(f => typeof f === 'function')) throw Error('Outbox owner unavailable');
   const issuer = processIdentity(process.pid);
   if (!issuer) throw Error('Outbox process identity unavailable');
@@ -150,6 +150,24 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
+        if (request.kind === 'accessibility') {
+          const target = request.identity;
+          if (closed || Object.keys(request).sort().join(',') !== 'capability,identity,kind' ||
+              typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
+              !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability)) ||
+              !target || Object.keys(target).sort().join(',') !== 'pid,started,windowId' ||
+              target.pid !== issuer.pid || target.started !== issuer.started || !Number.isSafeInteger(target.windowId) || target.windowId < 1 || target.windowId > 0xffffffff ||
+              typeof acquireAccessibility !== 'function' || abort.signal.aborted) return failed('admission', 'invalid-request');
+          const release = acquireAccessibility(target), expiry = setTimeout(() => socket.destroy(), Math.min(accessibilityMs, 60000));
+          try {
+            // Let Chromium publish the explicit feature set before the AX read.
+            await new Promise(resolve => setTimeout(resolve, 200));
+            if (abort.signal.aborted) return;
+            socket.write(JSON.stringify({ accessibility: 'ready' }) + '\n');
+            await new Promise(resolve => abort.signal.addEventListener('abort', resolve, { once: true }));
+          } finally { clearTimeout(expiry); release(); }
+          return;
+        }
         const background = request.kind === 'control';
         if (Object.keys(request).sort().join(',') !== (background ? 'arguments,capability,identity,kind' : 'arguments,capability,identity') ||
             typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
