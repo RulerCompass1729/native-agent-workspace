@@ -195,6 +195,18 @@ async function run() {
   if (await page.locator('#mobile-session-filter').count()) {
     // A checked attempt remembers the address, Tailscale user and port; a restart brings them back.
     await openSettings('zh', 'dark');
+    for (const lang of ['zh', 'en']) {
+      await page.locator('#ui-language').selectOption(lang);
+      await page.locator('#mobile-actor').fill('https://device.example.invalid/mobile/#pair=' + 's'.repeat(43));
+      await page.locator('#mobile-prepare').click();
+      assert.equal(await page.locator('#mobile-status').textContent(), locale.format(lang, 'mobile.invalidActor'));
+      assert.equal(await page.locator('#mobile-actor').getAttribute('aria-invalid'), 'true');
+      assert.equal(await page.locator('#mobile-pair-link').inputValue(), '');
+      assert.ok(!fs.readFileSync(path.join(profile, 'views.json'), 'utf8').includes('pair='));
+      await shoot(`${lang}-bad-account`, '#mobile-setup > details');
+      check(`${lang}: a pasted link is rejected with an account hint and never remembered`);
+    }
+    await page.locator('#ui-language').selectOption('zh');
     await page.locator('#mobile-origin').fill('https://device.example.invalid'); await page.locator('#mobile-actor').fill('synthetic-human');
     if (await page.locator('#mobile-advanced').count()) await page.locator('#mobile-advanced > summary').click();
     await page.locator('#mobile-port').fill('0'); await page.locator('#mobile-carrier').check();

@@ -6,6 +6,7 @@
   // remembered/remember carry the last checked address, Tailscale user and port across restarts. Never secrets or links.
   function bind({ container, document, api, getSessions, getRooms = () => [], now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, text, display, remembered = () => null, remember = () => {} }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
+    const { validActor } = global.nativeWorkspaceMobileIdentity || (typeof require === 'function' ? require('../mobile-identity.js') : {});
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
     const quiet = el => { if (display) display.unbind(el); el.textContent = ''; };
@@ -29,7 +30,7 @@
     };
     const section = node('details'), summary = node('summary', 'mobile.title'); section.append(summary);
     section.addEventListener('toggle', () => { if (section.open) summary.scrollIntoView?.({ block: 'start' }); });
-    const status = document.createElement('p'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    const status = document.createElement('p'); status.id = 'mobile-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     section.append(node('p', 'mobile.introCompact'));
     const advanced = node('details'), advancedTitle = node('summary', 'mobile.advanced'); advanced.id = 'mobile-advanced'; advancedTitle.id = 'mobile-advanced-title'; advanced.append(advancedTitle);
     const hint = key => { const el = node('p', key); el.className = 'quiet'; advanced.append(el); };
@@ -44,6 +45,10 @@
     section.append(connection, connectionFields);
     const origin = field('mobile.origin', 'mobile-origin', 'url', connectionFields); origin.placeholder = 'https://device.example.ts.net'; origin.autocomplete = 'off'; origin.maxLength = 2048;
     const actor = field('mobile.actor', 'mobile-actor', 'text', connectionFields); actor.autocomplete = 'off'; actor.maxLength = 320;
+    let actorInvalid = false;
+    function clearActorError() { actorInvalid = false; actor.setAttribute('aria-invalid', 'false'); actor.setAttribute('aria-describedby', ''); }
+    clearActorError();
+    actor.addEventListener('input', () => { if (actorInvalid && validActor(actor.value.trim())) { clearActorError(); quiet(status); } });
     const port = field('mobile.port', 'mobile-port', 'number', advanced); port.min = '0'; port.max = '65535'; port.value = '0';
     const carrier = check('mobile.carrierCompact', 'mobile-carrier', section); attribute(carrier, 'title', 'mobile.carrier');
     editConnection.addEventListener('click', () => { connection.hidden = true; connectionFields.hidden = false; origin.focus?.(); });
@@ -126,7 +131,7 @@
       const saved = remembered();
       if (!saved || typeof saved !== 'object') return;
       if (typeof saved.origin === 'string' && !origin.value) origin.value = saved.origin;
-      if (typeof saved.actor === 'string' && !actor.value) actor.value = saved.actor;
+      if (validActor(saved.actor) && !actor.value) actor.value = saved.actor;
       if (typeof saved.port === 'string' && /^\d{1,5}$/.test(saved.port) && port.value === '0') port.value = saved.port;
       return saved;
     }
@@ -135,7 +140,7 @@
       try {
         site = new URL(origin.value.trim()); const listenPort = Number(port.value);
         valid = Boolean(saved && saved.origin === origin.value && saved.actor === actor.value && saved.port === port.value &&
-          site.protocol === 'https:' && site.origin === origin.value && !site.username && !site.password && actor.value.trim() &&
+          site.protocol === 'https:' && site.origin === origin.value && !site.username && !site.password && validActor(actor.value) &&
           /^\d+$/.test(port.value) && Number.isInteger(listenPort) && listenPort <= 65535 && (listenPort === 0 || listenPort >= 1024));
       } catch { /* Invalid or incomplete remembered values stay editable. */ }
       connection.hidden = !valid; connectionFields.hidden = valid;
@@ -178,18 +183,25 @@
     async function pair() {
       if (!opened || busy) return;
       clearLink();
+      const account = actor.value.trim();
+      if (!validActor(account)) {
+        actorInvalid = true; actor.setAttribute('aria-invalid', 'true'); actor.setAttribute('aria-describedby', status.id);
+        connection.hidden = true; connectionFields.hidden = false;
+        say(status, 'mobile.invalidActor'); actor.focus?.(); return;
+      }
+      clearActorError();
       const current = getSessions(), selected = selections.filter(s => s.read.checked);
       let site, listenPort;
       try {
         site = new URL(origin.value.trim()); listenPort = Number(port.value);
-        if (site.protocol !== 'https:' || site.origin !== origin.value.trim() || site.username || site.password || !actor.value.trim() || !carrier.checked || !selected.length ||
+        if (site.protocol !== 'https:' || site.origin !== origin.value.trim() || site.username || site.password || !carrier.checked || !selected.length ||
             !/^\d+$/.test(port.value) || !Number.isInteger(listenPort) || listenPort > 65535 || listenPort !== 0 && listenPort < 1024 ||
             selected.some(s => !current.some(row => row.id === s.id && row.nativeId === s.nativeId && !row.archived && !row.nativeContextPending))) throw Error('invalid');
       } catch { say(status, 'mobile.invalid'); return; }
-      try { remember({ origin: site.origin, actor: actor.value.trim(), port: String(listenPort) }); } catch {}
+      try { remember({ origin: site.origin, actor: account, port: String(listenPort) }); } catch {}
       const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
       try {
-        const result = await api.mobilePairing({ actor: actor.value.trim(), origin: site.origin, port: listenPort, carrierConfirmed: true, replace: replace.checked,
+        const result = await api.mobilePairing({ actor: account, origin: site.origin, port: listenPort, carrierConfirmed: true, replace: replace.checked,
           ...(roomSelections.some(r => r.input.checked) || records.checked ? { workspace: { roomIds: roomSelections.filter(r => r.input.checked).map(r => r.id), records: records.checked } } : {}),
           selection: selected.map(s => ({ sessionId: s.id, actions: ['read', ...(s.send.checked ? ['send'] : []), ...(s.answer.checked ? ['answer'] : [])] })) });
         if (!opened || revision !== ticket) return;
@@ -210,6 +222,7 @@
     }
     function close() {
       revision++; opened = false; busy = false; clearLink(); origin.value = actor.value = search.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
+      clearActorError();
       selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); list.replaceChildren(); quiet(status); quiet(count); prepare.disabled = false; section.open = false; approval.open = advanced.open = false;
       connection.hidden = true; connectionFields.hidden = false; endpointHost.textContent = endpointActor.textContent = ''; quiet(endpointPort); endpoint.setAttribute('title', '');
       showApproval(null);

@@ -101,7 +101,7 @@ test('the actual DSH builder includes the existing Setup slot and module before 
   t.after(() => fs.rmSync(root, { recursive: true }));
   fs.mkdirSync(path.join(root, 'scripts')); fs.mkdirSync(path.join(root, 'app/dsh'), { recursive: true });
   fs.cpSync(path.resolve(__dirname, '../renderer'), path.join(root, 'app/renderer'), { recursive: true });
-  for (const name of ['collaboration-spaces.cjs', 'room-mention.js', 'native-usage.js', 'room-threads.js', 'approval-policy.js', 'terminal-continuation.js', 'butler-entry-view.js', 'butler-reads-view.js', 'butler-review-policy.js', 'task-stream.js', 'ui-locale.js', 'ui-messages.js', 'dsh/bootstrap.js']) fs.copyFileSync(path.resolve(__dirname, '..', name), path.join(root, 'app', name));
+  for (const name of ['collaboration-spaces.cjs', 'room-mention.js', 'native-usage.js', 'room-threads.js', 'approval-policy.js', 'terminal-continuation.js', 'butler-entry-view.js', 'butler-reads-view.js', 'butler-review-policy.js', 'task-stream.js', 'mobile-identity.js', 'ui-locale.js', 'ui-messages.js', 'dsh/bootstrap.js']) fs.copyFileSync(path.resolve(__dirname, '..', name), path.join(root, 'app', name));
   fs.copyFileSync(path.resolve(__dirname, '../../scripts/build-ui.cjs'), path.join(root, 'scripts/build-ui.cjs'));
   fs.symlinkSync(path.resolve(__dirname, '../../node_modules'), path.join(root, 'node_modules'), 'dir');
   const result = execFileSync(process.execPath, ['--max-old-space-size=64', path.join(root, 'scripts/build-ui.cjs')], { timeout: 5000, encoding: 'utf8', maxBuffer: 65536 });
@@ -231,4 +231,44 @@ test('the saved window view accepts only an https address, a Tailscale user and 
   for (const bad of [{ ...ok, secret: 's'.repeat(43) }, { ...ok, link: 'https://device.example.invalid/mobile/#pair=x' }, { ...ok, origin: 'http://device.example.invalid' },
     { ...ok, origin: 'https://device.example.invalid/path' }, { ...ok, port: '70000' }, { ...ok, port: 0 }, { ...ok, actor: 'x'.repeat(321) }, 'https://device.example.invalid'])
     assert.equal(validViews([{ ...base, mobileEndpoint: bad }]), false, JSON.stringify(bad));
+});
+
+
+test('B1 pasted links and malformed users are refused before remembering or pairing, even if IPC would fail', async () => {
+  const link = 'https://device.example.invalid/mobile/#pair=' + 's'.repeat(43);
+  for (const fail of [false, true]) for (const actor of [link, 'http://device.example.invalid', '//device.example.invalid/mobile/', '/mobile/#pair=synthetic', 'mailto:member@example.invalid', 'two users', 'user\\name', 'user\u0000name', 'user@@example.invalid', 'x'.repeat(321)]) {
+    const f = fixture({ fail }); f.setup.open(); f.valid(); f.el('mobile-actor').value = actor;
+    await f.el('mobile-prepare').listeners.click();
+    assert.deepEqual(f.remembered, [], 'bad account must never reach remember');
+    assert.deepEqual(f.calls, [], 'bad account must never reach pairing IPC');
+    assert.equal(f.root.all().find(node => node.children.includes(f.el('mobile-pair-link'))).hidden, true);
+    assert.match(f.status(), /这里填登录 Tailscale 的账号，不是链接/);
+    assert.equal(f.status().includes(actor), false, 'error must not reflect the pasted value');
+    assert.equal(f.el('mobile-actor').attributes['aria-invalid'], 'true');
+    assert.equal(f.el('mobile-actor').attributes['aria-describedby'], 'mobile-status');
+    f.el('mobile-actor').value = 'synthetic-human'; f.el('mobile-actor').listeners.input();
+    assert.equal(f.el('mobile-actor').attributes['aria-invalid'], 'false'); assert.equal(f.status(), '');
+  }
+});
+test('B1 legitimate usernames and emails keep their exact pairing payload and are remembered even when IPC fails', async () => {
+  for (const fail of [false, true]) for (const actor of ['synthetic-human', 'member.name_2', 'member+phone@example.invalid', '_member@example.invalid', '+phone@example.invalid', "o'example@example.invalid", 'member@github', '成员@passkey']) {
+    const f = fixture({ fail }); f.setup.open(); f.valid(); f.el('mobile-actor').value = '  ' + actor + '  ';
+    await f.el('mobile-prepare').listeners.click();
+    assert.deepEqual(f.remembered, [{ origin: 'https://mobile.invalid', actor, port: '0' }]);
+    assert.deepEqual(f.calls, [['pair', { actor, origin: 'https://mobile.invalid', port: 0, carrierConfirmed: true, replace: false,
+      selection: [{ sessionId: 'session-a', actions: ['read'] }] }]]);
+    assert.equal(f.root.all().find(node => node.children.includes(f.el('mobile-pair-link'))).hidden, fail);
+    if (fail) { assert.match(f.status(), /未确认/); assert.equal(f.status().includes('PRIVATE_IPC_PATH'), false); }
+  }
+});
+test('B1 a bad remembered actor is not restored or summarized, and a rejected edit preserves the last good endpoint', async () => {
+  const saved = { origin: 'https://device.example.invalid', actor: 'synthetic-human', port: '0' };
+  const link = saved.origin + '/mobile/#pair=' + 's'.repeat(43);
+  const bad = fixture({ saved: { ...saved, actor: link } }); bad.setup.open();
+  assert.equal(bad.el('mobile-connection-fields').hidden, false);
+  assert.equal(bad.el('mobile-connection-summary').hidden, true);
+  assert.equal(bad.el('mobile-actor').value, '');
+  const f = fixture({ saved, fail: true }); f.setup.open(); f.valid(); f.el('mobile-actor').value = link;
+  await f.el('mobile-prepare').listeners.click(); assert.deepEqual(f.remembered, []); assert.deepEqual(f.calls, []);
+  f.setup.close(); f.setup.open(); assert.equal(f.el('mobile-endpoint-actor').textContent, saved.actor);
 });

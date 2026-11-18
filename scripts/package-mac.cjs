@@ -166,6 +166,7 @@ async function build() {
       'mobile-broker.cjs',
       'mobile-consent.cjs',
       'mobile-http.cjs',
+      'mobile-identity.js',
       'mobile-push.cjs',
       'mobile-session.cjs',
       'mobile-web/client.js',

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { roomId } = require('./collaboration-spaces.cjs');
+const { validActor } = require('./mobile-identity.js');
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, limit) => typeof value === 'string' && value.length <= limit;
@@ -64,7 +65,7 @@ function validViews(views) {
     if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value, id)))) return false;
     // Phone access remembers only the address, Tailscale user and port; never a secret, link or cookie.
     if (view.mobileEndpoint !== undefined && (!object(view.mobileEndpoint) || Object.keys(view.mobileEndpoint).some(key => !['origin', 'actor', 'port'].includes(key)) ||
-        !text(view.mobileEndpoint.origin, 2048) || !/^https:\/\/[^/?#@\s]+$/.test(view.mobileEndpoint.origin) || !text(view.mobileEndpoint.actor, 320) ||
+        !text(view.mobileEndpoint.origin, 2048) || !/^https:\/\/[^/?#@\s]+$/.test(view.mobileEndpoint.origin) || !validActor(view.mobileEndpoint.actor) ||
         typeof view.mobileEndpoint.port !== 'string' || !/^\d{1,5}$/.test(view.mobileEndpoint.port) || Number(view.mobileEndpoint.port) > 65535)) return false;
     for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;

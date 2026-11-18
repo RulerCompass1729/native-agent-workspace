@@ -103,3 +103,27 @@ test('grouped-session disclosures round-trip stable space IDs and the independen
     assert.equal(fs.readFileSync(store.file, 'utf8'), before);
   }
 });
+
+
+test('B1 remembered mobile accounts accept usernames and emails but reject links before saving', t => {
+  const { store, dir } = setup(t); store.load();
+  const endpoint = actor => ({ origin: 'https://device.example.invalid', actor, port: '0' });
+  for (const actor of ['synthetic-human', 'member.name_2', 'member+phone@example.invalid', '_member@example.invalid', '+phone@example.invalid', "o'example@example.invalid", 'member@github', '成员@passkey']) {
+    const views = saved(); views[0].mobileEndpoint = endpoint(actor); store.save(views);
+    assert.deepEqual(new ViewStore(dir).load(), views);
+  }
+  const before = fs.readFileSync(store.file, 'utf8');
+  for (const actor of ['https://device.example.invalid/mobile/#pair=' + 's'.repeat(43), '//device.example.invalid', '/mobile/#pair=synthetic', 'mailto:member@example.invalid', 'two users', 'user\\name', 'user\u0000name', 'user@@example.invalid', 'x'.repeat(321), '', ' synthetic-human ', 'synthetic-human\n', null]) {
+    const views = saved(); views[0].mobileEndpoint = endpoint(actor);
+    assert.throws(() => store.save(views), /未覆盖/);
+    assert.equal(fs.readFileSync(store.file, 'utf8'), before, 'invalid account cannot overwrite the last good record');
+  }
+});
+test('B1 a pair link already on disk fails closed without exposing or overwriting recovery records', t => {
+  const { store } = setup(t), views = saved();
+  views[0].mobileEndpoint = { origin: 'https://device.example.invalid', actor: 'https://device.example.invalid/mobile/#pair=' + 's'.repeat(43), port: '0' };
+  const bad = JSON.stringify(views); fs.writeFileSync(store.file, bad, { mode: 0o600 });
+  assert.throws(() => store.load(), error => error.code === 'NAW_VIEW_RECORD' && !error.message.includes('pair=') && !error.message.includes('device.example.invalid'));
+  assert.equal(store.loaded, false); assert.throws(() => store.save([]), { code: 'NAW_VIEW_RECORD' });
+  assert.equal(fs.readFileSync(store.file, 'utf8'), bad);
+});
