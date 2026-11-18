@@ -4,6 +4,7 @@ const fs = require('node:fs'), path = require('node:path');
 const { randomBytes, randomUUID, createHash, timingSafeEqual } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
+const { readLayout } = require('./service-layout.cjs');
 const FILE = 'mobile-authority.json', OFF = 'mobile-disabled';
 const PAIR_MS = 120000, SESSION_MS = 12 * 60 * 60 * 1000, MAX_BYTES = 256 * 1024;
 const actions = new Set(['read', 'send', 'answer']);
@@ -42,12 +43,13 @@ function validScopes(scopes) {
   });
 }
 function validState(s) {
-  if (!exact(s, ['version', 'issuer', 'generation', 'enabled', 'actor', 'origin', 'scopes', 'pairing', 'device']) || s.version !== 1 ||
+  const all = s?.version === 2 && s.sessionPolicy === 'all';
+  if (!exact(s, ['version', 'issuer', 'generation', 'enabled', 'actor', 'origin', 'scopes', 'pairing', 'device', ...(all ? ['sessionPolicy'] : [])]) || (s.version !== 1 && !all) ||
     !exact(s.issuer, ['pid', 'started', 'instance']) || !Number.isSafeInteger(s.issuer.pid) || s.issuer.pid < 2 || !text(s.issuer.started) || !uuid(s.issuer.instance) ||
-    !uuid(s.generation) || typeof s.enabled !== 'boolean' || !validScopes(s.scopes)) return false;
+    !uuid(s.generation) || typeof s.enabled !== 'boolean' || !validScopes(s.scopes) || all && s.scopes.length !== 0) return false;
   if (s.actor === null || s.origin === null) {
     if (s.actor !== null || s.origin !== null || s.scopes.length || s.enabled || s.pairing !== null || s.device !== null) return false;
-  } else if (!text(s.actor, 320) || !origin(s.origin) || !s.scopes.length) return false;
+  } else if (!text(s.actor, 320) || !origin(s.origin) || !all && !s.scopes.length) return false;
   if (s.pairing !== null && (!exact(s.pairing, ['hash', 'until']) || !digest(s.pairing.hash) || !Number.isSafeInteger(s.pairing.until) || s.pairing.until < 0)) return false;
   if (s.device !== null && (!exact(s.device, ['id', 'tokenHash', 'csrfHash', 'until']) || !uuid(s.device.id) ||
     !digest(s.device.tokenHash) || !digest(s.device.csrfHash) || !Number.isSafeInteger(s.device.until) || s.device.until < 0)) return false;
@@ -74,8 +76,14 @@ function activeState(root, { io = fs, now = Date.now, alive = issuerAlive } = {}
   if (!Number.isSafeInteger(time) || time < 0 || !s.enabled || !s.device || s.device.until <= time || alive(s.issuer) !== true) throw denied();
   return s;
 }
-function scopeOf(s, target, action) {
+function scopeOf(s, target, action, root) {
   if (!actions.has(action) || !exact(target, ['serviceKey', 'sessionId', 'nativeId'])) throw denied();
+  if (s.version === 2 && s.sessionPolicy === 'all') {
+    if (!root || !['serviceKey','sessionId','nativeId'].every(k => text(target[k]))) throw denied();
+    const layout = readLayout(root);
+    if (layout.pending || !layout.entries.includes(target.serviceKey)) throw denied();
+    return { ...target, actions: ['read','send','answer'] };
+  }
   const found = s.scopes.find(x => x.serviceKey === target.serviceKey && x.sessionId === target.sessionId && x.nativeId === target.nativeId && x.actions.includes(action));
   if (!found) throw denied(); return found;
 }
@@ -86,10 +94,11 @@ function verifyTicket(root, ticket, target, expectedAction, options) {
     !['serviceKey', 'sessionId', 'nativeId'].every(k => ticket[k] === target[k])) throw denied();
   const s = activeState(root, options);
   if (!sameIssuer(ticket.issuer, s.issuer) || ticket.generation !== s.generation || ticket.deviceId !== s.device.id || !sameDigest(ticket.tokenHash, s.device.tokenHash)) throw denied();
-  scopeOf(s, { serviceKey: target.serviceKey, sessionId: target.sessionId, nativeId: target.nativeId }, ticket.action);
+  scopeOf(s, { serviceKey: target.serviceKey, sessionId: target.sessionId, nativeId: target.nativeId }, ticket.action, root);
   return true;
 }
 class MobileAccess {
+  #allGeneration = null;
   constructor(root, { io = fs, now = Date.now, identity = processIdentity(process.pid), exclusive } = {}) {
     if (!identity || !Number.isSafeInteger(identity.pid) || identity.pid < 2 || !text(identity.started) || typeof exclusive !== 'function') throw denied();
     this.io = io; this.now = now; this.root = rootPath(root, io); this.exclusive = exclusive;
@@ -119,7 +128,7 @@ class MobileAccess {
   // stale one. authenticate() refuses a device while it exists. Throws if it cannot be read.
   disabledMarker() { return disabled(this.root, this.io); }
   invalidate() {
-    this.closed = true;
+    this.closed = true; this.#allGeneration = null;
     try {
       if (disabled(this.root, this.io)) return true;
       const fd = this.io.openSync(path.join(this.root, OFF), 'wx', 0o600); this.io.closeSync(fd); return true;
@@ -140,6 +149,7 @@ class MobileAccess {
   }
   initialize({ alive = processMayBeAlive } = {}) {
     this.owner();
+    this.#allGeneration = null;
     const file = path.join(this.root, FILE);
     try {
       this.io.lstatSync(file); const old = readState(this.root, { io: this.io, allowDisabled: true });
@@ -148,15 +158,28 @@ class MobileAccess {
     const s = { version: 1, issuer: this.issuer, generation: randomUUID(), enabled: false, actor: null, origin: null, scopes: [], pairing: null, device: null };
     this.store(s); this.initialized = true; this.closed = false;
   }
-  beginPairing({ actor, origin: site, scopes, replace = false }) {
+  beginPairing({ actor, origin: site, scopes, replace = false, all = false }) {
     const s = this.load(), time = this.time();
-    if (!text(actor, 320) || !origin(site) || !validScopes(scopes) || !scopes.length || typeof replace !== 'boolean') throw denied();
+    if (!text(actor, 320) || !origin(site) || !validScopes(scopes) || (all ? scopes.length !== 0 : !scopes.length) || typeof all !== 'boolean' || typeof replace !== 'boolean') throw denied();
     if (s.device && s.device.until > time && replace !== true) throw denied('MOBILE_REPLACE_REQUIRED');
     const pairingSecret = secret();
-    const next = { ...s, generation: randomUUID(), enabled: false, actor, origin: site, scopes: JSON.parse(JSON.stringify(scopes)),
+    const next = { ...s, version: all ? 2 : 1, generation: randomUUID(), enabled: false, actor, origin: site, scopes: JSON.parse(JSON.stringify(scopes)),
       pairing: { hash: hash(pairingSecret), until: time + PAIR_MS }, device: null };
+    if (all) next.sessionPolicy = 'all'; else delete next.sessionPolicy;
     this.store(next); this.closed = false; this.failures = { since: time, count: 0 };
+    this.#allGeneration = all ? next.generation : null;
     return Object.freeze({ secret: pairingSecret, expiresAt: next.pairing.until });
+  }
+  // Main's lifetime-scoped policy leaves old backend verification exact: only
+  // observed concrete native tuples are mirrored into its strict v1 authority.
+  syncAllScopes(scopes) {
+    const s = this.load();
+    if (!this.#allGeneration || s.generation !== this.#allGeneration || !validScopes(scopes)) throw denied();
+    // No invented placeholder when empty. Retain the last real tuple set, or
+    // the empty v2 bootstrap until the first real session can be observed.
+    if (!scopes.length) return;
+    const next = { ...s, version: 1, scopes: JSON.parse(JSON.stringify(scopes)) }; delete next.sessionPolicy;
+    if (JSON.stringify(s) !== JSON.stringify(next)) this.store(next);
   }
   pair({ secret: pairingSecret, actor, origin: site }) {
     if (this.closed) throw denied();
@@ -184,7 +207,7 @@ class MobileAccess {
     return s;
   }
   authorize({ token: value, actor, origin: site, csrf, action, target }) {
-    const s = this.authenticate({ token: value, actor }); scopeOf(s, target, action);
+    const s = this.authenticate({ token: value, actor }); scopeOf(s, target, action, this.root);
     if (action === 'read' ? site !== undefined && site !== s.origin : site !== s.origin || !token(csrf) || !sameDigest(hash(csrf), s.device.csrfHash)) throw denied();
     return Object.freeze({ issuer: { ...s.issuer }, generation: s.generation, deviceId: s.device.id, tokenHash: s.device.tokenHash,
       action, serviceKey: target.serviceKey, sessionId: target.sessionId, nativeId: target.nativeId });

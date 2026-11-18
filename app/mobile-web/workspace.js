@@ -92,7 +92,7 @@
       form.append(label, input, submit); form.addEventListener('submit', event => { event.preventDefault(); run(async () => { await client.start(input.value); if (client.state.session && !locked) { input.value = ''; await navigate(); } else toast('locked'); }); }); el('content').append(form);
     }
     function heading(key) { el('content').append(node('h1', t(key))); }
-    function section(title, count, addKey) { const section = node('section', undefined, 'section'), h = node('div', undefined, 'section-title'), label = node('h2', title); if (count !== undefined) label.append(node('span', ' ' + count, 'quiet')); h.append(label); if (addKey) { const b = button('+', () => dialog(t(addKey), t('mac'))); b.setAttribute('aria-label', t(addKey)); h.append(b); } section.append(h); el('content').append(section); return section; }
+    function section(title, count) { const section = node('section', undefined, 'section'), h = node('div', undefined, 'section-title'), label = node('h2', title); if (count !== undefined) label.append(node('span', ' ' + count, 'quiet')); h.append(label); section.append(h); el('content').append(section); return section; }
     function roomList(container) {
       const box = node('div', undefined, 'box');
       for (const r of view.rooms) {
@@ -224,7 +224,7 @@
     function reminders() {
       heading('reminders'); if (!view.reminders) { el('content').append(node('p', t('noScope'))); return; }
       el('content').append(node('p', t('sameBell'), 'quiet'));
-      if (push) {
+      if (push && view.capabilities?.push !== false) {
         const card = node('section', undefined, 'reminder-card'); card.id = 'push-card';
         const title = node('h2', t('pushTitle')); title.id = 'push-title'; card.setAttribute('aria-labelledby', title.id);
         const supported = push.supported(), state = push.state;
@@ -286,7 +286,7 @@
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
         if (ticket !== epoch) return; view = next; lastReceived = global.performance.now();
-        if (push && next.reminders) await push.read();
+        if (push && next.reminders && next.capabilities?.push !== false) await push.read();
       } catch { disconnected = true; toast('offline'); } finally { if (ticket === epoch) { busy = false; paint(); } }
     }
     async function navigate() {

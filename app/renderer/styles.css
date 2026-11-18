@@ -959,6 +959,7 @@ main.settings-panel-open{margin-inline-end:340px}
 #mobile-setup .mobile-pair-actions{display:flex;flex-wrap:wrap;gap:6px}
 #mobile-setup .mobile-pair-actions button{padding:7px 10px;font-size:12px}
 #mobile-setup .mobile-sessions legend{font-size:12px}
+#mobile-setup #mobile-pair-qr{display:block;width:240px;max-width:100%;height:auto;padding:16px;background:white;margin:12px auto;image-rendering:pixelated}
 /* Compact space files: keep every filename, path hint and existing action. */
 #space-files-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
 #space-files-dialog h2{margin-bottom:8px}

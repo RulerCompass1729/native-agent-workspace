@@ -40,6 +40,8 @@ function fixture() {
   const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
     applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, tempReminders: null, tempQuitWaiting: false,
     require(name) {
+      if (name === './mobile-carrier.cjs') return { detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST' }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; } };
+      if (name === './mobile-qr.cjs') return { generate: async link => { assert.ok(link.startsWith('https://mobile.invalid/mobile/#pair=')); if (context.qrFailure) throw Error('Synthetic local image failure'); calls.push({ method: 'localQR' }); return 'data:image/png;base64,c3ludGhldGlj'; } };
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
       if (name === './mobile-workspace.cjs') return require('../mobile-workspace.cjs');
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };
@@ -62,7 +64,7 @@ function fixture() {
   const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
   return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
-for (const method of ['mobilePairing', 'mobileRevoke', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
+for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
   const f = fixture(); f.context.windows.get(7).background = true;
   const result = await f.handlers.get('workspace:' + method)(f.event, f.selection);
   assert.equal(result.ok, false);
@@ -72,10 +74,31 @@ for (const method of ['mobilePairing', 'mobileRevoke', 'mobileApprovalStatus', '
 test('mobile pairing and revocation are absent from the agent control catalog and invocation handlers', () => {
   const f = fixture(), { BackgroundControl } = require('../background-control.cjs');
   const methods = BackgroundControl.prototype.catalog.call({ handlers: f.context.applicationHandlers }).map(row => row.method);
-  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
+  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
     assert.equal(methods.includes(method), false);
     assert.equal(f.context.applicationHandlers.has(method), false);
   }
+});
+test('one-step connection uses twice-verified native carrier metadata and returns pixels without the bearer link', async () => {
+  const f=fixture(), result=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});
+  assert.equal(result.ok,true);assert.ok(result.value.qr.startsWith('data:image/png;base64,'));
+  assert.equal(Object.hasOwn(result.value,'secret'),false);assert.equal(f.calls.filter(x=>x.method==='detectCarrier').length,2);
+  const pair=f.calls.find(x=>x.method==='pair');assert.equal(pair.selection.all,true);assert.equal(pair.selection.selection,undefined);
+  assert.equal(pair.selection.actor,'synthetic-human');assert.equal(pair.selection.origin,'https://mobile.invalid');
+});
+test('caller supplied identity or a refused carrier cannot begin an authority or listener', async () => {
+  const f=fixture();let r=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false,actor:'other'});assert.equal(r.ok,false);assert.deepEqual(f.calls,[]);
+  f.context.carrierFailure=true;r=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(r.ok,false);assert.equal(f.calls.some(x=>x.method==='pair'),false);assert.equal(f.servers.length,0);
+});
+test('the legacy selected-pairing API cannot inject the internal all-scope flag', async () => {
+  const f=fixture();
+  for (const value of [{...f.selection,all:true},Object.assign(Object.create({all:true}),f.selection)]) {
+    const result=await f.handlers.get('workspace:mobilePairing')(f.event,value);
+    assert.equal(result.ok,false);assert.deepEqual(f.calls,[]);assert.equal(f.servers.length,0);
+  }
+});
+test('local code generation failure revokes only the new candidate and closes its listener', async () => {
+  const f=fixture();f.context.qrFailure=true;const r=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(r.ok,false);assert.ok(f.calls.some(x=>x.method==='revoke'));assert.equal(f.servers[0].listening,false);
 });
 test('boot registration is lazy and stopping an unused mobile entry creates neither broker nor authorization', () => {
   const f = fixture(); assert.deepEqual(f.calls, []);
@@ -163,7 +186,7 @@ test('preload exposes explicit desktop-only mobile management methods', async ()
     contextBridge: { exposeInMainWorld(key, value) { assert.ok(['workspace', '__DSH_LOCALE__'].includes(key), key); if (key === 'workspace') api = value; } },
     ipcRenderer: { on() {}, invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
   }; } });
-  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus', 'mobilePairing', 'mobileRevoke']);
+  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus', 'mobileConnect', 'mobileDetect', 'mobilePairing', 'mobileRevoke']);
   assert.equal(await api.mobileRevoke(), 'synthetic-result'); assert.deepEqual(calls, [['workspace:mobileRevoke']]);
 });
 test('the existing GUI payload list includes the app-local broker and its existing authority modules without running a package build', () => {

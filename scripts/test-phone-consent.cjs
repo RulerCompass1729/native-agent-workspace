@@ -26,6 +26,8 @@ function mainMobile(profile, roomState, labels, background) {
   const human = new Map(), scheduled = [];
   const context = vm.createContext({ require: createRequire(path.join(root, 'app/main.cjs')), primary: true, quitting: false,
     dataDir: profile, roomState, sessionLabels: labels, recordReminders, operationsUnavailable: null, stewardRecord: null,
+    confirmationInbox: require('../app/confirmation-inbox.cjs'), tempReminders: null,
+    tempSummary: require('../app/temp-reminders.cjs').tempSummary, readTempSummary: require('../app/temp-reminders.cjs').readSummary,
     backgroundControl: background, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     queueSecretary: null, integratorRole: null, stewardRole: null, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => scheduled.push(true), noteHuman: id => human.set(id, Date.now()) },

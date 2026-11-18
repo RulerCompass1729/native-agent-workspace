@@ -48,6 +48,11 @@ test('the source allowlist retains the baseline while allowing new source entrie
   const entries = new Set(sourceList().entries);
   for (const name of before) assert.ok(entries.has(name), 'Retained package source: ' + name);
 });
+test('the local Core Image helper and its fixed adapter are both in the package', () => {
+  const entries = new Set(sourceList().entries);
+  for (const name of ['mobile-carrier.cjs', 'mobile-qr.cjs', 'mobile-qr.jxa']) assert.ok(entries.has(name), name);
+  assert.match(fs.readFileSync(path.join(__dirname, '../mobile-qr.cjs'), 'utf8'), /path\.join\(__dirname, 'mobile-qr\.jxa'\)/);
+});
 test('the source allowlist is alphabetized with one file on each line', () => {
   const { body, entries } = sourceList();
   assert.equal(new Set(entries).size, entries.length, 'Each source is packaged once');

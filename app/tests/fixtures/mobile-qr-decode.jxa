@@ -1,0 +1,14 @@
+// Test only. Vision decodes a synthetic PNG received on stdin. No files or Apple events.
+ObjC.import('Foundation');
+ObjC.import('Vision');
+function run() {
+  const data = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  const base64 = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding);
+  const png = $.NSData.alloc.initWithBase64EncodedStringOptions(base64, 0);
+  const request = $.VNDetectBarcodesRequest.alloc.init;
+  const handler = $.VNImageRequestHandler.alloc.initWithDataOptions(png, $({}));
+  if (!handler.performRequestsError($([request]), Ref())) throw Error('Synthetic QR decode failed');
+  const rows = ObjC.unwrap(request.results);
+  if (rows.length !== 1) throw Error('Expected one synthetic code');
+  return rows[0].payloadStringValue.js;
+}

@@ -5,6 +5,7 @@ const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:c
 const { MobileAccess } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
 const { MAX_REQUESTS } = require('./mobile-session.cjs');
+const { readLayout } = require('./service-layout.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const denied = (code = 'MOBILE_BROKER_DENIED') => Object.assign(new Error('Mobile authorization or the original session changed. Nothing was retried.'), { code });
@@ -27,6 +28,7 @@ const receipt = (value, ticket, requestId, action) => {
 };
 
 class MobileBroker {
+  #fullLayout = null; #fullGeneration = null; #refreshing = null;
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
@@ -44,7 +46,7 @@ class MobileBroker {
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { this.#push?.close(); this.#push = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; }
+  #forget() { this.#push?.close(); this.#push = null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
@@ -65,7 +67,7 @@ class MobileBroker {
     return state;
   }
   #grant(auth, id, action) {
-    const state = this.#authenticate(auth), scope = state.scopes.find(value => value.sessionId === id && value.actions.includes(action));
+    const state = this.#authenticate(auth), scope = this.#scopes(state).find(value => value.sessionId === id && value.actions.includes(action));
     if (!scope) throw denied();
     const target = { serviceKey: scope.serviceKey, sessionId: scope.sessionId, nativeId: scope.nativeId };
     return { state, scope, ticket: this.#access.authorize({ ...auth, action, target }) };
@@ -77,9 +79,11 @@ class MobileBroker {
   }
   // Only the local desktop owner may call this method. Never expose a generic
   // RPC dispatcher that lets a remote request choose this method or its scope.
-  async beginPairing({ actor, origin, selection, replace = false, workspace }) {
+  async beginPairing({ actor, origin, selection, replace = false, workspace, all = false }) {
     this.#access.owner();
-    if (!Array.isArray(selection) || !selection.length || selection.length > MAX_REQUESTS || typeof replace !== 'boolean' ||
+    if (typeof all !== 'boolean' || all && (selection !== undefined || workspace !== undefined)) throw denied();
+    if (all) selection = [];
+    if (!Array.isArray(selection) || !all && !selection.length || selection.length > MAX_REQUESTS || typeof replace !== 'boolean' ||
         selection.some(value => !exact(value, ['sessionId', 'actions']) || typeof value.sessionId !== 'string' ||
           !Array.isArray(value.actions) || !value.actions.includes('read') || value.actions.some(action => !['read', 'send', 'answer'].includes(action)) || new Set(value.actions).size !== value.actions.length) ||
         new Set(selection.map(value => value.sessionId)).size !== selection.length) throw denied();
@@ -102,10 +106,15 @@ class MobileBroker {
             !entry.state.capabilities?.includes('humanMobileV1') || value.actions.some(action => action !== 'read') && !entry.state.capabilities.includes('humanMobilePreparedV1')) throw denied();
         return { serviceKey: entry.key, sessionId: record.id, nativeId: record.nativeId, actions: [...value.actions] };
       });
-      const workspaceGrant = workspace === undefined ? null : this.#desktop?.grant(client, workspace);
+      const workspaceGrant = all ? this.#desktop?.grant(client, { allRooms: true, records: true }) : workspace === undefined ? null : this.#desktop?.grant(client, workspace);
+      if (all && !workspaceGrant) throw denied();
       if (workspace !== undefined && !workspaceGrant) throw denied();
       if (!this.#access.initialized) this.#access.initialize();
-      const result = this.#access.beginPairing({ actor, origin, scopes, replace });
+      const layout = all ? this.#layout() : null;
+      const result = this.#access.beginPairing({ actor, origin, scopes, replace, all });
+      this.#fullLayout = layout;
+      this.#fullGeneration = all ? this.#access.load().generation : null;
+      if (all) this.#access.syncAllScopes(this.#scopes(this.#access.load()));
       this.#workspaceGrant = workspaceGrant && { value: workspaceGrant, generation: this.#access.load().generation };
       return result;
     } catch (error) { this.#forget(); this.#disconnect(); throw error; }
@@ -129,7 +138,7 @@ class MobileBroker {
     const consent = this.#consent.status(state);
     return { deviceId: state.device.id, expiresAt: state.device.until, csrf: csrf.value, consent: { registered: consent.registered, enabled: consent.enabled },
       ...(this.#workspaceGrant || this.#consentView ? { workspace: true } : {}),
-      sessions: state.scopes.filter(value => value.actions.includes('read')).map(value => {
+      sessions: this.#scopes(state).filter(value => value.actions.includes('read')).map(value => {
         const base = { id: value.sessionId, actions: [...value.actions] };
         try {
           const entry = this.#bound().route(value.sessionId), record = entry.state.sessions.find(row => row.id === value.sessionId);
@@ -139,7 +148,51 @@ class MobileBroker {
         } catch { return { ...base, available: false }; }
       }) };
   }
+  #layout() {
+    const layout = readLayout(this.#root);
+    if (layout.pending) throw denied();
+    return JSON.stringify([...layout.entries].sort());
+  }
+  #scopes(state) {
+    if (!this.#all(state)) return state.scopes;
+    if (this.#layout() !== this.#fullLayout) throw denied('MOBILE_RESULT_UNCONFIRMED');
+    const seen = new Set(), result = [];
+    for (const entry of this.#bound().entries) for (const record of entry.state.sessions) {
+      if (record.archived || record.nativeContextPending || typeof record.nativeId !== 'string' || !record.nativeId) continue;
+      if (!entry.state.capabilities?.includes('humanMobileV1')) continue;
+      if (seen.has(record.id)) throw denied(); seen.add(record.id);
+      result.push({ serviceKey: entry.key, sessionId: record.id, nativeId: record.nativeId, actions: entry.state.capabilities.includes('humanMobilePreparedV1') ? ['read','send','answer'] : ['read'] });
+    }
+    return result;
+  }
+  #all(state) { return this.#fullLayout !== null && this.#fullGeneration === state.generation; }
+  async #refreshFull(auth) {
+    const state = this.#authenticate(auth);
+    if (!this.#all(state)) return;
+    if (this.#refreshing) { await this.#refreshing; this.#authenticate(auth); return; }
+    const work = async () => {
+      const layout = this.#layout(), epoch = this.#epoch;
+      if (layout !== this.#fullLayout) {
+        if ([...this.#requests.values(), ...this.#workspaceRequests.values()].some(r => r.pending)) throw denied('MOBILE_REQUEST_CONFLICT');
+        const next = await connect(this.#scope, 'mobile-' + randomUUID());
+        try {
+          const fresh = this.#authenticate(auth);
+          if (epoch !== this.#epoch || fresh.generation !== state.generation || layout !== this.#layout() || !(next instanceof WorkspaceClient) || fs.realpathSync(next.scope) !== this.#root || next.socket?.destroyed) throw denied();
+          const old = this.#client; this.#client = next; this.#epoch++; this.#contexts.clear(); this.#fullLayout = layout;
+          next.once('closed', () => { if (this.#client === next) { this.#forget(); this.#disconnect(); } });
+          old.close();
+        } catch (error) { if (this.#client !== next) next.close(); throw error; }
+      }
+      const client = this.#bound(), current = this.#epoch; await client.refresh();
+      if (client !== this.#bound() || current !== this.#epoch || state.generation !== this.#authenticate(auth).generation || this.#fullLayout !== this.#layout()) throw denied();
+      this.#access.syncAllScopes(this.#scopes(this.#authenticate(auth)));
+    };
+    const pending = work(); this.#refreshing = pending;
+    try { await pending; } finally { if (this.#refreshing === pending) this.#refreshing = null; }
+  }
+  async refreshSession(auth) { await this.#refreshFull(auth); return this.session(auth); }
   async read(auth, id) {
+    if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const { ticket, scope } = this.#grant(auth, id, 'read'), client = this.#bound(), epoch = this.#epoch;
     const row = await client.call('mobileRead', ticket);
     this.#after(auth, ticket, client, epoch);
@@ -163,12 +216,14 @@ class MobileBroker {
     return state;
   }
   async workspaceRead(auth) {
+    if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch;
-    const result = await this.#desktop.read(client, this.#workspaceGrant?.value || { roomIds: [], records: false }, state.scopes);
+    const result = await this.#desktop.read(client, this.#workspaceGrant?.value || { roomIds: [], records: false }, this.#scopes(state));
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
-    this.#workspaceState(auth);
+    this.#scopes(this.#workspaceState(auth));
     const consent = this.#consent.status(state);
     result.capabilities.sensitiveDecisions = consent.enabled;
+    result.capabilities.push = !this.#all(state) && this.#workspaceGrant?.value.records === true;
     for (const card of result.confirmations) card.canDecide = Boolean(consent.enabled && card.version && card.state === 'confirmation-required' && !card.disposition && card.expiresAt > Date.now());
     return result;
   }
@@ -177,7 +232,7 @@ class MobileBroker {
       this.#bound();
       if (this.#access.closed || this.#access.disabledMarker()) return null;
       const s = this.#access.load();
-      if (!s.enabled || !s.device || s.device.until <= this.#access.time() ||
+      if (this.#all(s) || !s.enabled || !s.device || s.device.until <= this.#access.time() ||
           this.#workspaceGrant?.generation !== s.generation || this.#workspaceGrant.value.records !== true) return null;
       return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
     } catch { return null; }
@@ -228,13 +283,13 @@ class MobileBroker {
     this.#workspaceState(auth, true);
     const client = this.#bound(), epoch = this.#epoch; await client.refresh();
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
-    const state = this.#workspaceState(auth, true), binding = this.#desktop.confirmationBinding(client, state.scopes, value);
+    const state = this.#workspaceState(auth, true), binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value);
     return this.#consent.challenge(state, binding);
   }
   async decide(auth, value) {
     if (!exact(value, ['id', 'version', 'decision', 'challengeId', 'assertion'])) throw denied();
     const state = this.#workspaceState(auth, true), client = this.#bound(), epoch = this.#epoch;
-    const binding = this.#desktop.confirmationBinding(client, state.scopes, value), permit = this.#consent.consume(state, value, binding);
+    const binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value), permit = this.#consent.consume(state, value, binding);
     if (this.#decisions.size >= MAX_REQUESTS) throw denied();
     const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null }; this.#decisions.set(value.challengeId, row);
     const valid = () => {
@@ -242,7 +297,7 @@ class MobileBroker {
       return this.#workspaceState(auth, true);
     };
     try {
-      const result = await this.#desktop.decision(client, state.scopes, structuredClone(value), permit, valid);
+      const result = await this.#desktop.decision(client, this.#scopes(state), structuredClone(value), permit, valid);
       row.state = result.state;
       row.status = ['complete', 'cancelled', 'not-executed', 'confirmation-required'].includes(result.state) ? 'complete' : 'unconfirmed';
     } catch (error) { if (error.notSent === true) row.status = 'not-sent'; }

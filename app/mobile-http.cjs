@@ -90,7 +90,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
         return respond(response, 200, body, asset.type);
       }
       if (typeof request.url !== 'string' || request.url.includes('?') || request.url.includes('#') || values['x-naw-mobile'] !== '1') throw reject(403, 'MOBILE_DENIED');
-      if (request.method === 'GET' && request.url === '/mobile/session') return respond(response, 200, broker.session(auth(values)));
+      if (request.method === 'GET' && request.url === '/mobile/session') return respond(response, 200, await (typeof broker.refreshSession === 'function' ? broker.refreshSession(auth(values)) : broker.session(auth(values))));
       if (request.method === 'GET' && request.url === '/mobile/push') {
         if (typeof broker.pushInfo !== 'function') throw reject(403, 'MOBILE_DENIED');
         return respond(response, 200, broker.pushInfo(auth(values)));

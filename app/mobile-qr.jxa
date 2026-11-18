@@ -1,0 +1,16 @@
+// macOS Core Image only: no Apple events, application scripting, network, argv payload, or files.
+ObjC.import('Foundation');
+ObjC.import('AppKit');
+ObjC.import('CoreImage');
+ObjC.import('CoreGraphics');
+function run() {
+  const input = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+  if (Number(input.length) > 4096) throw Error('Invalid local code input');
+  const filter = $.CIFilter.filterWithName('CIQRCodeGenerator');
+  filter.setValueForKey(input, 'inputMessage');
+  filter.setValueForKey($('M'), 'inputCorrectionLevel');
+  const image = filter.outputImage.imageByApplyingTransform($.CGAffineTransformMakeScale(8, 8));
+  const bitmap = $.NSBitmapImageRep.alloc.initWithCIImage(image);
+  const data = bitmap.representationUsingTypeProperties($.NSPNGFileType, $({}));
+  return data.base64EncodedStringWithOptions(0).js;
+}

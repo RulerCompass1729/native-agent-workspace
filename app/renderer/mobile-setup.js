@@ -5,6 +5,7 @@
   // language switch repaints the panel in place; without them (unit tests) the Chinese catalog text is used.
   // remembered/remember carry the last checked address, Tailscale user and port across restarts. Never secrets or links.
   function bind({ container, document, api, getSessions, getRooms = () => [], now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, text, display, remembered = () => null, remember = () => {} }) {
+    const oneStep = typeof api.mobileConnect === 'function';
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const { validActor } = global.nativeWorkspaceMobileIdentity || (typeof require === 'function' ? require('../mobile-identity.js') : {});
     const format = text || ((key, params) => locale.format('zh', key, params));
@@ -50,7 +51,7 @@
     clearActorError();
     actor.addEventListener('input', () => { if (actorInvalid && validActor(actor.value.trim())) { clearActorError(); quiet(status); } });
     const port = field('mobile.port', 'mobile-port', 'number', advanced); port.min = '0'; port.max = '65535'; port.value = '0';
-    const carrier = check('mobile.carrierCompact', 'mobile-carrier', section); attribute(carrier, 'title', 'mobile.carrier');
+    const carrier = checkbox('mobile-carrier'), carrierRow = checkRow(carrier, node('span', 'mobile.carrierCompact')); section.append(carrierRow); attribute(carrier, 'title', 'mobile.carrier');
     editConnection.addEventListener('click', () => { connection.hidden = true; connectionFields.hidden = false; origin.focus?.(); });
     // About 90 sessions: a search narrows the list, chosen sessions stay listed first, and each one's
     // send/answer choices appear only after it is chosen.
@@ -61,7 +62,7 @@
     const list = document.createElement('div'); list.className = 'mobile-session-list';
     const noMatch = node('p', 'mobile.noMatch'); noMatch.className = 'quiet'; noMatch.hidden = true;
     const spaces = document.createElement('fieldset'); spaces.className = 'mobile-spaces'; spaces.append(node('legend', 'mobile.spaces')); advanced.append(spaces);
-    const records = check('mobile.allowRecords', 'mobile-records');
+    const records = checkbox('mobile-records'), recordsRow = checkRow(records, node('span', 'mobile.allowRecords')); advanced.append(recordsRow);
     hint('mobile.workspaceNote');
     const replace = check('mobile.replace', 'mobile-replace');
     hint('mobile.note');
@@ -77,6 +78,26 @@
     for (const [button, id] of [[approvalBegin, 'begin'], [approvalRefresh, 'refresh'], [approvalConfirm, 'confirm'], [approvalRevoke, 'revoke']]) { button.type = 'button'; button.id = 'mobile-approval-' + id; }
     const matched = checkbox('mobile-approval-matched'), enabled = checkbox('mobile-approval-enabled');
     approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); advanced.append(approval);
+    const allSessions = checkbox('mobile-all-sessions'), sharedHost = checkbox('mobile-shared-host'), qr = document.createElement('img');
+    qr.id = 'mobile-pair-qr'; qr.hidden = true; attribute(qr, 'alt', 'mobile.qrAlt');
+    const fullScope = node('p', 'mobile.fullScope'), fullBoundary = node('p', 'mobile.fullStage1');
+    fullScope.className = fullBoundary.className = 'quiet';
+    function showScope() {
+      if (!oneStep) return;
+      const all = allSessions.checked;
+      choices.hidden = carrierRow.hidden = spaces.hidden = recordsRow.hidden = all; connection.hidden = connectionFields.hidden = all;
+      if (port.parentElement) port.parentElement.hidden = all;
+      fullScope.hidden = fullBoundary.hidden = !all;
+      if (!all) showConnection(recall());
+      say(prepare, all ? 'mobile.connect' : 'mobile.prepare');
+    }
+    if (oneStep) {
+      allSessions.checked = true;
+      advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), checkRow(sharedHost, node('span', 'mobile.sharedHost')));
+      advanced.append(connection, connectionFields, carrierRow, choices);
+      section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.append(qr);
+      allSessions.addEventListener('change', () => { clearLink(); showScope(); });
+    }
     let approvalValue = null;
     function showApproval(value) {
       approvalValue = value; matched.checked = false; enabled.indeterminate = false; enabled.checked = value?.enabled === true;
@@ -108,7 +129,7 @@
     }
     port.addEventListener('input', updateAdvanced); port.addEventListener('change', updateAdvanced);
     records.addEventListener('change', updateAdvanced); replace.addEventListener('change', updateAdvanced);
-    const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; };
+    const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true; } };
     function counted() {
       say(count, 'mobile.selectedCount', { count: selections.filter(s => s.read.checked).length, total: selections.length });
     }
@@ -177,12 +198,26 @@
         selections.push({ id: record.id, nativeId: record.nativeId, read, send, answer, row, words: name.toLowerCase() });
       }
       filter();
-      say(status, 'mobile.idle');
+      if (oneStep) { allSessions.checked = true; sharedHost.checked = false; showScope(); }
+      say(status, oneStep ? 'mobile.autoReady' : 'mobile.idle');
       showApproval(null); approvalAction('mobileApprovalStatus');
     }
     async function pair() {
       if (!opened || busy) return;
       clearLink();
+      if (oneStep && allSessions.checked) {
+        const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
+        try {
+          const result = await api.mobileConnect({ sharedHostConfirmed: sharedHost.checked });
+          if (!opened || revision !== ticket) return;
+          if (typeof result.qr !== 'string' || result.qr.length > 350000 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.qr) || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= now()) throw Error('unconfirmed');
+          qr.src = result.qr; qr.hidden = false; say(status, 'mobile.qrReady');
+          timer = setTimer(() => { if (revision === ticket) { clearLink(); say(status, 'mobile.expired'); } }, Math.min(120000, result.expiresAt - now()));
+        } catch (error) {
+          if (opened && revision === ticket) { if (error?.uiMessage?.key === 'error.mobile.sharedHost') { advanced.open = true; say(status, 'error.mobile.sharedHost'); } else say(status, 'mobile.connectUnavailable'); }
+        } finally { if (opened && revision === ticket) { busy = false; prepare.disabled = false; } }
+        return;
+      }
       const account = actor.value.trim();
       if (!validActor(account)) {
         actorInvalid = true; actor.setAttribute('aria-invalid', 'true'); actor.setAttribute('aria-describedby', status.id);

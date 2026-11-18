@@ -1,4 +1,4 @@
-// Phone access in Settings with about 90 sessions: the person must find and choose one quickly.
+// One-step phone access, plus the retained explicit subset flow with about 90 sessions.
 // One hidden source window, a synthetic provider and synthetic names. No model, no real native runtime,
 // no network beyond the loopback pairing listener of the isolated profile.
 // Checks: each checkbox sits left of its words on one line; "Q07" is chosen in three steps
@@ -14,7 +14,7 @@ for (const repository of [root, path.dirname(common)]) assert.ok(!path.resolve(e
 const slot = path.resolve(process.env.NAW_GUI_TEST_SLOT || path.resolve(common, '../.local/gui-test-slot.lock')), token = randomUUID();
 fs.mkdirSync(path.dirname(slot), { recursive: true });
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no GUI or service started'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Claude 7', task: 'phone access setup', token, pid: process.pid }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'mobile setup GUI test', task: 'phone access setup', token, pid: process.pid, startedAt: new Date().toISOString() }));
 const scratch = require('./fixtures/test-scratch.cjs'), { _electron } = scratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs'), locale = require('../app/ui-locale.js');
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-mobile-setup-'));
@@ -104,7 +104,20 @@ async function variant(lang, theme) {
   const tag = `${lang}-${theme}-${viewportWidth}`;
   await openSettings(lang, theme);
   const compact = await page.locator('#mobile-advanced').count();
-  if (compact) {
+  const allScope = await page.locator('#mobile-all-sessions').count();
+  if (allScope) {
+    assert.equal(await page.locator('#mobile-all-sessions').isChecked(), true);
+    assert.equal(await page.locator('#mobile-advanced').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#mobile-origin').isVisible(), false);
+    assert.equal(await page.locator('#mobile-actor').isVisible(), false);
+    await shoot(tag + '-all-default', '#mobile-setup > details');
+    check(`${tag}: all current and future scope is the default intent; private entry fields stay in advanced`);
+    await subset();
+    const listHeight = await page.locator('#mobile-setup .mobile-session-list').evaluate(el => ({height:el.getBoundingClientRect().height,scroll:el.scrollHeight>el.clientHeight}));
+    assert.ok(listHeight.height<=121 && listHeight.scroll);
+    check(`${tag}: the explicit subset retains the bounded internally scrolling list`);
+  }
+  if (compact && !allScope) {
     assert.equal(await page.locator('#mobile-advanced').evaluate(el => el.open), false);
     assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advanced'));
     await compactHeight(tag);
@@ -124,7 +137,7 @@ async function variant(lang, theme) {
     }
     check(`${tag}: advanced setup starts folded without hidden nondefault choices`);
   }
-  await shoot(tag + '-list', '#mobile-setup fieldset');
+  await shoot(tag + '-list', '#mobile-setup .mobile-sessions');
   await alignment(tag + ' list');
   if (!await page.locator('#mobile-session-filter').count()) fail(`${tag}: no session search`);
   else {
@@ -139,14 +152,14 @@ async function variant(lang, theme) {
     });
     if (state.visible === 1 && state.chosen.length === 1 && state.chosen[0].startsWith(target) && state.actionsShown === 1) check(`${tag}: open, type Q07, tick → only ${target} is chosen; its send/answer appear (${state.count})`);
     else fail(`${tag}: Q07 flow ${JSON.stringify(state)}`);
-    await shoot(tag + '-q07', '#mobile-setup fieldset');
+    await shoot(tag + '-q07', '#mobile-setup .mobile-sessions');
     await alignment(tag + ' Q07 chosen');
     await page.locator('#mobile-session-filter').fill(''); await settle();
     const first = await page.locator('#mobile-setup .mobile-session').first().textContent();
     if (first.startsWith(target)) check(`${tag}: cleared search lists the chosen session first`); else fail(`${tag}: first row after clearing is ${first.slice(0, 30)}`);
   }
   if (compact) {
-    await page.locator('#mobile-advanced > summary').click();
+    if (!await page.locator('#mobile-advanced').evaluate(el => el.open)) await page.locator('#mobile-advanced > summary').click();
     await page.locator('#mobile-port').fill('43125'); await page.locator('#mobile-records').check(); await page.locator('#mobile-replace').check();
     const room = page.locator('#mobile-setup .mobile-spaces input[type=checkbox]').first(); await room.check();
     assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advancedActive', { count: 4 }));
@@ -173,6 +186,60 @@ async function variant(lang, theme) {
   }
   await page.locator('#close-setup').click(); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
 }
+async function subset() {
+  if (!await page.locator('#mobile-all-sessions').count()) return;
+  if (!await page.locator('#mobile-advanced').evaluate(el=>el.open)) await page.locator('#mobile-advanced > summary').click();
+  await page.locator('#mobile-all-sessions').uncheck(); await settle();
+}
+async function verifyFullConnect() {
+  let listenPort;
+  const nativeFixture = (method, target) => new Promise((resolve,reject) => {
+    const id=randomUUID(), timeout=setTimeout(()=>{child.off('message',receive);reject(Error('Synthetic native fixture did not settle'));},5000);
+    const receive=message=>{if(message.requestId!==id)return;child.off('message',receive);clearTimeout(timeout);message.error?reject(Error('Synthetic native fixture refused')):resolve(message);};
+    child.on('message',receive);child.send({id,method,target});
+  });
+  const request = (route, { method='GET', actor='synthetic-human', body, cookie, csrf } = {}) => new Promise((resolve, reject) => {
+    const req = require('node:http').request({hostname:'127.0.0.1',port:listenPort,path:route,method,headers:{Host:'mobile.invalid','Tailscale-User-Login':actor,'X-NAW-Mobile':'1',Origin:'https://mobile.invalid',...(body?{'Content-Type':'application/json'}:{}),...(cookie?{Cookie:cookie}:{}),...(csrf?{'X-NAW-CSRF':csrf}:{})}},response=>{
+      const chunks=[];response.on('data',b=>chunks.push(b));response.on('end',()=>{try{resolve({status:response.statusCode,headers:response.headers,value:JSON.parse(Buffer.concat(chunks).toString())})}catch{reject(Error('Synthetic mobile response unavailable'))}});
+    });req.on('error',()=>reject(Error('Synthetic mobile carrier unavailable')));req.end(body?JSON.stringify(body):undefined);
+  });
+  try {
+    await openSettings('zh','light'); assert.equal(await page.locator('#mobile-all-sessions').isChecked(),true);
+    await page.locator('#mobile-prepare').click();await until(()=>page.locator('#mobile-pair-qr').isVisible(),'Local one-step code');
+    listenPort = await app.evaluate(({app}) => app.nawSyntheticMobile.port);
+    const png=await page.locator('#mobile-pair-qr').getAttribute('src');assert.ok(png?.startsWith('data:image/png;base64,'));
+    assert.equal(await page.locator('#mobile-pair-link').inputValue(),'');
+    assert.ok(await page.locator('#mobile-pair-qr').evaluate(img=>img.naturalWidth>0),'Local code renders under the real shell CSP');
+    const renderedCode = await page.locator('#mobile-pair-qr').screenshot({scale:'css'});
+    const link=execFileSync('/usr/bin/osascript',['-l','JavaScript',path.join(root,'app/tests/fixtures/mobile-qr-decode.jxa')],{input:renderedCode.toString('base64'),encoding:'utf8',timeout:5000,env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'},stdio:['pipe','pipe','pipe']}).trim();
+    const parsed=new URL(link);assert.ok(parsed.origin==='https://mobile.invalid'&&/^#pair=[A-Za-z0-9_-]{43}$/.test(parsed.hash),'Exact private synthetic origin and one-use fragment');
+    assert.equal((await request('/mobile/session',{actor:'wrong-synthetic-user'})).status,403);
+    const paired=await request('/mobile/pair',{method:'POST',body:{secret:parsed.hash.slice(6)}});assert.equal(paired.status,200);
+    const cookie=paired.headers['set-cookie'][0].split(';')[0];
+    const before=await request('/mobile/session',{cookie});assert.equal(before.status,200);assert.equal(before.value.sessions.length,sessionCount);
+    assert.ok(before.value.sessions.every(s=>s.actions.join(',')==='read,send,answer'));
+    await client.call('create',{provider:'codex',cwd:profile,name:'Synthetic future member',view:'chat'});
+    const after=await request('/mobile/session',{cookie});assert.equal(after.status,200);assert.equal(after.value.sessions.length,sessionCount+1);
+    const future=after.value.sessions.find(s=>s.name==='Synthetic future member');assert.ok(future);
+    await nativeFixture('bindSends',future.id);
+    const desktopDraft='Synthetic desktop draft / 草稿  \n';await client.call('draft',future.id,desktopDraft);
+    const nativeRead=await request('/mobile/read/'+future.id,{cookie});assert.equal(nativeRead.status,200);assert.equal(nativeRead.value.canSend,true);
+    const sent=await request('/mobile/send',{method:'POST',cookie,csrf:after.value.csrf,body:{contextId:nativeRead.value.contextId,requestId:randomUUID(),text:'FULL_PHONE_SYNTHETIC_MESSAGE'}});
+    assert.equal(sent.status,200);assert.equal(sent.value.status,'submitted');
+    assert.equal((await nativeFixture('stats',future.id)).stats.sends,1);
+    const updated=(await client.call('initial')).sessions.find(s=>s.id===future.id);assert.ok(updated.messages.some(m=>m.text==='FULL_PHONE_SYNTHETIC_MESSAGE'));assert.equal(updated.liveDraft,desktopDraft);
+    const workspace=await request('/mobile/workspace',{cookie});assert.equal(workspace.status,200);assert.equal(workspace.value.capabilities.push,false);assert.equal(workspace.value.capabilities.sensitiveDecisions,false);
+    assert.equal((await request('/mobile/push',{cookie})).status,403);
+    assert.equal((await request('/mobile/push',{method:'POST',cookie,csrf:after.value.csrf,body:{action:'subscribe',subscription:{}}})).status,403);
+    const shot=await page.locator('#setup-dialog').screenshot({scale:'css'});
+    await page.locator('#mobile-revoke').click();await until(async()=>!await page.locator('#mobile-pair-qr').isVisible(),'Synthetic revocation');
+    fs.writeFileSync(path.join(evidence,'images','one-step-local-code-revoked.png'),shot);
+    check('One human click generates a local Core Image code in the real hidden shell; pair, future native send and draft preservation work; reminders are granted, push and sensitive approvals remain off; test code revoked before evidence saved');
+    await page.locator('#close-setup').click();
+  } finally {
+    await app.evaluate(({app})=>app.nawSyntheticMobile.restore());
+  }
+}
 async function run() {
   fs.mkdirSync(path.join(evidence, 'images'), { recursive: true });
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Synthetic service');
@@ -181,6 +248,13 @@ async function run() {
   names.splice(57, 1, target);
   for (const name of names) await client.call('create', { provider: 'codex', cwd: profile, name, view: 'chat' });
   const sourceEntry = require('./fixtures/synthetic-source-boot.cjs').createSourceEntry({ profile, code: root, fixturePid: child.pid });
+  // Test-only CommonJS hook: no live Tailscale inspection and no production hook/flag.
+  fs.writeFileSync(path.join(sourceEntry,'mobile-test-hook.cjs'), `
+const {app}=require('electron'), carrier=require(${JSON.stringify(path.join(root,'app/mobile-carrier.cjs'))}), original=carrier.detect;
+let port;carrier.detect=async()=>{if(!port){const server=require('node:net').createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));port=server.address().port;await new Promise(r=>server.close(r));}return {origin:'https://mobile.invalid',actor:'synthetic-human',port};};
+app.nawSyntheticMobile={get port(){return port},restore(){carrier.detect=original}};
+`,{mode:0o600});
+  const entryFile=path.join(sourceEntry,'entry.cjs');fs.writeFileSync(entryFile,"require('./mobile-test-hook.cjs');\n"+fs.readFileSync(entryFile,'utf8'),{mode:0o600});
   await launch(sourceEntry);
   const pageErrors = []; page.on('pageerror', error => pageErrors.push(error.message));
   assert.ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focused: win.isFocused() })))).every(win => !win.visible && !win.focused));
@@ -188,6 +262,7 @@ async function run() {
   const listed = (await client.call('initial')).sessions.filter(s => s.nativeId && !s.archived && !s.nativeContextPending).length;
   assert.equal(listed, sessionCount, 'Every synthetic session is offered in Phone access');
   targetLabel = target + ' · ' + (await client.call('initial')).sessions.find(s => s.name === target).id.slice(0, 6);
+  await verifyFullConnect();
   for (const width of [1240, 850]) {
     viewportWidth = width; await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows().forEach(win => win.setContentSize(width, 820)), width);
     for (const lang of ['zh', 'en']) for (const theme of ['dark', 'light']) await variant(lang, theme);
@@ -195,6 +270,7 @@ async function run() {
   if (await page.locator('#mobile-session-filter').count()) {
     // A checked attempt remembers the address, Tailscale user and port; a restart brings them back.
     await openSettings('zh', 'dark');
+    await subset();
     for (const lang of ['zh', 'en']) {
       await page.locator('#ui-language').selectOption(lang);
       await page.locator('#mobile-actor').fill('https://device.example.invalid/mobile/#pair=' + 's'.repeat(43));
@@ -208,7 +284,7 @@ async function run() {
     }
     await page.locator('#ui-language').selectOption('zh');
     await page.locator('#mobile-origin').fill('https://device.example.invalid'); await page.locator('#mobile-actor').fill('synthetic-human');
-    if (await page.locator('#mobile-advanced').count()) await page.locator('#mobile-advanced > summary').click();
+    if (await page.locator('#mobile-advanced').count() && !await page.locator('#mobile-advanced').evaluate(el=>el.open)) await page.locator('#mobile-advanced > summary').click();
     await page.locator('#mobile-port').fill('0'); await page.locator('#mobile-carrier').check();
     await page.locator('#mobile-session-filter').fill('Q07'); await page.getByRole('checkbox', { name: targetLabel, exact: true }).check();
     await page.locator('#mobile-prepare').click();
@@ -222,7 +298,8 @@ async function run() {
     await app.close(); app = null;
     await launch(sourceEntry); await openSettings('zh', 'dark');
     const values = await page.evaluate(() => ['mobile-origin', 'mobile-actor', 'mobile-port', 'mobile-pair-link'].map(id => document.getElementById(id).value));
-    const unticked = await page.evaluate(() => [...document.querySelectorAll('#mobile-setup input[type=checkbox]')].every(input => !input.checked));
+    const unticked = await page.evaluate(() => [...document.querySelectorAll('#mobile-setup input[type=checkbox]:not(#mobile-all-sessions)')].every(input => !input.checked));
+    if (await page.locator('#mobile-all-sessions').count()) assert.equal(await page.locator('#mobile-all-sessions').isChecked(), true, 'Only the approved all-scope draft default changes after restart; old selected grants are not broadened');
     if (JSON.stringify(values) === JSON.stringify(['https://device.example.invalid', 'synthetic-human', '0', '']) && unticked) check('After a restart the address, Tailscale user and port are filled in; the link and every choice start empty');
     else fail(`restart recall ${JSON.stringify({ values, unticked })}`);
     await shoot('zh-dark-restart', '#mobile-setup > details');

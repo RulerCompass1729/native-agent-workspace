@@ -29,6 +29,8 @@ function mainMobile(profile, roomState, labels, background) {
   const human = new Map(), scheduled = [];
   const context = vm.createContext({ require: createRequire(path.join(root, 'app/main.cjs')), primary: true, quitting: false,
     dataDir: profile, roomState, sessionLabels: labels, recordReminders, operationsUnavailable: null, stewardRecord: null,
+    confirmationInbox: require('../app/confirmation-inbox.cjs'), tempReminders: null,
+    tempSummary: require('../app/temp-reminders.cjs').tempSummary, readTempSummary: require('../app/temp-reminders.cjs').readSummary,
     backgroundControl: background, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     queueSecretary: null, integratorRole: null, stewardRole: null, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => scheduled.push(true), noteHuman: id => human.set(id, Date.now()) },
@@ -128,6 +130,8 @@ async function scenario(lang) {
     await page.evaluate(async language => { location.hash = '#' + language + '/home'; await globalThis.nawPhone.refresh(); }, lang);
     await page.locator('a.row').first().waitFor();
     await page.waitForFunction(() => document.querySelectorAll('a.row').length === 3);
+    const unavailableCreateButtons = await page.locator('.section-title button').count();
+    check(lang + ' unsupported session and space creation controls are absent', () => assert.equal(unavailableCreateButtons, 0));
     check(lang + ' paired scope excludes unpaired native data', () => assert.ok(!page.url().includes(challenge.secret)));
     const cookies = await context.cookies(); check(lang + ' cookie remains Secure HttpOnly SameSite Strict', () => assert.ok(cookies.some(c => c.name === '__Host-naw-mobile' && c.secure && c.httpOnly && c.sameSite === 'Strict')));
     async function go(dest) { const hash = '#' + lang + '/' + dest; await page.evaluate(value => { location.hash = value; }, hash); await page.waitForFunction(expected => document.documentElement.lang.startsWith(expected.lang) && document.documentElement.dataset.route === expected.hash && document.documentElement.dataset.loading === 'false', { lang, hash }); }
@@ -159,7 +163,8 @@ async function scenario(lang) {
       assert.equal(original.disposition, 'expired'); assert.equal(original.state, 'not-executed');
     });
     assert.equal(await page.locator('.confirm-actions button:not(:disabled)').count(), 0);
-    await go('confirm/' + encodeURIComponent(ids[1] + ':' + completedId));
+    const completed = projected.confirmations.find(card => card.operationId === completedId); assert.ok(completed);
+    await go('confirm/' + encodeURIComponent(completed.id));
     const completedText = await page.locator('.card-detail').innerText();
     check(lang + ' completed operation retains its original outcome', () => { assert.ok(completedText.includes(lang === 'zh' ? '操作已完成' : 'Action completed')); assert.ok(!completedText.includes(lang === 'zh' ? '已过期' : 'Expired')); });
     await go('reminders'); await page.locator('.reminder-card[data-record]').first().waitFor(); await shot('reminders');

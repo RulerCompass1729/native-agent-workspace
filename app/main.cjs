@@ -229,12 +229,13 @@ function stopAppMobileListener() {
 }
 async function beginAppMobile(options) {
   const keys = ['actor', 'origin', 'selection', 'replace', 'port', 'carrierConfirmed'];
-  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => ![...keys, 'workspace'].includes(key)) || keys.some(key => !Object.hasOwn(options, key)) ||
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => ![...keys, 'workspace', 'all'].includes(key)) || keys.some(key => !Object.hasOwn(options, key)) || options.all !== undefined && typeof options.all !== 'boolean' ||
       options.carrierConfirmed !== true || !Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535 || options.port !== 0 && options.port < 1024 || mobileOpening) throw Error('Mobile setup is unavailable or incomplete.');
   const broker = appMobileBroker(), handler = require('./mobile-http.cjs').createMobileHandler({ broker, origin: options.origin, actor: options.actor });
   const generation = ++mobileGeneration; mobileOpening = true; let authorityChanged = false;
   try {
-    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.selection, replace: options.replace,
+    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.all ? undefined : options.selection, replace: options.replace,
+      ...(options.all ? { all: true } : {}),
       ...(Object.hasOwn(options, 'workspace') ? { workspace: options.workspace } : {}) });
     authorityChanged = true;
     if (generation !== mobileGeneration || quitting) throw Error('Mobile setup cancelled.');
@@ -263,6 +264,29 @@ async function beginAppMobile(options) {
     else if (generation === mobileGeneration) watchAppMobile();
     throw Error('Mobile pairing was not confirmed. Check the private carrier and revoke access if necessary.');
   } finally { mobileOpening = false; }
+}
+async function detectAppMobile(context, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, 'sharedHostConfirmed') || typeof value.sharedHostConfirmed !== 'boolean') throw uiError('error.mobile.carrierUnavailable');
+  const savedPort = Number(context.view?.mobileEndpoint?.port);
+  const rememberedPort = Number.isSafeInteger(savedPort) && savedPort >= 1024 && savedPort <= 65535 ? savedPort : 48765;
+  try { return await require('./mobile-carrier.cjs').detect({ port: rememberedPort, sharedHostConfirmed: value.sharedHostConfirmed }); }
+  catch (error) { throw uiError(error.code === 'MOBILE_SHARED_HOST' ? 'error.mobile.sharedHost' : 'error.mobile.carrierUnavailable'); }
+}
+async function connectAppMobile(context, value) {
+  const carrier = await detectAppMobile(context, value);
+  // No renderer-supplied address, login, scope list, or arbitrary listener port.
+  const result = await beginAppMobile({ ...carrier, selection: [], all: true, replace: false, carrierConfirmed: true });
+  const generation = mobileGeneration;
+  try {
+    const fresh = await detectAppMobile(context, value);
+    if (JSON.stringify(carrier) !== JSON.stringify(fresh) || generation !== mobileGeneration || quitting || !primary) throw Error('Changed mobile carrier');
+    const qr = await require('./mobile-qr.cjs').generate(carrier.origin + '/mobile/#pair=' + result.secret);
+    if (generation !== mobileGeneration || result.expiresAt <= Date.now() || quitting || !primary) throw Error('Expired local code');
+    return { qr, expiresAt: result.expiresAt };
+  } catch {
+    if (generation === mobileGeneration) revokeAppMobile();
+    throw uiError('error.mobile.carrierUnavailable');
+  }
 }
 function revokeAppMobile() {
   mobileGeneration++; clearTimeout(mobileExpiry); mobileExpiry = undefined;
@@ -2466,6 +2490,8 @@ async function boot() {
   });
   register('mobilePairing', (c, selection) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
+    // The retained manual API must not bypass the new all-scope carrier check.
+    if (selection && selection.all !== undefined) throw uiError('error.mobile.carrierUnavailable');
     return beginAppMobile(selection);
   });
   register('mobileRevoke', c => {
@@ -2474,6 +2500,13 @@ async function boot() {
   });
   applicationHandlers.delete('mobilePairing');
   applicationHandlers.delete('mobileRevoke');
+  for (const [name, action] of Object.entries({ mobileDetect: detectAppMobile, mobileConnect: connectAppMobile })) {
+    register(name, (c, value) => {
+      if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
+      return action(c, value);
+    });
+    applicationHandlers.delete(name);
+  }
   for (const [method, name] of Object.entries({ mobileApprovalStatus: 'approvalStatus', mobileApprovalBegin: 'approvalBegin', mobileApprovalConfirm: 'approvalConfirm', mobileApprovalEnable: 'approvalEnable', mobileApprovalRevoke: 'approvalRevoke' })) {
     register(method, (c, value) => {
       if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');

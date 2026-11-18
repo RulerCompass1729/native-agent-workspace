@@ -33,6 +33,7 @@ class MobileWorkspace {
     Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now });
   }
   grant(client, value) {
+    if (exact(value, ['allRooms', 'records']) && value.allRooms === true && typeof value.records === 'boolean') return structuredClone(value);
     if (!exact(value, ['roomIds', 'records']) || !Array.isArray(value.roomIds) || value.roomIds.length > 32 ||
         value.roomIds.some(id => !identifier(id)) || new Set(value.roomIds).size !== value.roomIds.length || typeof value.records !== 'boolean') throw denied();
     const state = this.snapshot(client);
@@ -42,6 +43,7 @@ class MobileWorkspace {
   async read(client, grant, scopes) {
     await client.refresh();
     const state = this.snapshot(client), permitted = new Map(), cards = new Map(), originals = new Map();
+    grant = this.resolveGrant(grant, state);
     for (const scope of scopes.filter(s => s.actions.includes('read'))) {
       const record = state.sessions.find(s => s.id === scope.sessionId);
       if (!record || record.archived || record.nativeContextPending || record.nativeId !== scope.nativeId) continue;
@@ -140,6 +142,7 @@ class MobileWorkspace {
   }
   async action(client, grant, value, valid) {
     if (typeof valid !== 'function') throw denied();
+    grant = this.resolveGrant(grant, this.snapshot(client));
     if (value.action === 'recordAcknowledge') {
       if (!grant.records || !exact(value, ['requestId', 'action', 'record', 'kind', 'level'])) throw denied();
       const source = this.records.status(null, client), record = source.records.find(r => r.record === value.record);
@@ -169,6 +172,12 @@ class MobileWorkspace {
     }
     await this.broadcast(); this.schedule();
     return { status: 'complete', itemId };
+  }
+  resolveGrant(grant, state) {
+    if (exact(grant, ['allRooms','records']) && grant.allRooms === true && typeof grant.records === 'boolean') {
+      return { roomIds: (state.rooms || [state.room]).filter(r => r && !r.archived).map(r => r.id), records: grant.records };
+    }
+    return grant;
   }
 }
 module.exports = { MobileWorkspace };

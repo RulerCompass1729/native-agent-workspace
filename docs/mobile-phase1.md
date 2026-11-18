@@ -4,6 +4,39 @@ This delivery serves the product's single-entry vision: use the same NAW session
 spaces, queues and record reminders from a phone. It adds no provider runtime,
 model, background polling, telemetry destination or dependency.
 
+## Candidate: one-step pairing, first implementation stage
+
+The desktop's **Connect phone** action verifies an existing private Tailscale
+Serve mapping and the native login before opening its loopback listener. It uses
+an existing CLI entry, never the GUI bundle executable, and runs only `status`
+and `serve status`. It never edits Serve, Funnel, DNS or ACLs. Ambiguous mappings,
+unavailable identity and unknown shared-host trust fail closed. A shared-host
+exception still needs an explicit choice in Advanced settings; cookies are not
+isolated by port.
+
+Core Image generates the one-use QR locally through an OS helper. Its payload is
+piped to the helper, not put in process arguments, logs, files or a remote QR
+service. The normal response contains image pixels and expiry, not a plaintext
+link. QR pixels are cleared on expiry, closure, revocation or a changed setup.
+
+The default **intent for a new pairing** covers current and future sessions
+(read/send/answer), spaces, queue actions and record reminders. Opening Settings
+does not grant access or broaden an existing pairing. The all policy lives only
+in Main's current pairing lifetime. Observed concrete native tuples are mirrored
+into the strict v1 authority for already-running backends; no backend receives a
+wildcard ticket. A v2 empty bootstrap handles a pairing before the first native
+session exists. Native identity, action, owner, generation, expiry, prepared-input
+and human-input checks still apply. New trusted backend membership invalidates
+old read contexts before rebinding. Scope storage remains bounded; no silent
+truncation is permitted.
+
+This stage keeps sensitive enrollment separate and **forbids push on the server**
+for an all-scope pairing, even with records access. The phone also omits its push
+controls in this mode. The next stage owns QR-authorized first-key enrollment and
+candidate-to-active phone replacement. This checkpoint is not the full workflow
+or a daily installation. Session/space `+` controls that only explained a Mac-only
+action are now hidden; no creation API is added.
+
 ## Delivered boundary
 
 The six Chinese/English views use Main's `displayState` projection. Native reads,
@@ -12,7 +45,7 @@ prepared-submission protocol. The queue uses `RoomState` and the desktop assigne
 gate; record acknowledgements use the desktop bell's source. Phone sends preserve
 the desktop draft and enter the existing human quiet interval.
 
-The desktop person must explicitly select each native session, its send/answer
+In the retained individual-selection mode, the desktop person explicitly selects each native session, its send/answer
 permissions, shared spaces and record reminders. A room grant includes shared
 messages, member metadata and queue management, not members' private conversations.
 The new workspace grant and its idempotent request receipts live only in Main's
