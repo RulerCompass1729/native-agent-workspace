@@ -865,6 +865,7 @@ function bindClient(context) {
     // Each writer on its own: one that cannot write neither stops the other nor holds state.
     try { butlerIngress?.observeTerminalDialogs(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeNativeQuestions(data?.sessions); } catch { /* Retried on the next state. */ }
+    try { butlerIngress?.observeConnectionFailures(data?.sessions); } catch { /* Retried on the next state. */ }
     const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });
     if (wrote.some(Boolean)) broadcastRoom().catch(() => {});
     if (!context.background) placeOpened(client, data).catch(() => {});

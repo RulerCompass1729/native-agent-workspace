@@ -13,6 +13,42 @@ function fixture(t) {
   const room = new RoomState(directory), ledger = new ButlerLedger(directory);
   return { directory, room, ledger, ingress: new ButlerIngress(directory, { roomState: room, ledger }) };
 }
+function exhaustedConnection(extra = {}) {
+  return { id: 'agent-a', provider: 'claude', nativeId: 'native-a', state: 'error', liveDraft: '',
+    terminalState: { alive: true }, capacityRecovery: { nativeId: 'native-a', turnId: 'failed-a', reason: 'connection', status: 'exhausted', attempt: 3, due: 0 }, ...extra };
+}
+test('a current exhausted connection reaches the existing failure ledger once, including after ingress restart', t => {
+  const f = fixture(t), member = exhaustedConnection();
+  f.ingress.observeConnectionFailures([member]);
+  const events = f.ledger.eventsAfter(null).events;
+  assert.equal(events.length, 1); assert.equal(events[0].kind, 'failure');
+  assert.deepEqual(events[0].payload, { memberId: member.id, reason: 'connection-retry-exhausted' });
+  const bytes = fs.readFileSync(f.ledger.file);
+  f.ingress.observeConnectionFailures([member]);
+  const restored = new ButlerIngress(f.directory, { roomState: f.room }); restored.observeConnectionFailures([member]);
+  assert.deepEqual(fs.readFileSync(f.ledger.file), bytes, 'Duplicate live snapshots never rewrite or requeue the episode');
+  assert.equal(restored.ledger.eventsAfter(null).events.length, 1);
+  restored.observeConnectionFailures([exhaustedConnection({ nativeId: 'native-b' })]);
+  assert.equal(restored.ledger.eventsAfter(null).events.length, 1, 'The old native binding is rejected');
+  restored.observeConnectionFailures([exhaustedConnection({ capacityRecovery: { ...member.capacityRecovery, turnId: 'failed-b' } })]);
+  assert.equal(restored.ledger.eventsAfter(null).events.length, 2, 'A different current failed turn is a new episode');
+});
+for (const [label, change] of [
+  ['another provider', { provider: 'codex' }], ['working', { state: 'working' }], ['idle', { state: 'idle' }],
+  ['archived', { archived: true }], ['backend ended', { backendUnavailable: true }], ['disconnected', { transportDisconnected: true }],
+  ['new context', { nativeContextPending: {} }], ['new input', { pendingTag: 'new-input' }], ['new native turn', { activeTurnId: 'new-turn' }],
+  ['draft', { liveDraft: 'Unsent private words' }], ['approval', { approval: {} }], ['native approval', { nativeApproval: {} }],
+  ['native input boundary', { nativeInputRequired: true }], ['not alive', { terminalState: { alive: false } }],
+]) test('connection exhaustion cannot create a stale failure through ' + label, t => {
+  const f = fixture(t); f.ingress.observeConnectionFailures([exhaustedConnection(change)]);
+  assert.deepEqual(f.ledger.eventsAfter(null).events, []);
+});
+for (const change of [{ nativeId: 'old-native' }, { turnId: '' }, { attempt: 2 }, { attempt: '3' }, { status: 'scheduled' },
+  { reason: 'capacity' }, { reason: 'forbidden' }, { reason: 'routing' }, { due: 1 }])
+test('only the exact current connection exhaustion descriptor is a failure: ' + JSON.stringify(change), t => {
+  const f = fixture(t), row = exhaustedConnection(); row.capacityRecovery = { ...row.capacityRecovery, ...change };
+  f.ingress.observeConnectionFailures([row]); assert.deepEqual(f.ledger.eventsAfter(null).events, []);
+});
 function settle(room, status = 'waiting', reason = '', question = 'Approve the synthetic change?') {
   const itemId = room.queueAdd('Synthetic task', null);
   room.queueMarkSent('shared', itemId, 'agent-a', 'Synthetic agent', NOW);

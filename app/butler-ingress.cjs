@@ -63,9 +63,12 @@ function storedQueueSource(roomId, event) {
 class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
-    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map();
+    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.connectionFailures = new Map();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
+      const failure = /^connection-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
+      if (failure && event.kind === 'failure' && event.payload.reason === 'connection-retry-exhausted' && event.sourceRef === `connection-exhausted:${event.payload.memberId}`)
+        this.connectionFailures.set(event.payload.memberId, failure[1]);
       const question = /^native-question:([a-f0-9]{64}):(open|ended)$/.exec(event.eventId);
       if (question && event.sourceRef === `native-question:${event.payload.memberId}`) {
         if (event.kind === 'blocked' && event.payload.reason === 'native-question') this.nativeQuestions.set(question[1], { memberId: event.payload.memberId });
@@ -128,6 +131,23 @@ class ButlerIngress {
       if (failed) throw unavailable();
       this.errors.delete('source-store'); return { status: 'recorded', count };
     } catch { this.errors.set('source-store', 'source-unavailable'); throw unavailable(); }
+  }
+  // The backend exports this descriptor only while its failed native turn and
+  // the original input/control/membership guards still match. Record a fact,
+  // without settling/replaying a queue item or copying the native error body.
+  observeConnectionFailures(sessions = []) {
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      const r = s?.capacityRecovery;
+      if (s?.provider !== 'claude' || s.state !== 'error' || s.archived || s.backendUnavailable || s.transportDisconnected || s.nativeContextPending ||
+          s.liveDraft || s.pendingTag || s.activeTurnId || s.approval || s.approvalOverflow || s.claudeQuestion || s.nativeApproval || s.nativeInputRequired ||
+          !s.terminalState?.alive || typeof s.id !== 'string' || !s.id || typeof s.nativeId !== 'string' || !s.nativeId ||
+          r?.reason !== 'connection' || r.status !== 'exhausted' || r.attempt !== 3 || r.due !== 0 || r.nativeId !== s.nativeId || typeof r.turnId !== 'string' || !r.turnId) continue;
+      const identity = hash([s.id, s.nativeId, r.turnId]);
+      if (this.connectionFailures.get(s.id) === identity) continue;
+      this.record({ eventId: `connection-exhausted:${identity}`, sourceRef: `connection-exhausted:${s.id}`, kind: 'failure',
+        payload: { memberId: s.id, reason: 'connection-retry-exhausted' } });
+      this.connectionFailures.set(s.id, identity);
+    }
   }
   // Terminal titles only, explicitly requested for stewardEvents. No transcript or model call.
   observeTerminalDialogs(sessions = []) {
