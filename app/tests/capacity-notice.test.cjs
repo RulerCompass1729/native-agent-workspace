@@ -144,12 +144,13 @@ test('capacity notices localize only owned labels without changing raw recovery 
   }
 });
 
-test('a refused request (403) at its limit is notified and badged like the other causes, in its own words', () => {
+for (const reason of ['forbidden', 'connection'])
+test(`${reason} at its limit is notified and badged like the other causes, in its own words`, () => {
   for (const language of ['zh', 'en']) {
-    const row = record({ capacityRecovery: { ...record().capacityRecovery, reason: 'forbidden' } }), h = harness(language); h.fire([row]);
+    const row = record({ capacityRecovery: { ...record().capacityRecovery, reason } }), h = harness(language); h.fire([row]);
     assert.deepEqual(h.delivered.map(value => ({ ...value })), [{ title: locale.format(language, 'os.capacityTitle'), body: locale.format(language, 'os.capacityBody') }]);
     const refused = status(row, true, true, language);
-    assert.ok(refused.endsWith(locale.format(language, 'capacityBadge.forbiddenStopped') + locale.format(language, 'capacityBadge.retried', { count: 3 })));
+    assert.ok(refused.endsWith(locale.format(language, `capacityBadge.${reason}Stopped`) + locale.format(language, 'capacityBadge.retried', { count: 3 })));
     assert.ok(!refused.includes(locale.format(language, 'capacityBadge.capacityStopped')));
     assert.equal(status(row, false, true, language), status(record(), false, true, language), 'Only the opt-in badge differs by cause');
   }

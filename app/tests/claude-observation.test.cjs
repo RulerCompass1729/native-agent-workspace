@@ -1947,6 +1947,66 @@ test('missing native row gets at most five bounded reads, no delayed surprise re
 const refusedText = 'Please run /login · API Error: 403 Attention Required! | Cloudflare';
 const refusedRow = { apiErrorStatus: 403, error: 'authentication_failed' };
 const displayText = (language, message) => require('../ui-locale.js').displayText(language, message.text, message.uiMessage);
+const connectionRow = { apiErrorStatus: null, apiError: 'connection_failed', error: 'server_error' };
+for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end'])
+for (const apiErrorStatus of [null, undefined])
+for (const text of ["API Error: Can't reach the API server (ENOTFOUND)", 'Different localized native error words'])
+test(`Claude typed connection failure crosses the real bridge without matching prose: ${order} ${apiErrorStatus === null ? 'null' : 'omitted'} ${text}`, async t => {
+  const { f, ends, turn } = await capacityThroughBridge(t, '2.1.323', { ...connectionRow, apiErrorStatus }, order, text);
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'connectionFailed' }]);
+  assert.ok(ends.every(event => !Object.hasOwn(event, 'text') && !Object.hasOwn(event, 'errorMessage')), 'Failure events carry typed metadata rather than the native error body');
+});
+for (const change of [{ apiError: 'unknown_error' }, { apiError: null }, { apiError: undefined },
+  { apiErrorStatus: 0 }, { apiErrorStatus: 'null' }, { apiErrorStatus: 500 },
+  { isApiErrorMessage: false }, { isSidechain: true }, { message: { model: 'ordinary-model' } }])
+test('Claude connection continuation rejects other typed metadata: ' + JSON.stringify(change), t => {
+  const f = capacityWorkspace(t, undefined, { ...connectionRow, ...change });
+  f.fail({ errorRowUnclassified: true }); f.stop(); f.w.tickCapacity(Date.now() + 86400000);
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.events.filter(event => event.errorInfo === 'connectionFailed'), []);
+});
+for (const boundary of freshFailureBoundaries)
+test('Claude connection failure keeps the existing fresh-failure guard: ' + boundary,
+  t => freshFailureBoundary(t, boundary, connectionRow, 'connectionFailed'));
+for (const boundary of [...scheduledBoundaries, 'takeover', 'member-change'])
+test('Claude connection continuation yields to ' + boundary, t => scheduledYields(t, boundary, connectionRow));
+test('Claude connection failures share 2/5/10 minutes, stop after three and report every failed end once', async t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.fail({ errorRowUnclassified: true }); f.stop();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const recovery = f.w.capacityStatus(f.s.id); assert.equal(recovery?.reason, 'connection'); assert.equal(recovery.attempt, attempt);
+    assert.ok(recovery.due - Date.now() > [120000, 300000, 600000][attempt] - 1000);
+    f.w.tickCapacity(recovery.due - 1); assert.equal(f.sent.length, attempt);
+    f.w.tickCapacity(recovery.due); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.sent, Array(attempt + 1).fill('继续'), 'Only a new continue, never the original task');
+    nextFailure(f, null);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted');
+  assert.equal(f.s.state, 'error'); assert.equal(f.events.length, 4);
+  assert.ok(f.events.every(event => event.status === 'failed' && event.errorInfo === 'connectionFailed'));
+  assert.equal(new Set(f.events.map(event => event.turnId)).size, 4);
+  f.stop(); f.r.reportCapacityFailure(true); assert.equal(f.events.length, 4);
+  f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+  const limit = f.s.messages.filter(message => message.uiMessage?.key === 'notice.capacityLimitConnection');
+  assert.equal(limit.length, 1);
+  assert.equal(limit[0].text, '无法连接 API 服务，自动继续已达 3 次上限，需要你处理。');
+  assert.equal(displayText('en', limit[0]), 'The API connection failed, and automatic continuation reached its limit of 3 attempts. Your action is needed.');
+  const continues = f.s.messages.filter(message => message.uiMessage?.key === 'notice.capacityAutoContinueConnection');
+  assert.equal(continues.length, 3);
+  assert.match(displayText('en', continues[0]), /Automatic continuation after an API connection failure \(attempt 1\)/);
+});
+test('connection, capacity and forbidden failures use one shared budget rather than resetting it by cause', async t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.fail(); f.stop();
+  for (const [attempt, reason, status] of [[0, 'connection', 529], [1, 'capacity', 403], [2, 'forbidden', null]]) {
+    const recovery = f.w.capacityStatus(f.s.id); assert.equal(recovery.reason, reason); assert.equal(recovery.attempt, attempt);
+    f.w.tickCapacity(recovery.due); await new Promise(resolve => setImmediate(resolve)); nextFailure(f, status);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); assert.equal(f.w.capacityStatus(f.s.id).reason, 'connection');
+  assert.deepEqual(f.sent, ['继续', '继续', '继续']);
+});
+test('only Claude admits the typed connection failure; another provider never acquires this retry reason', t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.s.provider = 'codex'; f.fail(); f.stop();
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+});
 for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end']) for (const version of ['2.1.322', '2.1.323'])
 for (const [label, row] of [['authentication_failed', refusedRow], ['network_edge_blocked', { apiErrorStatus: 403, error: 'invalid_request', apiError: 'network_edge_blocked' }]])
 test(`a Claude request refused with a typed 403 is reported for the bounded continuation, through the real bridge: ${version} ${order} ${label}`, async t => {

@@ -474,7 +474,7 @@ function claudeGeneratedTitle(file, nativeId) {
   } catch { /* no transcript yet */ } finally { if (fd !== undefined) fs.closeSync(fd); }
   return null;
 }
-// Correlate the ordered failure UUID with native's typed HTTP status, never
+// Correlate the ordered failure UUID with native's typed failure metadata, never
 // the error prose. Reuse the bounded journal read used for native titles.
 // 529 is a model at capacity. 403 is a request the server or the network edge in front of it refused: measured
 // 2026-11-13 on 2.1.322 and 2.1.323 as an intermittent block that later requests of the same session passed. The
@@ -499,7 +499,10 @@ function claudeFailureCause(file, nativeId, messageId) {
         if (row.uuid !== messageId) continue;
         if (row.type !== 'assistant' || row.sessionId !== nativeId || row.isSidechain !== false ||
           row.isApiErrorMessage !== true || row.message?.model !== '<synthetic>') return false;
-        return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden' : false;
+        // Native 2.1.323 omits the HTTP status on a connection error; explicit
+        // null is the other no-status encoding. No other value is admitted.
+        return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden'
+          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && row.apiError === 'connection_failed' ? 'connectionFailed' : false;
       } catch { /* torn line: no authority to retry */ }
     }
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
@@ -1085,10 +1088,10 @@ class Claude extends EventEmitter {
     turn.failureReads = (turn.failureReads || 0) + 1;
     turn.pendingFailure = cause === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
-    // The bridge passes on a failure row whose prose it does not know only so that this read can find a typed 403
-    // (native words it "Please run /login · API Error: 403 …"). Any other such row leaves the turn as it was before
-    // these rows were passed on: no failed end is reported from it, and an overload is not taken from it either.
-    if (turn.errorRowUnclassified && cause !== 'requestForbidden') return;
+    // An unknown error body grants nothing: only the saved typed 403 or the
+    // exact no-status connection_failed pair can admit this otherwise unnamed
+    // failure. Other unknown rows retain their existing behavior.
+    if (turn.errorRowUnclassified && cause !== 'requestForbidden' && cause !== 'connectionFailed') return;
     turn.endReported = true;
     if (this.startedRootTurn?.id === turn.id) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
     this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: cause || null });

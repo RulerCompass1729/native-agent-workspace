@@ -410,7 +410,7 @@ function notifyCapacity(snapshot, win) {
         s.approval || s.approvalOverflow || s.claudeQuestion || s.nativeApproval || s.nativeInputRequired ||
         !['idle', 'error'].includes(s.state) || recovery?.nativeId !== s.nativeId ||
         typeof recovery.turnId !== 'string' || !recovery.turnId || recovery.status !== 'exhausted' ||
-        recovery.attempt !== 3 || !['capacity', 'routing', 'forbidden'].includes(recovery.reason)) continue;
+        recovery.attempt !== 3 || !['capacity', 'routing', 'forbidden', 'connection'].includes(recovery.reason)) continue;
     const key = JSON.stringify([recovery.nativeId, recovery.turnId]);
     let notices = capacityNotifications.get(s.id);
     if (!notices) capacityNotifications.set(s.id, notices = { seen: new Set(), active: new Set() });
