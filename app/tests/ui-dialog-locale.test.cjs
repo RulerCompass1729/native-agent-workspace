@@ -31,7 +31,10 @@ class Element {
     return this.childNodes.flatMap(child => [...(matches(child) ? [child] : []), ...(child.querySelectorAll?.(selector) || [])]);
   }
   addEventListener() {}
+  show() { this.open = true; }
   showModal() { this.open = true; }
+  matches() { return false; }
+  closest() { return { classList: { toggle() {} } }; }
   close() { this.open = false; }
 }
 
@@ -40,7 +43,7 @@ const otherRoom = '11111111-1111-4111-8111-111111111111';
 function fixture() {
   let language = 'zh';
   const root = new Element(), elements = new Map(), calls = [], notices = [];
-  const document = { activeElement: null, createElement: tag => node(tag), createTextNode: text => ({ nodeType: 3, textContent: text }) };
+  const document = { querySelector() { return null; }, activeElement: null, createElement: tag => node(tag), createTextNode: text => ({ nodeType: 3, textContent: text }) };
   const node = (tag, text, cls) => { const el = new Element(tag, text); el.className = cls || ''; el.focus = () => { document.activeElement = el; }; return el; };
   const $ = id => { if (!elements.has(id)) { const el = node('div'); el.id = id; elements.set(id, el); root.append(el); } return elements.get(id); };
   const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);

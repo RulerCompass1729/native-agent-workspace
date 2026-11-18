@@ -1082,7 +1082,7 @@ const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnava
   ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
   (!s.terminalAvailable && (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
-const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !renameTarget && !document.querySelector('dialog[open]');
+const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !renameTarget && !document.querySelector('dialog:modal, dialog[open]:not(#setup-dialog)');
 function updateState(next) {
   const before = new Map((state?.sessions || []).map(s => [s.id, s]));
   state = projectSpace({ ...state, ...next });
@@ -2179,6 +2179,18 @@ const dialogTickets = new WeakMap();
 function openTransientDialog(id) {
   const dialog = $(id), ticket = { dialog }; dialogTickets.set(dialog, ticket);
   if (!dialog.open) dialog.showModal(); return ticket;
+}
+function openSetupDialog() {
+  const dialog = $('setup-dialog');
+  // A settings link inside another modal (for example Create) keeps that
+  // dialog's focus boundary and draft. Ordinary settings never make chat inert.
+  const modal = Boolean(document.querySelector('dialog:modal:not(#setup-dialog)'));
+  if (dialog.open && dialog.matches(':modal') !== modal) dialog.close();
+  const ticket = { dialog }; dialogTickets.set(dialog, ticket);
+  dialog.setAttribute('closedby', modal ? 'any' : 'none');
+  $('header').closest('main').classList.toggle('settings-panel-open', !modal);
+  if (!dialog.open) { if (modal) dialog.showModal(); else dialog.show(); }
+  return ticket;
 }
 function currentDialogTicket(ticket) {
   return Boolean(ticket && ticket.dialog.isConnected && ticket.dialog.open && dialogTickets.get(ticket.dialog) === ticket);
@@ -3730,7 +3742,9 @@ function renderInterfaceLanguage() {
   status.textContent = warningKey ? uiText(warningKey) : ''; status.hidden = !warningKey;
   $('setup-title').textContent = uiText('common.settings');
   $('setup-intro').textContent = uiText('setup.intro');
-  $('refresh-setup').textContent = uiText('setup.recheck'); $('close-setup').textContent = uiText('common.done');
+  $('refresh-setup').textContent = uiText('setup.recheck');
+  $('close-setup').setAttribute('aria-label', `${uiText('common.close')} · ${uiText('common.settings')}`);
+  $('close-setup').title = uiText('common.close');
   const entry = $('setup-button');
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
@@ -3774,7 +3788,7 @@ function renderSetupPrograms(localeOnly = false) {
   versionText();
 }
 async function showSetup() {
-  const ticket = setupTicket = openTransientDialog('setup-dialog');
+  const ticket = setupTicket = openSetupDialog();
   mobileSetup.open();
   setupLoading = true; setupFailure = null;
   renderInterfaceLanguage(); renderSetupPrograms();
@@ -6797,7 +6811,12 @@ for (const dialog of document.querySelectorAll('dialog')) {
       $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
+      $('header').closest('main').classList.remove('settings-panel-open');
       mobileSetup.close();
+      if (inputFocusAllowed()) {
+        const reply = current() ? chatInput() : spaceId ? $('shared-input') : null;
+        if (reply?.getClientRects().length && !reply.disabled) reply.focus({ preventScroll: true });
+      }
       $('setup-status').replaceChildren(); $('version-info').textContent = '';
     } else if (dialog.id === 'notes-dialog') {
       $('room-notes-text').value = ''; ui.display.unbind($('notes-error')); $('notes-error').textContent = ''; $('notes-error').hidden = true;
@@ -6819,6 +6838,12 @@ for (const dialog of document.querySelectorAll('dialog')) {
 }
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
+$('setup-dialog').addEventListener('keydown', event => {
+  // Do not consume Escape from chat/the terminal, or an IME composition.
+  if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229 && !$('setup-dialog').matches(':modal')) {
+    event.preventDefault(); event.stopPropagation(); $('setup-dialog').close();
+  }
+});
 sidebarHoverCard = (() => {
   const list = $('session-list'), surface = list?.closest('.naw') || list?.closest('.sidebar');
   return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: surface, surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;

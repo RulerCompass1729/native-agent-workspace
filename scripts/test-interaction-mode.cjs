@@ -54,7 +54,7 @@ async function run() {
   await until(async () => (await fixture()).inputs.length === 2, 'Terminal receives its own Tab and arrow');
   assert.deepEqual((await fixture()).inputs.map(input => input.data), ['\t', '\x1b[D']); check('Terminal Tab and arrow still reach the synthetic native runtime');
   await menu('chat'); await until(async () => await page.locator('#chat-tab').getAttribute('aria-pressed') === 'true', 'Native View menu to chat'); check('Real native menu / preload / renderer route both modes');
-  await page.locator('#setup-button').click(); await menu('terminal'); assert.equal(await page.locator('#chat-tab').getAttribute('aria-pressed'), 'true'); assert.equal(await page.locator('#setup-dialog').isVisible(), true); await page.keyboard.press('Escape'); check('Mode menu does not switch through an open modal');
+  await page.locator('#new-session').click(); await menu('terminal'); assert.equal(await page.locator('#chat-tab').getAttribute('aria-pressed'), 'true'); assert.equal(await page.locator('#create-dialog').isVisible(), true); await page.keyboard.press('Escape'); check('Mode menu does not switch through an open modal');
   await page.locator('#terminal-maximize').click(); await page.locator('#return-to-chat').waitFor({ state: 'visible' });
   await page.locator('#terminal-tab').focus(); await page.keyboard.press('Tab'); assert.equal(await page.evaluate(() => document.activeElement.id), 'return-to-chat');
   await page.keyboard.press('Enter'); await page.locator('#conversation-pane').waitFor({ state: 'visible' });

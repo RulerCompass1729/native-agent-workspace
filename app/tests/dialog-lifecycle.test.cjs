@@ -15,7 +15,10 @@ class Element {
   querySelector(selector) { assert.equal(selector, '.rail-label'); return this.rail ||= new Element(); }
   append(...values) { this.children.push(...values); }
   replaceChildren(...values) { this.children = values; }
-  showModal() { this.open = true; }
+  show() { this.open = true; this.modal = false; }
+  showModal() { this.open = true; this.modal = true; }
+  matches(selector) { assert.equal(selector, ':modal'); return this.open && this.modal; }
+  closest(selector) { assert.equal(selector, 'main'); return this.main ||= { classList: { toggle() {} } }; }
   close() { this.open = false; }
 }
 const pending = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { resolve, reject, promise }; };
@@ -29,6 +32,7 @@ function fixture() {
   assert.ok(showStart >= 0 && showEnd > showStart);
   ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
   const context = vm.createContext({ spaceName: room => room?.name, $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
+    document: { querySelector(selector) { assert.equal(selector, 'dialog:modal:not(#setup-dialog)'); return [...elements.values()].find(e => e !== $('setup-dialog') && e.open && e.modal) || null; } },
     ui, uiText, activityStream: undefined,
     toast: text => messages.push(text), mobileSetup: { open() {}, close() {} }, toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
@@ -44,6 +48,33 @@ const preflight = () => ({ paths: {}, configured: {} });
 test('the actual notes button passes selected space rather than treating its click event as a space ID', () => {
   const f = fixture(); f.$('room-notes').onclick({ type: 'click' });
   assert.equal(f.$('notes-dialog').open, true); assert.equal(f.$('room-notes-text').value, 'Saved original');
+});
+test('ordinary settings leave the conversation interactive while real dialogs stay modal', async () => {
+  const f = fixture(), work = f.context.showSetup();
+  assert.equal(f.$('setup-dialog').matches(':modal'), false, 'ordinary settings must not make the conversation inert');
+  f.calls[0].resolve(preflight()); await work;
+  f.context.openNotes(); assert.equal(f.$('notes-dialog').matches(':modal'), true);
+});
+test('settings opened from the create dialog preserve the existing modal and its draft', async () => {
+  const f = fixture(); f.$('create-dialog').showModal(); f.$('session-name').value = 'Unsent creation draft';
+  const work = f.context.showSetup();
+  assert.equal(f.$('setup-dialog').matches(':modal'), true);
+  assert.equal(f.$('create-dialog').open, true); assert.equal(f.$('session-name').value, 'Unsent creation draft');
+  f.calls[0].resolve(preflight()); await work;
+});
+test('input focus permits only nonmodal settings and still refuses every other open dialog', () => {
+  const expression = source.match(/const inputFocusAllowed = (.*);/)[1];
+  for (const kind of ['none', 'settings', 'modal-settings', 'approval', 'other']) {
+    const allowed = vm.runInNewContext('(' + expression + ')()', {
+      sessionMenu: null, roomMenu: null, contentMenu: null, renameTarget: null,
+      document: { querySelector(selector) {
+        if (kind === 'none') return null;
+        if (kind === 'settings') return selector === 'dialog[open]' ? {} : null;
+        return {};
+      } },
+    });
+    assert.equal(allowed, kind === 'none' || kind === 'settings', kind);
+  }
 });
 test('an old setup result cannot reopen a closed window or overwrite a newer check', async () => {
   const f = fixture(), old = f.context.showSetup(); assert.equal(f.$('setup-dialog').open, true);
