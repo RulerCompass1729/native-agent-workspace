@@ -27,7 +27,7 @@ const env = {
   NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_UI_LANGUAGE: 'zh', NAW_TEST_VISIBLE: '0', NAW_APP_VERSION: require('../package.json').version,
 };
 const child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')], env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-let app, page, client, errors = ''; const checks = [], failures = [], shots = [], measurements = [];
+let app, page, client, targetLabel, viewportWidth = 1240, errors = ''; const checks = [], failures = [], shots = [], measurements = [];
 child.stderr.on('data', data => { errors += data; }); const closed = new Promise(resolve => child.once('close', resolve));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 240; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
@@ -86,16 +86,51 @@ async function alignment(tag) {
   if (rows.length && !bad) check(`${tag}: ${rows.length} visible checkboxes each sit left of their words, centred within 2px`);
   else fail(`${tag}: ${bad} of ${rows.length} visible checkboxes are not left of and centred with their words`);
 }
+async function compactHeight(tag) {
+  const geometry = await page.evaluate(() => {
+    const panel = document.querySelector('#setup-dialog'), title = document.querySelector('#mobile-setup > details > summary'), button = document.querySelector('#mobile-prepare');
+    const p = panel.getBoundingClientRect(), h = title.getBoundingClientRect(), b = button.getBoundingClientRect(), sticky = panel.querySelector('.setup-heading').getBoundingClientRect();
+    const list = document.querySelector('#mobile-setup .mobile-session-list'), endpoint = document.querySelector('#mobile-connection-summary'), fields = document.querySelector('#mobile-connection-fields');
+    return { panelTop: p.top, panelBottom: p.bottom, stickyBottom: sticky.bottom, titleTop: h.top, buttonBottom: b.bottom, height: b.bottom - h.top,
+      remembered: !endpoint.hidden, fieldsVisible: !fields.hidden, listHeight: list.getBoundingClientRect().height, listScroll: list.scrollHeight > list.clientHeight, panelOverflow: panel.scrollWidth > panel.clientWidth,
+      rowHeight: document.querySelector('#mobile-setup .mobile-session > .mobile-check').getBoundingClientRect().height };
+  });
+  measurements.push({ tag, ...geometry });
+  if (geometry.titleTop >= geometry.stickyBottom - 1 && geometry.buttonBottom <= geometry.panelBottom - 8 && !geometry.panelOverflow) check(`${tag}: title→prepare ${geometry.height.toFixed(1)}px fits without another scroll (${geometry.remembered ? 'remembered' : 'first use'})`);
+  else fail(`${tag}: compact geometry ${JSON.stringify(geometry)}`);
+  if (geometry.listHeight <= 121 && geometry.rowHeight <= 25 && geometry.listScroll) check(`${tag}: about five rows, internal list scroll`); else fail(`${tag}: list geometry ${JSON.stringify(geometry)}`);
+}
 async function variant(lang, theme) {
-  const tag = `${lang}-${theme}`;
+  const tag = `${lang}-${theme}-${viewportWidth}`;
   await openSettings(lang, theme);
+  const compact = await page.locator('#mobile-advanced').count();
+  if (compact) {
+    assert.equal(await page.locator('#mobile-advanced').evaluate(el => el.open), false);
+    assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advanced'));
+    await compactHeight(tag);
+    const endpoint = await page.locator('#mobile-connection-summary').isVisible();
+    if (!endpoint) {
+      assert.deepEqual(await page.locator('#mobile-origin').inputValue(), ''); assert.deepEqual(await page.locator('#mobile-actor').inputValue(), '');
+      assert.ok(await page.locator('#mobile-origin').isEditable()); assert.ok(await page.locator('#mobile-actor').isEditable());
+      await page.locator('#setup-dialog').screenshot({ path: path.join(evidence, '..', `first-use-${lang}-${theme}-${viewportWidth}.png`), scale: 'css' });
+      check(`${tag}: empty address and user inputs are directly editable, not an empty summary`);
+    } else {
+      assert.equal(await page.locator('#mobile-endpoint-port').textContent(), locale.format(lang, 'mobile.endpointPortAuto'));
+      await page.locator('#setup-dialog').screenshot({ path: path.join(evidence, '..', `remembered-${lang}-${theme}-${viewportWidth}.png`), scale: 'css' });
+      check(`${tag}: automatic port is labeled in plain language`);
+    }
+    if (endpoint && viewportWidth === 1240) {
+      await page.locator('#setup-dialog').screenshot({ path: path.join(evidence, '..', `final-${lang}-${theme}.png`), scale: 'css' });
+    }
+    check(`${tag}: advanced setup starts folded without hidden nondefault choices`);
+  }
   await shoot(tag + '-list', '#mobile-setup fieldset');
   await alignment(tag + ' list');
   if (!await page.locator('#mobile-session-filter').count()) fail(`${tag}: no session search`);
   else {
     // Steps 2 and 3: type Q07, tick it.
     await page.locator('#mobile-session-filter').fill('Q07');
-    const box = page.getByRole('checkbox', { name: new RegExp('^' + target) }); await box.check(); await settle();
+    const box = page.getByRole('checkbox', { name: targetLabel, exact: true }); await box.check(); await settle();
     const state = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('#mobile-setup .mobile-session')];
       const read = rows.map(row => row.querySelector('label > input[type=checkbox]'));
@@ -109,6 +144,18 @@ async function variant(lang, theme) {
     await page.locator('#mobile-session-filter').fill(''); await settle();
     const first = await page.locator('#mobile-setup .mobile-session').first().textContent();
     if (first.startsWith(target)) check(`${tag}: cleared search lists the chosen session first`); else fail(`${tag}: first row after clearing is ${first.slice(0, 30)}`);
+  }
+  if (compact) {
+    await page.locator('#mobile-advanced > summary').click();
+    await page.locator('#mobile-port').fill('43125'); await page.locator('#mobile-records').check(); await page.locator('#mobile-replace').check();
+    const room = page.locator('#mobile-setup .mobile-spaces input[type=checkbox]').first(); await room.check();
+    assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advancedActive', { count: 4 }));
+    await page.locator('#mobile-advanced > summary').click();
+    assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advancedActive', { count: 4 }));
+    await page.locator('#mobile-advanced > summary').focus(); await page.keyboard.press('Space');
+    await page.locator('#mobile-port').fill('0'); await page.locator('#mobile-records').uncheck(); await page.locator('#mobile-replace').uncheck(); await room.uncheck();
+    assert.equal(await page.locator('#mobile-advanced-title').textContent(), locale.format(lang, 'mobile.advanced'));
+    check(`${tag}: folded title exposes four nondefaults, keyboard Space expands it, clearing restores defaults`);
   }
   const folded = page.locator('#mobile-approval-section');
   if (!await folded.count()) { fail(`${tag}: sensitive approvals are not a folded section`); await shoot(tag + '-approval', '#mobile-approval-begin'); }
@@ -131,7 +178,7 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Synthetic service');
   client = await connect(profile, 'mobile-setup-gui-person'); scratch.ownService(profile);
   const names = Array.from({ length: sessionCount }, (_, i) => `Synthetic member ${String(i + 1).padStart(2, '0')}`);
-  names.splice(57, 0, target);
+  names.splice(57, 1, target);
   for (const name of names) await client.call('create', { provider: 'codex', cwd: profile, name, view: 'chat' });
   const sourceEntry = require('./fixtures/synthetic-source-boot.cjs').createSourceEntry({ profile, code: root, fixturePid: child.pid });
   await launch(sourceEntry);
@@ -139,14 +186,19 @@ async function run() {
   assert.ok((await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), focused: win.isFocused() })))).every(win => !win.visible && !win.focused));
   check('Isolated source window stays hidden and unfocused');
   const listed = (await client.call('initial')).sessions.filter(s => s.nativeId && !s.archived && !s.nativeContextPending).length;
-  assert.equal(listed, sessionCount + 1, 'Every synthetic session is offered in Phone access');
-  for (const lang of ['zh', 'en']) for (const theme of ['dark', 'light']) await variant(lang, theme);
+  assert.equal(listed, sessionCount, 'Every synthetic session is offered in Phone access');
+  targetLabel = target + ' · ' + (await client.call('initial')).sessions.find(s => s.name === target).id.slice(0, 6);
+  for (const width of [1240, 850]) {
+    viewportWidth = width; await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows().forEach(win => win.setContentSize(width, 820)), width);
+    for (const lang of ['zh', 'en']) for (const theme of ['dark', 'light']) await variant(lang, theme);
+  }
   if (await page.locator('#mobile-session-filter').count()) {
     // A checked attempt remembers the address, Tailscale user and port; a restart brings them back.
     await openSettings('zh', 'dark');
     await page.locator('#mobile-origin').fill('https://device.example.invalid'); await page.locator('#mobile-actor').fill('synthetic-human');
+    if (await page.locator('#mobile-advanced').count()) await page.locator('#mobile-advanced > summary').click();
     await page.locator('#mobile-port').fill('0'); await page.locator('#mobile-carrier').check();
-    await page.locator('#mobile-session-filter').fill('Q07'); await page.getByRole('checkbox', { name: new RegExp('^' + target) }).check();
+    await page.locator('#mobile-session-filter').fill('Q07'); await page.getByRole('checkbox', { name: targetLabel, exact: true }).check();
     await page.locator('#mobile-prepare').click();
     await until(async () => await page.locator('#mobile-pair-link').inputValue() !== '', 'Synthetic pairing link');
     await page.locator('#mobile-revoke').click();
@@ -162,10 +214,15 @@ async function run() {
     if (JSON.stringify(values) === JSON.stringify(['https://device.example.invalid', 'synthetic-human', '0', '']) && unticked) check('After a restart the address, Tailscale user and port are filled in; the link and every choice start empty');
     else fail(`restart recall ${JSON.stringify({ values, unticked })}`);
     await shoot('zh-dark-restart', '#mobile-setup > details');
+    await page.locator('#close-setup').click();
+    for (const width of [1240, 850]) {
+      viewportWidth = width; await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows().forEach(win => win.setContentSize(width, 820)), width);
+      for (const lang of ['zh', 'en']) for (const theme of ['dark', 'light']) await variant(lang, theme);
+    }
   }
   assert.deepEqual(pageErrors, []);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, failures, measurements, screenshots: shots, pageErrors }, null, 2));
-  console.log(`GUI ${checks.length}/${failures.length}; screenshots=${shots.length}; sessions=${sessionCount + 1}; models=0`);
+  console.log(`GUI ${checks.length}/${failures.length}; screenshots=${shots.length}; sessions=${sessionCount}; models=0`);
   if (failures.length) process.exitCode = 1;
 }
 run().catch(async error => {

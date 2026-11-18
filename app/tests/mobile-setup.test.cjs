@@ -13,7 +13,7 @@ const rowsOf = root => root.all().filter(n => n.className === 'mobile-session');
 const inputsOf = row => row.all().filter(n => n.tag === 'input');
 // A person's click: the box changes, then its change listener runs.
 function tick(input, checked = true) { input.checked = checked; input.listeners.change?.(); }
-function fixture({ pending = false, fail = false, revoked = true, records: given, rooms = [], saved = null } = {}) {
+function fixture({ pending = false, fail = false, revoked = true, records: given, rooms = [], saved = null, approval = null } = {}) {
   const root = new Element('container'), calls = [], timers = new Map(), remembered = [], records = given || [
     { id: 'session-a', nativeId: 'native-a', name: '<script>literal member</script>' },
     { id: 'session-b', nativeId: 'native-b', name: 'Original second' },
@@ -21,6 +21,7 @@ function fixture({ pending = false, fail = false, revoked = true, records: given
   ]; let at = 1000, nextTimer = 0, release;
   const api = { async mobilePairing(value) { calls.push(['pair', value]); if (pending && calls.filter(c => c[0] === 'pair').length === 1) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { secret: 's'.repeat(43), expiresAt: at + 120000 }; },
     async mobileRevoke() { calls.push(['revoke']); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { authorizationRevoked: revoked, connectionClosed: true, committedWorkMayContinue: true }; } };
+  if (approval) api.mobileApprovalStatus = async () => approval;
   const setup = bind({ container: root, document: { createElement: tag => new Element(tag) }, api, getSessions: () => records, getRooms: () => rooms,
     remembered: () => saved, remember: value => { remembered.push(value); saved = value; },
     now: () => at, setTimer(fn, delay) { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; }, clearTimer(id) { timers.delete(id); } });
@@ -175,6 +176,53 @@ test('sensitive approvals start folded on every opening', () => {
   const f = fixture(); f.setup.open(); const section = f.el('mobile-approval-section');
   assert.equal(section.tag, 'details'); assert.equal(section.open, false); assert.equal(section.children[0].tag, 'summary');
   section.open = true; f.setup.close(); f.setup.open(); assert.equal(section.open, false);
+});
+test('advanced setup starts folded and folding it changes no choices or pairing payload', async () => {
+  const f = fixture({ rooms: [{ id: 'room-a', name: 'Synthetic space' }] }); f.setup.open();
+  const advanced = f.el('mobile-advanced'); assert.ok(advanced); assert.equal(advanced.tag, 'details'); assert.equal(advanced.open, false);
+  assert.equal(f.el('mobile-advanced-title').textContent, '高级设置');
+  assert.equal(f.el('mobile-port').value, '0');
+  assert.ok(advanced.all().filter(n => n.type === 'checkbox').every(n => !n.checked));
+  advanced.open = true; advanced.open = false; f.valid(); await f.el('mobile-prepare').listeners.click();
+  assert.deepEqual(f.calls[0][1], { actor: 'synthetic-human', origin: 'https://mobile.invalid', port: 0, carrierConfirmed: true, replace: false, selection: [{ sessionId: 'session-a', actions: ['read'] }] });
+  advanced.open = true; f.setup.close(); f.setup.open(); assert.equal(advanced.open, false);
+});
+test('only a valid remembered endpoint is summarized and Edit reveals its unchanged values', () => {
+  const saved = { origin: 'https://device.example.invalid', actor: 'synthetic-human', port: '0' };
+  const f = fixture({ saved }); f.setup.open();
+  assert.equal(f.el('mobile-connection-summary').hidden, false); assert.equal(f.el('mobile-connection-fields').hidden, true);
+  assert.equal(f.el('mobile-endpoint-host').textContent, 'device.example.invalid'); assert.equal(f.el('mobile-endpoint-actor').textContent, saved.actor); assert.equal(f.el('mobile-endpoint-port').textContent, '端口自动');
+  f.el('mobile-edit-connection').listeners.click();
+  assert.equal(f.el('mobile-connection-summary').hidden, true); assert.equal(f.el('mobile-connection-fields').hidden, false);
+  assert.deepEqual(['mobile-origin', 'mobile-actor', 'mobile-port'].map(id => f.el(id).value), [saved.origin, saved.actor, saved.port]);
+  for (const endpoint of [null, { ...saved, origin: 'http://device.example.invalid' }, { ...saved, port: '80' }]) {
+    const other = fixture({ saved: endpoint }); other.setup.open();
+    assert.equal(other.el('mobile-connection-summary').hidden, true); assert.equal(other.el('mobile-connection-fields').hidden, false);
+  }
+});
+test('folded advanced setup exposes each nondefault choice in its count', () => {
+  const f = fixture({ rooms: [{ id: 'room-a', name: 'Synthetic space' }] }); f.setup.open();
+  const title = f.el('mobile-advanced-title'), advanced = f.el('mobile-advanced');
+  tick(f.el('mobile-records')); assert.equal(title.textContent, '高级设置（已开 1 项）');
+  tick(f.el('mobile-replace')); f.el('mobile-port').value = '43125'; f.el('mobile-port').listeners.input();
+  tick(f.root.all().find(n => n.className === 'mobile-spaces').all().find(n => n.tag === 'input'));
+  assert.equal(title.textContent, '高级设置（已开 4 项）'); assert.equal(advanced.open, false);
+  f.setup.close(); f.setup.open(); assert.equal(title.textContent, '高级设置');
+  const remembered = fixture({ saved: { origin: 'https://device.example.invalid', actor: 'synthetic-human', port: '43125' } }); remembered.setup.open();
+  assert.equal(remembered.el('mobile-advanced-title').textContent, '高级设置（已开 1 项）'); assert.equal(remembered.el('mobile-advanced').open, false);
+  assert.equal(remembered.el('mobile-endpoint-port').textContent, '端口 43125');
+});
+test('an unconfirmed pairing points to the explicit replacement choice in advanced setup', async () => {
+  const f = fixture({ fail: true }); f.setup.open(); f.valid(); await f.el('mobile-prepare').listeners.click();
+  assert.match(f.status(), /高级设置/); assert.match(f.status(), /替换/);
+  assert.equal(f.el('mobile-replace').checked, false); assert.equal(f.calls.length, 1);
+});
+test('existing sensitive registration and enabling remain visible in the folded advanced count', async () => {
+  const f = fixture({ approval: { paired: true, registered: true, enabled: true } }); f.setup.open();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.el('mobile-advanced').open, false); assert.equal(f.el('mobile-approval-enabled').checked, true);
+  assert.equal(f.el('mobile-advanced-title').textContent, '高级设置（已开 2 项）');
+  assert.deepEqual(f.calls, [], 'reading existing authority never pairs, revokes or changes a grant');
 });
 test('the saved window view accepts only an https address, a Tailscale user and a port for phone access', () => {
   const { validViews } = require('../view-store.cjs'), base = { owner: 'synthetic-owner', selected: '', mode: 'chat' };

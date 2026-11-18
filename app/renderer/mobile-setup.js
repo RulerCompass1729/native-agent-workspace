@@ -28,15 +28,25 @@
       return box;
     };
     const section = node('details'), summary = node('summary', 'mobile.title'); section.append(summary);
+    section.addEventListener('toggle', () => { if (section.open) summary.scrollIntoView?.({ block: 'start' }); });
     const status = document.createElement('p'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-    section.append(node('p', 'mobile.intro'));
-    const hint = key => { const el = node('p', key); el.className = 'quiet'; section.append(el); };
-    const check = (key, id) => { const input = checkbox(id); section.append(checkRow(input, node('span', key))); return input; };
-    const field = (key, id, type = 'text') => { const input = document.createElement('input'); input.id = id; input.type = type; section.append(labelled(key, input)); return input; };
-    const origin = field('mobile.origin', 'mobile-origin', 'url'); origin.placeholder = 'https://device.example.ts.net'; origin.autocomplete = 'off'; origin.maxLength = 2048;
-    const actor = field('mobile.actor', 'mobile-actor'); actor.autocomplete = 'off'; actor.maxLength = 320;
-    const port = field('mobile.port', 'mobile-port', 'number'); port.min = '0'; port.max = '65535'; port.value = '0';
-    const carrier = check('mobile.carrier', 'mobile-carrier');
+    section.append(node('p', 'mobile.introCompact'));
+    const advanced = node('details'), advancedTitle = node('summary', 'mobile.advanced'); advanced.id = 'mobile-advanced'; advancedTitle.id = 'mobile-advanced-title'; advanced.append(advancedTitle);
+    const hint = key => { const el = node('p', key); el.className = 'quiet'; advanced.append(el); };
+    const check = (key, id, parent = advanced) => { const input = checkbox(id), row = checkRow(input, node('span', key)); parent.append(row); return input; };
+    const field = (key, id, type, parent) => { const input = document.createElement('input'); input.id = id; input.type = type; parent.append(labelled(key, input)); return input; };
+    const connection = document.createElement('div'), connectionFields = document.createElement('div'); connection.id = 'mobile-connection-summary'; connection.className = 'mobile-connection-summary'; connectionFields.id = 'mobile-connection-fields';
+    const endpoint = document.createElement('span'); endpoint.className = 'mobile-endpoint';
+    const endpointHost = raw('span', ''), endpointActor = raw('span', ''), endpointPort = raw('span', '');
+    endpointHost.id = 'mobile-endpoint-host'; endpointActor.id = 'mobile-endpoint-actor'; endpointPort.id = 'mobile-endpoint-port';
+    endpoint.append(endpointHost, raw('span', ' · '), endpointActor, raw('span', ' · '), endpointPort);
+    const editConnection = node('button', 'mobile.editConnection'); editConnection.type = 'button'; editConnection.id = 'mobile-edit-connection'; connection.append(endpoint, editConnection);
+    section.append(connection, connectionFields);
+    const origin = field('mobile.origin', 'mobile-origin', 'url', connectionFields); origin.placeholder = 'https://device.example.ts.net'; origin.autocomplete = 'off'; origin.maxLength = 2048;
+    const actor = field('mobile.actor', 'mobile-actor', 'text', connectionFields); actor.autocomplete = 'off'; actor.maxLength = 320;
+    const port = field('mobile.port', 'mobile-port', 'number', advanced); port.min = '0'; port.max = '65535'; port.value = '0';
+    const carrier = check('mobile.carrierCompact', 'mobile-carrier', section); attribute(carrier, 'title', 'mobile.carrier');
+    editConnection.addEventListener('click', () => { connection.hidden = true; connectionFields.hidden = false; origin.focus?.(); });
     // About 90 sessions: a search narrows the list, chosen sessions stay listed first, and each one's
     // send/answer choices appear only after it is chosen.
     const choices = document.createElement('fieldset'); choices.className = 'mobile-sessions'; section.append(choices);
@@ -45,7 +55,7 @@
     const count = document.createElement('p'); count.className = 'quiet mobile-count'; count.setAttribute('aria-live', 'polite');
     const list = document.createElement('div'); list.className = 'mobile-session-list';
     const noMatch = node('p', 'mobile.noMatch'); noMatch.className = 'quiet'; noMatch.hidden = true;
-    const spaces = document.createElement('fieldset'); spaces.className = 'mobile-spaces'; spaces.append(node('legend', 'mobile.spaces')); section.append(spaces);
+    const spaces = document.createElement('fieldset'); spaces.className = 'mobile-spaces'; spaces.append(node('legend', 'mobile.spaces')); advanced.append(spaces);
     const records = check('mobile.allowRecords', 'mobile-records');
     hint('mobile.workspaceNote');
     const replace = check('mobile.replace', 'mobile-replace');
@@ -53,37 +63,46 @@
     const prepare = node('button', 'mobile.prepare'), revoke = node('button', 'mobile.revoke'); prepare.type = revoke.type = 'button'; prepare.id = 'mobile-prepare'; revoke.id = 'mobile-revoke';
     const link = document.createElement('input'); link.id = 'mobile-pair-link'; link.readOnly = true; link.autocomplete = 'off';
     const linkBox = labelled('mobile.link', link); linkBox.hidden = true;
-    section.append(prepare, revoke, linkBox, status); container.append(section);
+    const actions = document.createElement('div'); actions.className = 'mobile-pair-actions'; actions.append(prepare, revoke);
+    section.append(advanced, actions, linkBox, status); container.append(section);
     // Sensitive approvals start folded: they are off by default and come after pairing.
     const approval = document.createElement('details'), approvalTitle = document.createElement('summary'); approval.id = 'mobile-approval-section'; say(approvalTitle, 'mobile.approvalTitle'); approval.append(approvalTitle);
     const approvalInfo = document.createElement('p'), fingerprint = document.createElement('output'); fingerprint.id = 'mobile-approval-fingerprint';
     const approvalBegin = say(document.createElement('button'), 'mobile.approvalBegin'), approvalRefresh = say(document.createElement('button'), 'mobile.approvalRefresh'), approvalConfirm = say(document.createElement('button'), 'mobile.approvalConfirm'), approvalRevoke = say(document.createElement('button'), 'mobile.approvalRevoke');
     for (const [button, id] of [[approvalBegin, 'begin'], [approvalRefresh, 'refresh'], [approvalConfirm, 'confirm'], [approvalRevoke, 'revoke']]) { button.type = 'button'; button.id = 'mobile-approval-' + id; }
     const matched = checkbox('mobile-approval-matched'), enabled = checkbox('mobile-approval-enabled');
-    approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); section.append(approval);
+    approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); advanced.append(approval);
     let approvalValue = null;
     function showApproval(value) {
       approvalValue = value; matched.checked = false; enabled.indeterminate = false; enabled.checked = value?.enabled === true;
       enabled.disabled = !value?.registered; approvalConfirm.disabled = true; approvalBegin.disabled = !value?.paired;
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
+      updateAdvanced();
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;
       const ticket = revision;
       try { await api[method](value); const next = await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
-      catch { if (opened && revision === ticket) { enabled.indeterminate = true; enabled.disabled = true; approvalConfirm.disabled = true; say(approvalInfo, 'mobile.approvalUnconfirmed'); } }
+      catch { if (opened && revision === ticket) { enabled.indeterminate = true; enabled.disabled = true; approvalConfirm.disabled = true; say(approvalInfo, 'mobile.approvalUnconfirmed'); updateAdvanced(); } }
     }
     approvalBegin.addEventListener('click', () => approvalAction('mobileApprovalBegin'));
     approvalRefresh.addEventListener('click', () => approvalAction('mobileApprovalStatus'));
     approvalRevoke.addEventListener('click', () => approvalAction('mobileApprovalRevoke'));
-    matched.addEventListener('change', () => { approvalConfirm.disabled = !(matched.checked && approvalValue?.pending?.ready); });
+    matched.addEventListener('change', () => { approvalConfirm.disabled = !(matched.checked && approvalValue?.pending?.ready); updateAdvanced(); });
     approvalConfirm.addEventListener('click', () => {
       const pending = approvalValue?.pending;
       if (matched.checked && pending?.ready) approvalAction('mobileApprovalConfirm', { registrationId: pending.registrationId, fingerprint: pending.fingerprint });
     });
-    enabled.addEventListener('change', () => approvalAction('mobileApprovalEnable', { enabled: enabled.checked, registrationId: approvalValue?.registrationId }));
+    enabled.addEventListener('change', () => { updateAdvanced(); approvalAction('mobileApprovalEnable', { enabled: enabled.checked, registrationId: approvalValue?.registrationId }); });
     let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [];
+    function updateAdvanced() {
+      const count = Number(port.value !== '0') + roomSelections.filter(r => r.input.checked).length + Number(records.checked) + Number(replace.checked) +
+        Number(matched.checked) + Number(enabled.checked || enabled.indeterminate) + Number(Boolean(approvalValue?.registered || approvalValue?.pending));
+      say(advancedTitle, count ? 'mobile.advancedActive' : 'mobile.advanced', { count });
+    }
+    port.addEventListener('input', updateAdvanced); port.addEventListener('change', updateAdvanced);
+    records.addEventListener('change', updateAdvanced); replace.addEventListener('change', updateAdvanced);
     const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; };
     function counted() {
       say(count, 'mobile.selectedCount', { count: selections.filter(s => s.read.checked).length, total: selections.length });
@@ -109,16 +128,31 @@
       if (typeof saved.origin === 'string' && !origin.value) origin.value = saved.origin;
       if (typeof saved.actor === 'string' && !actor.value) actor.value = saved.actor;
       if (typeof saved.port === 'string' && /^\d{1,5}$/.test(saved.port) && port.value === '0') port.value = saved.port;
+      return saved;
+    }
+    function showConnection(saved) {
+      let valid = false, site;
+      try {
+        site = new URL(origin.value.trim()); const listenPort = Number(port.value);
+        valid = Boolean(saved && saved.origin === origin.value && saved.actor === actor.value && saved.port === port.value &&
+          site.protocol === 'https:' && site.origin === origin.value && !site.username && !site.password && actor.value.trim() &&
+          /^\d+$/.test(port.value) && Number.isInteger(listenPort) && listenPort <= 65535 && (listenPort === 0 || listenPort >= 1024));
+      } catch { /* Invalid or incomplete remembered values stay editable. */ }
+      connection.hidden = !valid; connectionFields.hidden = valid;
+      endpointHost.textContent = valid ? site.host : ''; endpointActor.textContent = valid ? actor.value : '';
+      if (valid) say(endpointPort, port.value === '0' ? 'mobile.endpointPortAuto' : 'mobile.endpointPort', { port: port.value }); else quiet(endpointPort);
+      endpoint.setAttribute('title', valid ? `${origin.value} · ${actor.value} · ${port.value}` : '');
     }
     function open() {
       revision++; opened = true; busy = false; prepare.disabled = false; clearLink(); selections = [];
-      records.checked = false; search.value = ''; approval.open = false; recall();
-      choices.replaceChildren(node('legend', 'mobile.sessions'), search, count, list, noMatch);
+      records.checked = false; search.value = ''; approval.open = advanced.open = false; showConnection(recall());
+      choices.replaceChildren(node('legend', 'mobile.sessionsCompact'), search, count, list, noMatch);
       roomSelections = []; spaces.replaceChildren(node('legend', 'mobile.spaces'));
       for (const room of getRooms()) {
         if (!room?.id || room.archived) continue;
         const input = checkbox();
         spaces.append(checkRow(input, raw('span', room.name || room.id))); roomSelections.push({ id: room.id, input });
+        input.addEventListener('change', updateAdvanced);
       }
       for (const record of getSessions()) {
         if (record.archived || record.nativeContextPending || !record.nativeId) continue;
@@ -127,7 +161,8 @@
         const name = `${record.name || record.id} · ${record.id.slice(0, 6)}`;
         row.className = 'mobile-session'; actions.className = 'mobile-session-actions'; actions.hidden = true;
         actions.append(checkRow(send, node('span', 'mobile.allowSend')), checkRow(answer, node('span', 'mobile.allowAnswer')));
-        row.append(checkRow(read, raw('span', name)), actions);
+        const nameLabel = raw('span', name); nameLabel.setAttribute('title', name);
+        row.append(checkRow(read, nameLabel), actions);
         // Unticking a session also clears its hidden send/answer choices, so no grant stays out of sight.
         read.addEventListener('change', () => {
           actions.hidden = !read.checked;
@@ -162,7 +197,7 @@
         link.value = site.origin + '/mobile/#pair=' + result.secret; linkBox.hidden = false;
         if (result.localAddress) say(status, 'mobile.ready', { address: result.localAddress }); else say(status, 'mobile.readyUnconfirmed');
         timer = setTimer(() => { if (revision !== ticket) return; clearLink(); say(status, 'mobile.expired'); }, Math.min(120000, result.expiresAt - now()));
-      } catch { if (opened && revision === ticket) say(status, 'mobile.unconfirmed'); }
+      } catch { if (opened && revision === ticket) say(status, 'mobile.unconfirmedAdvanced'); }
       finally { if (opened && revision === ticket) { busy = false; prepare.disabled = false; } }
     }
     async function stop() {
@@ -175,7 +210,8 @@
     }
     function close() {
       revision++; opened = false; busy = false; clearLink(); origin.value = actor.value = search.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
-      selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); list.replaceChildren(); quiet(status); quiet(count); prepare.disabled = false; section.open = false; approval.open = false;
+      selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); list.replaceChildren(); quiet(status); quiet(count); prepare.disabled = false; section.open = false; approval.open = advanced.open = false;
+      connection.hidden = true; connectionFields.hidden = false; endpointHost.textContent = endpointActor.textContent = ''; quiet(endpointPort); endpoint.setAttribute('title', '');
       showApproval(null);
     }
     prepare.addEventListener('click', pair); revoke.addEventListener('click', stop);

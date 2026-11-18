@@ -131,7 +131,7 @@ async function scenario(lang) {
       const api = Object.fromEntries(methods.map(name => [name, value => globalThis.desktopCall(name, value)]));
       globalThis.setup = globalThis.nativeWorkspaceMobileSetup.bind({ container: document.querySelector('#mobile-setup'), document, api, getSessions: () => [], text: (key, params) => globalThis.nativeWorkspaceLocale.format(lang, key, params) }); setup.open();
     }, { lang });
-    await mac.locator('#mobile-setup > details > summary').click(); await mac.locator('#mobile-approval-section > summary').click(); await mac.locator('#mobile-approval-begin:not(:disabled)').waitFor(); await mac.locator('#mobile-approval-begin').click();
+    await mac.locator('#mobile-setup > details > summary').click(); await mac.locator('#mobile-advanced > summary').click(); await mac.locator('#mobile-approval-section > summary').click(); await mac.locator('#mobile-approval-begin:not(:disabled)').waitFor(); await mac.locator('#mobile-approval-begin').click();
     const start = await app.broker().approvalStatus(); assert.ok(start.pending.code); assert.equal(start.enabled, false);
     await page.goto(site + '/mobile/#' + lang + '/home'); await page.waitForFunction(() => globalThis.nawPhone?.client.state.session);
     await page.getByRole('button', { name: lang === 'zh' ? '管理' : 'Manage', exact: true }).click();
