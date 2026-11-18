@@ -60,22 +60,16 @@
   }
   function alignedColumnWidths(count, width, saved = []) {
     width = Number.isFinite(width) ? Math.max(1, width) : 1;
-    const capacity = Math.max(1, Math.floor(width / 260)), widths = Array(count).fill(0);
+    const capacity = Math.max(1, Math.floor(width / 260)), total = count ? width * count / Math.min(count, capacity) : 0;
+    const floor = Math.min(260, width), widths = Array(count).fill(0), free = new Set(widths.keys());
     const weights = widths.map((_, i) => Number.isFinite(saved[i]) && saved[i] > 0 ? saved[i] : 1);
-    const grouped = count > capacity && weights.some(n => Math.abs(n - weights[0]) > 1e-8);
-    const groupSize = grouped ? capacity : count, floor = Math.min(260, width);
-    // Unequal resized columns cannot fit every sliding window. Keep each
-    // complete page at the viewport width, retaining the person's width ratios.
-    for (let start = 0; start < count; start += groupSize) {
-      const stop = Math.min(count, start + groupSize), free = new Set(Array.from({ length: stop - start }, (_, i) => start + i));
-      let remaining = grouped ? width : width * count / Math.min(count, capacity);
-      while (free.size) {
-        const sum = [...free].reduce((n, i) => n + weights[i], 0), low = [...free].filter(i => remaining * weights[i] / sum < floor);
-        if (!low.length) { for (const i of free) widths[i] = remaining * weights[i] / sum; break; }
-        for (const i of low) { widths[i] = floor; remaining -= floor; free.delete(i); }
-      }
+    let remaining = total;
+    while (free.size) {
+      const sum = [...free].reduce((n, i) => n + weights[i], 0), low = [...free].filter(i => remaining * weights[i] / sum < floor);
+      if (!low.length) { for (const i of free) widths[i] = remaining * weights[i] / sum; break; }
+      for (const i of low) { widths[i] = floor; remaining -= floor; free.delete(i); }
     }
-    return { capacity, total: widths.reduce((a, b) => a + b, 0), widths };
+    return { capacity, total, widths };
   }
   function columnWindow(widths, left, width) {
     let offset = 0; const starts = [], ends = [];
@@ -89,7 +83,10 @@
     const end = Math.max(0, widths.reduce((a, b) => a + b, 0) - width), clamp = n => Math.max(0, Math.min(end, n));
     const ends = []; let offset = 0;
     for (const value of widths) { offset += value; ends.push(offset); }
-    const points = [0, ...ends.filter(n => n < end && ends.some(right => Math.abs(right - n - width) < 1)), end];
+    // Preserve resized widths: the right edge may be partial, but stops use
+    // real column starts. A column wider than the viewport keeps its end reachable.
+    const points = [0, ...ends.filter(n => n <= end)];
+    if (points.length === 1 && end > 0) points.push(end);
     left = clamp(left); origin = clamp(origin);
     if (Math.abs(left - origin) <= .5) return left;
     let target = points.reduce((a, b) => Math.abs(b - left) < Math.abs(a - left) ? b : a);
@@ -154,7 +151,22 @@
     if (aligned) strip.append(readers, pagePrevious, pageNext);
     function schedulePager() { if (!pagerFrame) pagerFrame = requestAnimationFrame(() => { pagerFrame = 0; if (!disposed) updatePager(); }); }
     function cancelColumnSnap() { clearTimeout(snapTimer); snapTimer = 0; snapOrigin = null; lastLeft = readers.scrollLeft; }
+    if (aligned) {
+      // Only this owned scroller: native user scrolling bypasses the JS setter,
+      // while explicit scrollLeft restores must cancel an older gesture first.
+      const nativeLeft = Object.getOwnPropertyDescriptor(doc.defaultView.Element.prototype, 'scrollLeft');
+      Object.defineProperty(readers, 'scrollLeft', {
+        configurable: true, enumerable: nativeLeft.enumerable,
+        get() { return nativeLeft.get.call(this); },
+        set(value) {
+          if (this === readers) cancelColumnSnap();
+          nativeLeft.set.call(this, value);
+          if (this === readers) lastLeft = nativeLeft.get.call(this);
+        },
+      });
+    }
     function settleColumns() {
+      if (disposed || dragging || !alignedGrid()) { cancelColumnSnap(); return; }
       const origin = snapOrigin;
       if (origin === null) return;
       const target = columnSnap(alignedWidths, readers.scrollLeft, readers.clientWidth, origin);
@@ -164,17 +176,17 @@
     function deferColumnSnap() { clearTimeout(snapTimer); snapTimer = setTimeout(settleColumns, 120); }
     if (aligned) {
       readers.addEventListener('scroll', () => {
-        schedulePager(); if (snapOrigin !== null) deferColumnSnap(); else lastLeft = readers.scrollLeft;
+        schedulePager(); if (!dragging && snapOrigin !== null) deferColumnSnap(); else lastLeft = readers.scrollLeft;
       }, { passive: true });
       readers.addEventListener('wheel', event => {
-        if (!alignedGrid() || !event.deltaX || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+        if (dragging || !alignedGrid() || !event.deltaX || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
         if (snapOrigin === null) snapOrigin = lastLeft;
         // Keep native pixel input and nested scrollers. Only a direct gesture
         // settles to columns; restoring a recorded reading position does not.
         deferColumnSnap();
       }, { passive: true });
       readers.addEventListener('keydown', event => {
-        if (!alignedGrid() || event.defaultPrevented || !['ArrowLeft', 'ArrowRight'].includes(event.key) || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        if (dragging || !alignedGrid() || event.defaultPrevented || !['ArrowLeft', 'ArrowRight'].includes(event.key) || event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
         cancelColumnSnap(); snapOrigin = readers.scrollLeft; deferColumnSnap();
       });
     }
@@ -439,7 +451,7 @@
       });
       grip.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
-        event.preventDefault(); options.beforeLayout?.();
+        event.preventDefault(); cancelColumnSnap(); options.beforeLayout?.();
         dragging = { pointerId: event.pointerId, x: event.clientX, index: records.findIndex(r => r.id === record.id) }; grip.setPointerCapture(event.pointerId);
       });
       grip.addEventListener('pointermove', event => {
@@ -558,7 +570,7 @@
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { disposed = true; cancelColumnSnap(); if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
+      dispose() { disposed = true; cancelColumnSnap(); if (aligned) delete readers.scrollLeft; if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
   return { create, statusFacts, excerpt, adjustedWidths, alignedColumnWidths, columnWindow, columnSnap };

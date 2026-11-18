@@ -56,13 +56,10 @@ test('settling respects unequal resized widths, a single oversized column, and a
 });
 
 
-test('unequal overflow columns retain their ratios within whole viewport pages',()=>{
-  for(const width of [794,1224,1544]){
-    const m=alignedColumnWidths(8,width,[1.2,.8,1,1,1,1,1,1]);
-    for(let start=0;start<8;start+=m.capacity){
-      assert.ok(Math.abs(m.widths.slice(start,start+m.capacity).reduce((a,b)=>a+b,0)-width)<1e-7);
-    }
-    const target=columnSnap(m.widths,380,width,0);
-    assert.ok(target>0);assert.ok(Math.abs(target/width-Math.round(target/width))<1e-7,'Only whole pages are selected for unequal widths');
-  }
+test('manual width preferences remain global across the viewport boundary',()=>{
+  const preferred=[260,260,260,260,352,352,352,352];
+  const m=alignedColumnWidths(8,1224,preferred);
+  assert.deepEqual(m.widths,preferred);
+  assert.equal(columnSnap(m.widths,380,1224,0),260,'Stop at an actual column start, not a page-normalized boundary');
+  assert.equal(columnSnap(m.widths,900,1224,780),1040);
 });
