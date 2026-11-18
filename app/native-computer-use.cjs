@@ -82,7 +82,7 @@ function scopedTools(list) {
   const names = new Set(['see', 'inspect_ui', 'click', 'type']);
   if (!Array.isArray(list?.tools) || list.tools.length !== 4 || new Set(list.tools.map(tool => tool.name)).size !== 4 ||
       list.tools.some(tool => !names.has(tool.name))) throw Error('The qualified Peekaboo tool catalog changed.');
-  return { ...list, tools: list.tools.map(tool => {
+  const tools = list.tools.map(tool => {
     const schema = { ...tool.inputSchema, properties: { ...tool.inputSchema.properties } };
     const required = new Set(schema.required || []);
     if (tool.name === 'see' || tool.name === 'inspect_ui') {
@@ -114,7 +114,25 @@ function scopedTools(list) {
     }
     schema.required = [...required];
     return { ...tool, description: 'NAW only: use one exact installed NAW window and a fresh explicit snapshot. For messages prefer collaboration-space @, and use the corresponding session GUI only if that route fails; verify target/body and the visible send result. Never send through a service or change goal status as a substitute for a message. Never approve permissions, issue terminal commands, or replace human drafts without authorization. ' + tool.description, inputSchema: schema };
-  }) };
+  });
+  // This acknowledgement belongs to the local gate, not the pinned desktop
+  // catalog. It never reaches the bridge and never dispatches an input.
+  return { ...list, tools: [...tools, {
+    name: 'recover_input',
+    description: 'After input completion became unknown: first review a fresh see/inspect_ui of the SAME exact NAW process/window, then explicitly acknowledge that the previous action remains unconfirmed. Never retry that action. This clears only the future-input block; observe again before any new authorized input.',
+    inputSchema: { type: 'object', additionalProperties: false,
+      properties: { app_target: { type: 'string', pattern: '^PID:[1-9][0-9]*$' },
+        window_id: { type: 'integer', minimum: 1, maximum: 0xffffffff }, snapshot: { type: 'string', minLength: 1 },
+        acknowledge_unknown: { type: 'boolean', const: true } },
+      required: ['app_target', 'window_id', 'snapshot', 'acknowledge_unknown'] },
+  }] };
+}
+function freshWindowGeneration(result, pid, windowId) {
+  const meta = result?._meta, target = meta?.target_receipt;
+  return result?.isError === false && meta?.used_cache === false && target?.pid === pid && target.window_id === windowId &&
+    typeof target.process_start_identity_decimal === 'string' && /^[1-9][0-9]{0,19}$/.test(target.process_start_identity_decimal) &&
+    Array.isArray(result.content) && result.content.length > 0 && result.content.every(block => ['text', 'image'].includes(block?.type))
+    ? target.process_start_identity_decimal : null;
 }
 function actionObservation(result, pid, windowId) {
   const meta = result?._meta, target = meta?.target_receipt;
@@ -142,16 +160,35 @@ function actionResult(output, observed, kind, reason) {
   return { isError: !observed, structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
 function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now } = {}) {
-  let receipt = null, busy = false, completionUnknown = false;
+  let receipt = null, busy = false, completionUnknown = null, recovery = null, recoveredSnapshot = null;
+  const markUnknown = (previous, postSnapshot) => {
+    completionUnknown = { pid: previous.pid, windowId: previous.windowId, started: previous.started,
+      generation: previous.generation, snapshot: previous.snapshot, postSnapshot };
+    recovery = null;
+  };
   return async (params, invoke) => {
     if (busy) throw Error('A computer-use operation is already in flight; observe again after it settles.');
     const name = params?.name, args = params?.arguments;
-    if (!['see', 'inspect_ui', 'click', 'type'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
-    if (completionUnknown && name !== 'see' && name !== 'inspect_ui') throw Error('Previous input completion unknown; further input is blocked. Use see or inspect_ui to check the current window without retrying the action.');
+    if (!['see', 'inspect_ui', 'click', 'type', 'recover_input'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
+    if (completionUnknown && !['see', 'inspect_ui', 'recover_input'].includes(name)) throw Error('Previous input completion unknown; further input is blocked. Review a fresh see/inspect_ui of the same exact window, then use recover_input to acknowledge it. Do not retry the previous action.');
     busy = true;
     try {
+      if (name === 'recover_input') {
+        const previous = recovery; recovery = null; receipt = null;
+        if (!completionUnknown) throw Error('No input recovery is pending.');
+        if (!previous || Object.keys(args).some(key => !['app_target', 'window_id', 'snapshot', 'acknowledge_unknown'].includes(key)) ||
+            args.acknowledge_unknown !== true || args.snapshot !== previous.snapshot || args.app_target !== `PID:${previous.pid}` ||
+            args.window_id !== previous.windowId || now() - previous.at < 0 || now() - previous.at > 60000 ||
+            identity(previous.pid)?.started !== previous.started) {
+          throw Error('Recovery requires this client\'s fresh post-lock exact-window observation and explicit acknowledgement. The previous action remains unconfirmed; do not retry it.');
+        }
+        recoveredSnapshot = previous.snapshot; completionUnknown = null;
+        const result = { outcome: 'input_recovery_acknowledged', previousAction: 'unconfirmed', inputBlocked: false,
+          retrySafe: false, requiresFreshObservation: true };
+        return { isError: false, structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) + '\nDo not retry the previous action. Observe again before any new authorized input.' }] };
+      }
       if (name === 'see' || name === 'inspect_ui') {
-        receipt = null;
+        receipt = null; recovery = null;
         if (name === 'inspect_ui' && args.include_elements !== true) throw Error('AX-only inspection requires include_elements:true for its structured snapshot receipt.');
         if (typeof args.app_target !== 'string' || !/^PID:[1-9][0-9]{0,9}$/.test(args.app_target) ||
             !Number.isSafeInteger(args.window_id) || args.window_id < 1 || args.window_id > 0xffffffff || args.fresh !== true ||
@@ -182,9 +219,20 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
         if (completionUnknown) {
           // Preserve diagnosis after an uncertain action, without treating a
           // later snapshot as proof that the original input finished safely.
+          const generation = freshWindowGeneration(result, pid, args.window_id);
+          if (generation && receipt.pid === completionUnknown.pid && receipt.windowId === completionUnknown.windowId &&
+              receipt.started === completionUnknown.started && (!completionUnknown.generation || generation === completionUnknown.generation) &&
+              snapshot !== completionUnknown.snapshot && snapshot !== completionUnknown.postSnapshot) recovery = { ...receipt, generation };
           receipt = null;
-          return { ...result, _meta: { ...result._meta, naw_input_blocked: true },
-            content: [...result.content, { type: 'text', text: 'Previous input completion unknown. This is a read-only observation; further input remains blocked. Do not retry the previous action.' }] };
+          return { ...result, _meta: { ...result._meta, naw_input_blocked: true, naw_recovery_available: Boolean(recovery) },
+            content: [...result.content, { type: 'text', text: 'Previous input completion unknown. This is a read-only observation; input remains blocked. If recovery is available, review this window then call recover_input with this snapshot and acknowledge_unknown:true. Do not retry the previous action.' }] };
+        }
+        if (recoveredSnapshot !== null) {
+          if (snapshot === recoveredSnapshot || !freshWindowGeneration(result, pid, args.window_id)) {
+            receipt = null;
+            throw Error('Input recovery requires a new fresh exact NAW snapshot after acknowledgement.');
+          }
+          recoveredSnapshot = null;
         }
         return result;
       }
@@ -224,18 +272,18 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
       const { expect: _expect, ...wireArgs } = args;
       let output;
       try { output = await invoke({ ...params, arguments: wireArgs }); }
-      catch (error) { completionUnknown = true; throw error; }
+      catch (error) { markUnknown(previous); throw error; }
       if (output?.isError) {
-        if (!(output._meta?.mutation_dispatched === false && output._meta?.dispatch_state === 'none')) completionUnknown = true;
+        if (!(output._meta?.mutation_dispatched === false && output._meta?.dispatch_state === 'none')) markUnknown(previous);
         return actionResult(output, false, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page', 'Bridge refused or could not confirm the action; do not retry.');
       }
-      let post;
-      try { post = actionObservation(await invoke({ name: 'inspect_ui', arguments: { app_target: `PID:${previous.pid}`,
-        window_id: previous.windowId, fresh: true, include_elements: true } }), previous.pid, previous.windowId); } catch { /* No repeat observation or mutation. */ }
+      let post, postResult;
+      try { postResult = await invoke({ name: 'inspect_ui', arguments: { app_target: `PID:${previous.pid}`,
+        window_id: previous.windowId, fresh: true, include_elements: true } }); post = actionObservation(postResult, previous.pid, previous.windowId); } catch { /* No repeat observation or mutation. */ }
       const current = identity(previous.pid);
       if (!post || current?.started !== previous.started || post.meta.snapshot_id === previous.snapshot ||
           previous.generation && post.generation !== previous.generation) {
-        completionUnknown = true;
+        markUnknown(previous, postResult?._meta?.snapshot_id);
         return actionResult(output, false, name === 'type' ? 'text_and_focus' : 'page', 'Fresh same-window post-action observation is unavailable; do not retry.');
       }
       let verified;
@@ -247,9 +295,9 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
           fieldFocused(e, post.meta.focused_element, previous.pid, previous.windowId));
         verified = matches.length === 1 && (name !== 'type' || matches[0].value === args.text);
       }
-      if (!verified) completionUnknown = true;
+      if (!verified) markUnknown(previous, postResult?._meta?.snapshot_id);
       return actionResult(output, verified, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page',
-        verified ? undefined : 'Requested page, focus or complete literal text was not observed; no retry or further input is allowed.');
+        verified ? undefined : 'Requested page, focus or complete literal text was not observed. Do not retry; further input is blocked until a fresh observation and explicit recover_input acknowledgement.');
     } finally { busy = false; }
   };
 }
