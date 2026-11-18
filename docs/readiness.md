@@ -30,11 +30,27 @@ unverified instead of being declared passed. No product patch masks those trials
 
 Background application control is now packaged, but installing frontend files
 does not add its proof collector or tool catalog to retained old native backends.
-Original native workspace_control registration, actual original-agent delivery
-and continued native work need separate adoption and acceptance. The dormant
-mobile prefix validation repair enables no phone/network listener. Physical
-IME, original goal resume, signed physical resize and full-day dogfood remain
-open. No push is used.
+Original-agent delivery — scope rechecked 2026-11-18: current-member queue
+send/READY records are observed, and the original sender/recipient case below
+remains scoped evidence. Neither qualifies every backend retained before a GUI
+update. For an unqualified retained backend, native workspace_control/tool
+adoption, its own native delivery receipt and continued work on the same native
+identity still need acceptance; a new session's delivery is not a substitute.
+
+Original goal resume — known limitation, rechecked 2026-11-18: the supported
+Codex path has no qualified conditional native resume interface. NAW stops
+automatic continuation for a blocked/paused goal and leaves the person to use
+`/goal resume` in the same terminal; it does not issue that command or use an
+unconditional goal setter. The 0.167.0 source and local 0.167.1 schema evidence
+are version-scoped, not proof about later native versions. A supported conditional
+write and native acceptance are still needed before automatic resume could be
+claimed; an active-goal wait returning is not that proof. See the [T-111 known
+limit](interaction.md)
+and the frozen review record's conditional-resume and original-delivery entries.
+
+The dormant mobile prefix validation repair enables no phone/network listener.
+Physical IME, signed physical resize and full-day dogfood remain open. No push is
+used.
 
 One original Main-to-secretary outbox task has an exact shared ledger entry,
 native receipt and completed first command. The recipient's native
