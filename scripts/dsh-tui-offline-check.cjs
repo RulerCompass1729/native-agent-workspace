@@ -20,6 +20,9 @@
 // Each of the three stops (stop, blocked, witness lost) ends the TUI within
 // the PTY host's SIGTERM grace, so its SIGKILL fallback never runs, and
 // after each session no process of the runtime remains.
+// The log drops reports about once a minute, and the witness then stops the
+// session (dsh-witness.cjs). Such a session showed nothing about the path
+// under test, so it runs again, at most ATTEMPTS times in all.
 const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
@@ -34,6 +37,7 @@ const REPLY = 'FAKE-REPLY-OK';
 const BLOCKED_TARGET = 'example.com:443';
 // pty_host.py sends SIGKILL only once this long has passed since its SIGTERM.
 const PTY_TERM_GRACE_MS = 5000;
+const ATTEMPTS = 3;
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -47,11 +51,46 @@ function parseArguments(argv) {
 // --- results -------------------------------------------------------------
 
 const results = [];
+// The current attempt's outcomes, reported once it is known to count.
+let buffer = null;
+
+function report(outcome) {
+  results.push(outcome);
+  const mark = outcome.passed ? 'PASS' : 'FAIL';
+  console.log(`${mark} ${outcome.name}${outcome.detail === undefined ? '' : ` — ${outcome.detail}`}`);
+}
 
 function check(name, passed, detail) {
-  results.push({ name, passed: passed === true, detail });
-  const mark = passed === true ? 'PASS' : 'FAIL';
-  console.log(`${mark} ${name}${detail === undefined ? '' : ` — ${detail}`}`);
+  const outcome = { name, passed: passed === true, detail };
+  if (buffer !== null) {
+    buffer.push(outcome);
+    return;
+  }
+  report(outcome);
+}
+
+// Runs one session check, `run` resolving with its session, again while the
+// witness stopped that session at a missing beat.
+async function attempts(name, run) {
+  for (let index = 1; index <= ATTEMPTS; index++) {
+    const outcomes = [];
+    buffer = outcomes;
+    let session = null;
+    try {
+      session = await run();
+    } finally {
+      buffer = null;
+      if (session === null) {
+        for (const outcome of outcomes) report(outcome);
+      }
+    }
+    const silent = session.violations.some(record => record.source === 'witness' && record.target === 'witness-silent');
+    if (!silent || index === ATTEMPTS) {
+      for (const outcome of outcomes) report(outcome);
+      return;
+    }
+    console.log(`NOTE ${name}: the witness stopped the session at a missing beat during attempt ${index}`);
+  }
 }
 
 // --- fixtures ------------------------------------------------------------
@@ -306,6 +345,7 @@ async function checkChat(options, where) {
   checkGrace('chat', terminal);
   await waitFor(() => runtimeProcesses(where).length === 0, 10);
   check('chat: no runtime process remains', runtimeProcesses(where).length === 0);
+  return session;
 }
 
 function connectThrough(port, target) {
@@ -341,6 +381,7 @@ async function checkBlock(options, where) {
   await waitFor(() => runtimeProcesses(where).length === 0, 10);
   check('block: no runtime process remains', runtimeProcesses(where).length === 0);
   await session.stop();
+  return session;
 }
 
 // The witness's own log reader: a child of this process streaming the
@@ -375,6 +416,7 @@ async function checkLost(options, where) {
   await waitFor(() => runtimeProcesses(where).length === 0, 10);
   check('lost: no runtime process remains', runtimeProcesses(where).length === 0);
   await session.stop();
+  return session;
 }
 
 async function main() {
@@ -389,9 +431,9 @@ async function main() {
     const work = path.join(dir, 'work');
     fs.mkdirSync(work);
     const options = { dataDir, work, fake, certificate };
-    await checkChat(options, where);
-    await checkBlock(options, where);
-    await checkLost(options, where);
+    await attempts('chat', () => checkChat(options, where));
+    await attempts('block', () => checkBlock(options, where));
+    await attempts('lost', () => checkLost(options, where));
   } finally {
     if (fake) await fake.close();
     fs.rmSync(dir, { recursive: true, force: true });

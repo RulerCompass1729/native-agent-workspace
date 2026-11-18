@@ -9,7 +9,7 @@ const os = require('node:os');
 const net = require('node:net');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { PassThrough } = require('node:stream');
+const { PassThrough, Writable } = require('node:stream');
 const { pathToFileURL } = require('node:url');
 const dshTui = require('../dsh-tui.cjs');
 const egress = require('../dsh-egress.cjs');
@@ -261,13 +261,30 @@ class FakeReader extends EventEmitter {
   }
 }
 
-// A canary process. It exits on SIGTERM, unless `stubborn`.
+// The canary process. `ports` are the beats written to its input; it emits
+// 'beat' for each. It exits on SIGTERM, unless `stubborn`.
 class FakeCanary extends EventEmitter {
   constructor(pid, stubborn = false) {
     super();
     this.pid = pid;
     this.stubborn = stubborn;
     this.signals = [];
+    this.ports = [];
+    this.inputEnded = false;
+    this.stdin = new Writable({
+      write: (chunk, encoding, done) => {
+        for (const line of String(chunk).split('\n')) {
+          if (line === '') continue;
+          this.ports.push(Number(line));
+          this.emit('beat', Number(line));
+        }
+        done();
+      },
+      final: done => {
+        this.inputEnded = true;
+        done();
+      },
+    });
   }
   kill(signal) {
     this.signals.push(signal);
@@ -276,30 +293,51 @@ class FakeCanary extends EventEmitter {
   }
 }
 
+// The kernel's report of each beat, while `answering`.
+function answerBeats(reader, canary) {
+  const answers = { answering: true };
+  canary.on('beat', port => {
+    if (!answers.answering) return;
+    setImmediate(() => reader.report(`Sandbox: node(${canary.pid}) deny(1) network-outbound remote:*:${port}`));
+  });
+  return answers;
+}
+
 function fakeWitness(options = {}) {
   const reader = new FakeReader();
   const spawned = [];
   const denials = [];
-  let lost = 0;
+  const reasons = [];
   const canaries = [];
+  const runCanary = options.runCanary || (() => {
+    const canary = new FakeCanary(901 + canaries.length, options.stubborn === true);
+    canaries.push(canary);
+    return canary;
+  });
   const started = witness.startWitness({
     nonce: NONCE,
-    runCanary: () => {
-      const canary = new FakeCanary(901 + canaries.length, options.stubborn === true);
-      canaries.push(canary);
-      return canary;
-    },
+    runCanary,
     onDenial: denial => denials.push(denial),
-    onLost: () => lost++,
+    onLost: reason => reasons.push(reason),
     spawn: (program, args, spawnOptions) => {
       spawned.push({ program, args, spawnOptions });
       return reader;
     },
     armTimeoutMs: options.armTimeoutMs || 2000,
-    canaryExitMs: options.canaryExitMs || 2000,
-    canaryReportMs: options.canaryReportMs || 2000,
+    beatMs: options.beatMs || 10000,
+    beatReportMs: options.beatReportMs || 2000,
   });
-  return { reader, spawned, denials, canaries, started, lost: () => lost };
+  return { reader, spawned, denials, canaries, started, reasons, lost: () => reasons.length };
+}
+
+// Starts the stream and reports the first beat.
+async function armedWitness(options = {}) {
+  const run = fakeWitness(options);
+  run.reader.stdout.write('Filtering the log data using ...\n');
+  await tick();
+  const canary = run.canaries[0];
+  run.reader.report(`Sandbox: node(${canary.pid}) deny(1) network-outbound remote:*:${canary.ports[0]}`);
+  return { ...run, canary, armed: await run.started };
 }
 
 test('a denial report is parsed from the first line of the kernel message', () => {
@@ -319,97 +357,180 @@ test('a denial report is parsed from the first line of the kernel message', () =
   assert.equal(witness.parseDenial(undefined), null);
 });
 
-test('the witness arms only on its canary report and then passes every other refusal on', async () => {
+test('the witness arms on its canary’s first beat report and then passes every other refusal on', async () => {
   const run = fakeWitness();
   assert.equal(run.spawned[0].program, '/usr/bin/log');
   assert.deepEqual(run.spawned[0].args.slice(0, 3), ['stream', '--style', 'ndjson']);
   assert.ok(run.spawned[0].args[4].includes(`eventMessage CONTAINS "${NONCE}"`));
   run.reader.stdout.write('Filtering the log data using ...\n');
   await tick();
-  assert.equal(run.canaries.length, 1, 'the header starts the first canary');
+  assert.equal(run.canaries.length, 1, 'the header starts the canary');
+  const canary = run.canaries[0];
+  assert.deepEqual(canary.ports, [1], 'and its first beat');
   run.reader.report('Sandbox: curl(55) deny(1) network-outbound remote:*:443');
-  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
+  run.reader.report(`Sandbox: node(${canary.pid}) deny(1) network-outbound remote:*:1`);
   const armed = await run.started;
   assert.equal(armed.armed, true);
+  assert.equal(armed.beats, 1);
   // A report that came before arming is still a refusal.
   assert.deepEqual(run.denials.map(denial => denial.pid), [55]);
-  run.reader.report(`1 duplicate report for Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
+  run.reader.report(`1 duplicate report for Sandbox: node(${canary.pid}) deny(1) network-outbound remote:*:1`);
   run.reader.report('Sandbox: python3(66) deny(1) network-bind local:*:8000');
   await tick();
   assert.deepEqual(run.denials.map(denial => denial.pid), [55, 66]);
-  // The canary was ended with SIGTERM before the witness armed.
-  assert.deepEqual(run.canaries.map(canary => canary.signals), [['SIGTERM']]);
+  assert.equal(armed.beats, 1, 'a repeated report is not another beat');
   armed.close();
   await tick();
   assert.deepEqual(run.reader.signals, ['SIGTERM']);
+  assert.deepEqual(canary.signals, ['SIGTERM']);
+  assert.equal(canary.inputEnded, true);
   assert.equal(run.lost(), 0, 'closing is not a loss');
   run.reader.report('Sandbox: curl(77) deny(1) network-outbound remote:*:443');
   await tick();
   assert.deepEqual(run.denials.map(denial => denial.pid), [55, 66]);
 });
 
-test('without a canary report, or with the reader gone, the witness refuses to arm', async () => {
-  const silent = fakeWitness({ armTimeoutMs: 100 });
+test('without a beat report, or with the reader or the canary gone, the witness refuses to arm', async () => {
+  const silent = fakeWitness({ armTimeoutMs: 100, beatMs: 20 });
   silent.reader.stdout.write('Filtering the log data using ...\n');
   await assert.rejects(silent.started, /no canary report/);
   assert.deepEqual(silent.reader.signals, ['SIGTERM']);
-  assert.ok(silent.canaries.length >= 1);
-  // Canaries still running are ended with SIGTERM.
-  assert.ok(silent.canaries.every(canary => canary.signals.join() === 'SIGTERM'), JSON.stringify(silent.canaries.map(canary => canary.signals)));
+  assert.equal(silent.canaries.length, 1, 'one canary, beating');
+  assert.ok(silent.canaries[0].ports.length >= 3, JSON.stringify(silent.canaries[0].ports));
+  assert.deepEqual(silent.canaries[0].signals, ['SIGTERM']);
   const ended = fakeWitness();
   ended.reader.emit('exit', 1, null);
   await assert.rejects(ended.started, /the log reader ended/);
+  const gone = fakeWitness();
+  gone.reader.stdout.write('header\n');
+  await tick();
+  gone.canaries[0].emit('exit', 1, null);
+  await assert.rejects(gone.started, /the canary ended/);
+  assert.deepEqual(gone.reader.signals, ['SIGTERM']);
+  const unstarted = fakeWitness({ runCanary: () => ({ pid: undefined }) });
+  unstarted.reader.stdout.write('header\n');
+  await assert.rejects(unstarted.started, /the canary did not start/);
+  const throwing = fakeWitness({ runCanary: () => { throw Error('no sandbox-exec'); } });
+  throwing.reader.stdout.write('header\n');
+  await assert.rejects(throwing.started, /no sandbox-exec/);
   assert.throws(() => witness.startWitness({ nonce: 'bad' }), /invalid nonce/);
 });
 
-test('the log reader ending after arming is reported as lost', async () => {
-  const run = fakeWitness();
+// r4: the log drops reports for about a second roughly once a minute. A beat
+// whose report is missing means a refusal could be missing too.
+test('a beat report missing after arming loses the witness', async () => {
+  const run = fakeWitness({ beatMs: 10, beatReportMs: 60 });
   run.reader.stdout.write('header\n');
   await tick();
-  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
-  await run.started;
+  const canary = run.canaries[0];
+  const answers = answerBeats(run.reader, canary);
+  const armed = await run.started;
+  await wait(200);
+  assert.equal(run.lost(), 0, 'every beat reported: the witness holds');
+  assert.ok(armed.beats >= 8, String(armed.beats));
+  const ports = new Set(canary.ports);
+  assert.equal(ports.size, canary.ports.length, 'each beat has its own port');
+  assert.ok(canary.ports.every(port => port >= 1 && port <= witness.BEAT_PORTS));
+  answers.answering = false;
+  await wait(200);
+  assert.deepEqual(run.reasons, ['witness-silent']);
+  assert.equal(armed.armed, false);
+  assert.deepEqual(run.reader.signals, ['SIGTERM']);
+  assert.deepEqual(canary.signals, ['SIGTERM']);
+  const sent = canary.ports.length;
+  await wait(50);
+  assert.equal(canary.ports.length, sent, 'no beats after the loss');
+  run.reader.report('Sandbox: curl(77) deny(1) network-outbound remote:*:443');
+  await tick();
+  assert.deepEqual(run.denials, [], 'nothing is passed on after the loss');
+});
+
+// Seen in the real smoke run: the drop came while arming, and beats still
+// unreported then must not count against the session that starts after.
+test('beats missing before arming only delay it', async () => {
+  const run = fakeWitness({ beatMs: 10, beatReportMs: 40 });
+  run.reader.stdout.write('header\n');
+  await tick();
+  await wait(70);
+  const canary = run.canaries[0];
+  assert.ok(canary.ports.length >= 4, JSON.stringify(canary.ports));
+  answerBeats(run.reader, canary);
+  const armed = await run.started;
+  await wait(150);
+  assert.equal(run.lost(), 0, JSON.stringify(run.reasons));
+  assert.ok(armed.beats >= 5, String(armed.beats));
+  armed.close();
+});
+
+test('the log reader ending after arming loses the witness', async () => {
+  const run = await armedWitness();
   run.reader.emit('exit', 0, null);
   run.reader.emit('error', Error('gone'));
-  assert.equal(run.lost(), 1);
+  assert.deepEqual(run.reasons, ['witness-lost']);
 });
 
-// R2-B1: a canary's PID is exempt only while it is that canary: its own probe
-// report, while it runs or just after it exits. Anything else from that PID,
-// and anything at all once the PID may belong to another process, is a refusal.
-test('a refusal from a canary PID is recorded unless it is the canary probe, and always once the canary is gone', async () => {
-  const run = fakeWitness({ canaryReportMs: 50 });
-  run.reader.stdout.write('header\n');
+test('the canary ending or refusing beats after arming loses the witness', async () => {
+  const exited = await armedWitness();
+  exited.canary.emit('exit', 0, null);
+  assert.deepEqual(exited.reasons, ['witness-silent']);
+  assert.deepEqual(exited.reader.signals, ['SIGTERM']);
+  assert.deepEqual(exited.canary.signals, [], 'an ended canary is not signalled');
+  const refusing = await armedWitness();
+  refusing.canary.stdin.emit('error', Error('EPIPE'));
+  assert.deepEqual(refusing.reasons, ['witness-silent']);
+  assert.deepEqual(refusing.canary.signals, ['SIGTERM']);
+});
+
+// R2-B1: only reports of beats from the canary itself, while it runs, are the
+// witness's own. Its end loses the witness, so no later process can reuse
+// its PID unrecorded.
+test('a refusal is the canary’s own only when it is a beat of the running canary', async () => {
+  const run = await armedWitness();
+  const pid = run.canary.pid;
+  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:5000`);
+  run.reader.report(`Sandbox: node(${pid}) deny(1) network-bind local:*:7`);
+  run.reader.report('Sandbox: node(4321) deny(1) network-outbound remote:*:1');
   await tick();
-  const pid = run.canaries[0].pid;
-  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
-  await run.started;
-  // The canary's own repeated report, right after it exited: still the canary.
-  run.reader.report(`1 duplicate report for Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
-  // The same PID refused elsewhere is not the canary's probe.
-  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:443`);
-  await wait(100);
-  // Later the PID can belong to another process, whatever it connects to.
-  run.reader.report(`Sandbox: curl(${pid}) deny(1) network-outbound remote:*:443`);
-  run.reader.report(`Sandbox: node(${pid}) deny(1) network-outbound remote:*:1`);
-  await tick();
-  const seen = run.denials.map(denial => [denial.process, denial.pid, denial.target]);
+  const seen = run.denials.map(denial => [denial.pid, denial.operation, denial.target]);
   assert.deepEqual(seen, [
-    ['node', pid, 'remote:*:443'],
-    ['curl', pid, 'remote:*:443'],
-    ['node', pid, 'remote:*:1'],
+    [pid, 'network-outbound', 'remote:*:5000'],
+    [pid, 'network-bind', 'local:*:7'],
+    [4321, 'network-outbound', 'remote:*:1'],
   ]);
+  run.canary.emit('exit', 0, null);
+  assert.deepEqual(run.reasons, ['witness-silent']);
 });
 
-// R2-B2: no SIGKILL. A canary that outlives SIGTERM keeps the witness from
-// arming, so the session does not start.
-test('canaries are ended with SIGTERM and the witness does not arm while one keeps running', async () => {
-  const run = fakeWitness({ stubborn: true, canaryExitMs: 100 });
-  run.reader.stdout.write('header\n');
-  await tick();
-  run.reader.report(`Sandbox: node(${run.canaries[0].pid}) deny(1) network-outbound remote:*:1`);
-  await assert.rejects(run.started, /a canary did not exit/);
-  assert.deepEqual(run.canaries.map(canary => canary.signals), [['SIGTERM']]);
+// R2-B2: SIGTERM, never SIGKILL, even for a canary that outlives it.
+test('a canary that outlives SIGTERM gets nothing stronger', async () => {
+  const run = await armedWitness({ stubborn: true });
+  run.armed.close();
+  run.armed.close();
+  await wait(50);
+  assert.deepEqual(run.canary.signals, ['SIGTERM']);
   assert.deepEqual(run.reader.signals, ['SIGTERM']);
+  assert.equal(run.lost(), 0);
+});
+
+// The canary program itself, under a profile that allows everything, so the
+// connections arrive: one per port written, and an exit when the input ends.
+test('the canary connects once to each port it is given and exits when its input ends', { skip: process.platform !== 'darwin' }, async t => {
+  let connections = 0;
+  const server = net.createServer(socket => {
+    connections++;
+    socket.on('error', () => {});
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const child = dshTui.runCanary('(version 1)\n(allow default)', process.execPath);
+  const exited = new Promise(resolve => child.once('exit', code => resolve(code)));
+  const port = server.address().port;
+  child.stdin.write(`${port}\n`);
+  child.stdin.write(`${port}\n`);
+  for (let index = 0; index < 100 && connections < 2; index++) await wait(50);
+  assert.equal(connections, 2);
+  child.stdin.end();
+  assert.equal(await exited, 0);
 });
 
 // --- runtime checks -----------------------------------------------------------
@@ -680,12 +801,21 @@ test('a refusal anywhere in the sandbox is recorded with its program and stops t
 });
 
 test('a session stops when its witness is lost and does not start without one', async t => {
-  const lost = launched(t);
-  await lost.runtime.launch(lost.where, '/synthetic/node');
-  lost.guards.witness.onLost();
-  await tick();
-  assert.equal(lost.terminals[0].stops, 1);
-  assert.deepEqual(lost.activities.map(message => message.key), ['notice.activity.dshWitnessLost']);
+  const cases = [
+    [undefined, 'witness-lost'],
+    ['witness-lost', 'witness-lost'],
+    ['witness-silent', 'witness-silent'],
+    ['something else', 'witness-lost'],
+  ];
+  for (const [reason, target] of cases) {
+    const lost = launched(t);
+    await lost.runtime.launch(lost.where, '/synthetic/node');
+    lost.guards.witness.onLost(reason);
+    await tick();
+    assert.equal(lost.terminals[0].stops, 1, String(reason));
+    assert.deepEqual(lost.runtime.violations.map(found => [found.source, found.target]), [['witness', target]]);
+    assert.deepEqual(lost.activities.map(message => message.key), ['notice.activity.dshWitnessLost']);
+  }
   const failing = launched(t, { witnessFails: true });
   await assert.rejects(failing.runtime.launch(failing.where, '/synthetic/node'), error => {
     return error.code === 'dsh-witness-unavailable' && error.uiMessage.key === 'error.dsh.witnessUnavailable';
@@ -694,26 +824,60 @@ test('a session stops when its witness is lost and does not start without one', 
   assert.equal(failing.guards.proxyClosed, 1);
 });
 
-// R2-B1 end to end: the real witness over a fake log and canary. Once the
-// canary has exited, its PID refused anywhere stops the session.
-test('a refusal from a reused canary PID is recorded and stops the session', async t => {
+// The real witness over a fake log and canary.
+function beatingWitness(reader, canary) {
+  return {
+    startWitness: options => witness.startWitness({ ...options, runCanary: () => canary, spawn: () => reader, beatMs: 10, beatReportMs: 60 }),
+  };
+}
+
+// r4 end to end: while every beat is reported the session runs; the first
+// beat report the log drops stops it.
+test('a session stops when a beat report of its witness goes missing', async t => {
   const reader = new FakeReader();
   const canary = new FakeCanary(901);
-  const realWitness = {
-    startWitness: options => witness.startWitness({ ...options, runCanary: () => canary, spawn: () => reader, canaryReportMs: 30 }),
-  };
-  const { runtime, where, terminals, activities } = launched(t, { witnessModule: realWitness });
+  const answers = answerBeats(reader, canary);
+  const { runtime, where, terminals, activities } = launched(t, { witnessModule: beatingWitness(reader, canary) });
   reader.stdout.write('header\n');
-  reader.report('Sandbox: node(901) deny(1) network-outbound remote:*:1');
   await runtime.launch(where, '/synthetic/node');
   assert.equal(terminals.length, 1);
-  await wait(80);
-  reader.report('Sandbox: node(901) deny(1) network-outbound remote:*:443');
-  await tick();
+  await wait(150);
+  assert.equal(terminals[0].stops, 0, 'beats reported: the session runs');
+  answers.answering = false;
+  await wait(200);
   assert.equal(terminals[0].stops, 1);
-  assert.deepEqual(runtime.violations.map(found => [found.source, found.pid, found.target]), [['sandbox', 901, 'remote:*:443 (node)']]);
-  assert.deepEqual(activities.map(message => message.key), ['notice.activity.dshEgressBlocked']);
+  assert.deepEqual(runtime.violations.map(found => [found.source, found.target]), [['witness', 'witness-silent']]);
+  assert.deepEqual(activities.map(message => message.key), ['notice.activity.dshWitnessLost']);
+  assert.deepEqual(canary.signals, ['SIGTERM']);
   await runtime.stop();
+});
+
+// R2-B1 end to end: a refusal from the canary's PID that is not a beat is
+// recorded and stops the session; so does the canary's end.
+test('a refusal from the canary’s PID that is not a beat stops the session, and so does its end', async t => {
+  const reader = new FakeReader();
+  const canary = new FakeCanary(901);
+  answerBeats(reader, canary);
+  const blocked = launched(t, { witnessModule: beatingWitness(reader, canary) });
+  reader.stdout.write('header\n');
+  await blocked.runtime.launch(blocked.where, '/synthetic/node');
+  reader.report('Sandbox: node(901) deny(1) network-outbound remote:*:5000');
+  await wait(30);
+  assert.equal(blocked.terminals[0].stops, 1);
+  assert.deepEqual(blocked.runtime.violations.map(found => [found.source, found.pid, found.target]), [['sandbox', 901, 'remote:*:5000 (node)']]);
+  assert.deepEqual(blocked.activities.map(message => message.key), ['notice.activity.dshEgressBlocked']);
+  await blocked.runtime.stop();
+  const endReader = new FakeReader();
+  const endCanary = new FakeCanary(902);
+  answerBeats(endReader, endCanary);
+  const ended = launched(t, { witnessModule: beatingWitness(endReader, endCanary) });
+  endReader.stdout.write('header\n');
+  await ended.runtime.launch(ended.where, '/synthetic/node');
+  endCanary.emit('exit', 0, null);
+  await tick();
+  assert.equal(ended.terminals[0].stops, 1);
+  assert.deepEqual(ended.runtime.violations.map(found => [found.source, found.target]), [['witness', 'witness-silent']]);
+  await ended.runtime.stop();
 });
 
 // --- PTY environment ------------------------------------------------------------

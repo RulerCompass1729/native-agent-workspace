@@ -3,23 +3,29 @@
 // reports each refusal to the unified log, tagged with the session's nonce by
 // the profile's `(with message ...)`; NAW reads that log, so a refusal by any
 // process in the session's tree (a tool child, a DNS lookup, a socket bind)
-// leaves a record, not only what passes the egress proxy. The witness is
-// trusted only after a canary process, run under the same profile, has made
-// one refused connection, its report has arrived and every canary has exited.
+// leaves a record, not only what passes the egress proxy.
+// The log does not keep every report. For programs that are not Apple's own,
+// Node.js among them, the reports of about a second go missing roughly once a
+// minute, with no trace in the log and no sign to the reader (measured on
+// 2026-11-17). So a canary process runs beside the session for as long as it
+// lasts, under the same profile and with the same Node.js, and makes one
+// refused connection every BEAT_MS: a beat. The witness arms on the first
+// beat's report. After that, a beat whose report does not arrive within
+// BEAT_REPORT_MS means a refusal by the session could have gone unrecorded as
+// well, so the witness is lost and the session stops.
 const { spawn: spawnProcess } = require('node:child_process');
 
 const LOG = '/usr/bin/log';
 const ARM_TIMEOUT_MS = 10000;
-const CANARY_INTERVAL_MS = 500;
-// The canary's one refused connection, as the kernel reports it.
-const CANARY_PORT = 1;
-const CANARY_OPERATION = 'network-outbound';
-const CANARY_TARGET = `remote:*:${CANARY_PORT}`;
-// After SIGTERM, how long a canary has to exit before the witness gives up.
-const CANARY_EXIT_MS = 5000;
-// A canary's own report may arrive after it exits; after this its PID can
-// belong to another process, whose refusals are recorded like any other.
-const CANARY_REPORT_MS = 5000;
+const BEAT_MS = 250;
+// A beat's report arrived within 8 ms in 631 measured beats.
+const BEAT_REPORT_MS = 1000;
+// Each beat connects to the next loopback port in 1..BEAT_PORTS. A new port
+// each time keeps the kernel from folding beats into one duplicate report,
+// and each report names its beat.
+const BEAT_PORTS = 999;
+const BEAT_OPERATION = 'network-outbound';
+const BEAT_TARGET = /^remote:\*:(\d+)$/;
 // "Sandbox: node(4242) deny(1) network-outbound /private/var/run/mDNSResponder"
 // A repeated refusal arrives as "1 duplicate report for Sandbox: ...".
 const DENIAL = /Sandbox: (.+?)\((\d+)\) deny\(\d+\) (\S+)(?: (.*))?$/;
@@ -41,14 +47,17 @@ function parseDenial(message) {
   };
 }
 
-// `runCanary()` starts one sandboxed process that connects to CANARY_PORT on
-// the loopback and returns it (a ChildProcess: `pid`, `kill()`, 'exit').
-// Resolves once a canary's report has arrived and every canary has exited;
-// canaries still running then get SIGTERM, never SIGKILL, and one that does
-// not exit refuses the witness. Rejects, with the log reader and the
-// canaries stopped, if that does not happen in time. After arming, every
-// other report goes to `onDenial`, and the log reader ending before
-// `close()` goes to `onLost`. `spawn` and the times are replaced only in tests.
+// `runCanary()` starts the canary and returns it (a ChildProcess: `pid`, a
+// writable `stdin`, `kill()`, 'exit'). For each port number written to its
+// input as one line, it connects once to that loopback port; it exits when
+// its input ends. Resolves with the witness once a beat's report has arrived.
+// Rejects, with the log reader and the canary stopped, if none arrives in
+// time or either of them ends first. After arming, every report that is not
+// a beat's goes to `onDenial`, and `onLost(reason)` is called once when the
+// witness can no longer vouch for the record: 'witness-lost' when the log
+// reader ends, 'witness-silent' when a beat's report is missing or the canary
+// ends or stops taking beats. close() ends the log reader and the canary with
+// SIGTERM, never SIGKILL. `spawn` and the times are replaced only in tests.
 function startWitness({
   nonce,
   runCanary,
@@ -56,62 +65,86 @@ function startWitness({
   onLost = () => {},
   spawn = spawnProcess,
   armTimeoutMs = ARM_TIMEOUT_MS,
-  canaryExitMs = CANARY_EXIT_MS,
-  canaryReportMs = CANARY_REPORT_MS,
+  beatMs = BEAT_MS,
+  beatReportMs = BEAT_REPORT_MS,
 }) {
   if (!validNonce(nonce)) throw Error('DSH witness: invalid nonce');
   const predicate = `senderImagePath ENDSWITH "/Sandbox" AND eventMessage CONTAINS "${nonce}"`;
   return new Promise((resolve, reject) => {
     const reader = spawn(LOG, ['stream', '--style', 'ndjson', '--predicate', predicate], { stdio: ['ignore', 'pipe', 'ignore'] });
-    // pid -> { child, exitedAt, ended }; exitedAt is null while it runs.
-    const canaries = new Map();
-    // arming: no canary report yet. settling: one arrived, the canaries are
-    // exiting. armed: resolved. closed: stopped or failed.
+    // { child, exited }, from the stream's header on.
+    let canary = null;
+    // Beats whose report has not arrived: port -> when it was sent.
+    const waiting = new Map();
+    let port = 0;
+    let beats = 0;
+    // arming: no beat report yet. armed: resolved. closed: stopped, refused or lost.
     let phase = 'arming';
     let pending = '';
-    let canaryTimer = null;
-    let deadline = null;
-    const stopTimers = () => {
-      clearTimeout(deadline);
-      clearInterval(canaryTimer);
-    };
+    let beatTimer = null;
+    let armDeadline = null;
     const witness = {
       get armed() {
         return phase === 'armed';
       },
+      // Beats whose report arrived (read by the sandbox check).
+      get beats() {
+        return beats;
+      },
       close() {
+        if (phase === 'closed') return;
         phase = 'closed';
-        stopTimers();
+        clearTimeout(armDeadline);
+        clearInterval(beatTimer);
         reader.kill('SIGTERM');
+        if (canary !== null && !canary.exited) {
+          canary.child.stdin.end();
+          canary.child.kill('SIGTERM');
+        }
       },
     };
-    const running = () => {
-      const found = [];
-      for (const canary of canaries.values()) {
-        if (canary.exitedAt === null) found.push(canary);
-      }
-      return found;
-    };
-    const endCanaries = () => {
-      for (const canary of running()) {
-        if (canary.ended) continue;
-        canary.ended = true;
-        canary.child.kill('SIGTERM');
-      }
-    };
     const fail = error => {
-      if (phase === 'armed' || phase === 'closed') return;
+      if (phase !== 'arming') return;
       witness.close();
-      endCanaries();
       reject(error);
     };
-    const settle = () => {
-      if (phase !== 'settling' || running().length > 0) return;
-      clearTimeout(deadline);
-      phase = 'armed';
-      resolve(witness);
+    const lose = reason => {
+      if (phase !== 'armed') return;
+      witness.close();
+      onLost(reason);
     };
-    deadline = setTimeout(() => fail(Error('DSH witness: no canary report')), armTimeoutMs);
+    // Before arming, trouble refuses the witness; after, it loses it.
+    const broken = (problem, reason) => {
+      if (phase === 'arming') {
+        fail(Error(`DSH witness: ${problem}`));
+        return;
+      }
+      lose(reason);
+    };
+    armDeadline = setTimeout(() => fail(Error('DSH witness: no canary report')), armTimeoutMs);
+    // Runs after the poll phase that follows a beat, so a report already in
+    // the reader's pipe is read before its beat is judged missing, even when
+    // this process was busy.
+    const judge = () => {
+      if (phase === 'closed') return;
+      const now = performance.now();
+      for (const [beatPort, sentAt] of waiting) {
+        if (now - sentAt <= beatReportMs) continue;
+        if (phase === 'armed') {
+          lose('witness-silent');
+          return;
+        }
+        // Before arming a missing report only delays arming.
+        waiting.delete(beatPort);
+      }
+    };
+    const beat = () => {
+      if (phase === 'closed') return;
+      port = (port % BEAT_PORTS) + 1;
+      waiting.set(port, performance.now());
+      canary.child.stdin.write(`${port}\n`);
+      setImmediate(judge);
+    };
     const startCanary = () => {
       let child;
       try {
@@ -120,33 +153,47 @@ function startWitness({
         fail(error);
         return;
       }
-      // A canary that did not start never reports; the deadline covers it.
-      if (!child || !Number.isInteger(child.pid)) return;
-      const canary = { child, exitedAt: null, ended: false };
-      canaries.set(child.pid, canary);
+      if (!child || !Number.isInteger(child.pid) || !child.stdin) {
+        fail(Error('DSH witness: the canary did not start'));
+        return;
+      }
+      canary = { child, exited: false };
+      child.stdin.on('error', () => broken('the canary stopped taking beats', 'witness-silent'));
+      child.on('error', () => broken('the canary failed', 'witness-silent'));
       child.once('exit', () => {
-        canary.exitedAt = Date.now();
-        settle();
+        canary.exited = true;
+        broken('the canary ended', 'witness-silent');
       });
+      beat();
+      beatTimer = setInterval(beat, beatMs);
     };
-    // The canary's own probe, from a PID that is still that canary: it runs,
-    // or exited so recently that the PID cannot have been reused.
-    const fromCanary = denial => {
-      const canary = canaries.get(denial.pid);
-      if (canary === undefined) return false;
-      if (denial.operation !== CANARY_OPERATION || denial.target !== CANARY_TARGET) return false;
-      return canary.exitedAt === null || Date.now() - canary.exitedAt <= canaryReportMs;
+    // The port of a beat, if this is the running canary's report of one.
+    const beatOf = denial => {
+      if (canary === null || canary.exited || denial.pid !== canary.child.pid) return null;
+      if (denial.operation !== BEAT_OPERATION) return null;
+      const match = BEAT_TARGET.exec(denial.target);
+      if (!match) return null;
+      const beatPort = Number(match[1]);
+      return beatPort >= 1 && beatPort <= BEAT_PORTS ? beatPort : null;
     };
     const handle = denial => {
       if (phase === 'closed') return;
-      if (fromCanary(denial)) {
-        // A later canary report, or a repeat of one, changes nothing.
-        if (phase !== 'arming') return;
-        phase = 'settling';
-        stopTimers();
-        endCanaries();
-        deadline = setTimeout(() => fail(Error('DSH witness: a canary did not exit')), canaryExitMs);
-        settle();
+      const beatPort = beatOf(denial);
+      if (beatPort !== null) {
+        const sentAt = waiting.get(beatPort);
+        // A late or repeated report of a beat changes nothing.
+        if (sentAt === undefined) return;
+        waiting.delete(beatPort);
+        beats++;
+        if (phase === 'arming') {
+          // Earlier beats were before the session; only later ones count.
+          for (const [earlier, earlierAt] of waiting) {
+            if (earlierAt <= sentAt) waiting.delete(earlier);
+          }
+          phase = 'armed';
+          clearTimeout(armDeadline);
+          resolve(witness);
+        }
         return;
       }
       try {
@@ -157,11 +204,8 @@ function startWitness({
     };
     const readLine = line => {
       if (!line.startsWith('{')) {
-        // The header: the stream is starting. Canaries repeat until one is seen.
-        if (canaryTimer === null && phase === 'arming') {
-          startCanary();
-          canaryTimer = setInterval(startCanary, CANARY_INTERVAL_MS);
-        }
+        // The header: the stream is starting, so the beats can begin.
+        if (canary === null && phase === 'arming') startCanary();
         return;
       }
       let event;
@@ -180,19 +224,10 @@ function startWitness({
       pending = lines.pop();
       for (const line of lines) readLine(line.trim());
     });
-    const ended = () => {
-      if (phase === 'arming' || phase === 'settling') {
-        fail(Error('DSH witness: the log reader ended'));
-        return;
-      }
-      if (phase === 'closed') return;
-      phase = 'closed';
-      stopTimers();
-      onLost();
-    };
+    const ended = () => broken('the log reader ended', 'witness-lost');
     reader.on('error', ended);
     reader.on('exit', ended);
   });
 }
 
-module.exports = { LOG, CANARY_PORT, validNonce, parseDenial, startWitness };
+module.exports = { LOG, BEAT_PORTS, validNonce, parseDenial, startWitness };

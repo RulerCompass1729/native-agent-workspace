@@ -17,7 +17,7 @@ const { execFile, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 const { uiError, uiActivity } = require('./ui-errors.cjs');
-const { validNonce, CANARY_PORT } = require('./dsh-witness.cjs');
+const { validNonce } = require('./dsh-witness.cjs');
 
 const TUI_PACKAGE = '@deepseek-harness-tui/dsh-tui';
 const TUI_VERSION = '0.18.0';
@@ -265,14 +265,34 @@ function sandboxProfile({ proxyPort, nonce, injectDir, personHome = os.homedir()
   return lines.join('\n');
 }
 
-// One sandboxed process that makes a refused connection, so the witness can
-// see a report for this exact profile before the session starts. It exits
-// by itself; the witness ends any that still run with SIGTERM and waits.
+// The witness's canary: one sandboxed process beside the session, with the
+// session's profile and Node.js, for as long as the session lasts. For each
+// port number the witness writes to its input it connects once to that
+// loopback port, which the profile refuses. It exits when its input ends (also
+// when NAW itself goes away) or on SIGTERM.
+const CANARY_SOURCE = [
+  "const net = require('node:net');",
+  "let pending = '';",
+  "process.stdin.setEncoding('utf8');",
+  "process.stdin.on('data', chunk => {",
+  "  pending += chunk;",
+  "  const lines = pending.split('\\n');",
+  "  pending = lines.pop();",
+  "  for (const line of lines) {",
+  "    const socket = net.connect(Number(line), '127.0.0.1');",
+  "    socket.on('error', () => {});",
+  "    socket.on('connect', () => socket.destroy());",
+  "  }",
+  "});",
+  "process.stdin.on('end', () => process.exit(0));",
+].join('\n');
+
 function runCanary(profile, execPath) {
-  const code = `require('node:net').connect(${CANARY_PORT}, '127.0.0.1').on('error', () => process.exit(0))`;
-  const child = spawn(SANDBOX_EXEC, ['-p', profile, execPath, '-e', code], { stdio: 'ignore', env: { PATH: '/usr/bin:/bin' } });
-  // A canary that cannot start never reports, and the witness is refused.
+  const child = spawn(SANDBOX_EXEC, ['-p', profile, execPath, '-e', CANARY_SOURCE], { stdio: ['pipe', 'ignore', 'ignore'], env: { PATH: '/usr/bin:/bin' } });
+  // A canary that cannot start, or stops, makes the witness refuse or lose
+  // the session; the witness also listens for these.
   child.on('error', () => {});
+  child.stdin.on('error', () => {});
   return child;
 }
 
@@ -412,7 +432,7 @@ class DshTui extends EventEmitter {
         nonce,
         runCanary: () => runCanary(profile, execPath),
         onDenial: denial => this.blocked(sandboxViolation(denial)),
-        onLost: () => this.witnessLost(),
+        onLost: reason => this.witnessLost(reason),
       });
     } catch (error) {
       await this.closeGuards();
@@ -460,11 +480,14 @@ class DshTui extends EventEmitter {
     this.emit('activity', ...uiActivity('notice.activity.dshEgressBlocked', { target: found.target }));
     this.terminal?.stop().catch(() => {});
   }
-  // The log reader ended: refusals would no longer be recorded, so the
-  // session does not go on without them.
-  witnessLost() {
+  // The witness can no longer vouch for the record: its log reader ended
+  // ('witness-lost') or a canary beat's report did not arrive
+  // ('witness-silent'), so a refusal could have gone unrecorded. The session
+  // does not go on without the record.
+  witnessLost(reason) {
     if (this.stopped || this.violation) return;
-    this.violation = { at: Date.now(), source: 'witness', target: 'witness-lost' };
+    const target = reason === 'witness-silent' ? 'witness-silent' : 'witness-lost';
+    this.violation = { at: Date.now(), source: 'witness', target };
     this.violations.push(this.violation);
     this.emit('activity', ...uiActivity('notice.activity.dshWitnessLost'));
     this.terminal?.stop().catch(() => {});
