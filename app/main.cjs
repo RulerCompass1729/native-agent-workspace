@@ -81,9 +81,6 @@ let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFa
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
 for (const flag of ['disable-background-networking', 'disable-component-update', 'disable-sync']) app.commandLine.appendSwitch(flag);
-// Publish the complete native AX tree from renderer creation so background
-// computer-use sees controls rather than only Electron's outer window groups.
-if (process.platform === 'darwin') app.commandLine.appendSwitch('force-renderer-accessibility', 'complete');
 let vendorIcons;
 function localVendorIcons() {
   return vendorIcons ||= require('./vendor-icons.cjs').loadVendorIcons(path.join(app.getPath('userData'), 'vendor-icons'));
