@@ -880,6 +880,30 @@ test('a refusal from the canary’s PID that is not a beat stops the session, an
   await ended.runtime.stop();
 });
 
+// F's two r3 counterexamples (R2-B1): one second after the canary ends, curl
+// or node with its PID reports a refusal in a beat's form. No time after the
+// end is trusted; the end itself stops the session, and the report changes
+// nothing.
+test('a report from an ended canary’s PID a second later finds the session already stopped', async t => {
+  for (const program of ['curl', 'node']) {
+    const reader = new FakeReader();
+    const canary = new FakeCanary(901);
+    answerBeats(reader, canary);
+    const run = launched(t, { witnessModule: beatingWitness(reader, canary) });
+    reader.stdout.write('header\n');
+    await run.runtime.launch(run.where, '/synthetic/node');
+    canary.emit('exit', 0, null);
+    await tick();
+    assert.equal(run.terminals[0].stops, 1, program);
+    await wait(1000);
+    reader.report(`Sandbox: ${program}(901) deny(1) network-outbound remote:*:1`);
+    await wait(30);
+    assert.equal(run.terminals[0].stops, 1, program);
+    assert.deepEqual(run.runtime.violations.map(found => [found.source, found.target]), [['witness', 'witness-silent']], program);
+    await run.runtime.stop();
+  }
+});
+
 // --- PTY environment ------------------------------------------------------------
 
 test('an isolated terminal child gets only its listed environment, not NAW’s', async t => {
