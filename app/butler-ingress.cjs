@@ -9,6 +9,8 @@ const { nonBlockingQuestion } = require('./approval-policy.js');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
+const recoveryFailureReasons = Object.freeze({ capacity: 'capacity-retry-exhausted', routing: 'routing-retry-exhausted',
+  forbidden: 'forbidden-retry-exhausted', connection: 'connection-retry-exhausted' });
 
 function queueOutcomeSource(outcome) {
   if (!outcome || !(outcome.status === 'failed' || outcome.status === 'waiting' && !outcome.reason)) return null;
@@ -63,12 +65,13 @@ function storedQueueSource(roomId, event) {
 class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
-    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.connectionFailures = new Map();
+    this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
-      const failure = /^connection-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
-      if (failure && event.kind === 'failure' && event.payload.reason === 'connection-retry-exhausted' && event.sourceRef === `connection-exhausted:${event.payload.memberId}`)
-        this.connectionFailures.set(event.payload.memberId, failure[1]);
+      const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
+      if (failure && event.kind === 'failure' && Object.values(recoveryFailureReasons).includes(event.payload.reason) &&
+          (failure[1] !== 'connection' || event.payload.reason === recoveryFailureReasons.connection) && event.sourceRef === `${failure[1]}-exhausted:${event.payload.memberId}`)
+        this.recoveryFailures.add(failure[2]);
       const question = /^native-question:([a-f0-9]{64}):(open|ended)$/.exec(event.eventId);
       if (question && event.sourceRef === `native-question:${event.payload.memberId}`) {
         if (event.kind === 'blocked' && event.payload.reason === 'native-question') this.nativeQuestions.set(question[1], { memberId: event.payload.memberId });
@@ -132,21 +135,20 @@ class ButlerIngress {
       this.errors.delete('source-store'); return { status: 'recorded', count };
     } catch { this.errors.set('source-store', 'source-unavailable'); throw unavailable(); }
   }
-  // The backend exports this descriptor only while its failed native turn and
-  // the original input/control/membership guards still match. Record a fact,
-  // without settling/replaying a queue item or copying the native error body.
-  observeConnectionFailures(sessions = []) {
+  // The backend validates the live failed turn; intake never settles or replays its task.
+  observeRecoveryFailures(sessions = []) {
     for (const s of Array.isArray(sessions) ? sessions : []) {
-      const r = s?.capacityRecovery;
-      if (s?.provider !== 'claude' || s.state !== 'error' || s.archived || s.backendUnavailable || s.transportDisconnected || s.nativeContextPending ||
+      const r = s?.capacityRecovery, reason = Object.hasOwn(recoveryFailureReasons, r?.reason) ? recoveryFailureReasons[r.reason] : null;
+      if (!reason || !(s?.provider === 'claude' && r.reason !== 'routing' || s?.provider === 'codex' && ['capacity', 'routing'].includes(r.reason)) ||
+          s.state !== 'error' && !(s.provider === 'codex' && s.state === 'idle') || s.archived || s.backendUnavailable || s.transportDisconnected || s.nativeContextPending ||
           s.liveDraft || s.pendingTag || s.activeTurnId || s.approval || s.approvalOverflow || s.claudeQuestion || s.nativeApproval || s.nativeInputRequired ||
-          !s.terminalState?.alive || typeof s.id !== 'string' || !s.id || typeof s.nativeId !== 'string' || !s.nativeId ||
-          r?.reason !== 'connection' || r.status !== 'exhausted' || r.attempt !== 3 || r.due !== 0 || r.nativeId !== s.nativeId || typeof r.turnId !== 'string' || !r.turnId) continue;
+          (s.provider === 'claude' && !s.terminalState?.alive || s.terminalState?.alive === false) ||
+          typeof s.id !== 'string' || !s.id || typeof s.nativeId !== 'string' || !s.nativeId ||
+          r.status !== 'exhausted' || r.attempt !== 3 || r.due !== 0 || r.nativeId !== s.nativeId || typeof r.turnId !== 'string' || !r.turnId) continue;
       const identity = hash([s.id, s.nativeId, r.turnId]);
-      if (this.connectionFailures.get(s.id) === identity) continue;
-      this.record({ eventId: `connection-exhausted:${identity}`, sourceRef: `connection-exhausted:${s.id}`, kind: 'failure',
-        payload: { memberId: s.id, reason: 'connection-retry-exhausted' } });
-      this.connectionFailures.set(s.id, identity);
+      if (this.recoveryFailures.has(identity)) continue;
+      this.record({ eventId: `recovery-exhausted:${identity}`, sourceRef: `recovery-exhausted:${s.id}`, kind: 'failure', payload: { memberId: s.id, reason } });
+      this.recoveryFailures.add(identity);
     }
   }
   // Terminal titles only, explicitly requested for stewardEvents. No transcript or model call.

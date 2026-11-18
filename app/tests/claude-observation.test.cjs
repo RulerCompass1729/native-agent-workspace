@@ -2561,11 +2561,12 @@ test(`T32 native draft survives the complete continuation path: ${version} ${whe
 });
 
 
-test('exhausted connection reaches the butler failure ledger through actual main listeners', async t => {
+for (const [cause, rowChange, status] of [['connection', connectionRow, null], ['capacity', {}, 529], ['forbidden', refusedRow, 403]])
+test('exhausted ' + cause + ' reaches the butler failure ledger through actual main listeners', async t => {
   const { RoomState } = require('../room-state.cjs');
   const { ButlerIngress, bindQueueOutcomes } = require('../butler-ingress.cjs');
   const rules = require('../queue-dispatch.cjs');
-  const f = capacityWorkspace(t, undefined, connectionRow);
+  const f = capacityWorkspace(t, undefined, rowChange);
   const room = new RoomState(f.dir);
   const ingress = new ButlerIngress(f.dir, { roomState: room });
   bindQueueOutcomes(room, ingress, () => {});
@@ -2576,11 +2577,11 @@ test('exhausted connection reaches the butler failure ledger through actual main
   room.queueSetDelivery('shared', item, tag, 0);
   f.s.messages.unshift({ id: tag, role: 'user', text: 'Synthetic offline task', origin: 'naw-dispatch', time: now - 30000 });
   Object.assign(f.s, { name: 'Synthetic member', roomIds: ['shared'], roomId: 'shared', createdAt: now - 3600000 });
-  f.fail({ errorRowUnclassified: true }); f.stop();
+  f.fail(cause === 'capacity' ? {} : { errorRowUnclassified: true }); f.stop();
   for (let attempt = 0; attempt < 3; attempt++) {
     f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);
     await new Promise(resolve => setImmediate(resolve));
-    nextFailure(f, null);
+    nextFailure(f, status);
   }
   const member = f.w.snapshot().sessions.find(s => s.id === f.s.id);
   assert.equal(member.state, 'error');
@@ -2621,19 +2622,20 @@ test('exhausted connection reaches the butler failure ledger through actual main
   assert.equal(controlIngress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 1);
   console.log(JSON.stringify({ actual: beforeControl, positiveControl: { reason: control.reason, butlerFailures: 1 } }));
   assert.equal(failures.length, 1, 'retry exhaustion must reach the butler failure ledger');
-  assert.deepEqual(failures[0].payload, { memberId: f.s.id, reason: 'connection-retry-exhausted' });
+  assert.deepEqual(failures[0].payload, { memberId: f.s.id, reason: `${cause}-retry-exhausted` });
   assert.equal(room.queueFind('shared', item).status, 'sent', 'The failure fact does not silently cancel or replay the task');
   for (const listener of listeners) listener({ sessions: [member] });
   assert.equal(ingress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 1, 'Repeated live snapshots are one episode');
 });
 
+for (const [cause, rowChange, status] of [['connection', connectionRow, null], ['capacity', {}, 529], ['forbidden', refusedRow, 403]])
 for (const boundary of ['draft', 'input', 'native-id', 'takeover', 'member-change'])
-test('exhausted connection is not exported as a fresh failure after ' + boundary, async t => {
+test('exhausted ' + cause + ' is not exported as a fresh failure after ' + boundary, async t => {
   const { RoomState } = require('../room-state.cjs'), { ButlerIngress } = require('../butler-ingress.cjs');
-  const f = capacityWorkspace(t, undefined, connectionRow); f.fail(); f.stop();
+  const f = capacityWorkspace(t, undefined, rowChange); f.fail(); f.stop();
   for (let attempt = 0; attempt < 3; attempt++) {
     f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);
-    await new Promise(resolve => setImmediate(resolve)); nextFailure(f, null);
+    await new Promise(resolve => setImmediate(resolve)); nextFailure(f, status);
   }
   assert.equal(f.w.capacityStatus(f.s.id)?.status, 'exhausted');
   if (boundary === 'draft') f.w.setDraft(f.s.id, 'Unsent private words', 'window');
@@ -2644,7 +2646,7 @@ test('exhausted connection is not exported as a fresh failure after ' + boundary
   const member = f.w.snapshot().sessions.find(s => s.id === f.s.id);
   assert.equal(member.capacityRecovery, null, 'A stale exhausted episode is not a current failure fact');
   const room = new RoomState(f.dir), ingress = new ButlerIngress(f.dir, { roomState: room });
-  ingress.observeConnectionFailures([member]);
+  ingress.observeRecoveryFailures([member]);
   assert.equal(ingress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 0);
   assert.equal(f.sent.length, 3, 'No fourth retry or replay');
 });

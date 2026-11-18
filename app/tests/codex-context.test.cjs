@@ -573,3 +573,47 @@ for (const version of ['0.166.0', '0.167.0']) {
   if(intervention==='human draft')assert.equal(f.w.drafts.get(f.s.id),'Unsent human direction');
  });
 }
+
+function exhaustedButler(f) {
+ const {RoomState}=require('../room-state.cjs'),{ButlerIngress}=require('../butler-ingress.cjs');
+ const room=new RoomState(f.dir),ingress=new ButlerIngress(f.dir,{roomState:room}),listeners=[];
+ const main=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8'),start=main.indexOf("  client.on('state', data => {"),end=main.indexOf("  client.on('terminal', data =>",start);
+ assert.ok(start>0&&end>start);
+ require('node:vm').runInNewContext(main.slice(start,end),{client:{on:(event,listener)=>{if(event==='state')listeners.push(listener);}},context:{background:true},win:{isDestroyed:()=>false},butlerIngress:ingress,roomState:room,sessionLabels:{labels:new Map()},broadcastRoom:async()=>{},placeOpened:async()=>{},carryGrants:async()=>{}});
+ assert.equal(listeners.length,2);
+ return {ingress,observe:()=>{const sessions=f.w.snapshot().sessions;for(const listener of listeners)listener({sessions});return ingress.ledger.eventsAfter(null).events.filter(event=>event.kind==='failure');}};
+}
+async function exhaustNativeRecovery(f,cause) {
+ const code=cause==='routing'?'other':'serverOverloaded',message=cause==='routing'?routingError:'NATIVE ORIGINAL';
+ f.fail('original',code,message);
+ for(let attempt=0;attempt<3;attempt++){
+  const recovery=f.w.capacityStatus(f.s.id);assert.equal(recovery.attempt,attempt);
+  f.w.tickCapacity(recovery.due);await capacityTick();f.start('automatic-'+(attempt+1));f.end('automatic-'+(attempt+1),code,'failed',message);
+ }
+ assert.equal(f.calls.length,3);assert.equal(f.w.capacityStatus(f.s.id).status,'exhausted');
+}
+for(const cause of ['capacity','routing'])test('native Codex '+cause+' exhaustion reaches actual Main intake without a PTY or queue',async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';const capture=exhaustedButler(f);
+ f.fail('first',cause==='routing'?'other':'serverOverloaded',cause==='routing'?routingError:'NATIVE ORIGINAL');
+ assert.deepEqual(capture.observe(),[],'Scheduling is not exhaustion');
+ f.w.cancelCapacity(f.s.id);await exhaustNativeRecovery(f,cause);
+ const state=f.s.state,events=capture.observe();console.log('CODEX-EXHAUSTION',JSON.stringify({cause,state,attempts:f.calls.length,failures:events.length,terminal:f.r.terminal||null}));
+ assert.equal(events.length,1);assert.deepEqual(events[0].payload,{memberId:f.s.id,reason: `${cause}-retry-exhausted`});
+ assert.equal(f.s.state,state,'Intake never changes native state');assert.equal(f.s.view,'chat');
+ assert.equal(capture.observe().length,1,'Repeated snapshots do not re-record');
+ const replacement=new (require('../butler-ingress.cjs').ButlerIngress)(f.dir,{roomState:new (require('../room-state.cjs').RoomState)(f.dir)});
+ replacement.observeRecoveryFailures(f.w.snapshot().sessions);assert.equal(replacement.ledger.eventsAfter(null).events.filter(event=>event.kind==='failure').length,1);
+ f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.length,3);
+});
+for(const cause of ['capacity','routing'])for(const boundary of ['draft','input','native-id','takeover','member-change'])
+test('exhausted Codex '+cause+' cannot report a stale episode after '+boundary,async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';await exhaustNativeRecovery(f,cause);
+ const capture=exhaustedButler(f);
+ if(boundary==='draft')f.w.setDraft(f.s.id,'Unsent private words','window');
+ if(boundary==='input')f.start('new-human-turn');
+ if(boundary==='native-id')f.s.nativeId=randomUUID();
+ if(boundary==='takeover')f.w.claim(f.s.id,'other-window');
+ if(boundary==='member-change')f.w.join(f.s.id,true);
+ assert.equal(f.w.capacityStatus(f.s.id),null);assert.deepEqual(capture.observe(),[]);
+ assert.equal(f.calls.length,3,'No replay or fourth continuation');
+});

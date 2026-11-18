@@ -608,7 +608,7 @@ class Workspace extends EventEmitter {
   // restored from history or disk, and the original task is never replayed.
   capacityStatus(id) {
     const r = this.capacityRecoveries.get(id);
-    if (r?.reason === 'connection' && r.status === 'exhausted') {
+    if (r?.status === 'exhausted') {
       const s = this.sessions.get(id);
       if (!s || !this.capacityValid(s, r)) return null;
     }
