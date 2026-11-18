@@ -139,7 +139,8 @@ test('forced cleanup refuses a substituted root and leaves its symlink target un
 test('the real worker consumes its root receipt, rejects a fake version mismatch, and exits with no root left', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-worker-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const binary = path.join(directory, '2.1.328'); fs.writeFileSync(binary, '#!/bin/sh\necho "2.1.329 (Synthetic CLI)"\n', { mode: 0o700 });
+  const binary = path.join(directory, '2.1.328'), marker = path.join(directory, 'version-reached');
+  fs.writeFileSync(binary, '#!' + process.execPath + '\nrequire("node:assert/strict").deepEqual(process.argv.slice(2), ["--version"]);\nrequire("node:fs").writeFileSync(' + JSON.stringify(marker) + ', "reached");\nconsole.log("2.1.329 (Synthetic CLI)");\n', { mode: 0o700 });
   const filename = path.resolve(__dirname, '../claude-qualification.cjs'), box = { exports: {} }, cp = require('node:child_process');
   let root;
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
@@ -147,5 +148,24 @@ test('the real worker consumes its root receipt, rejects a fake version mismatch
     require: name => name === 'node:child_process' ? { fork: (file, args, options) => { root = JSON.parse(args[2]).root; return cp.fork(file, args, options); } } : name.startsWith('.') ? require(path.resolve(path.dirname(filename), name)) : require(name),
   }, { filename });
   const result = await box.exports.nativeJourneys({ binary, version: '2.1.328', privateDir: directory });
+  assert.equal(fs.existsSync(marker), true, 'The worker must parse and execute the controlled version check before refusing the mismatch');
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'reached');
   assert.equal(result.passed, false); assert.equal(result.reason, 'native-startup'); assert.equal(fs.existsSync(root), false);
+});
+
+test('every qualification worker entry passes node --check without running its entry code', () => {
+  const { spawnSync } = require('node:child_process'), app = path.resolve(__dirname, '..');
+  const entries = new Set(['claude-qualification.cjs', 'claude-mod-check.cjs']);
+  for (const entry of entries) {
+    const file = path.join(app, entry), source = fs.readFileSync(file, 'utf8');
+    // Follow the actual fork declarations, including workers added later. An
+    // unrecognized declaration fails closed instead of silently missing an entry.
+    const workers = [...source.matchAll(/\bfork\(\s*path\.join\(__dirname,\s*['"]([^'"]+\.cjs)['"]\)/g)];
+    assert.equal(workers.length, [...source.matchAll(/\bfork\s*\(/g)].length, entry + ': every fork entry must be checked');
+    for (const [, worker] of workers) entries.add(path.relative(app, path.resolve(path.dirname(file), worker)));
+    const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.error, undefined, entry);
+    assert.equal(result.status, 0, entry + ': ' + result.stderr);
+  }
+  assert.ok(entries.size > 2, 'The guard reached the real worker entry');
 });
