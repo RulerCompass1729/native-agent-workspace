@@ -14,15 +14,22 @@ test('all-session authority includes future concrete identities without turning 
   const challenge = access.beginPairing({ actor, origin, scopes: [], all: true });
   const device = access.pair({ secret: challenge.secret, actor, origin });
   const target = { serviceKey: '.', sessionId: 'future-session', nativeId: 'future-native' };
+  const before = access.load(); assert.equal(before.version, 2); assert.equal(before.sessionPolicy, 'all'); assert.deepEqual(before.scopes, []);
+  assert.throws(() => access.authorize({ token: device.cookieValue, csrf: device.csrf, actor, origin, action: 'send', target }));
+  access.syncAllScopes([{...target,actions:['read','send','answer']}]);
   const ticket = access.authorize({ token: device.cookieValue, csrf: device.csrf, actor, origin, action: 'send', target });
   assert.equal(verifyTicket(root, ticket, target, 'send'), true);
   assert.throws(() => verifyTicket(root, ticket, { ...target, nativeId: 'replaced' }, 'send'));
   assert.throws(() => verifyTicket(root, ticket, target, 'answer'));
   assert.throws(() => access.authorize({ token: device.cookieValue, csrf: device.csrf, actor, origin, action: 'send', target: { ...target, serviceKey: 'outside' } }));
-  const before = access.load(); assert.equal(before.version, 2); assert.equal(before.sessionPolicy, 'all'); assert.deepEqual(before.scopes, []);
   assert.throws(() => access.save({ ...before, sessionPolicy: 'unknown' }));
   assert.throws(() => access.save({ ...before, scopes: [{ ...target, actions: ['read'] }] }));
   access.revoke(); assert.throws(() => verifyTicket(root, ticket, target, 'send'));
+});
+test('an empty all-scope bootstrap cannot grant an unobserved native target',t=>{
+ const {root,access}=authority(t),challenge=access.beginPairing({actor,origin,scopes:[],all:true}),device=access.pair({secret:challenge.secret,actor,origin});
+ const target={serviceKey:'.',sessionId:'unobserved',nativeId:'unobserved-native'};
+ assert.throws(()=>access.authorize({token:device.cookieValue,csrf:device.csrf,actor,origin,action:'read',target}));
 });
 test('legacy selected read pairing never inherits the new all-session policy', t => {
   const { root, access } = authority(t), target = { serviceKey: '.', sessionId: 'selected', nativeId: 'native' };
@@ -131,4 +138,38 @@ test('all-scope workspace stays readable with many long histories and labels omi
   assert.ok(result.sessions.every(s=>s.earlierMessagesOmitted>0||s.messages.some(m=>m.textOmitted)),'bounded content is explicitly labelled');
   assert.ok(result.sessions.every(s=>s.messages.every(m=>!m.text.includes('\ufffd'))),'UTF-8 boundaries do not invent replacement characters');
   assert.ok(sessions.every((s,i)=>s.messages[0].text===bodies[i%2]),'native source content is unchanged');
+});
+test('all targets ending or losing native identity disappear from list, scopes and backend authority, including the last tuple',async t=>{
+ const f=brokerFixture(t),c=await f.broker.beginPairing({actor,origin,all:true}),d=f.broker.pair({secret:c.secret,actor,origin}),auth={token:d.cookieValue,actor,origin};auth.csrf=f.broker.session(auth).csrf;
+ const native=require('../mobile-session.cjs'),record=f.entries[0].state.sessions[0];record.messages=[{id:'history',role:'assistant',text:'Synthetic ended history',nativeId:record.nativeId}];
+ let ticket;const client=f.clients[0],call=client.call.bind(client);client.call=async(method,value)=>{ticket=structuredClone(value);return call(method,value);};
+ await f.broker.read(auth,'first');
+ const workspace={dataDir:f.root,closed:false,get:()=>record,runtimes:new Map([[record.id,{stopped:true,backendExitConfirmed:true}]]),approvalRoutes:new Map(),host:{}};
+ for(const mutate of [r=>{r.state='ended'},r=>{r.archived=true},r=>{r.nativeContextPending=true},r=>{r.nativeId=''},r=>{r.backendUnavailable=true}]){
+  Object.assign(record,f.row('first'),{archived:false,nativeContextPending:false,backendUnavailable:false});mutate(record);
+  assert.equal((await f.broker.refreshSession(auth)).sessions.length,0);assert.equal((await f.broker.workspaceRead(auth)).scopes.length,0);
+  await assert.rejects(f.broker.read(auth,'first'));assert.throws(()=>native.read(workspace,ticket));
+  const state=JSON.parse(fs.readFileSync(path.join(f.root,'mobile-authority.json'),'utf8'));assert.deepEqual(state.scopes,[]);
+ }
+ Object.assign(record,f.row('first'),{archived:false,nativeContextPending:false,backendUnavailable:false});
+ assert.equal((await f.broker.read(auth,'first')).id,'first');
+ f.entries[0].state.sessions.push(f.row('second'));await f.broker.refreshSession(auth);record.state='ended';
+ assert.deepEqual(Array.from((await f.broker.refreshSession(auth)).sessions,s=>s.id),['second']);
+ assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root,'mobile-authority.json'),'utf8')).scopes.map(s=>s.sessionId),['second']);
+});
+test('selected historical reads keep their existing semantics after a session ends',async t=>{
+ const f=brokerFixture(t),c=await f.broker.beginPairing({actor,origin,selection:[{sessionId:'first',actions:['read']}]}),d=f.broker.pair({secret:c.secret,actor,origin}),auth={token:d.cookieValue,actor,origin};auth.csrf=f.broker.session(auth).csrf;
+ const record=f.entries[0].state.sessions[0];record.state='ended';record.messages=[{id:'old',role:'assistant',text:'Synthetic selected history',nativeId:record.nativeId}];
+ const native=require('../mobile-session.cjs'),target={serviceKey:'.',sessionId:record.id,nativeId:record.nativeId};
+ let ticket;const client=f.clients[0],call=client.call.bind(client);client.call=async(method,value)=>{ticket=structuredClone(value);return call(method,value);};
+ assert.equal((await f.broker.read(auth,'first')).id,'first');
+ assert.equal(native.read({dataDir:f.root,closed:false,get:()=>record,runtimes:new Map([[record.id,{stopped:true,backendExitConfirmed:true}]]),approvalRoutes:new Map(),host:{}},ticket).messages[0].text,'Synthetic selected history');
+ assert.equal(verifyTicket(f.root,ticket,target,'read'),true);
+});
+test('a full workspace rechecks current targets after its own refresh; selected history remains visible',async()=>{
+ const {MobileWorkspace}=require('../mobile-workspace.cjs'),record={id:'first',nativeId:'native-first',state:'idle',messages:[{id:'history',role:'assistant',text:'Synthetic history'}]};
+ const w=new MobileWorkspace({snapshot:()=>({sessions:[record],rooms:[]}),roomState:{},records:{status:()=>({count:0}),acknowledge(){}}});
+ const client={refresh:async()=>{record.state='ended'},route:()=>({key:'.'})},scope={serviceKey:'.',sessionId:record.id,nativeId:record.nativeId,actions:['read']};
+ assert.equal((await w.read(client,{allRooms:true,records:true},[scope])).sessions.length,0);
+ assert.equal((await w.read(client,{roomIds:[],records:false},[scope])).sessions[0].messages[0].text,'Synthetic history');
 });

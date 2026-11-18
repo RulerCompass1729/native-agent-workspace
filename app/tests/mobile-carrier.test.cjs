@@ -6,3 +6,24 @@ test('carrier executes only bounded read-only commands with a clean environment'
 test('carrier detects only the exact existing private mapping and native login, without mutation',()=>{const f=state(),before=JSON.stringify(f);const r=load().inspect(f.status,f.serve,{port:48765});assert.equal(r.origin,'https://demo.example.ts.net:10000');assert.equal(r.actor,'synthetic-person');assert.equal(r.port,48765);assert.equal(JSON.stringify(f),before);});
 test('carrier refuses wrong identity, public funnel, ambiguity, unsafe upstream and mapped port changes',()=>{const {inspect}=load();for(const mutate of [f=>{f.status.Self.UserID=8},f=>{f.status.BackendState='Stopped'},f=>{f.serve.AllowFunnel['demo.example.ts.net:10000']=true},f=>{f.serve.Web['demo.example.ts.net:10000'].Handlers['/'].Proxy='http://localhost:48765'},f=>{f.serve.Web['demo.example.ts.net:10000'].Handlers['/'].Proxy='http://127.0.0.1:8001'},f=>{f.serve.Web['demo.example.ts.net:10001']=f.serve.Web['demo.example.ts.net:10000'];f.serve.TCP['10001']={HTTPS:true}}]){const f=state();mutate(f);assert.throws(()=>inspect(f.status,f.serve,{port:48765}));}});
 test('other services on the hostname require an explicit exception rather than a fabricated carrier check',()=>{const f=state();f.serve.Web['demo.example.ts.net:443']={Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}};assert.throws(()=>load().inspect(f.status,f.serve,{port:48765}),e=>e.code==='MOBILE_SHARED_HOST');assert.equal(load().inspect(f.status,f.serve,{port:48765,sharedHostConfirmed:true}).actor,'synthetic-person');});
+test('TLS forwarding and foreground services require a fresh shared-host exception',()=>{
+  for(const mutate of [
+    f=>{f.serve.TCP[443]={TCPForward:'127.0.0.1:8001',TerminateTLS:'demo.example.ts.net'};},
+    f=>{f.serve.Foreground={synthetic:{TCP:{443:{HTTPS:true}},Web:{'demo.example.ts.net:443':{Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}}}}};},
+    f=>{f.serve.Foreground={synthetic:{TCP:{443:{TCPForward:'127.0.0.1:8001',TerminateTLS:'demo.example.ts.net'}}}};},
+    f=>{f.serve.TCP[8443]={TCPForward:'127.0.0.1:8001'};}
+  ]){
+    const f=state();mutate(f);const before=JSON.stringify(f);
+    assert.throws(()=>load().inspect(f.status,f.serve,{port:48765}),e=>e.code==='MOBILE_SHARED_HOST');
+    assert.equal(load().inspect(f.status,f.serve,{port:48765,sharedHostConfirmed:true}).port,48765);
+    assert.throws(()=>load().inspect(f.status,f.serve,{port:48765}),e=>e.code==='MOBILE_SHARED_HOST');
+    assert.equal(JSON.stringify(f),before);
+  }
+});
+test('unverifiable foreground configuration and duplicate entry ownership fail closed even with an exception',()=>{
+  for(const mutate of [f=>{f.serve.Foreground={bad:null}},f=>{f.serve.Foreground=[]},f=>{f.serve.Foreground={nested:{Foreground:{}}}},f=>{f.serve.Foreground={duplicate:{TCP:f.serve.TCP,Web:f.serve.Web}}},f=>{f.serve.Foreground={shadow:{TCP:f.serve.TCP,Web:{'demo.example.ts.net:10000':{Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}}}}};},f=>{f.serve.Foreground={funnel:{AllowFunnel:{'demo.example.ts.net:10000':true}}};}]){
+    const f=state();mutate(f);assert.throws(()=>load().inspect(f.status,f.serve,{port:48765,sharedHostConfirmed:true}));
+  }
+  const f=state();f.serve.TCP[443]={TCPForward:'127.0.0.1:8001',TerminateTLS:'other.example.ts.net'};
+  assert.equal(load().inspect(f.status,f.serve,{port:48765}).port,48765,'another exact TLS SNI does not share this cookie host');
+});

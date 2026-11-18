@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
 const { MobileAccess } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
-const { MAX_REQUESTS } = require('./mobile-session.cjs');
+const { MAX_REQUESTS, currentTarget } = require('./mobile-session.cjs');
 const { readLayout } = require('./service-layout.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
@@ -158,7 +158,7 @@ class MobileBroker {
     if (this.#layout() !== this.#fullLayout) throw denied('MOBILE_RESULT_UNCONFIRMED');
     const seen = new Set(), result = [];
     for (const entry of this.#bound().entries) for (const record of entry.state.sessions) {
-      if (record.archived || record.nativeContextPending || typeof record.nativeId !== 'string' || !record.nativeId) continue;
+      if (!currentTarget(record)) continue;
       if (!entry.state.capabilities?.includes('humanMobileV1')) continue;
       if (seen.has(record.id)) throw denied(); seen.add(record.id);
       result.push({ serviceKey: entry.key, sessionId: record.id, nativeId: record.nativeId, actions: entry.state.capabilities.includes('humanMobilePreparedV1') ? ['read','send','answer'] : ['read'] });
@@ -196,6 +196,7 @@ class MobileBroker {
     const { ticket, scope } = this.#grant(auth, id, 'read'), client = this.#bound(), epoch = this.#epoch;
     const row = await client.call('mobileRead', ticket);
     this.#after(auth, ticket, client, epoch);
+    if (this.#all(this.#authenticate(auth)) && !currentTarget(row)) throw denied();
     if (!row || row.id !== ticket.sessionId || row.nativeId !== ticket.nativeId || !row.proof || row.proof.nativeId !== ticket.nativeId) throw denied();
     const contextId = randomBytes(32).toString('base64url');
     if (this.#contexts.size >= MAX_REQUESTS) this.#contexts.delete(this.#contexts.keys().next().value);

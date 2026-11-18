@@ -14,6 +14,12 @@ unavailable identity and unknown shared-host trust fail closed. A shared-host
 exception still needs an explicit choice in Advanced settings; cookies are not
 isolated by port.
 
+The check includes foreground Web mappings and same-host TLS TCP forwarding,
+not just the root Web table. Unprovable additional topology needs that same
+one-call exception; ambiguous ownership and Funnel cannot use it. Changes to
+scope or carrier trust invalidate pending setup results before clearing pixels,
+so an earlier all-scope response cannot reappear under a narrower form.
+
 Core Image generates the one-use QR locally through an OS helper. Its payload is
 piped to the helper, not put in process arguments, logs, files or a remote QR
 service. The normal response contains image pixels and expiry, not a plaintext
@@ -29,6 +35,14 @@ session exists. Native identity, action, owner, generation, expiry, prepared-inp
 and human-input checks still apply. New trusted backend membership invalidates
 old read contexts before rebinding. Scope storage remains bounded; no silent
 truncation is permitted.
+
+Only current native targets belong to an all pairing. Ended, archived, unbound
+or confirmed-exited targets are removed from its list, grants and workspace
+projection using the same target predicate. When no targets remain, the exact
+scope set is cleared to the strict empty v2 bootstrap, which authorizes no
+target; both current and published v1 readers reject the previous ticket. A
+later current target can be mirrored without widening an old selected pairing.
+Individual-selection mode retains its existing historical read semantics.
 
 All-scope conversation previews share a four-MiB encoded-body budget rather than
 each reserving the old per-thread maximum. Session/space metadata is retained;

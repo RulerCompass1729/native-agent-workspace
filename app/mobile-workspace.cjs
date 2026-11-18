@@ -8,6 +8,7 @@ const presentation = card => 'sha256:' + createHash('sha256').update(JSON.string
 const { nonBlockingQuestion } = require('./approval-policy.js');
 const { confirmationSummary } = require('./confirmation-inbox.cjs');
 const { tempSummary } = require('./temp-reminders.cjs');
+const { currentTarget } = require('./mobile-session.cjs');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -65,7 +66,7 @@ class MobileWorkspace {
     grant = this.resolveGrant(grant, state);
     for (const scope of scopes.filter(s => s.actions.includes('read'))) {
       const record = state.sessions.find(s => s.id === scope.sessionId);
-      if (!record || record.archived || record.nativeContextPending || record.nativeId !== scope.nativeId) continue;
+      if (!record || record.archived || record.nativeContextPending || record.nativeId !== scope.nativeId || all && !currentTarget(record)) continue;
       try { if (client.route(record.id).key !== scope.serviceKey) continue; } catch { continue; }
       permitted.set(record.id, record);
       // Older desktop projections did not expose the unified array. Keep their

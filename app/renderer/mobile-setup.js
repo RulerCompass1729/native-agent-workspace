@@ -49,7 +49,8 @@
     let actorInvalid = false;
     function clearActorError() { actorInvalid = false; actor.setAttribute('aria-invalid', 'false'); actor.setAttribute('aria-describedby', ''); }
     clearActorError();
-    actor.addEventListener('input', () => { if (actorInvalid && validActor(actor.value.trim())) { clearActorError(); quiet(status); } });
+    actor.addEventListener('input', () => { invalidatePairing(); if (actorInvalid && validActor(actor.value.trim())) { clearActorError(); quiet(status); } });
+    origin.addEventListener('input', invalidatePairing);
     const port = field('mobile.port', 'mobile-port', 'number', advanced); port.min = '0'; port.max = '65535'; port.value = '0';
     const carrier = checkbox('mobile-carrier'), carrierRow = checkRow(carrier, node('span', 'mobile.carrierCompact')); section.append(carrierRow); attribute(carrier, 'title', 'mobile.carrier');
     editConnection.addEventListener('click', () => { connection.hidden = true; connectionFields.hidden = false; origin.focus?.(); });
@@ -96,7 +97,8 @@
       advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), checkRow(sharedHost, node('span', 'mobile.sharedHost')));
       advanced.append(connection, connectionFields, carrierRow, choices);
       section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.append(qr);
-      allSessions.addEventListener('change', () => { clearLink(); showScope(); });
+      allSessions.addEventListener('change', () => { invalidatePairing(); showScope(); });
+      sharedHost.addEventListener('change', invalidatePairing);
     }
     let approvalValue = null;
     function showApproval(value) {
@@ -127,9 +129,15 @@
         Number(matched.checked) + Number(enabled.checked || enabled.indeterminate) + Number(Boolean(approvalValue?.registered || approvalValue?.pending));
       say(advancedTitle, count ? 'mobile.advancedActive' : 'mobile.advanced', { count });
     }
-    port.addEventListener('input', updateAdvanced); port.addEventListener('change', updateAdvanced);
-    records.addEventListener('change', updateAdvanced); replace.addEventListener('change', updateAdvanced);
+    const configurationChanged = () => { invalidatePairing(); updateAdvanced(); };
+    port.addEventListener('input', configurationChanged); port.addEventListener('change', configurationChanged);
+    records.addEventListener('change', configurationChanged); replace.addEventListener('change', configurationChanged);
+    carrier.addEventListener('change', invalidatePairing);
     const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true; } };
+    function invalidatePairing() {
+      revision++; clearLink(); busy = false; prepare.disabled = false;
+      if (opened) say(status, oneStep && allSessions.checked ? 'mobile.autoReady' : 'mobile.idle');
+    }
     function counted() {
       say(count, 'mobile.selectedCount', { count: selections.filter(s => s.read.checked).length, total: selections.length });
     }
@@ -178,7 +186,7 @@
         if (!room?.id || room.archived) continue;
         const input = checkbox();
         spaces.append(checkRow(input, raw('span', room.name || room.id))); roomSelections.push({ id: room.id, input });
-        input.addEventListener('change', updateAdvanced);
+        input.addEventListener('change', configurationChanged);
       }
       for (const record of getSessions()) {
         if (record.archived || record.nativeContextPending || !record.nativeId) continue;
@@ -191,10 +199,12 @@
         row.append(checkRow(read, nameLabel), actions);
         // Unticking a session also clears its hidden send/answer choices, so no grant stays out of sight.
         read.addEventListener('change', () => {
+          invalidatePairing();
           actions.hidden = !read.checked;
           if (!read.checked) send.checked = answer.checked = false;
           counted();
         });
+        send.addEventListener('change', invalidatePairing); answer.addEventListener('change', invalidatePairing);
         selections.push({ id: record.id, nativeId: record.nativeId, read, send, answer, row, words: name.toLowerCase() });
       }
       filter();

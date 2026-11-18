@@ -4,7 +4,6 @@ const fs = require('node:fs'), path = require('node:path');
 const { randomBytes, randomUUID, createHash, timingSafeEqual } = require('node:crypto');
 const { TextDecoder } = require('node:util');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
-const { readLayout } = require('./service-layout.cjs');
 const FILE = 'mobile-authority.json', OFF = 'mobile-disabled';
 const PAIR_MS = 120000, SESSION_MS = 12 * 60 * 60 * 1000, MAX_BYTES = 256 * 1024;
 const actions = new Set(['read', 'send', 'answer']);
@@ -79,10 +78,9 @@ function activeState(root, { io = fs, now = Date.now, alive = issuerAlive } = {}
 function scopeOf(s, target, action, root) {
   if (!actions.has(action) || !exact(target, ['serviceKey', 'sessionId', 'nativeId'])) throw denied();
   if (s.version === 2 && s.sessionPolicy === 'all') {
-    if (!root || !['serviceKey','sessionId','nativeId'].every(k => text(target[k]))) throw denied();
-    const layout = readLayout(root);
-    if (layout.pending || !layout.entries.includes(target.serviceKey)) throw denied();
-    return { ...target, actions: ['read','send','answer'] };
+    // Empty bootstrap/withdrawal is not a wildcard. Main must first observe
+    // eligible native targets and mirror their exact concrete v1 scopes.
+    throw denied();
   }
   const found = s.scopes.find(x => x.serviceKey === target.serviceKey && x.sessionId === target.sessionId && x.nativeId === target.nativeId && x.actions.includes(action));
   if (!found) throw denied(); return found;
@@ -175,10 +173,8 @@ class MobileAccess {
   syncAllScopes(scopes) {
     const s = this.load();
     if (!this.#allGeneration || s.generation !== this.#allGeneration || !validScopes(scopes)) throw denied();
-    // No invented placeholder when empty. Retain the last real tuple set, or
-    // the empty v2 bootstrap until the first real session can be observed.
-    if (!scopes.length) return;
-    const next = { ...s, version: 1, scopes: JSON.parse(JSON.stringify(scopes)) }; delete next.sessionPolicy;
+    const next = { ...s, version: scopes.length ? 1 : 2, scopes: JSON.parse(JSON.stringify(scopes)) };
+    if (scopes.length) delete next.sessionPolicy; else next.sessionPolicy = 'all';
     if (JSON.stringify(s) !== JSON.stringify(next)) this.store(next);
   }
   pair({ secret: pairingSecret, actor, origin: site }) {

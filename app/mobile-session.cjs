@@ -28,10 +28,16 @@ function serviceProof(w) {
   const { layout } = location(w); if (layout.pending) throw denied();
   return JSON.stringify([...layout.entries].sort());
 }
+function readableTarget(s) { return Boolean(s && !s.archived && !s.nativeContextPending && typeof s.nativeId === 'string' && s.nativeId); }
+// Current all-mode grants exclude ended targets; selected historical reads
+// intentionally retain their existing semantics through readableTarget().
+function currentTarget(s, runtime) {
+  return readableTarget(s) && !['ended','closed'].includes(s.state) && !s.backendUnavailable && !s.backendExitConfirmed && !s.stopped && !runtime?.stopped && !runtime?.backendExitConfirmed;
+}
 function checked(w, ticket, action) {
   const { root, key } = location(w), s = w.get(ticket?.sessionId);
   const target = { serviceKey: key, sessionId: s.id, nativeId: s.nativeId };
-  if (w.closed || s.archived || s.nativeContextPending) throw denied();
+  if (w.closed || !readableTarget(s)) throw denied();
   verifyTicket(root, ticket, target, action);
   return s;
 }
@@ -213,9 +219,9 @@ function read(w, ticket) {
   }).reverse();
   const q = question(w, s);
   return { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name, state: s.state, proof: proof(s),
-    canSend: s.state === 'idle' && !!r && !r.stopped && !r.backendExitConfirmed && !r.transportDisconnected && r.chatAvailable !== false && !r.nativeInputRequired && !r.nativeAbortRequest && !r.pendingQueue && !s.pendingTag && !s.approval && !w.storageWarning,
+    canSend: currentTarget(s, r) && s.state === 'idle' && !!r && !r.transportDisconnected && r.chatAvailable !== false && !r.nativeInputRequired && !r.nativeAbortRequest && !r.pendingQueue && !s.pendingTag && !s.approval && !w.storageWarning,
     question: q && Buffer.byteLength(JSON.stringify(q)) <= TEXT_BYTES ? q : null, questionOmitted: Boolean(q && Buffer.byteLength(JSON.stringify(q)) > TEXT_BYTES),
     messages, earlierMessagesOmitted: Math.max(0, rows.length - messages.length) };
 }
 function find(w, ticket, spec, action) { const row = lookup(w, ticket, spec, action); return row ? receipt(w, row) : null; }
-module.exports = { CAPABILITY, PREPARED, PREPARE_MS, MAX_REQUESTS, read, send, answer, find, valid, prepare, commit, cancel, disconnected };
+module.exports = { CAPABILITY, PREPARED, PREPARE_MS, MAX_REQUESTS, currentTarget, read, send, answer, find, valid, prepare, commit, cancel, disconnected };
