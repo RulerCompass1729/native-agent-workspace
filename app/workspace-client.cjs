@@ -699,10 +699,11 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'initial') return this.refresh(roomId);
     if (method === 'nativeHistory') {
       const guard = this.operationGuard(this.active); guard();
-      if (!this.active.state.capabilities?.includes('nativeHistory')) throw uiError("error.client.reopenForBackend");
+      const provider = args[0]?.provider === 'claude' ? 'claude' : 'codex';
+      if (!this.active.state.capabilities?.includes(provider === 'claude' ? 'claudeSessionList' : 'nativeHistory')) throw uiError("error.client.reopenForBackend");
       const result = await this.active.client.call(method, ...args); guard();
       const snapshot = await this.refresh(roomId); guard();
-      return { ...result, data: result.data.map(row => ({ ...row, existingIds: snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === row.nativeId).map(s => s.id) })) };
+      return { ...result, data: result.data.map(row => ({ ...row, existingIds: snapshot.sessions.filter(s => s.provider === provider && s.nativeId === row.nativeId).map(s => s.id) })) };
     }
     if (method === 'importHistory') {
       if (args[1] != null && (typeof args[1] !== 'object' || Array.isArray(args[1]))) throw uiError("error.client.invalidHistoryImport");

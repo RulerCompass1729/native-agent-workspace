@@ -108,6 +108,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   previews. A desktop rename stays in session-labels.json and takes precedence
   for display; it does not rewrite prior name snapshots in locally stored
   shared records.
+- Claude session list: only when you open 「继续已有 Claude 会话…」, the service
+  reads the head and tail (at most 64 KiB each) of local Claude transcripts to
+  show each session's title or first typed message (60 characters), folder and
+  time, and runs `claude agents --json --all` for running state. These are shown
+  only in that dialog: they are not written to NAW records, queues, delivery
+  records or logs, and no model or network is called. Continuing a session uses
+  the existing pasted-ID path and its naming rules above.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local

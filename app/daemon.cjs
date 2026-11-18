@@ -37,6 +37,8 @@ async function main() {
   // Version decisions and the fallback clock must outlive this process: they go to the data directory.
   const host = new NativeHost(privateDir, dataDir, binding); await host.start();
   // A sibling, never inside the legacy shared cwd (including NAW_WORKSPACE).
+  // Claude sessions to continue from the new-session dialog; read only when the dialog asks.
+  const claudeSessions = new (require('./claude-session-list.cjs').ClaudeSessions)({ launcher: () => host.binaries?.claude, file: path.join(dataDir, 'claude-qualification.json') });
   const workspace = new Workspace(host, dataDir, `${path.resolve(defaultWorkspace)}-sessions`); const clients = new Set(), writers = new Map();
   // Clients that take state deltas (state-delta.cjs), each with the states its next frame may build on.
   const deltas = new Map(), stateEncoder = createStateEncoder();
@@ -80,7 +82,7 @@ async function main() {
         await host.startCodex();
         return { binding, nativeReady: Boolean(host.rpc), credentialPresent: host.butlerCredentialPresent === true };
       }
-      case 'initial': host.resolvePrograms?.(); return { ...(binding ? { serviceBinding: binding } : {}), ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'archiveIdleMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'freeClaimV1', 'eitherViewInputV1', 'createSettingsV1', 'createSettingsProfileV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'participantMaintenanceStopV1', 'guardedSessionStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer', 'programAvailabilityV1'], codexProfiles: require('./codex-profile.cjs').listCodexProfiles(), runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': host.resolvePrograms?.(); return { ...(binding ? { serviceBinding: binding } : {}), ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [background.CAPABILITY, ...mobileCapabilities, ...(fs.existsSync(path.join(__dirname, 'scoped-outbox-runtime.cjs')) ? ['scopedNativeOutboxV1'] : []), ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'operatorControl1a', 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'archiveIdleMoveV1', 'spaceMergeV1', 'queueDispatchV1', 'freeClaimV1', 'eitherViewInputV1', 'createSettingsV1', 'createSettingsProfileV1', 'agentAddressedHandoffs', 'agentWakeV1', require('./session-wake.cjs').PREFLIGHT, 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'conditionalMaintenanceStopV1', 'participantMaintenanceStopV1', 'guardedSessionStopV1', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'claudeSessionList', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer', 'programAvailabilityV1'], codexProfiles: require('./codex-profile.cjs').listCodexProfiles(), runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -125,7 +127,7 @@ async function main() {
       case 'peerSend': return workspace.peerLeases.send(client, owner, args[0]);
       case 'peerPause': return workspace.peerLeases.pause(client, args[0]?.id);
       case 'retrySave': return workspace.retrySave();
-      case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
+      case 'nativeHistory': return args[0]?.provider === 'claude' ? claudeSessions.list({ search: args[0].search, cursor: args[0].cursor }) : workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner, args[1]);
       case 'observe': return workspace.observe(args[0]);
       case 'gitWorktreePreview': return gitWorktree.preview(args[0], args[1], args[2]);

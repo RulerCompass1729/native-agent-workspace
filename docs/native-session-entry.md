@@ -141,3 +141,28 @@ remain available through the existing archive view. One local reference is saved
 before resume; this follows the existing local-save behavior, not a guarantee
 against power loss. Uncertain native acknowledgement or incomplete pagination
 keeps that reference without automatic retry, fork or task replay.
+
+## Claude session list in 新建会话 (2026-11-18)
+
+Choosing Claude in 新建会话 offers 「继续已有 Claude 会话…」, a list with search
+like the Codex one. Choosing a row uses the same import as a pasted ID
+(`importHistory` with the row's folder and the dialog's name and permission
+choice); there is no second import path, and the paste-ID field and fork entry
+remain.
+
+- Read only when the dialog asks: the top-level `<uuid>.jsonl` files under
+  `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/`, newest first, 30 per page. For
+  each file NAW reads at most the first and last 64 KiB and keeps the session ID,
+  the folder from that session's own rows, the modification time and a title (the
+  newest `custom-title`, else `ai-title`, else the first typed message, cut to 60
+  characters). Subagent files, symlinks and files owned by another user are skipped.
+- Running state comes from `claude agents --json --all`. A running row is labelled
+  「正在别处运行，先在那边退出再接」 but stays selectable; the existing import guard
+  (`claude agents --json` and the process check) still refuses it, so no second
+  writer starts. A row already open in NAW shows 「已在工作台中」 instead.
+- The list sits behind the Claude qualification gate: an unqualified or unknown
+  version reads no files and says to paste the ID; records whose format is not
+  recognized are counted and the dialog says to paste the ID.
+- Verified on Claude 2.1.327 by `scripts/test-native-claude-session-list.cjs`
+  (isolated HOME and config, real CLI under the loopback sandbox, zero requests).
+  Other versions are not verified.
