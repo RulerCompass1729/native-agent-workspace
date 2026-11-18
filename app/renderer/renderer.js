@@ -726,8 +726,22 @@ function columnTerminalSash(binding) {
   return binding.nativeSash = sash;
 }
 // A smaller window lowers a tall terminal (down to 64px) so the input stays in the column.
+function fitColumnTerminalWidth(binding) {
+  const entry = terminals.get(binding.id);
+  if (!entry?.ready || entry.restoring) return;
+  const record = state.sessions.find(s => s.id === binding.id);
+  if (record?.owner !== owner || !currentTerminalDisplay(entry, record) ||
+      !entry.element.isConnected || !entry.element.checkVisibility() || entry.element.clientHeight <= 0) return;
+  const width = entry.element.clientWidth;
+  // Output redraws and height clamping keep their existing grid. Only a first
+  // owned display or a changed usable width opens the existing next-frame fit.
+  if (width > 0 && width !== entry.columnWidth) fitColumnTerminal(binding);
+}
 function refreshColumnTerminalHeights() {
-  for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
+  for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) {
+    applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
+    fitColumnTerminalWidth(binding);
+  }
 }
 window.addEventListener('resize', () => { hideColumnTerminalHint(); fitRoomTabs(true); refreshColumnTerminalHeights(); });
 function removeColumnInput(id) {
@@ -5366,7 +5380,7 @@ async function ensureTerminal(id, explicit = false) {
       entry.sequence = snapshot.sequence; entry.ready = true;
       flushTerminalEvents(entry);
       loading.remove(); surface.hidden = false; surface.inert = false;
-      render(); if (!columnTerminalBinding(id)) { fitTerminal(id); if (intent === selectionRevision) focusTerminal(id); } else revealTerminalCursor(entry);
+      render(); const column = columnTerminalBinding(id); if (!column) { fitTerminal(id); if (intent === selectionRevision) focusTerminal(id); } else { fitColumnTerminalWidth(column); revealTerminalCursor(entry); }
     } catch (error) {
       if (terminals.get(id) === entry) {
         entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
@@ -5383,9 +5397,10 @@ async function ensureTerminal(id, explicit = false) {
 }
 function fitTerminal(id) {
   const entry = terminals.get(id); const s = state.sessions.find(s => s.id === id);
-  if (!entry?.ready) return;
+  if (!entry?.ready || entry.restoring) return;
   if (s?.owner !== owner) { entry.nativeSize = undefined; return; }
   const column = columnTerminalBinding(id);
+  if (column && !currentTerminalDisplay(entry, s)) return;
   if (column ? !column.resizeAllowed : activeSessionId() !== id || terminalLayout === 'hidden') return;
   if (entry.composing || entry.composition) { entry.fitPending = true; return; }
   if (entry.fitScheduled) return;
@@ -5395,6 +5410,7 @@ function fitTerminal(id) {
     const latest = state.sessions.find(s => s.id === id);
     const binding = columnTerminalBinding(id);
     if (terminals.get(id) !== entry || (column ? binding !== column || !column.resizeAllowed : activeSessionId() !== id || terminalLayout === 'hidden') || !entry.element.isConnected || !entry.element.checkVisibility() || latest?.owner !== owner) return;
+    if (entry.restoring || column && (!currentTerminalDisplay(entry, latest) || entry.element.clientWidth <= 0 || entry.element.clientHeight <= 0)) return;
     if (entry.composing || entry.composition) { entry.fitPending = true; return; }
     const dimensions = entry.fit.proposeDimensions();
     if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) return;
@@ -5402,6 +5418,7 @@ function fitTerminal(id) {
     // pane reads that original grid through the surface's local overflow.
     if (column) column.resizeAllowed = false;
     entry.term.resize(Math.max(20, Math.min(400, dimensions.cols)), Math.max(5, Math.min(200, dimensions.rows)));
+    if (column) entry.columnWidth = entry.element.clientWidth;
     revealTerminalCursor(entry);
     const size = JSON.stringify([entry.term.cols, entry.term.rows]);
     if (entry.nativeSize === size) return;

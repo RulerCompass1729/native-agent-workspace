@@ -238,7 +238,7 @@ test('the actual overview measures column heights after its final header and sha
     fitRoomTabs() { calls.fittedWithToolbar = context.roomOverview.toolbar.hidden; },
     $: element,
   });
-  const refresh = renderer.indexOf('function refreshColumnTerminalHeights(');
+  const refresh = renderer.indexOf('function fitColumnTerminalWidth(');
   if (refresh >= 0) vm.runInContext(renderer.slice(refresh, renderer.indexOf("window.addEventListener('resize'", refresh)), context);
   const begin = renderer.indexOf('function renderRoomOverview(');
   vm.runInContext(renderer.slice(begin, renderer.indexOf('const nativeUsable =', begin)), context);
