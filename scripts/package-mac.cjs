@@ -189,6 +189,7 @@ async function build() {
       'mobile-web/sw.js',
       'mobile-web/workspace.js',
       'mobile-workspace.cjs',
+      'native-accessibility.cjs',
       'native-blocks.cjs',
       'native-computer-use.cjs',
       'native-directory-trust.cjs',
