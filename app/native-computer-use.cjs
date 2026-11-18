@@ -159,6 +159,19 @@ function actionResult(output, observed, kind, reason) {
     retrySafe: refused && meta.retry_safe === true, ...(reason ? { reason } : {}) };
   return { isError: !observed, structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }] };
 }
+function canObserveUnverifiedClick(output, previous) {
+  const meta = output?._meta, target = meta?.target_receipt, identity = meta?.target_identity;
+  // The pinned bridge marks an accepted AXPress as an error when it cannot
+  // prove the effect. Only this exact one-action background receipt permits
+  // a read-only postcondition check, never a retry or a delivery claim.
+  return output?.isError === true && meta?.state === 'dispatched_unverified' && meta.effect === 'unverifiable' &&
+    meta.dispatch_state === 'dispatched' && meta.mutation_dispatched === true && meta.dispatched_unit_count === 1 &&
+    meta.retry_safe === false && meta.requires_fresh_observation === true && meta.delivery_mode === 'background' &&
+    meta.delivery_mechanism === 'accessibility_action' && typeof previous.generation === 'string' &&
+    target?.pid === previous.pid && target.window_id === previous.windowId && target.process_start_identity_decimal === previous.generation &&
+    identity?.kind === 'window' && identity.pid === previous.pid && identity.window_id === previous.windowId &&
+    identity.process_start_identity_decimal === previous.generation;
+}
 function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now } = {}) {
   let receipt = null, busy = false, completionUnknown = null, recovery = null, recoveredSnapshot = null;
   const markUnknown = (previous, postSnapshot) => {
@@ -273,7 +286,7 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
       let output;
       try { output = await invoke({ ...params, arguments: wireArgs }); }
       catch (error) { markUnknown(previous); throw error; }
-      if (output?.isError) {
+      if (output?.isError && !(name === 'click' && canObserveUnverifiedClick(output, previous))) {
         if (!(output._meta?.mutation_dispatched === false && output._meta?.dispatch_state === 'none')) markUnknown(previous);
         return actionResult(output, false, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page', 'Bridge refused or could not confirm the action; do not retry.');
       }

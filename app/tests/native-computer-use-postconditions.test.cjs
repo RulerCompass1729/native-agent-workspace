@@ -23,13 +23,13 @@ const accepted = { isError: false, content: [{ type: 'text', text: 'Clicked succ
 } };
 const click = { name: 'click', arguments: { snapshot: 'before', on: 'button', expect: { label: 'Cancel owned dialog' } } };
 const type = { name: 'type', arguments: { snapshot: 'before', on: 'field', text: 'hello world', clear: true } };
-async function trial(request, after, before = capture('before')) {
+async function trial(request, after, before = capture('before'), mutationResult = accepted) {
   let reads = 0, actions = 0;
   const calls = [], gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });
   const invoke = async params => {
     calls.push(params);
     if (params.name === 'inspect_ui') return ++reads === 1 ? before : after;
-    actions++; return accepted;
+    actions++; return mutationResult;
   };
   await gate(observe, invoke);
   return { result: await gate(request, invoke), gate, invoke, calls, counts: () => ({ reads, actions }) };
@@ -129,4 +129,48 @@ test('post-action snapshots also require an explicit protocol success flag', asy
     if (isError === undefined) delete after.isError; else after.isError = isError;
     assert.equal((await trial(click, after)).result.isError, true);
   }
+});
+
+// The qualified bridge reports an accepted AXPress without an effect proof as
+// isError:true. That is not delivery proof, and it is not a reason to retry.
+function unverifiedClick() {
+  return { isError: true, _meta: { state: 'dispatched_unverified', effect: 'unverifiable', dispatch_state: 'dispatched',
+    mutation_dispatched: true, dispatched_unit_count: 1, retry_safe: false, requires_fresh_observation: true,
+    delivery_mode: 'background', delivery_mechanism: 'accessibility_action',
+    target_receipt: { pid: 123, window_id: 456, process_start_identity_decimal: '1700000000123456' },
+    target_identity: { kind: 'window', pid: 123, window_id: 456, process_start_identity_decimal: '1700000000123456' } } };
+}
+test('one unverified exact background AX click can be checked by a new page fact without resending', async () => {
+  const t = await trial(click, capture('after', { opened: true }), capture('before'), unverifiedClick());
+  assert.equal(t.result.isError, false);
+  assert.equal(t.result.structuredContent.outcome, 'postcondition_observed');
+  assert.equal(t.result.structuredContent.deliveryVerified, false);
+  assert.equal(t.result.structuredContent.retrySafe, false);
+  assert.deepEqual(t.counts(), { reads: 2, actions: 1 });
+});
+test('an unverified click without the new page fact stays unknown and never retries', async () => {
+  const t = await trial(click, capture('after'), capture('before'), unverifiedClick());
+  assert.equal(t.result.isError, true);
+  assert.deepEqual(t.counts(), { reads: 2, actions: 1 });
+  await assert.rejects(t.gate(click, t.invoke), /completion unknown/);
+});
+test('foreign, partial, foreground or malformed bridge-error receipts cannot enter the postcondition path', async () => {
+  for (const change of [r => { r._meta.target_receipt.pid = 999; }, r => { r._meta.target_identity.window_id = 999; },
+    r => { r._meta.target_receipt.process_start_identity_decimal = '1700000000999999'; }, r => { r._meta.dispatched_unit_count = 2; },
+    r => { r._meta.delivery_mode = 'foreground'; }, r => { r._meta.mutation_dispatched = false; }, r => { delete r._meta.target_identity; }]) {
+    const output = unverifiedClick(); change(output);
+    const t = await trial(click, capture('after', { opened: true }), capture('before'), output);
+    assert.equal(t.result.isError, true); assert.deepEqual(t.counts(), { reads: 1, actions: 1 });
+  }
+});
+test('an error-marked or wrong-window post-read cannot confirm a dispatched-unverified click', async () => {
+  for (const change of [r => { r.isError = true; }, r => { r._meta.target_receipt.window_id = 999; }, r => { r._meta.used_cache = true; }]) {
+    const after = capture('after', { opened: true }); change(after);
+    const t = await trial(click, after, capture('before'), unverifiedClick());
+    assert.equal(t.result.isError, true); assert.deepEqual(t.counts(), { reads: 2, actions: 1 });
+  }
+});
+test('bridge errors during typing retain the original locked behavior', async () => {
+  const t = await trial(type, capture('after', { value: 'hello world' }), capture('before'), unverifiedClick());
+  assert.equal(t.result.isError, true); assert.deepEqual(t.counts(), { reads: 1, actions: 1 });
 });
