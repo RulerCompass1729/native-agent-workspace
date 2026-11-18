@@ -68,7 +68,7 @@ function space(count) {
     take('const COLUMN_TERMINAL = ', '\n'),
     take('function renderColumnInput(', '// T-135:'),
     take('function columnTerminalLimits(', 'function columnTerminalAlignment('),
-    take('function refreshColumnTerminalHeights(', "window.addEventListener('resize'"),
+    take('// A smaller window lowers a tall terminal', "window.addEventListener('resize'"),
     take('function columnTerminalBinding(', 'function terminalContextVisible('),
   ].join('\n'), context);
   // One overview redraw as collaboration-overview.js and renderRoomOverview do it: the page has changed,
