@@ -80,6 +80,7 @@
     const matched = checkbox('mobile-approval-matched'), enabled = checkbox('mobile-approval-enabled');
     approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); advanced.append(approval);
     const allSessions = checkbox('mobile-all-sessions'), sharedHost = checkbox('mobile-shared-host'), qr = document.createElement('img');
+    const qrTrust=node('p','mobile.qrTrust');qrTrust.className='quiet';qrTrust.hidden=true;
     qr.id = 'mobile-pair-qr'; qr.hidden = true; attribute(qr, 'alt', 'mobile.qrAlt');
     const fullScope = node('p', 'mobile.fullScope'), fullBoundary = node('p', 'mobile.fullStage1');
     fullScope.className = fullBoundary.className = 'quiet';
@@ -90,13 +91,14 @@
       if (port.parentElement) port.parentElement.hidden = all;
       fullScope.hidden = fullBoundary.hidden = !all;
       if (!all) showConnection(recall());
-      say(prepare, all ? 'mobile.connect' : 'mobile.prepare');
+      say(prepare, all ? approvalValue?.paired ? 'mobile.replacePhone' : 'mobile.connect' : 'mobile.prepare');
+      if(oneStep)say(fullBoundary,approvalValue?.paired?'mobile.replaceAfterComplete':'mobile.fullStage2');
     }
     if (oneStep) {
       allSessions.checked = true;
       advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), checkRow(sharedHost, node('span', 'mobile.sharedHost')));
       advanced.append(connection, connectionFields, carrierRow, choices);
-      section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.append(qr);
+      section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.append(qr,qrTrust);
       allSessions.addEventListener('change', () => { invalidatePairing(); showScope(); });
       sharedHost.addEventListener('change', invalidatePairing);
     }
@@ -106,7 +108,7 @@
       enabled.disabled = !value?.registered; approvalConfirm.disabled = true; approvalBegin.disabled = !value?.paired;
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
-      updateAdvanced();
+      updateAdvanced();showScope();
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;
@@ -123,7 +125,7 @@
       if (matched.checked && pending?.ready) approvalAction('mobileApprovalConfirm', { registrationId: pending.registrationId, fingerprint: pending.fingerprint });
     });
     enabled.addEventListener('change', () => { updateAdvanced(); approvalAction('mobileApprovalEnable', { enabled: enabled.checked, registrationId: approvalValue?.registrationId }); });
-    let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [];
+    let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [],setupId=null;
     function updateAdvanced() {
       const count = Number(port.value !== '0') + roomSelections.filter(r => r.input.checked).length + Number(records.checked) + Number(replace.checked) +
         Number(matched.checked) + Number(enabled.checked || enabled.indeterminate) + Number(Boolean(approvalValue?.registered || approvalValue?.pending));
@@ -133,7 +135,8 @@
     port.addEventListener('input', configurationChanged); port.addEventListener('change', configurationChanged);
     records.addEventListener('change', configurationChanged); replace.addEventListener('change', configurationChanged);
     carrier.addEventListener('change', invalidatePairing);
-    const clearLink = () => { clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true; } };
+    const cancelCode = id => {if(id && typeof api.mobileCancelSetup==='function')Promise.resolve(api.mobileCancelSetup({setupId:id})).catch(()=>{});};
+    const clearLink = (cancel=true) => { if(cancel){const old=setupId;setupId=null;cancelCode(old);}clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true;qrTrust.hidden=true; } };
     function invalidatePairing() {
       revision++; clearLink(); busy = false; prepare.disabled = false;
       if (opened) say(status, oneStep && allSessions.checked ? 'mobile.autoReady' : 'mobile.idle');
@@ -218,12 +221,15 @@
       if (oneStep && allSessions.checked) {
         const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
         try {
-          const result = await api.mobileConnect({ sharedHostConfirmed: sharedHost.checked });
-          if (!opened || revision !== ticket) return;
+          const result = await api.mobileConnect({ sharedHostConfirmed: sharedHost.checked,...(approvalValue?.paired?{replace:true}:{}) });
+          if (!opened || revision !== ticket) {cancelCode(result.setupId);return;}
           if (typeof result.qr !== 'string' || result.qr.length > 350000 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.qr) || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= now()) throw Error('unconfirmed');
-          qr.src = result.qr; qr.hidden = false; say(status, 'mobile.qrReady');
-          timer = setTimer(() => { if (revision === ticket) { clearLink(); say(status, 'mobile.expired'); } }, Math.min(120000, result.expiresAt - now()));
+          setupId=result.setupId || null;qr.src = result.qr; qr.hidden = false;qrTrust.hidden=false; say(status, 'mobile.qrReady');
+          timer = setTimer(() => { if (revision === ticket) { clearLink(false); say(status, 'mobile.expired'); } }, Math.min(120000, result.expiresAt - now()));
         } catch (error) {
+          if(opened && revision===ticket && typeof api.mobileApprovalStatus==='function'){
+            try{const current=await api.mobileApprovalStatus();if(opened && revision===ticket)showApproval(current);}catch{}
+          }
           if (opened && revision === ticket) { if (error?.uiMessage?.key === 'error.mobile.sharedHost') { advanced.open = true; say(status, 'error.mobile.sharedHost'); } else say(status, 'mobile.connectUnavailable'); }
         } finally { if (opened && revision === ticket) { busy = false; prepare.disabled = false; } }
         return;

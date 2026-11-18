@@ -33,3 +33,14 @@ test('an older QR completion cannot replace a newer attempt or its enabled state
  assert.equal(f.el('mobile-prepare').disabled,true);assert.equal(f.el('mobile-pair-qr').hidden,true);
  pending[1]({qr:f.png,expiresAt:110000});await second;assert.equal(f.el('mobile-prepare').disabled,false);assert.equal(f.el('mobile-pair-qr').src,f.png);f.setup.close();
 });
+test('a displayed or late QR setup is cancelled by identity when scope changes, without revoking the active phone',async()=>{
+ const f=fixture(),cancelled=[];f.api.mobileCancelSetup=async value=>{cancelled.push(value.setupId);return {cancelled:true};};
+ const id='11111111-1111-4111-8111-111111111111';f.api.mobileConnect=async()=>({qr:f.png,expiresAt:110000,setupId:id});await f.el('mobile-prepare').listeners.click();
+ f.el('mobile-all-sessions').checked=false;f.el('mobile-all-sessions').listeners.change();assert.deepEqual(cancelled,[id]);assert.equal(f.el('mobile-pair-qr').hidden,true);
+ f.setup.open();let finish;f.api.mobileConnect=()=>new Promise(r=>{finish=r});const pending=f.el('mobile-prepare').listeners.click();f.el('mobile-shared-host').listeners.change();finish({qr:f.png,expiresAt:110000,setupId:id});await pending;
+ assert.deepEqual(cancelled,[id,id]);assert.equal(f.el('mobile-pair-qr').hidden,true);f.setup.close();
+});
+test('QR pixel expiry does not cancel a redeemed enrollment window; closing still explicitly cancels that setup',async()=>{
+ const f=fixture(),cancelled=[];f.api.mobileCancelSetup=async v=>{cancelled.push(v.setupId);return {cancelled:true};};f.api.mobileConnect=async()=>({qr:f.png,expiresAt:110000,setupId:'11111111-1111-4111-8111-111111111111'});
+ await f.el('mobile-prepare').listeners.click();f.timers.get(1).fn();assert.equal(f.el('mobile-pair-qr').hidden,true);assert.equal(cancelled.length,0);f.setup.close();assert.equal(cancelled.length,1);
+});

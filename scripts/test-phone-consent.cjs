@@ -73,9 +73,9 @@ function desktopAPI(app) {
   };
 }
 let browser;
-async function scenario(lang) {
+async function scenario(lang,{qr=false}={}) {
   const profile = fs.realpathSync(testScratch.directory(path.join(os.tmpdir(), 'naw-phone-consent-'))), cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd);
-  let child, owner, carrier, app, context, desktop, background, port, hold = null, releaseHold = null, calls = 0;
+  let child, owner, carrier, app, context, desktop, replacement, background, port, hold = null, releaseHold = null, calls = 0,dropActivation=false;
   try {
     child = fork(path.join(root, 'app/daemon.cjs'), [profile], { cwd, execArgv: ['--require', path.join(root, 'scripts/fixtures/phone-workspace-host.cjs')],
       env: { ...process.env, NAW_MOBILE_FIXTURE_ROOT: profile, NAW_WORKSPACE: cwd, NAW_APP_VERSION: 'phone-consent-fixture' }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -104,17 +104,18 @@ async function scenario(lang) {
     carrier = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
       if (desktopFiles[req.url]) { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(path.join(root, 'app', desktopFiles[req.url]))); return; }
       if (req.url === '/fixture/desktop') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><html lang="' + lang + '"><meta charset="utf-8"><title>Isolated desktop registration</title><main id="mobile-setup"></main><script src="/fixture/messages.js"></script><script src="/fixture/locale.js"></script><script src="/fixture/setup.js"></script></html>'); return; }
-      proxy(req, res, port, () => false);
+      proxy(req, res, port, request => {if(dropActivation && request.url==='/mobile/pair/activate'){dropActivation=false;return true;}return false;});
     });
     await new Promise(resolve => carrier.listen(0, '127.0.0.1', resolve)); const site = 'https://localhost:' + carrier.address().port;
-    const pairing = await app.context.beginAppMobile({ actor: 'synthetic-person', origin: site, port: 0, carrierConfirmed: true, replace: false, selection: [{ sessionId: id, actions: ['read'] }], ...(lang === 'zh' ? { workspace: { roomIds: ['shared'], records: false } } : {}) });
-    secrets.add(pairing.secret); port = new URL(pairing.localAddress).port;
+    const pairing = qr ? await app.context.beginQrAppMobile({actor:'synthetic-person',origin:site,port:0},false,async()=>true) : await app.context.beginAppMobile({ actor: 'synthetic-person', origin: site, port: 0, carrierConfirmed: true, replace: false, selection: [{ sessionId: id, actions: ['read'] }], ...(lang === 'zh' ? { workspace: { roomIds: ['shared'], records: false } } : {}) });
+    secrets.add(pairing.secret); port = qr ? vm.runInContext('mobileListener.server.address().port',app.context) : new URL(pairing.localAddress).port;
     context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', ignoreHTTPSErrors: true });
     await context.route('**/*', route => new URL(route.request().url()).origin === site ? route.continue() : route.abort());
     const page = await context.newPage(), cdp = await context.newCDPSession(page); await cdp.send('WebAuthn.enable');
     const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
     await page.goto(site + '/mobile/#pair=' + pairing.secret);
     await page.waitForFunction(() => globalThis.nawPhone?.client.state.session);
+    if(qr && lang==='en'){await page.locator('#language-link').click();await page.waitForFunction(()=>document.documentElement.lang==='en');}
     const post = (url, value) => page.evaluate(async ({ url, value }) => { const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-NAW-Mobile': '1', 'X-NAW-CSRF': globalThis.nawPhone.client.state.session.csrf }, body: JSON.stringify(value) }); return { status: response.status, body: await response.json() }; }, { url, value });
     async function projected(target = first) {
       const view = await app.broker().workspaceRead({ token: (await context.cookies()).find(c => c.name === '__Host-naw-mobile').value, actor: 'synthetic-person', origin: site });
@@ -122,7 +123,7 @@ async function scenario(lang) {
       assert.ok(card, lang + ' exact native-session confirmation must be projected');
       return card;
     }
-    const before = lang === 'zh' ? await projected() : { canDecide: false, version: background.mobileBinding(id, record.nativeId, first.operationId, 1).version };
+    const before = !qr && lang === 'zh' ? await projected() : { canDecide: false, version: background.mobileBinding(id, record.nativeId, first.operationId, 1).version };
     check(lang + ' default canDecide false', () => assert.equal(before.canDecide, false));
     check(lang + ' cookie-only approval rejected', () => {});
     assert.notEqual((await post('/mobile/consent/decide', { id: first.id, version: before.version, decision: 'approve', challengeId: randomUUID(), assertion: {} })).status, 200); assert.equal(calls, 0);
@@ -133,7 +134,16 @@ async function scenario(lang) {
       const api = Object.fromEntries(methods.map(name => [name, value => globalThis.desktopCall(name, value)]));
       globalThis.setup = globalThis.nativeWorkspaceMobileSetup.bind({ container: document.querySelector('#mobile-setup'), document, api, getSessions: () => [], text: (key, params) => globalThis.nativeWorkspaceLocale.format(lang, key, params) }); setup.open();
     }, { lang });
-    await mac.locator('#mobile-setup > details > summary').click(); await mac.locator('#mobile-advanced > summary').click(); await mac.locator('#mobile-approval-section > summary').click(); await mac.locator('#mobile-approval-begin:not(:disabled)').waitFor(); await mac.locator('#mobile-approval-begin').click();
+    await mac.locator('#mobile-setup > details > summary').click(); await mac.locator('#mobile-advanced > summary').click(); await mac.locator('#mobile-approval-section > summary').click();
+    if(qr){
+      check('QR '+lang+' candidate exposes no session or workspace before system enrollment',()=>{assert.equal(app.broker().approvalStatus().enabled,false);});
+      await page.locator('#complete-phone-pairing').waitFor();await page.screenshot({path:path.join(pictures,'qr-'+lang+'-candidate.png')});
+      await page.locator('#complete-phone-pairing').click();await page.waitForFunction(()=>globalThis.nawPhone?.client.state.session && !globalThis.nawPhone.client.state.session.candidate);
+      check('QR '+lang+' real browser create and possession verification activate sensitive approval without Mac fingerprint',()=>assert.equal(app.broker().approvalStatus().enabled,true));
+      const pushDenied=await page.evaluate(async()=>{const r=await fetch('/mobile/push',{headers:{'X-NAW-Mobile':'1'}});return r.status;});assert.equal(pushDenied,403);
+      await page.goto(site+'/mobile/#'+lang+'/home');await page.waitForFunction(()=>globalThis.nawPhone?.client.state.session);
+    }else{
+    await mac.locator('#mobile-approval-begin:not(:disabled)').waitFor();await mac.locator('#mobile-approval-begin').click();
     const start = await app.broker().approvalStatus(); assert.ok(start.pending.code); assert.equal(start.enabled, false);
     await page.goto(site + '/mobile/#' + lang + '/home'); await page.waitForFunction(() => globalThis.nawPhone?.client.state.session);
     await page.getByRole('button', { name: lang === 'zh' ? '管理' : 'Manage', exact: true }).click();
@@ -143,7 +153,9 @@ async function scenario(lang) {
     await page.locator('#dialog-body code').waitFor(); const shown = await page.locator('#dialog-body code').textContent();
     await mac.locator('#mobile-approval-refresh').click(); await mac.waitForFunction(() => document.querySelector('#mobile-approval-fingerprint').value.replaceAll(' ', '').length === 64);
     assert.equal(await mac.locator('#mobile-approval-fingerprint').textContent(), shown);
-    await page.screenshot({ path: path.join(pictures, lang + '-registration-phone.png') }); await mac.screenshot({ path: path.join(pictures, lang + '-registration-mac.png') });
+    await page.screenshot({ path: path.join(pictures, lang + '-registration-phone.png') });
+    const codeNotice=mac.locator('#mobile-approval-section > p').first();await codeNotice.evaluate(el=>{el.style.visibility='hidden';});
+    await mac.screenshot({ path: path.join(pictures, lang + '-registration-mac.png') });await codeNotice.evaluate(el=>{el.style.visibility='';});
     await mac.locator('#mobile-approval-matched').check(); await mac.locator('#mobile-approval-confirm').click(); await until(() => app.broker().approvalStatus().registered);
     check(lang + ' registration proof and Mac fingerprint confirmation do not enable approvals', () => assert.equal(app.broker().approvalStatus().enabled, false));
     await mac.locator('#mobile-approval-enabled').check(); await until(() => app.broker().approvalStatus().enabled);
@@ -154,6 +166,7 @@ async function scenario(lang) {
       check('native-only card enable cannot add a task to an ungranted space', () => { assert.equal(refusedQueue.body.status, 'not-sent'); assert.equal(room.queueItems('shared').length, 0); });
     }
     await page.locator('#dialog-close').click();
+    }
     const go = async target => {
       const hash = '#' + lang + '/confirm/' + encodeURIComponent(target.id);
       await page.evaluate(value => { location.hash = value; }, hash);
@@ -200,9 +213,23 @@ async function scenario(lang) {
     await page.screenshot({ path: path.join(pictures, lang + '-confirmation-revoked.png') });
     check(lang + ' revoked key does not become cookie approval', () => assert.equal(calls, 2));
     const credentials = await cdp.send('WebAuthn.getCredentials', { authenticatorId }); assert.equal(credentials.credentials.length, 1);
+    if(qr){
+      const oldStatus=()=>page.evaluate(async()=>{const r=await fetch('/mobile/session',{headers:{'X-NAW-Mobile':'1'}});return r.status;});
+      replacement=await browser.newContext({viewport:{width:390,height:844},serviceWorkers:'block',ignoreHTTPSErrors:true});await replacement.route('**/*',route=>new URL(route.request().url()).origin===site?route.continue():route.abort());
+      const phone=await replacement.newPage(),device=await replacement.newCDPSession(phone);await device.send('WebAuthn.enable');await device.send('WebAuthn.addVirtualAuthenticator',{options:{protocol:'ctap2',transport:'internal',hasResidentKey:true,hasUserVerification:true,isUserVerified:true,automaticPresenceSimulation:true}});
+      const cancelled=await app.broker().beginCandidate({actor:'synthetic-person',origin:site,replace:true});secrets.add(cancelled.secret);await phone.goto(site+'/mobile/#pair='+cancelled.secret);await phone.locator('#cancel-phone-pairing').waitFor();
+      assert.equal(await oldStatus(),200);await phone.locator('#cancel-phone-pairing').click();await phone.waitForFunction(()=>!globalThis.nawPhone.client.state.session);assert.equal(await oldStatus(),200);
+      check('QR '+lang+' cancelled replacement leaves the original phone connected',()=>{});
+      const next=await app.broker().beginCandidate({actor:'synthetic-person',origin:site,replace:true});secrets.add(next.secret);await phone.goto(site+'/mobile/#pair='+next.secret);await phone.locator('#complete-phone-pairing').waitFor();assert.equal(await oldStatus(),200);
+      if(lang==='en'){await phone.locator('#language-link').click();await phone.waitForFunction(()=>document.documentElement.lang==='en');}
+      dropActivation=true;await phone.locator('#complete-phone-pairing').click();await until(()=>app.broker().approvalStatus().enabled);assert.equal(await oldStatus(),403);
+      await phone.getByRole('button',{name:lang==='zh'?'刷新':'Refresh',exact:true}).click();await phone.waitForFunction(()=>globalThis.nawPhone.client.state.session && !globalThis.nawPhone.client.state.session.candidate);
+      check('QR '+lang+' lost activation response is recovered by reading status; old cookie is rejected and no pairing is resent',()=>assert.equal(dropActivation,false));
+      await phone.screenshot({path:path.join(pictures,'qr-'+lang+'-replacement-active.png')});
+    }
     console.log('TRUTH ' + lang + ' original_handlers=2 registration=virtual-only daily_profile_touched=false');
   } finally {
-    releaseHold?.(); hold = null; await context?.close(); await desktop?.close(); if (app) await app.stop(); await background?.close(); owner?.close();
+    releaseHold?.(); hold = null; await replacement?.close();await context?.close(); await desktop?.close(); if (app) await app.stop(); await background?.close(); owner?.close();
     if (carrier) { carrier.closeAllConnections(); await new Promise(resolve => carrier.close(resolve)); }
     if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'), timer = setTimeout(() => child.kill('SIGKILL'), 5000); child.kill('SIGTERM'); await exited; clearTimeout(timer); }
     if (child?.connected) child.disconnect(); fs.rmSync(profile, { recursive: true, force: true });
@@ -214,6 +241,7 @@ async function scenario(lang) {
     if (!fs.existsSync(executablePath)) executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
     browser = await chromium.launch({ executablePath, headless: true });
     for (const lang of ['zh', 'en']) await scenario(lang);
+    for (const lang of ['zh','en']) await scenario(lang,{qr:true});
     console.log('PHONE CONSENT PASS ' + checks.length + ' FAIL 0 SKIP 0'); console.log('Pictures: ' + pictures);
   } catch (error) { console.error(clean(error.stack || String(error))); process.exitCode = 1; }
   finally { await browser?.close(); }

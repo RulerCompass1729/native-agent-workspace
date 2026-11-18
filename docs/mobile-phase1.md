@@ -4,7 +4,54 @@ This delivery serves the product's single-entry vision: use the same NAW session
 spaces, queues and record reminders from a phone. It adds no provider runtime,
 model, background polling, telemetry destination or dependency.
 
-## Candidate: one-step pairing, first implementation stage
+## Candidate: QR-authorized enrollment and atomic phone replacement
+
+The normal Connect phone path now prepares an in-memory candidate. Its QR is a
+one-use enrollment password, not immediate workspace authority. The private
+carrier and originating human window are checked before code generation, before
+exchange and before activation. The link can be exchanged within two minutes;
+exchange grants a separate two-minute enrollment window. Expiring QR pixels
+does not cut short that redeemed window. Closing or changing setup cancels the
+matching candidate; a stale cancellation cannot revoke its successor.
+
+The phone explicitly invokes the existing WebAuthn creation and key-possession
+verification. The QR intent authorizes only this candidate's first key, bound to
+the exact origin, RP, generation and device. Its verified completion can enable
+per-card approval without a Mac fingerprint ceremony. An ordinary paired cookie
+cannot use this enrollment path or replace a key. Every supported sensitive card
+still requires a fresh UP+UV assertion for its exact identity, presentation,
+decision and deadline. The original manual selected-pairing path remains manual.
+
+If system enrollment is unavailable or cancelled, the person may explicitly
+choose basic access. It never enables sensitive approval implicitly. A candidate
+can otherwise access only its setup status and fixed enrollment/completion
+routes; sessions, workspace, execution and push remain denied until activation.
+
+Preparing, exchanging, cancelling or expiring a replacement leaves the active
+phone's authority unchanged. Completion refreshes current targets and checks
+the carrier, human context and original generation again. In-flight or uncertain
+old receipts block the swap instead of being discarded. A single authority-file
+rename switches generations; old tickets then fail and the old key, contexts,
+queued push and owned client are cleared before successful completion returns.
+A known pre-rename storage refusal preserves old access. An unconfirmable disk
+state or post-commit cleanup failure closes access rather than restoring an old
+grant or claiming success. Already committed native work is not undone or resent.
+
+The approved trust root is possession of the short-lived QR plus the existing
+carrier/account gates. The retained `none` attestation does not certify a real
+iPhone, particular biometric, or trusted hardware. A same-account person or
+software client who obtains the QR first can enroll its own key. The desktop
+warns about this accepted boundary; there is no claim that per-card verification
+repairs a stolen first enrollment. See [WebAuthn's none attestation format](https://www.w3.org/TR/webauthn-3/#sctn-none-attestation).
+
+All current/future target, ended-target, shared-host exception and push-off
+boundaries below remain. No native terminal, arbitrary command, session/space
+creation, membership, model/settings, interruption/takeover or file API is added.
+The session/space creation `+` controls remain hidden; queue task addition remains
+the separately authorized existing action. No real pairing, phone, notification
+service or daily app was used for this implementation's isolated tests.
+
+## Shared scope and transport behavior
 
 The desktop's **Connect phone** action verifies an existing private Tailscale
 Serve mapping and the native login before opening its loopback listener. It uses
@@ -52,11 +99,11 @@ eight-MiB response unavailable. The original native records, confirmation conten
 and selected-mode limits are unchanged. Metadata itself still has the existing
 hard response bound.
 
-This stage keeps sensitive enrollment separate and **forbids push on the server**
+The all-scope path **forbids push on the server**
 for an all-scope pairing, even with records access. The phone also omits its push
-controls in this mode. The next stage owns QR-authorized first-key enrollment and
-candidate-to-active phone replacement. This checkpoint is not the full workflow
-or a daily installation. Session/space `+` controls that only explained a Mac-only
+controls in this mode. Enrollment and candidate activation follow the separate
+QR authorization above. This checkpoint is not a daily installation.
+Session/space `+` controls that only explained a Mac-only
 action are now hidden; no creation API is added.
 
 ## Delivered boundary
@@ -81,8 +128,9 @@ Host, Tailscale identity header, bearer cookie, same Origin for writes, and
 session-bound CSRF. These are carrier/delegation checks, not a protected proof of
 the physical person's identity against arbitrary same-account local code.
 
-Sensitive approvals are deliberately disabled, as the person approved for this
-batch. Cards show the original operation and deadline; native input is two minutes,
+The retained individual-selection path starts with sensitive approval disabled;
+the QR path enables it only after authorized system enrollment. Cards show the
+original operation and deadline; native input is two minutes,
 other operations ten minutes, matching the stale-card lane. That lane owns the
 desktop execution-time expiry gate. Merge its gate without replacing it with this
 delivery's presentation-only deadline field. Native terminal, interruption,

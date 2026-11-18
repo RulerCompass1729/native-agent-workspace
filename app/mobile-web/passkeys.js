@@ -31,16 +31,18 @@
       const credential = await credentials[creation ? 'create' : 'get']({ publicKey: options(publicKey, creation) });
       if (!credential) throw Error('PASSKEY_CANCELLED'); return serialize(credential);
     }
-    async function register(session, code) {
+    async function enroll(session,value) {
       if (busy || !session) throw Error('MOBILE_CONSENT_BUSY'); busy = true;
       try {
-        const start = await request('/mobile/consent/registration/options', { code }, session.csrf);
+        const start = await request('/mobile/consent/registration/options', value, session.csrf);
         const credential = await get(start.publicKey, true);
         const registered = await request('/mobile/consent/register', { registrationId: start.registrationId, credential }, session.csrf);
         const assertion = await get(registered.publicKey);
         return await request('/mobile/consent/registration/proof', { registrationId: start.registrationId, assertion }, session.csrf);
       } finally { busy = false; }
     }
+    const register=(session,code)=>enroll(session,{code});
+    function registerCandidate(session){if(session?.candidate!==true)throw Error('MOBILE_ENROLLMENT_UNAVAILABLE');return enroll(session,{});}
     async function decide(session, card, decision) {
       if (busy || storageError || !session || pending.some(p => p.id === card.id && !['complete', 'not-sent'].includes(p.status))) throw Error('MOBILE_ACTION_UNCONFIRMED');
       // Confirmed outcomes remain in the original durable desktop record. Only
@@ -63,7 +65,7 @@
       if (result.challengeId !== row.challengeId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status)) throw Error('MOBILE_ACTION_UNCONFIRMED');
       row.status = result.status; save(); return result;
     }
-    return { register, decide, receipt, get pending() { return pending; }, get busy() { return busy; } };
+    return { register,registerCandidate, decide, receipt, get pending() { return pending; }, get busy() { return busy; } };
   }
   const value = { create, options, serialize, KEY };
   if (typeof module === 'object' && module.exports) module.exports = value; else global.NAWMobilePasskeys = value;

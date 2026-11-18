@@ -216,6 +216,9 @@ async function verifyFullConnect() {
     assert.equal((await request('/mobile/session',{actor:'wrong-synthetic-user'})).status,403);
     const paired=await request('/mobile/pair',{method:'POST',body:{secret:parsed.hash.slice(6)}});assert.equal(paired.status,200);
     const cookie=paired.headers['set-cookie'][0].split(';')[0];
+    const candidate=await request('/mobile/session',{cookie});assert.equal(candidate.status,200);assert.equal(candidate.value.candidate,true);assert.equal(candidate.value.sessions.length,0);
+    assert.equal((await request('/mobile/workspace',{cookie})).status,403);
+    const activated=await request('/mobile/pair/activate',{method:'POST',cookie,csrf:candidate.value.csrf,body:{mode:'basic'}});assert.equal(activated.status,200);assert.equal(activated.value.sensitiveDecisions,false);
     const before=await request('/mobile/session',{cookie});assert.equal(before.status,200);assert.equal(before.value.sessions.length,sessionCount);
     assert.ok(before.value.sessions.every(s=>s.actions.join(',')==='read,send,answer'));
     await client.call('create',{provider:'codex',cwd:profile,name:'Synthetic future member',view:'chat'});
@@ -231,6 +234,8 @@ async function verifyFullConnect() {
     const workspace=await request('/mobile/workspace',{cookie});assert.equal(workspace.status,200);assert.equal(workspace.value.capabilities.push,false);assert.equal(workspace.value.capabilities.sensitiveDecisions,false);
     assert.equal((await request('/mobile/push',{cookie})).status,403);
     assert.equal((await request('/mobile/push',{method:'POST',cookie,csrf:after.value.csrf,body:{action:'subscribe',subscription:{}}})).status,403);
+    // Decode was in memory only; never persist a pairing bearer in evidence.
+    await page.locator('#mobile-pair-qr').evaluate(el=>{el.style.visibility='hidden';});
     const shot=await page.locator('#setup-dialog').screenshot({scale:'css'});
     await page.locator('#mobile-revoke').click();await until(async()=>!await page.locator('#mobile-pair-qr').isVisible(),'Synthetic revocation');
     fs.writeFileSync(path.join(evidence,'images','one-step-local-code-revoked.png'),shot);

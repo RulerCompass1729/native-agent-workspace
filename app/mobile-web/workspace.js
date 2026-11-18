@@ -42,7 +42,7 @@
   Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
   function mount() {
     const d = global.document, el = id => d.getElementById(id);
-    const fragment = global.location.hash, pairSecret = fragment.startsWith('#pair=') ? fragment.slice(6) : undefined;
+    let pairSecret=global.location.hash.startsWith('#pair=')?global.location.hash.slice(6):undefined;
     if (pairSecret !== undefined) global.history.replaceState(null, '', global.location.pathname + '#zh/home');
     let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '';
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
@@ -68,6 +68,11 @@
     }
     const actions = createWorkspaceActions({ storage, request: api, newId: () => global.crypto.randomUUID(), changed: () => updateCompose() });
     const passkeys = global.NAWMobilePasskeys.create({ storage, request: api });
+    Object.assign(words.zh,{finishPair:'完成手机配对',qrEnrollment:'这次二维码授权登记一把批准密钥。尚未激活，不能读取或执行操作。',verifyPair:'使用系统验证完成配对',finishVerified:'完成配对',verifyPairNote:'系统可能提示创建凭据及再次验证。每张敏感卡仍须单独验证。',basicPair:'先使用基础权限',basicPairNote:'敏感批准保持关闭。新手机完成后，旧手机才断开。',cancelPair:'取消本次配对',pairUnconfirmed:'验证取消或结果未确认。请刷新核对；可回 Mac 重新出码，或明确选择基础权限。不会自动启用敏感批准。'});
+    Object.assign(words.en,{finishPair:'Complete phone pairing',qrEnrollment:'This QR code authorizes one approval key. Nothing can be read or executed until activation.',verifyPair:'Complete pairing with system verification',finishVerified:'Complete pairing',verifyPairNote:'The system may ask you to create a credential and verify again. Each sensitive card still requires its own verification.',basicPair:'Use basic access first',basicPairNote:'Sensitive approvals stay off. The old phone disconnects only after this phone completes pairing.',cancelPair:'Cancel this pairing',pairUnconfirmed:'Verification cancelled or unconfirmed. Refresh to check, get a new code on the Mac, or explicitly choose basic access. Sensitive approval is never enabled automatically.'});
+    let pairingNotice=false,pairingBusy=false;
+    words.zh.bellNote='数量来自桌面同一份提醒。敏感卡需逐张系统验证；未启用或不支持的操作请回 Mac。';
+    words.en.bellNote='The count uses the same desktop reminders. Sensitive cards require individual system verification; use the Mac when not enabled or supported.';
     client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: () => updateCompose() });
     const push = global.NAWMobilePush?.create({ request: api, session: () => client.state.session });
     Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量，不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
@@ -90,6 +95,23 @@
       const label = node('label', t('pairLabel')), input = node('input'); input.id = 'pair-code'; input.name = 'secret'; input.type = 'password'; input.required = true; input.minLength = input.maxLength = 43; input.autocomplete = 'one-time-code'; input.autocapitalize = 'none'; input.spellcheck = false; label.htmlFor = input.id;
       const submit = node('button', t('pair'), 'primary'); submit.type = 'submit';
       form.append(label, input, submit); form.addEventListener('submit', event => { event.preventDefault(); run(async () => { await client.start(input.value); if (client.state.session && !locked) { input.value = ''; await navigate(); } else toast('locked'); }); }); el('content').append(form);
+    }
+    function candidate() {
+      const session=client.state.session,box=node('section',undefined,'auth-form');
+      box.append(node('h1',t('finishPair')),node('p',t('qrEnrollment')));
+      const runPair=async mode=>{
+        if(pairingBusy)return;pairingBusy=true;pairingNotice=false;paint();
+        try {
+          if(mode==='verified' && !client.state.session.consent?.verified)await passkeys.registerCandidate(client.state.session);
+          await api('/mobile/pair/activate',{mode},session.csrf);await client.start();await refresh();
+        }catch{pairingNotice=true;}
+        finally{pairingBusy=false;paint();}
+      };
+      const verify=button(t(session.consent?.verified?'finishVerified':'verifyPair'),()=>runPair('verified'),'primary');verify.id='complete-phone-pairing';verify.disabled=pairingBusy;
+      const basic=button(t('basicPair'),()=>runPair('basic'));basic.id='basic-phone-pairing';basic.disabled=pairingBusy;
+      const cancel=button(t('cancelPair'),async()=>{if(pairingBusy)return;await client.logout();locked=true;view=null;paint();});cancel.id='cancel-phone-pairing';cancel.disabled=pairingBusy;
+      box.append(verify,node('p',t('verifyPairNote'),'quiet'),basic,node('p',t('basicPairNote'),'quiet'),cancel);
+      if(pairingNotice)box.append(node('p',t('pairUnconfirmed'),'callout'));el('content').append(box);
     }
     function heading(key) { el('content').append(node('h1', t(key))); }
     function section(title, count) { const section = node('section', undefined, 'section'), h = node('div', undefined, 'section-title'), label = node('h2', title); if (count !== undefined) label.append(node('span', ' ' + count, 'quiet')); h.append(label); section.append(h); el('content').append(section); return section; }
@@ -270,11 +292,13 @@
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
       else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? view?.sessions.find(s => s.id === route.id)?.name || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
-      const bell = link('', 'reminders', 'icon bell'); bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh), button(t('registerKey'), registerPasskey), button(t('logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
+      const pendingPair=client.state.session?.candidate===true;
+      const bell = link('', 'reminders', 'icon bell'); bell.hidden=pendingPair;bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh));if(!pendingPair)menu.append(button(t('registerKey'), registerPasskey));menu.append(button(t(pendingPair?'cancelPair':'logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
-      const status = node('span', locked ? t('locked') : disconnected ? t('offline') : t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
-      el('navigation').hidden = locked;
+      const status = node('span', locked ? t('locked') : disconnected ? t('offline') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
+      el('navigation').hidden = locked || client.state.session?.candidate===true;
       if (locked || !client.state.session) { login(); updateCompose(); return; }
+      if(client.state.session.candidate){candidate();updateCompose();return;}
       const nav = node('div', undefined, 'nav-inner'); for (const key of ['home', 'space', 'queue']) { const a = link('', key, route?.page === key ? 'active' : ''); a.append(icon(key), node('span', t(key))); if (route?.page === key) a.setAttribute('aria-current', 'page'); nav.append(a); } el('navigation').append(nav);
       if (!view) { el('content').append(node('p', t('offline'))); updateCompose(); return; }
       ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)(); updateCompose();
@@ -282,6 +306,7 @@
     async function refresh() {
       if (busy) return; busy = true; const ticket = ++epoch;
       try { await client.start(); if (!locked && client.state.session) await client.refresh(); if (locked || !client.state.session) { view = null; return; }
+        if(client.state.session.candidate){view=null;return;}
         const next = client.state.session.workspace ? await api('/mobile/workspace') : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
@@ -310,7 +335,7 @@
     let navigation = Promise.resolve();
     const scheduleNavigate = () => (navigation = navigation.then(navigate, navigate));
     global.addEventListener('hashchange', () => run(scheduleNavigate));
-    client.ready = (async () => { await client.start(pairSecret); await scheduleNavigate(); })(); paint();
+    client.ready = (async () => {try{await client.start(pairSecret);}finally{pairSecret=undefined;}await scheduleNavigate(); })(); paint();
     return { client, actions, refresh, navigate };
   }
   const exported = { createWorkspaceActions, ACTION_KEY, mount };

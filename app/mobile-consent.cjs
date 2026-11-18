@@ -102,6 +102,19 @@ class MobileConsent {
       challenge: randomBytes(32).toString('base64url'), rpId, until: this.#time() + 120000, failures: 0, started: false };
     this.#pending = p; return this.status(a).pending;
   }
+  // Broker-only: a redeemed, desktop-issued QR intent authorizes this single
+  // candidate enrollment. These are not desktop-management HTTP methods.
+  beginQrRegistration(a) { this.beginRegistration(a);this.#pending.qrAuthorized=true; }
+  qrOptions(a,value) {
+    if (!this.#pendingFor(a).qrAuthorized || !value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length) throw denied();
+    return this.registrationOptions(a,{code:this.#pending.code});
+  }
+  completeQrRegistration(a,value) {
+    if (!this.#pendingFor(a).qrAuthorized) throw denied();
+    this.proveRegistration(a,value);
+    const p=this.#pendingFor(a);this.confirmRegistration(a,{registrationId:p.registrationId,fingerprint:p.key.fingerprint});
+    return this.setEnabled(a,{enabled:true,registrationId:p.registrationId});
+  }
   registrationOptions(a, value) {
     const p = this.#pendingFor(a);
     if (p.started || p.failures >= 10 || typeof value?.code !== 'string' || !same(Buffer.from(p.code), Buffer.from(value.code))) { p.failures++; throw denied(); }

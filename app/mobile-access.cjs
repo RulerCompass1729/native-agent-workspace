@@ -97,6 +97,58 @@ function verifyTicket(root, ticket, target, expectedAction, options) {
 }
 class MobileAccess {
   #allGeneration = null;
+  #candidate = null;
+  #base(s) { return hash(JSON.stringify([s.issuer,s.generation,s.enabled,s.actor,s.origin,s.device,s.pairing])); }
+  #pending(id) {
+    const c=this.#candidate;
+    if (!c || id !== undefined && id !== c.id || c.until <= this.time() || c.base !== this.#base(this.load())) throw denied();
+    return c;
+  }
+  candidateStatus() {
+    try { const c=this.#pending(); return {id:c.id,expiresAt:c.until,redeemed:!!c.state.device}; } catch { return null; }
+  }
+  // Desktop-issued enrollment intent stays in memory, separate from the active
+  // file. Neither preparing nor exchanging this QR grants ordinary API access.
+  beginCandidate({actor,origin:site,replace=false}) {
+    const s=this.load(),time=this.time();
+    if (!text(actor,320) || !origin(site) || typeof replace !== 'boolean') throw denied();
+    if (s.enabled && s.device?.until > time && (!replace || s.actor !== actor || s.origin !== site)) throw denied('MOBILE_REPLACE_REQUIRED');
+    const value=secret(),id=randomUUID();
+    this.#candidate={id,base:this.#base(s),until:time+PAIR_MS,failures:0,csrf:null,state:{...s,version:2,sessionPolicy:'all',generation:randomUUID(),enabled:false,actor,origin:site,scopes:[],pairing:{hash:hash(value),until:time+PAIR_MS},device:null}};
+    return {id,secret:value,expiresAt:time+PAIR_MS};
+  }
+  cancelCandidate(id) { if (this.#candidate?.id===id) { this.#candidate=null;return true; } return false; }
+  pairCandidate(value) {
+    const c=this.#pending(),s=c.state,time=this.time();
+    if (!exact(value,['secret','actor','origin']) || value.actor !== s.actor || value.origin !== s.origin || !s.pairing || c.failures>=10 || !token(value.secret) || !sameDigest(hash(value.secret),s.pairing.hash)) { c.failures++;throw denied(); }
+    const bearer=secret(),csrf=secret();c.csrf=csrf;c.until=time+PAIR_MS;
+    c.state={...s,enabled:true,pairing:null,device:{id:randomUUID(),tokenHash:hash(bearer),csrfHash:hash(csrf),until:time+SESSION_MS}};
+    const result={csrf,deviceId:c.state.device.id,expiresAt:c.state.device.until};Object.defineProperty(result,'cookieValue',{value:bearer});return Object.freeze(result);
+  }
+  candidateAuthenticate(auth,write=false) {
+    const c=this.#pending(),s=c.state;
+    if (!auth || typeof auth!=='object' || Array.isArray(auth) || Object.keys(auth).some(k=>!['token','actor','origin','csrf'].includes(k)) || !s.device || !token(auth.token) || auth.actor!==s.actor || !sameDigest(hash(auth.token),s.device.tokenHash) ||
+      (write ? auth.origin!==s.origin || !token(auth.csrf) || !sameDigest(hash(auth.csrf),s.device.csrfHash) : auth.origin!==undefined && auth.origin!==s.origin)) throw denied();
+    return s;
+  }
+  candidateCsrf(auth) { this.candidateAuthenticate(auth);return this.#pending().csrf; }
+  // Called only after the broker verifies the candidate completion. One atomic
+  // rename is the authority boundary. A known pre-rename failure keeps old
+  // access; an uncertain disk state fails closed, never restores a stale grant.
+  activateCandidate(id,scopes) {
+    const c=this.#pending(id),before=this.load();if(!c.state.device || !validScopes(scopes))throw denied();
+    const next={...c.state,version:scopes.length?1:2,scopes:JSON.parse(JSON.stringify(scopes))};if(scopes.length)delete next.sessionPolicy;
+    try { this.save(next); } catch {
+      let actual;try {actual=readState(this.root,{io:this.io,allowDisabled:true});}catch{}
+      if(!actual || hash(JSON.stringify(actual))!==hash(JSON.stringify(next))) {
+        if(actual && hash(JSON.stringify(actual))===hash(JSON.stringify(before))) throw denied('MOBILE_STORAGE');
+        this.invalidate();throw denied('MOBILE_STORAGE');
+      }
+    }
+    try { if(disabled(this.root,this.io)){const off=path.join(this.root,OFF);if(!privateFile(this.io.lstatSync(off)))throw denied();this.io.unlinkSync(off);} }
+    catch {this.invalidate();throw denied('MOBILE_STORAGE');}
+    this.#candidate=null;this.#allGeneration=next.generation;this.closed=false;return next;
+  }
   constructor(root, { io = fs, now = Date.now, identity = processIdentity(process.pid), exclusive } = {}) {
     if (!identity || !Number.isSafeInteger(identity.pid) || identity.pid < 2 || !text(identity.started) || typeof exclusive !== 'function') throw denied();
     this.io = io; this.now = now; this.root = rootPath(root, io); this.exclusive = exclusive;
@@ -126,7 +178,7 @@ class MobileAccess {
   // stale one. authenticate() refuses a device while it exists. Throws if it cannot be read.
   disabledMarker() { return disabled(this.root, this.io); }
   invalidate() {
-    this.closed = true; this.#allGeneration = null;
+    this.closed = true; this.#allGeneration = null; this.#candidate=null;
     try {
       if (disabled(this.root, this.io)) return true;
       const fd = this.io.openSync(path.join(this.root, OFF), 'wx', 0o600); this.io.closeSync(fd); return true;
@@ -147,7 +199,7 @@ class MobileAccess {
   }
   initialize({ alive = processMayBeAlive } = {}) {
     this.owner();
-    this.#allGeneration = null;
+    this.#allGeneration = null; this.#candidate=null;
     const file = path.join(this.root, FILE);
     try {
       this.io.lstatSync(file); const old = readState(this.root, { io: this.io, allowDisabled: true });
@@ -160,6 +212,7 @@ class MobileAccess {
     const s = this.load(), time = this.time();
     if (!text(actor, 320) || !origin(site) || !validScopes(scopes) || (all ? scopes.length !== 0 : !scopes.length) || typeof all !== 'boolean' || typeof replace !== 'boolean') throw denied();
     if (s.device && s.device.until > time && replace !== true) throw denied('MOBILE_REPLACE_REQUIRED');
+    this.#candidate=null;
     const pairingSecret = secret();
     const next = { ...s, version: all ? 2 : 1, generation: randomUUID(), enabled: false, actor, origin: site, scopes: JSON.parse(JSON.stringify(scopes)),
       pairing: { hash: hash(pairingSecret), until: time + PAIR_MS }, device: null };
@@ -209,7 +262,7 @@ class MobileAccess {
       action, serviceKey: target.serviceKey, sessionId: target.sessionId, nativeId: target.nativeId });
   }
   revoke() {
-    this.closed = true;
+    this.closed = true;this.#candidate=null;
     let s;
     // An unreadable or replaced issuer is not authority to overwrite somebody
     // else's grant. Stop this entry, and keep shared cancellation unconfirmed.

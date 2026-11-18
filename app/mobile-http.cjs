@@ -102,19 +102,23 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       const reading = request.method === 'GET' && request.url.match(/^\/mobile\/read\/([A-Za-z0-9_-]{1,100})$/);
       if (reading) return respond(response, 200, await broker.read(auth(values), reading[1]));
-      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push', ...Object.keys(consentRoutes)].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
+      if (request.method !== 'POST' || !['/mobile/pair', '/mobile/pair/activate', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push', ...Object.keys(consentRoutes)].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');
       if (values.origin !== origin) throw reject(403, 'MOBILE_DENIED');
       const value = await body(request, values, request.url === '/mobile/pair' ? 4096 : 65536);
       if (request.url === '/mobile/pair') {
         if (!exact(value, ['secret']) || !secret(value.secret)) throw reject(400, 'MOBILE_BAD_REQUEST');
-        const paired = broker.pair({ secret: value.secret, actor, origin });
+        const paired = await broker.pair({ secret: value.secret, actor, origin });
         if (!secret(paired.cookieValue) || !Number.isSafeInteger(paired.expiresAt)) throw reject(401, 'MOBILE_DENIED');
         const maxAge = Math.min(SESSION_MS / 1000, Math.max(0, Math.floor((paired.expiresAt - Date.now()) / 1000)));
         response.setHeader('Set-Cookie', `${COOKIE}=${paired.cookieValue}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`);
-        return respond(response, 200, { paired: true, deviceId: paired.deviceId, expiresAt: paired.expiresAt });
+        return respond(response, 200, { paired: paired.candidate!==true,...(paired.candidate?{candidate:true}:{}), deviceId: paired.deviceId, expiresAt: paired.expiresAt });
       }
       const credentials = auth(values);
       if (!secret(credentials.csrf)) throw reject(403, 'MOBILE_DENIED');
+      if(request.url==='/mobile/pair/activate') {
+        if(!exact(value,['mode']) || !['verified','basic'].includes(value.mode) || typeof broker.activateCandidate!=='function')throw reject(403,'MOBILE_DENIED');
+        dispatch=true;return respond(response,200,await broker.activateCandidate(credentials,value));
+      }
       if (request.url === '/mobile/push') {
         if (typeof broker.pushAction !== 'function') throw reject(403, 'MOBILE_DENIED');
         return respond(response, 200, broker.pushAction(credentials, value));

@@ -28,6 +28,7 @@ const receipt = (value, ticket, requestId, action) => {
 };
 
 class MobileBroker {
+  #candidate=null; #candidateSerial=0;
   #fullLayout = null; #fullGeneration = null; #refreshing = null;
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
@@ -77,10 +78,71 @@ class MobileBroker {
     const fresh = this.#grant(auth, ticket.sessionId, ticket.action).ticket;
     if (fingerprint(fresh) !== fingerprint(ticket)) throw denied('MOBILE_RESULT_UNCONFIRMED');
   }
+  #dropCandidate(id) {
+    const c=this.#candidate;if(!c || id!==undefined && c.id!==id)return false;
+    this.#candidate=null;this.#candidateSerial++;this.#access.cancelCandidate(c.id);c.consent.revoke();c.client.close();return true;
+  }
+  cancelCandidate(id) { this.#access.owner();return {cancelled:this.#dropCandidate(id)}; }
+  #candidateFor(auth,write=false) {
+    const c=this.#candidate,state=this.#access.candidateAuthenticate(auth,write);
+    if(!c || c.id!==this.#access.candidateStatus()?.id || c.client.closing || c.client.socket.destroyed)throw denied();
+    return {c,state};
+  }
+  async beginCandidate({actor,origin,replace=false,validate=async()=>true}) {
+    this.#access.owner();if(typeof replace!=='boolean' || typeof validate!=='function')throw denied();
+    this.#dropCandidate();const serial=++this.#candidateSerial,client=await connect(this.#scope,'mobile-candidate-'+randomUUID());
+    try {
+      if(serial!==this.#candidateSerial || !(client instanceof WorkspaceClient) || client.scope!==this.#scope || fs.realpathSync(client.scope)!==this.#root || client.socket.destroyed)throw denied();
+      if(!this.#access.initialized)this.#access.initialize();
+      const layout=this.#layout(),grant=this.#desktop?.grant(client,{allRooms:true,records:true});if(!grant)throw denied();
+      const result=this.#access.beginCandidate({actor,origin,replace});
+      const c={id:result.id,client,layout,grant,validate,consent:new MobileConsent(),activating:false};this.#candidate=c;
+      client.once('closed',()=>{if(this.#candidate===c)this.#dropCandidate(c.id);});
+      return {...result,setupId:result.id};
+    } catch(error){client.close();throw error;}
+  }
+  #candidateSession(auth) {
+    const {c,state}=this.#candidateFor(auth),consent=c.consent.status(state),status=this.#access.candidateStatus();
+    return {candidate:true,deviceId:state.device.id,expiresAt:status.expiresAt,csrf:this.#access.candidateCsrf(auth),sessions:[],consent:{registered:consent.registered,enabled:false,verified:consent.enabled},workspace:false};
+  }
+  #currentScopes(client) {
+    const seen=new Set(),scopes=[];
+    for(const entry of client.entries)for(const record of entry.state.sessions){
+      if(!currentTarget(record) || !entry.state.capabilities?.includes('humanMobileV1'))continue;
+      if(seen.has(record.id))throw denied();seen.add(record.id);
+      scopes.push({serviceKey:entry.key,sessionId:record.id,nativeId:record.nativeId,actions:entry.state.capabilities.includes('humanMobilePreparedV1')?['read','send','answer']:['read']});
+    }
+    return scopes;
+  }
+  async activateCandidate(auth,value) {
+    if(!exact(value,['mode']) || !['verified','basic'].includes(value.mode))throw denied();
+    const {c,state}=this.#candidateFor(auth,true);if(c.activating || value.mode==='verified' && !c.consent.status(state).enabled)throw denied();
+    c.activating=true;
+    try {
+      await c.client.refresh();if(await c.validate()!==true)throw denied();
+      if(this.#candidateFor(auth,true).c!==c || c.layout!==this.#layout())throw denied();
+      // Keep uncertain receipt recovery and in-flight work on its original
+      // generation. The person may explicitly revoke instead of replacing.
+      if([...this.#requests.values(),...this.#workspaceRequests.values(),...this.#decisions.values()].some(r=>r.pending || ['unconfirmed','prepared','awaiting-native'].includes(r.result?.status) || r.status==='unconfirmed'))throw denied('MOBILE_REQUEST_CONFLICT');
+      const scopes=this.#currentScopes(c.client);
+      this.#push?.close();this.#push=null;
+      const next=this.#access.activateCandidate(c.id,scopes),old=this.#client;
+      this.#forget();this.#client=c.client;this.#candidate=null;this.#candidateSerial++;
+      this.#fullLayout=c.layout;this.#fullGeneration=next.generation;this.#workspaceGrant={value:c.grant,generation:next.generation};
+      this.#consent=c.consent;if(value.mode==='basic')this.#consent.revoke();
+      this.#csrf={generation:next.generation,deviceId:next.device.id,value:auth.csrf};
+      c.client.once('closed',()=>{if(this.#client===c.client){this.#forget();this.#disconnect();}});
+      try{old?.close();if(old && (!old.closing || !old.socket.destroyed))throw denied();}
+      catch{this.revoke();this.#changed();throw denied('MOBILE_CLEANUP_UNCONFIRMED');}
+      this.#changed();
+      return {activated:true,sensitiveDecisions:value.mode==='verified'};
+    } finally {c.activating=false;}
+  }
   // Only the local desktop owner may call this method. Never expose a generic
   // RPC dispatcher that lets a remote request choose this method or its scope.
   async beginPairing({ actor, origin, selection, replace = false, workspace, all = false }) {
     this.#access.owner();
+    this.#dropCandidate();
     if (typeof all !== 'boolean' || all && (selection !== undefined || workspace !== undefined)) throw denied();
     if (all) selection = [];
     if (!Array.isArray(selection) || !all && !selection.length || selection.length > MAX_REQUESTS || typeof replace !== 'boolean' ||
@@ -120,8 +182,17 @@ class MobileBroker {
     } catch (error) { this.#forget(); this.#disconnect(); throw error; }
   }
   pair(value) {
-    this.#bound();
     if (!exact(value, ['secret', 'actor', 'origin'])) throw denied();
+    if(this.#candidate && this.#access.candidateStatus()) {
+      const c=this.#candidate;
+      return (async()=>{
+        if(await c.validate()!==true || this.#candidate!==c || c.id!==this.#access.candidateStatus()?.id)throw denied();
+        const paired=this.#access.pairCandidate(value),state=this.#access.candidateAuthenticate({token:paired.cookieValue,actor:value.actor,origin:value.origin});
+        c.consent.beginQrRegistration(state);this.#changed();
+        const result={candidate:true,deviceId:paired.deviceId,expiresAt:paired.expiresAt};Object.defineProperty(result,'cookieValue',{value:paired.cookieValue});return Object.freeze(result);
+      })();
+    }
+    this.#bound();
     const paired = this.#access.pair(value), state = this.#access.authenticate({ token: paired.cookieValue, actor: value.actor });
     this.#contexts.clear(); this.#requests.clear();
     this.#csrf = { generation: state.generation, deviceId: state.device.id, value: paired.csrf };
@@ -133,6 +204,7 @@ class MobileBroker {
     return Object.freeze(result);
   }
   session(auth) {
+    try{return this.#candidateSession(auth);}catch{}
     const state = this.#authenticate(auth), csrf = this.#csrf;
     if (!csrf || csrf.generation !== state.generation || csrf.deviceId !== state.device.id || digest(csrf.value) !== state.device.csrfHash) throw denied('MOBILE_REPAIR_REQUIRED');
     const consent = this.#consent.status(state);
@@ -156,14 +228,7 @@ class MobileBroker {
   #scopes(state) {
     if (!this.#all(state)) return state.scopes;
     if (this.#layout() !== this.#fullLayout) throw denied('MOBILE_RESULT_UNCONFIRMED');
-    const seen = new Set(), result = [];
-    for (const entry of this.#bound().entries) for (const record of entry.state.sessions) {
-      if (!currentTarget(record)) continue;
-      if (!entry.state.capabilities?.includes('humanMobileV1')) continue;
-      if (seen.has(record.id)) throw denied(); seen.add(record.id);
-      result.push({ serviceKey: entry.key, sessionId: record.id, nativeId: record.nativeId, actions: entry.state.capabilities.includes('humanMobilePreparedV1') ? ['read','send','answer'] : ['read'] });
-    }
-    return result;
+    return this.#currentScopes(this.#bound());
   }
   #all(state) { return this.#fullLayout !== null && this.#fullGeneration === state.generation; }
   async #refreshFull(auth) {
@@ -190,7 +255,7 @@ class MobileBroker {
     const pending = work(); this.#refreshing = pending;
     try { await pending; } finally { if (this.#refreshing === pending) this.#refreshing = null; }
   }
-  async refreshSession(auth) { await this.#refreshFull(auth); return this.session(auth); }
+  async refreshSession(auth) { try{return this.#candidateSession(auth);}catch{} await this.#refreshFull(auth); return this.session(auth); }
   async read(auth, id) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const { ticket, scope } = this.#grant(auth, id, 'read'), client = this.#bound(), epoch = this.#epoch;
@@ -276,9 +341,22 @@ class MobileBroker {
     return result;
   }
   approvalRevoke() { this.#consent.revoke(); return { enabled: false, registered: false }; }
-  registrationOptions(auth, value) { return this.#consent.registrationOptions(this.#writeState(auth), value); }
-  registerPasskey(auth, value) { return this.#consent.register(this.#writeState(auth), value); }
-  registrationProof(auth, value) { return this.#consent.proveRegistration(this.#writeState(auth), value); }
+  registrationOptions(auth, value) {
+    let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
+    return candidate?candidate.c.consent.qrOptions(candidate.state,value):this.#consent.registrationOptions(this.#writeState(auth),value);
+  }
+  registerPasskey(auth, value) {
+    let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
+    if(!candidate)return this.#consent.register(this.#writeState(auth),value);
+    if(!exact(value,['registrationId','credential']))throw denied();
+    const result=candidate.c.consent.register(candidate.state,value);return {publicKey:result.publicKey};
+  }
+  registrationProof(auth, value) {
+    let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
+    if(!candidate)return this.#consent.proveRegistration(this.#writeState(auth),value);
+    if(!exact(value,['registrationId','assertion']))throw denied();
+    return {verified:candidate.c.consent.completeQrRegistration(candidate.state,value).enabled};
+  }
   async decisionOptions(auth, value) {
     if (!exact(value, ['id', 'version', 'decision'])) throw denied();
     this.#workspaceState(auth, true);
@@ -292,7 +370,7 @@ class MobileBroker {
     const state = this.#workspaceState(auth, true), client = this.#bound(), epoch = this.#epoch;
     const binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value), permit = this.#consent.consume(state, value, binding);
     if (this.#decisions.size >= MAX_REQUESTS) throw denied();
-    const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null }; this.#decisions.set(value.challengeId, row);
+    const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null, pending:true }; this.#decisions.set(value.challengeId, row);
     const valid = () => {
       if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
       return this.#workspaceState(auth, true);
@@ -301,7 +379,7 @@ class MobileBroker {
       const result = await this.#desktop.decision(client, this.#scopes(state), structuredClone(value), permit, valid);
       row.state = result.state;
       row.status = ['complete', 'cancelled', 'not-executed', 'confirmation-required'].includes(result.state) ? 'complete' : 'unconfirmed';
-    } catch (error) { if (error.notSent === true) row.status = 'not-sent'; }
+    } catch (error) { if (error.notSent === true) row.status = 'not-sent'; } finally {row.pending=false;}
     valid(); return structuredClone(row);
   }
   decisionReceipt(auth, value) {
@@ -366,12 +444,12 @@ class MobileBroker {
       ...(action === 'send' ? { text: value.text } : { questionId: context.questionId, answers: structuredClone(value.answers) }) };
     if (action === 'answer' && !uuid(spec.questionId)) throw denied();
     this.#human(ticket.sessionId);
-    const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, pending: null };
+    const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, pending: null, result:{status:'unconfirmed'} };
     this.#requests.set(value.requestId, entry);
     entry.pending = (async () => {
       try {
         const result = await client.call(action === 'send' ? 'mobileSend' : 'mobileAnswer', ticket, spec);
-        this.#after(auth, ticket, client, epoch); return receipt(result, ticket, value.requestId, action);
+        this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, value.requestId, action);
       } finally { entry.pending = null; }
     })();
     return entry.pending;
@@ -385,11 +463,13 @@ class MobileBroker {
     if (!entry) throw denied('MOBILE_RECEIPT_UNKNOWN');
     const { ticket } = this.#grant(auth, entry.ticket.sessionId, entry.action), client = this.#bound(), epoch = this.#epoch;
     const result = await client.call(entry.action === 'send' ? 'mobileSendReceipt' : 'mobileAnswerReceipt', ticket, entry.spec);
-    this.#after(auth, ticket, client, epoch); return receipt(result, ticket, requestId, entry.action);
+    this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, requestId, entry.action);
   }
   logout(auth) {
     // Logging out a read-only device must not require send permission. It
     // still requires an explicit same-origin, session-bound CSRF token.
+    let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
+    if(candidate){this.#dropCandidate(candidate.c.id);this.#changed();return {authorizationRevoked:true,connectionClosed:true,committedWorkMayContinue:false};}
     this.#writeState(auth);
     const result = this.revoke();
     this.#changed();
@@ -399,16 +479,18 @@ class MobileBroker {
   // including when access is closed or the state is unreadable. The OFF marker is written only when a revocation could
   // not be saved (which also closes access); it voids a device here too, as authentication already does.
   openUntil() {
+    const candidate=this.#access.candidateStatus();if(this.#candidate && !candidate)this.#dropCandidate();
     try {
-      if (!this.#access.initialized || this.#access.closed) return 0;
+      if (!this.#access.initialized || this.#access.closed) return candidate?.expiresAt || 0;
       let off = true;
       try { off = this.#access.disabledMarker(); } catch { off = true; }
       const s = this.#access.load(), time = this.#access.time();
       const until = Math.max(s.pairing ? s.pairing.until : 0, s.enabled && s.device && !off ? s.device.until : 0);
-      return until > time ? until : 0;
-    } catch { return 0; }
+      return Math.max(until > time ? until : 0,candidate?.expiresAt || 0);
+    } catch { return candidate?.expiresAt || 0; }
   }
   revoke() {
+    this.#candidateSerial++;this.#dropCandidate();
     this.#forget();
     let result;
     try { result = this.#access.initialized ? this.#access.revoke() : { confirmed: true }; }

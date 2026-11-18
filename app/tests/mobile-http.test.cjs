@@ -24,6 +24,18 @@ function fixture() {
   }
   return { broker, calls, result, invoke, handler };
 }
+test('QR activation keeps every fixed transport gate and accepts only its exact completion modes',async()=>{
+ const f=fixture();let activated=0;f.broker.activateCandidate=async()=>{activated++;return {activated:true,sensitiveDecisions:false};};
+ const raw=['Host','mobile.invalid','Tailscale-User-Login',actor,'X-NAW-Mobile','1','Origin',origin,'Cookie',`${COOKIE}=${bearer}`,'X-NAW-CSRF',csrf,'Content-Type','application/json'];
+ for(const field of ['Host','Tailscale-User-Login','X-NAW-Mobile','Origin','Cookie','X-NAW-CSRF']){
+  const missing=raw.filter((_,i)=>i%2===0?raw[i]!==field:raw[i-1]!==field);assert.notEqual((await f.invoke({url:'/mobile/pair/activate',method:'POST',raw:missing,value:{mode:'verified'}})).statusCode,200);
+ }
+ assert.equal(activated,0);
+ for(const value of [{},{mode:'all'},{mode:'verified',enabled:true},{mode:'basic',actor:'other'}])assert.notEqual((await f.invoke({url:'/mobile/pair/activate',method:'POST',value})).statusCode,200);
+ for(const mode of ['verified','basic'])assert.equal((await f.invoke({url:'/mobile/pair/activate',method:'POST',value:{mode}})).statusCode,200);
+ assert.equal(activated,2);
+ for(const method of ['beginCandidate','approvalConfirm','approvalEnable','cancelCandidate'])assert.equal((await f.invoke({url:'/mobile/'+method,method:'POST',value:{}})).statusCode,404);
+});
 test('authenticated phone workspace uses only the fixed app-local projection endpoint', async () => {
   const f = fixture();
   f.broker.workspaceRead = async auth => { f.calls.push(['workspaceRead', auth]); return { sessions: [], rooms: [], reminders: { count: 0, records: [] } }; };
