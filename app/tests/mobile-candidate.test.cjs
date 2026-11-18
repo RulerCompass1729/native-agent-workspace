@@ -62,7 +62,7 @@ for(const [name,change] of Object.entries({origin:{client:{origin:'https://other
  const consent=new MobileConsent(),a={origin,generation:require('node:crypto').randomUUID(),device:{id:require('node:crypto').randomUUID()}},key=signer();consent.beginQrRegistration(a);const start=consent.qrOptions(a,{}),proof=consent.register(a,{registrationId:start.registrationId,credential:key.credential(start.publicKey)});
  assert.throws(()=>consent.completeQrRegistration(a,{registrationId:start.registrationId,assertion:key.assertion(proof.publicKey,change)}));assert.equal(consent.status(a).enabled,false);
 });
-function brokerFixture(t) {
+function brokerFixture(t, {changed}={}) {
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-candidate-broker-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true}));const {EventEmitter}=require('node:events'),vm=require('node:vm'),{createRequire}=require('node:module');
  const record={id:target.sessionId,nativeId:target.nativeId,name:'Synthetic member',provider:'codex',state:'idle',messages:[],controlRevision:0,connectionRevision:0},entries=[{key:'.',state:{capabilities:['humanMobileV1','humanMobilePreparedV1'],sessions:[record]}}];
  let hold=false,release,entered,outcome='submitted',writes=0;const sending=new Promise(r=>{entered=r});const clients=[];
@@ -81,7 +81,7 @@ function brokerFixture(t) {
  vm.runInNewContext(fs.readFileSync(filename,'utf8'),{module,process,Buffer,structuredClone,require(name){if(name==='./workspace-client.cjs')return {WorkspaceClient:Client};if(name==='./service-client.cjs')return {connect:async()=>new Client()};return req(name);}});
  const binding={sessionId:record.id,nativeId:record.nativeId,operationId:'card',version:'exact-card-version',decision:1,expiresAt:Date.now()+120000};
  const desktop={grant:(_c,g)=>g,records:{status:()=>({count:0})},read:async(_c,g,s)=>({grant:g,scopes:s,capabilities:{},confirmations:[]}),confirmationBinding:()=>binding,decision:async(_c,_s,_v,permit,valid)=>{permit.check(valid(),binding);return {state:'complete'};}};
- const broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop});t.after(()=>broker.revoke());
+ const broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,changed});t.after(()=>broker.revoke());
  const auth=d=>({token:d.cookieValue,actor,origin});
  async function paired(){const c=await broker.beginPairing({actor,origin,selection:[{sessionId:record.id,actions:['read','send','answer']}]}),a=auth(broker.pair({secret:c.secret,actor,origin}));a.csrf=broker.session(a).csrf;return a;}
  async function candidate(options={}){const c=await broker.beginCandidate({actor,origin,...options}),a=auth(await broker.pair({secret:c.secret,actor,origin}));a.csrf=broker.session(a).csrf;return {challenge:c,auth:a};}
@@ -150,4 +150,49 @@ test('an uncertain original receipt blocks replacement until queried; receipt re
  assert.equal((await f.broker.send(old,{contextId:row.contextId,requestId,text:'Synthetic uncertain action'})).status,'unconfirmed');
  const next=await f.candidate({replace:true});await f.prove(next.auth);await assert.rejects(f.broker.activateCandidate(next.auth,{mode:'verified'}));assert.ok(f.broker.session(old));
  f.outcome('submitted');assert.equal((await f.broker.receipt(old,requestId)).status,'submitted');await f.broker.activateCandidate(next.auth,{mode:'verified'});assert.equal(f.writes(),1);assert.throws(()=>f.broker.session(old));
+});
+
+// Exercise the production WorkspaceClient.close, with only its owned transport
+// replaced by a throwing fixture. No socket, phone or native process is used.
+function failCandidateTransportClose(client, beforeClose=()=>{}) {
+ const close=client.close.bind(client);
+ client.control={revision:0,manualEpoch:0,views:new Set([client]),clients:1};client.legacyObservers=new Map();
+ client.entries=client.entries.map(entry=>({...entry,client:{close(){beforeClose();throw Error('Synthetic transport cleanup failure');}}}));
+ client.close=require('../workspace-client.cjs').WorkspaceClient.prototype.close.bind(client);
+ return ()=>{client.close=close;};
+}
+function enableOldKey(f,old) {
+ const key=signer(),begin=f.broker.approvalBegin(),options=f.broker.registrationOptions(old,{code:begin.code});
+ const proof=f.broker.registerPasskey(old,{registrationId:options.registrationId,credential:key.credential(options.publicKey)});
+ f.broker.registrationProof(old,{registrationId:options.registrationId,assertion:key.assertion(proof.publicKey)});
+ const pending=f.broker.approvalStatus().pending;f.broker.approvalConfirm({registrationId:pending.registrationId,fingerprint:pending.fingerprint});
+ const status=f.broker.approvalStatus();f.broker.approvalEnable({enabled:true,registrationId:status.registrationId});return key;
+}
+for(const action of ['revoke','logout'])for(const phase of ['prepared','redeemed'])
+test(`explicit ${action} invalidates old authority and key before a ${phase} candidate transport can fail`,async t=>{
+ let changes=0;const f=brokerFixture(t,{changed:()=>{changes++;}}),old=await f.paired(),key=enableOldKey(f,old),previous=f.clients[0];
+ let ticket;const call=previous.call.bind(previous);previous.call=async(method,value,...args)=>{if(method==='mobileRead')ticket=value;return call(method,value,...args);};
+ await f.broker.read(old,target.sessionId);assert.ok(ticket);assert.ok(f.broker.session(old));assert.equal(f.broker.approvalStatus().enabled,true);
+ const card={id:'card',version:f.binding.version,decision:'approve'},challenge=await f.broker.decisionOptions(old,card);
+ const next=phase==='redeemed'?await f.candidate({replace:true}):{challenge:await f.broker.beginCandidate({actor,origin,replace:true})};
+ if(next.auth)await f.prove(next.auth);
+ const candidate=f.clients.at(-1),root=previous.scope,before=fs.readFileSync(path.join(root,'mobile-authority.json'));let revokedBeforeClose=false;
+ const restore=failCandidateTransportClose(candidate,()=>{try{verifyTicket(root,ticket,target,'read');}catch{revokedBeforeClose=true;}}),changedBefore=changes;
+ try{
+  assert.throws(()=>action==='revoke'?f.broker.revoke():f.broker.logout(old),'Cleanup failure remains unconfirmed, never a false success');
+  assert.equal(revokedBeforeClose,true,'Durable native ticket revocation precedes transport cleanup');
+  assert.throws(()=>f.broker.session(old));assert.equal(f.broker.approvalStatus().enabled,false);assert.equal(f.broker.approvalStatus().registered,false);
+  assert.equal(before.equals(fs.readFileSync(path.join(root,'mobile-authority.json')))&&!fs.existsSync(path.join(root,'mobile-disabled')),false);
+  assert.throws(()=>verifyTicket(root,ticket,target,'read'));await assert.rejects(f.broker.read(old,target.sessionId));
+  await assert.rejects(f.broker.decide(old,{...card,challengeId:challenge.challengeId,assertion:key.assertion(challenge.publicKey)}));
+  if(next.auth){assert.throws(()=>f.broker.session(next.auth));await assert.rejects(f.broker.activateCandidate(next.auth,{mode:'verified'}));}
+  else await assert.rejects(async()=>f.broker.pair({secret:next.challenge.secret,actor,origin}));
+  assert.equal(f.broker.openUntil(),0);assert.equal(previous.closing,true,'Old client cleanup is attempted after candidate cleanup throws');
+  if(action==='logout')assert.equal(changes,changedBefore+1,'Listener change notification survives cleanup failure');
+ }finally{restore();}
+});
+test('cancelling only a candidate preserves the old key and authority even if its transport cleanup fails',async t=>{
+ const f=brokerFixture(t),old=await f.paired();enableOldKey(f,old);const next=await f.candidate({replace:true}),candidate=f.clients.at(-1),restore=failCandidateTransportClose(candidate);
+ try{assert.throws(()=>f.broker.cancelCandidate(next.challenge.id));assert.ok(f.broker.session(old));assert.equal(f.broker.approvalStatus().enabled,true);assert.throws(()=>f.broker.session(next.auth));}
+ finally{restore();}
 });

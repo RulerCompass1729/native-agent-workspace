@@ -47,7 +47,7 @@ class MobileBroker {
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { this.#push?.close(); this.#push = null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; }
+  #forget() { const push = this.#push; this.#push = null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
@@ -469,11 +469,10 @@ class MobileBroker {
     // Logging out a read-only device must not require send permission. It
     // still requires an explicit same-origin, session-bound CSRF token.
     let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
-    if(candidate){this.#dropCandidate(candidate.c.id);this.#changed();return {authorizationRevoked:true,connectionClosed:true,committedWorkMayContinue:false};}
+    if(candidate){try{this.#dropCandidate(candidate.c.id);}finally{this.#changed();}return {authorizationRevoked:true,connectionClosed:true,committedWorkMayContinue:false};}
     this.#writeState(auth);
-    const result = this.revoke();
-    this.#changed();
-    return result;
+    try { return this.revoke(); }
+    finally { this.#changed(); }
   }
   // Until when the app's listener is needed: an unexpired pairing link or paired device. 0 when nothing is open,
   // including when access is closed or the state is unreadable. The OFF marker is written only when a revocation could
@@ -490,11 +489,18 @@ class MobileBroker {
     } catch { return candidate?.expiresAt || 0; }
   }
   revoke() {
-    this.#candidateSerial++;this.#dropCandidate();
-    this.#forget();
-    let result;
+    this.#candidateSerial++;
+    let result, cleanupFailed = false;
+    // Authorization must fail closed before any transport/observer can throw.
+    // Attempt every cleanup even if an earlier one failed; never report success
+    // for an unconfirmed close. Cancelling only a candidate remains separate.
     try { result = this.#access.initialized ? this.#access.revoke() : { confirmed: true }; }
-    finally { this.#disconnect(); }
+    finally {
+      for (const cleanup of [() => this.#forget(), () => this.#dropCandidate(), () => this.#disconnect()]) {
+        try { cleanup(); } catch { cleanupFailed = true; }
+      }
+    }
+    if (cleanupFailed) throw denied('MOBILE_CLEANUP_UNCONFIRMED');
     // Closing only this broker's own connection invalidates its uncommitted
     // reservations. A commit already written may still be native work.
     return { authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
