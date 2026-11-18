@@ -58,6 +58,27 @@
     next[index] = Math.max(floor, Math.min(pair - floor, weights[index] + delta / total * sum));
     next[index + 1] = pair - next[index]; return next;
   }
+  function alignedColumnWidths(count, width, saved = []) {
+    width = Number.isFinite(width) ? Math.max(1, width) : 1;
+    const capacity = Math.max(1, Math.floor(width / 260)), total = count ? width * count / Math.min(count, capacity) : 0;
+    const floor = Math.min(260, width), widths = Array(count).fill(0), free = new Set(widths.keys());
+    const weights = widths.map((_, i) => Number.isFinite(saved[i]) && saved[i] > 0 ? saved[i] : 1);
+    let remaining = total;
+    while (free.size) {
+      const sum = [...free].reduce((n, i) => n + weights[i], 0), low = [...free].filter(i => remaining * weights[i] / sum < floor);
+      if (!low.length) { for (const i of free) widths[i] = remaining * weights[i] / sum; break; }
+      for (const i of low) { widths[i] = floor; remaining -= floor; free.delete(i); }
+    }
+    return { capacity, total, widths };
+  }
+  function columnWindow(widths, left, width) {
+    let offset = 0; const starts = [], ends = [];
+    for (const value of widths) { starts.push(offset); offset += value; ends.push(offset); }
+    const before = starts.filter(x => x < left - 1).length, after = ends.filter(x => x > left + width + 1).length;
+    const first = Math.max(0, ends.findIndex(x => x > left + 1)), capacity = Math.max(1, Math.floor(width / Math.min(...widths)));
+    const next = ends.findIndex(x => x > left + width + 1);
+    return { before, after, previous: before ? starts[Math.max(0, first - capacity)] : 0, next: after ? (starts[next] > left + 1 ? starts[next] : left + width) : 0 };
+  }
   // Progressive reveal is remembered per space for the app session, so switching
   // spaces keeps how many member columns the person had expanded.
   const memberLimits = new Map();
@@ -68,6 +89,8 @@
     const setText = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
+    const aligned = options.alignedTabs === true, alignedGrid = () => aligned && layout === 'grid' && !focused && contentVisible;
+    let alignedWidths = [], activeMember = '', pagerFrame = 0, disposed = false, measuredWidth = 0;
     const roomKey = options.roomId || 'shared';
     let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false, progressive = false;
     const orderType = 'application/x-native-room-member-order';
@@ -104,10 +127,44 @@
     toolbar.append(back, layouts, simplify);
     const headers = el('div', undefined, 'collaboration-statuses'); display.attribute(headers, 'aria-label', 'collab.memberStatus');
     const readers = el('div', undefined, 'collaboration-readers');
+    const strip = el('div', undefined, 'collaboration-strip');
+    const pagePrevious = button('', () => pageColumns(false), 'collaboration-page collaboration-page-previous');
+    const pageNext = button('', () => pageColumns(true), 'collaboration-page collaboration-page-next');
+    pagePrevious.hidden = pageNext.hidden = true;
+    if (aligned) strip.append(readers, pagePrevious, pageNext);
+    function schedulePager() { if (!pagerFrame) pagerFrame = requestAnimationFrame(() => { pagerFrame = 0; if (!disposed) updatePager(); }); }
+    if (aligned) readers.addEventListener('scroll', schedulePager, { passive: true });
+    function markActive(id) {
+      activeMember = id;
+      for (const [key, pane] of panes) { pane.header.dataset.active = String(key === id); if (key === id) pane.name.setAttribute('aria-current', 'true'); else pane.name.removeAttribute('aria-current'); }
+    }
+    function pageColumns(forward) {
+      if (!alignedGrid()) return;
+      const w = columnWindow(alignedWidths, readers.scrollLeft, readers.clientWidth);
+      readers.scrollLeft = forward ? w.next : w.previous; schedulePager();
+    }
+    function updatePager() {
+      const on = alignedGrid();
+      if (!on) { pagePrevious.hidden = pageNext.hidden = true; return; }
+      const w = columnWindow(alignedWidths, readers.scrollLeft, readers.clientWidth);
+      const origin = doc.activeElement;
+      pagePrevious.hidden = !on || !w.before; pageNext.hidden = !on || !w.after;
+      setText(pagePrevious, `‹ +${w.before}`); setText(pageNext, `+${w.after} ›`);
+      display.attribute(pagePrevious, 'aria-label', 'collab.previousColumns', { count: w.before }); display.attribute(pageNext, 'aria-label', 'collab.nextColumns', { count: w.after });
+      const box = readers.getBoundingClientRect();
+      for (const pane of panes.values()) {
+        const r = pane.unit.getBoundingClientRect();
+        pane.header.classList.toggle('page-start', on && !pagePrevious.hidden && r.left <= box.left + 1 && r.right > box.left + 1);
+        pane.header.classList.toggle('page-end', on && !pageNext.hidden && r.left < box.right - 1 && r.right >= box.right - 1);
+      }
+      if (on && (origin === pageNext && pageNext.hidden || origin === pagePrevious && pagePrevious.hidden)) {
+        const id = origin === pageNext ? records.at(-1)?.id : records[0]?.id; panes.get(id)?.name.focus({ preventScroll: true });
+      }
+    }
     const columnCapacity = () => {
       const style = getComputedStyle(readers), gap = parseFloat(style.columnGap) || 0;
       const width = (readers.clientWidth || host.clientWidth) - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-      return Math.max(1, Math.floor((width + gap) / (300 + gap)));
+      return aligned ? alignedColumnWidths(records.length, width).capacity : Math.max(1, Math.floor((width + gap) / (300 + gap)));
     };
     const showMore = button('', () => {
       const previous = visibleLimit;
@@ -119,9 +176,10 @@
     const chipsMore = button('', () => { chipsExpanded = !chipsExpanded; render(); }, 'collaboration-chips-more');
     const empty = el('p', undefined, 'quiet collaboration-empty'); display.text(empty, 'collab.empty');
     headers.append(chipsMore);
-    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, showMore, empty, orderStatus);
+    host.classList.add('collaboration-overview'); host.append(toolbar, headers, aligned ? strip : readers, showMore, empty, orderStatus);
     const widthObserver = new ResizeObserver(() => {
       const next = columnCapacity();
+      if (alignedGrid() && measuredWidth !== readers.clientWidth) { options.beforeLayout?.(); setWidths(); options.onLayout?.(); return; }
       if (next !== capacity) {
         options.beforeLayout?.(); capacity = next;
         if (!focused && layout === 'grid') { render(); options.onLayout?.(); }
@@ -162,6 +220,8 @@
         display.computed(pane.compactChild, 'title', () => statusFacts(record, connected, Date.now(), language()).child);
         pane.freshness.classList.toggle('compact-status-hidden', !facts.freshnessReported);
         pane.header.dataset.state = record.state || 'unknown'; pane.header.dataset.stale = String(facts.stale);
+        pane.header.dataset.ready = String(facts.state === locale.format(language(), 'collab.ready'));
+        if (aligned) display.computed(pane.header, 'title', () => { const f = statusFacts(record, connected, Date.now(), language()); return [f.state, f.child, f.freshness].join(' · '); });
         const needs = record.state === 'approval' || record.state === 'error' || Boolean(record.approval || record.claudeQuestion || record.approvals?.length || record.nativeApproval?.requests?.length);
         pane.header.dataset.alert = String(needs);
         let alertKey = '';
@@ -176,22 +236,31 @@
     function setWidths() {
       capacity = columnCapacity();
       const total = records.length, allFit = total <= capacity;
-      if (allFit) {
+      if (alignedGrid()) {
+        measuredWidth = readers.clientWidth;
+        const m = alignedColumnWidths(total, measuredWidth, records.map(r => weights.get(r.id) || 1));
+        alignedWidths = m.widths; host.dataset.capacity = String(m.capacity);
+        records.forEach((record, i) => panes.get(record.id).unit.style.setProperty('--member-width', `${m.widths[i]}px`));
+      } else if (allFit) {
         host.style.setProperty('--collaboration-columns', records.map(record => `minmax(300px, ${weights.get(record.id) || 1}fr)`).join(' ') || 'minmax(300px, 1fr)');
       } else {
         host.style.setProperty('--collaboration-columns', `repeat(${capacity}, minmax(300px, 1fr))`);
       }
       host.style.setProperty('--collaboration-row-min', `${readers.clientHeight || 300}px`);
       for (let i = 0; i < total; i++) {
-        const pane = panes.get(records[i].id); pane.grip.hidden = !allFit || i === total - 1 || layout === 'list' || Boolean(focused);
+        const pane = panes.get(records[i].id); pane.grip.hidden = (!allFit && !alignedGrid()) || i === total - 1 || layout === 'list' || Boolean(focused);
         pane.grip.setAttribute('aria-valuenow', String(Math.round((weights.get(records[i].id) || 1) * 100)));
       }
+      if (aligned) schedulePager();
     }
     function resize(index, delta, total) {
-      const values = records.map(r => weights.get(r.id) || 1), next = adjustedWidths(values, index, delta, total);
+      const values = records.map(r => weights.get(r.id) || 1), next = alignedGrid()
+        ? adjustedWidths(values, index, delta, alignedWidths.reduce((a, b) => a + b, 0), 260)
+        : adjustedWidths(values, index, delta, total);
       records.forEach((r, i) => weights.set(r.id, next[i])); setWidths();
     }
     function updateProgressiveControls() {
+      if (alignedGrid()) { showMore.hidden = true; schedulePager(); return; }
       const remaining = records.length - visibleLimit;
       if (progressive && remaining > 0 && layout === 'grid' && !focused) {
         const next = Math.min(capacity, remaining);
@@ -337,6 +406,7 @@
       reader.append(messages, short, input, nativeFooter, grip);
       // Every member is one card: its head (handle, maker, name, menu, state) above its own conversation and input.
       const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(header, reader);
+      if (aligned) { unit.addEventListener('focusin', () => markActive(record.id)); unit.addEventListener('pointerdown', () => markActive(record.id)); }
       // With many members the band above the cards is an index of everyone, including members whose cards are not shown yet.
       const chip = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-chip'); chip.dataset.memberId = record.id;
       const chipName = el('span', undefined, 'collaboration-chip-name'), chipAlert = el('span', undefined, 'collaboration-member-alert');
@@ -352,6 +422,7 @@
       const anchor = reordered && host.dataset.listUnits === 'true' && [...readers.children].find(n => n.getBoundingClientRect().bottom > readers.getBoundingClientRect().top);
       const anchorOffset = anchor && anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top;
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
+      host.dataset.alignedTabs = String(alignedGrid());
       simplify.setAttribute('aria-pressed', String(brief)); grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
       const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
@@ -363,7 +434,7 @@
       const chipIndex = options.memberIndex !== false && progressive && layout === 'grid' && !focused && contentVisible;
       headers.hidden = !chipIndex; host.dataset.band = String(chipIndex);
       // List already scrolls; grid's row limit must not hide list members.
-      if (!progressive || layout === 'list') visibleLimit = records.length;
+      if (alignedGrid() || !progressive || layout === 'list') visibleLimit = records.length;
       else {
         visibleRows = Math.max(1, memberLimits.get(roomKey) || 1);
         visibleLimit = Math.min(records.length, visibleRows * capacity);
@@ -421,6 +492,8 @@
           } else { display.unbind(pane.notice); setText(pane.notice, ''); }
         }
       });
+      if (aligned && !panes.has(activeMember)) activeMember = records[0]?.id || '';
+      if (aligned) markActive(activeMember);
       setWidths(); refreshStatus(); updateProgressiveControls();
       for (const [messages, top, left, short, briefTop] of scrolls) { messages.scrollTop = top; messages.scrollLeft = left; short.scrollTop = briefTop; }
       if (anchor?.isConnected && host.dataset.listUnits === 'true') readers.scrollTop += anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top - anchorOffset;
@@ -436,8 +509,8 @@
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
+      dispose() { disposed = true; if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
-  return { create, statusFacts, excerpt, adjustedWidths };
+  return { create, statusFacts, excerpt, adjustedWidths, alignedColumnWidths, columnWindow };
 });

@@ -1038,7 +1038,7 @@ function renderRoomOverview() {
   const oldIndex = oldHeader ? [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')].indexOf(oldHeader) : -1;
   const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
-    host: $('collaboration-overview'), roomId: state.room.id, memberIndex: false,
+    host: $('collaboration-overview'), roomId: state.room.id, memberIndex: false, alignedTabs: true,
     display: ui.display, language: ui.language, showError: ui.showError,
     onMove: moveRoomMember,
     onOrderError: error => error.message ? toastError(error) : toastMessage('collab.orderUnchanged'),

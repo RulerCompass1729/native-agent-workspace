@@ -143,3 +143,31 @@
 #room-composer { padding: 8px 12px; }
 #shared-input { padding: 8px; }
 .room-controls { gap: 6px; margin-top: 6px; }
+
+/* T-prime: the existing member heads are a continuous strip over the original readers. */
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-strip { position:relative; display:flex; min-width:0; min-height:0; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-readers { flex:1; display:flex; flex-flow:row nowrap; gap:0; padding:0; overflow-x:auto; overflow-y:hidden; align-items:stretch; scrollbar-width:thin; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-unit { flex:0 0 var(--member-width); width:var(--member-width); min-height:0; height:100%; grid-template-rows:46px minmax(0,1fr); border:0; border-radius:0; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-unit > .collaboration-member-status { position:relative; top:auto; align-self:stretch; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; align-content:center; gap:4px; height:46px; padding:0 8px; border:0; border-right:1px solid var(--border); border-bottom:1px solid var(--border); border-radius:0; background:var(--panel); }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-status[data-active="true"] { background:var(--surface); box-shadow:inset 0 1px var(--green); }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-heading { display:flex; flex-flow:row nowrap; align-items:center; min-width:0; gap:4px; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-heading::before { content:''; flex:none; width:7px; height:7px; border-radius:50%; background:var(--muted); }
+.collaboration-overview[data-aligned-tabs="true"] [data-ready="true"] .collaboration-member-heading::before { background:#6b8761; }
+.collaboration-overview[data-aligned-tabs="true"] [data-state="working"] .collaboration-member-heading::before { background:#b78c42; }
+.collaboration-overview[data-aligned-tabs="true"] [data-alert="true"] .collaboration-member-heading::before { background:#b26345; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-name,.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-name.is-revealed { flex:1; min-width:0; display:flex; flex-wrap:nowrap; align-items:center; gap:4px; white-space:nowrap; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-name-text { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-state { max-width:100px; font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.collaboration-overview[data-aligned-tabs="true"] :is(.collaboration-member-child,.collaboration-member-child-compact,.collaboration-member-freshness) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-member-reader { border:0; border-right:1px solid var(--border); border-radius:0; }
+.collaboration-overview[data-aligned-tabs="true"] .collaboration-resize { right:-3px; width:7px; border-radius:0; }
+.collaboration-page { position:absolute; top:0; z-index:7; height:46px; min-width:28px; padding:0 4px; border-radius:0; background:var(--surface); border:0; border-bottom:1px solid var(--border); font-size:11px; }
+.collaboration-page[hidden] { display:none; }
+.collaboration-page-previous { left:0; border-right:1px solid var(--border); }
+.collaboration-page-next { right:0; border-left:1px solid var(--border); }
+.collaboration-overview[data-aligned-tabs="true"] .page-start { padding-left:40px!important; }
+.collaboration-overview[data-aligned-tabs="true"] .page-end { padding-right:46px!important; }
+/* The wrapper changes no list or focused-member layout. */
+.collaboration-overview:not([data-aligned-tabs="true"]) .collaboration-strip { display:contents; }
+
+.collaboration-overview[data-aligned-tabs="true"] :is(.page-start,.page-end) .collaboration-member-state { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }

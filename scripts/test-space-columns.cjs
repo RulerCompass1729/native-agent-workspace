@@ -105,18 +105,19 @@ async function run() {
         await page.screenshot({ path: path.join(evidence, 'images', `${lang}-${theme}-${width}-top.png`), scale: 'css' });
         for (let n = 0; n < 8 && !await page.locator(`.collaboration-member-status[data-member-id="${ids[6]}"]`).isVisible(); n++) { await page.locator('.collaboration-show-more').click(); await settle(); }
         const sticky = await page.evaluate(() => {
-          const outer = document.querySelector('.collaboration-readers'), head = document.querySelector('.collaboration-member-status'), reader = document.querySelector('.collaboration-messages');
-          const before = head.getBoundingClientRect().top; outer.scrollTop = 120;
-          return { before, top: outer.getBoundingClientRect().top, delta: outer.scrollTop, headTop: head.getBoundingClientRect().top, bodyBottom: reader.getBoundingClientRect().bottom };
+          const outer = document.querySelector('.collaboration-readers'), head = document.querySelector('.collaboration-member-status');
+          outer.scrollLeft = Math.min(120, outer.scrollWidth - outer.clientWidth);
+          const u = head.closest('.collaboration-member-unit').getBoundingClientRect(), r = head.getBoundingClientRect();
+          return { scrollLeft: outer.scrollLeft, leftDelta: r.left - u.left, rightDelta: r.right - u.right };
         });
-        assert.ok(sticky.delta > 0); assert.ok(Math.abs(sticky.headTop - sticky.top) <= 1 && sticky.bodyBottom > sticky.headTop, 'Header stays with its visible content');
-        await page.locator('.collaboration-readers').evaluate(e => e.scrollTop = 0);
+        assert.equal(sticky.leftDelta, 0); assert.equal(sticky.rightDelta, 0);
+        await page.locator('.collaboration-readers').evaluate(e => e.scrollLeft = 0);
         const target = page.locator(`.collaboration-member-status[data-member-id="${ids[6]}"]`); await target.scrollIntoViewIfNeeded();
         const metrics = await page.evaluate(() => ({ width: innerWidth, hiddenMemberLists: document.querySelectorAll('#room-member-tabs button').length === 0 && [...document.querySelectorAll('.collaboration-member-chip')].every(e => !e.getClientRects().length), names: [...document.querySelectorAll('.collaboration-member-unit:not([hidden]) .collaboration-name-text')].map(e => ({ name: e.textContent, width: e.getBoundingClientRect().width, clipped: e.scrollWidth > e.clientWidth + 1 })), menu: document.getElementById('switch-space').getBoundingClientRect().toJSON(), rail: [...document.querySelectorAll('#space-rail-routes button')].map(e => ({ width: e.clientWidth, contents: e.scrollWidth, display: getComputedStyle(e).display })) }));
         assert.equal(metrics.hiddenMemberLists, true); assert.ok(metrics.names.length >= 7); assert.ok(metrics.names.every(n => !n.clipped));
         assert.ok(metrics.menu.width > 0 && metrics.menu.x >= 0 && metrics.menu.right <= width);
         assert.ok(metrics.rail.every(button => button.display === 'grid' && button.contents <= button.width + 1), 'Rail controls fit without wrapping or overflow');
-        const key = `${lang}-${theme}-${width}`; await page.screenshot({ path: path.join(evidence, 'images', key + '.png'), scale: 'css' }); shots.push({ key, ...metrics, sticky }); check(key + ': target 7 visible, full short names, one member list, sticky heading, rail labels fit');
+        const key = `${lang}-${theme}-${width}`; await page.screenshot({ path: path.join(evidence, 'images', key + '.png'), scale: 'css' }); shots.push({ key, ...metrics, sticky }); check(key + ': target 7 visible, full short names, one member list, aligned heading, rail labels fit');
       }
     }
   }
