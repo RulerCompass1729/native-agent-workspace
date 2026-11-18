@@ -6,12 +6,13 @@ const between = (start, end) => source.slice(source.indexOf(start), source.index
 function harness() {
   const frames = [], sent = [], dimensions = { width: 364, height: 112 };
   const record = { id: 'a', owner: 'local', nativeId: 'native-a', connectionRevision: 1, terminalState: { alive: true, epoch: 'epoch-a' } };
-  const binding = { id: 'a', column: true, visible: true, nativeVisible: true };
+  const binding = { id: 'a', column: true, visible: true, nativeVisible: true, ui: { input: { value: '' }, setValue: () => true } };
   const element = { isConnected: true, get clientWidth() { return dimensions.width; }, get clientHeight() { return dimensions.height; }, checkVisibility: () => binding.visible && binding.nativeVisible };
   const term = { cols: 100, rows: 30, resize(cols, rows) { this.cols = cols; this.rows = rows; } };
   const entry = { element, term, ready: true, nativeId: record.nativeId, generation: 1, epoch: record.terminalState.epoch,
     fit: { proposeDimensions: () => ({ cols: Math.floor(dimensions.width / 8), rows: Math.floor(dimensions.height / 16) }) } };
   const c = vm.createContext({ state: { sessions: [record] }, owner: 'local', terminals: new Map([['a', entry]]), sessionComposers: new Map([['a', binding]]),
+    projectSpace: s => s, shownKnown: new Set(), legacyProgressOffline: () => false, latestViewStorage: undefined, pendingDrafts: new Map(), queuedInputs: new Map(), queuedRoomInputs: new Map(),
     composerCurrent: b => b.visible, applyColumnTerminalHeight() {}, columnTerminalHeight: () => 112, revealTerminalCursor() {},
     attempt: fn => fn(), requestAnimationFrame: fn => frames.push(fn), activeSessionId: () => null, terminalLayout: 'hidden',
     api: { resize: async (id, cols, rows) => sent.push({ id, cols, rows }) } });
@@ -21,6 +22,7 @@ function harness() {
     between('function fitColumnTerminal(', '// The column budget'),
     between('// A smaller window lowers', "window.addEventListener('resize'"),
     between('function fitTerminal(id)', '// Follow the producer'),
+    between('function updateState(next)', '// Like a native TUI queue'),
   ].join('\n'), c);
   return { c, frames, sent, dimensions, record, binding, entry, refresh: () => c.refreshColumnTerminalHeights(), flush() { while (frames.length) frames.shift()(); } };
 }
@@ -56,4 +58,37 @@ test('IME composition defers width fitting through the existing pending-fit barr
 test('automatic width fitting keeps the native grid bounds', () => {
   const h = harness(); h.dimensions.width = 1; h.dimensions.height = 1; h.refresh(); h.flush(); assert.deepEqual(h.sent[0], { id: 'a', cols: 20, rows: 5 });
   h.dimensions.width = 9000; h.dimensions.height = 9000; h.refresh(); h.flush(); assert.deepEqual(h.sent[1], { id: 'a', cols: 400, rows: 200 });
+});
+
+// B1: the same entry may outlive its grid pane and an ownership round trip.
+test('same entry refits the original grid after a wider focused or solo pane resized it', () => {
+  const h = harness(); h.refresh(); h.flush(); assert.equal(h.entry.term.cols, 45);
+  h.binding.visible = false; h.entry.element.checkVisibility = () => true; h.c.activeSessionId = () => 'a'; h.c.terminalLayout = 'split';
+  h.dimensions.width = 900; h.c.fitTerminal('a'); h.flush(); assert.equal(h.entry.term.cols, 112);
+  h.binding.visible = true; h.c.activeSessionId = () => null; h.c.terminalLayout = 'hidden'; h.dimensions.width = 364;
+  h.refresh(); h.flush(); assert.equal(h.entry.term.cols, 45);
+  assert.deepEqual(h.sent.map(s => s.cols), [45, 112, 45]);
+});
+test('reacquiring the same entry refits after a foreign canonical resize, including while parked', () => {
+  for (const parked of [false, true]) {
+    const h = harness(); h.refresh(); h.flush(); assert.equal(h.entry.term.cols, 45);
+    h.record.owner = 'other'; h.record.controlRevision = 1; h.binding.visible = !parked; h.refresh(); h.flush();
+    assert.equal(h.sent.length, 1, 'The foreign window alone controls its PTY');
+    // Simulate its received canonical resize on the retained display, as in G's counterexample.
+    h.entry.term.resize(100, 30);
+    h.record.owner = 'local'; h.record.controlRevision = 2; h.binding.visible = true; h.refresh(); h.flush();
+    assert.equal(h.entry.term.cols, 45); assert.deepEqual(h.sent.map(s => s.cols), [45, 45], 'The real PTY must also leave the foreign 100-col grid');
+  }
+});
+test('hidden ownership round trips invalidate the grid, while same-owner input revisions and pure height changes do not', () => {
+  const h = harness(); h.refresh(); h.flush();
+  h.dimensions.height = 144;
+  h.c.updateState({ sessions: [{ ...h.record, controlRevision: 1 }] }); h.refresh();
+  assert.equal(h.frames.length, 0, 'Typing revisions must not refit a height-only layout change');
+  h.dimensions.height = 112; h.binding.visible = false;
+  h.c.updateState({ sessions: [{ ...h.record, owner: 'other', controlRevision: 2 }] }); h.refresh(); h.flush(); assert.equal(h.sent.length, 1);
+  h.c.updateState({ sessions: [{ ...h.record, controlRevision: 3 }] }); h.binding.visible = true;
+  h.refresh(); assert.equal(h.frames.length, 1); h.flush();
+  assert.equal(h.sent.length, 1, 'Unchanged canonical dimensions keep same-size PTY deduplication');
+  h.refresh(); assert.equal(h.frames.length, 0);
 });

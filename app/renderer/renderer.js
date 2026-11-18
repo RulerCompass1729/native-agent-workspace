@@ -730,12 +730,17 @@ function fitColumnTerminalWidth(binding) {
   const entry = terminals.get(binding.id);
   if (!entry?.ready || entry.restoring) return;
   const record = state.sessions.find(s => s.id === binding.id);
-  if (record?.owner !== owner || !currentTerminalDisplay(entry, record) ||
+  if (record?.owner !== owner) { entry.columnFit = undefined; entry.nativeSize = undefined; return; }
+  if (!currentTerminalDisplay(entry, record) ||
       !entry.element.isConnected || !entry.element.checkVisibility() || entry.element.clientHeight <= 0) return;
-  const width = entry.element.clientWidth;
-  // Output redraws and height clamping keep their existing grid. Only a first
-  // owned display or a changed usable width opens the existing next-frame fit.
-  if (width > 0 && width !== entry.columnWidth) fitColumnTerminal(binding);
+  const width = entry.element.clientWidth, size = JSON.stringify([entry.term.cols, entry.term.rows]);
+  // The same entry can return from a wider solo pane or a foreign canonical grid.
+  // DOM-only height changes and ordinary output do not change this fit key.
+  const key = JSON.stringify([width, entry.term.cols, entry.term.rows]);
+  if (width > 0 && key !== entry.columnFit) {
+    if (entry.nativeSize !== size) entry.nativeSize = undefined;
+    fitColumnTerminal(binding);
+  }
 }
 function refreshColumnTerminalHeights() {
   for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) {
@@ -1116,6 +1121,10 @@ function updateState(next) {
   if (latestViewStorage !== undefined) { state.viewStorageWarning = latestViewStorage; state.viewStorageWarningUiMessage = latestViewStorageUiMessage; }
   for (const [id, binding] of sessionComposers) {
     const previous = before.get(id), after = state.sessions.find(s => s.id === id);
+    // Ownership can change while the column is parked, without recreating its terminal.
+    if (previous?.owner !== after?.owner) {
+      const entry = terminals.get(id); if (entry) entry.columnFit = undefined;
+    }
     if (previous && after && (previous.owner !== owner || after.owner !== owner)) {
       if (binding.typedWhileFree && !heldElsewhere(after)) {
         if (after.owner === owner && composerCurrent(binding)) { binding.typedWhileFree = false; saveSessionDraft(binding); }
@@ -5418,7 +5427,7 @@ function fitTerminal(id) {
     // pane reads that original grid through the surface's local overflow.
     if (column) column.resizeAllowed = false;
     entry.term.resize(Math.max(20, Math.min(400, dimensions.cols)), Math.max(5, Math.min(200, dimensions.rows)));
-    if (column) entry.columnWidth = entry.element.clientWidth;
+    if (column) entry.columnFit = JSON.stringify([entry.element.clientWidth, entry.term.cols, entry.term.rows]);
     revealTerminalCursor(entry);
     const size = JSON.stringify([entry.term.cols, entry.term.rows]);
     if (entry.nativeSize === size) return;
