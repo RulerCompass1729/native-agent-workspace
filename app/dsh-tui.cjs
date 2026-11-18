@@ -433,6 +433,7 @@ class DshTui extends EventEmitter {
         runCanary: () => runCanary(profile, execPath),
         onDenial: denial => this.blocked(sandboxViolation(denial)),
         onLost: reason => this.witnessLost(reason),
+        onGap: gap => this.emit('dshWitnessGap', gap),
       });
     } catch (error) {
       await this.closeGuards();
@@ -481,7 +482,7 @@ class DshTui extends EventEmitter {
     this.terminal?.stop().catch(() => {});
   }
   // The witness can no longer vouch for the record: its log reader ended
-  // ('witness-lost') or a canary beat's report did not arrive
+  // ('witness-lost') or fresh canary reports ceased / the canary ended
   // ('witness-silent'), so a refusal could have gone unrecorded. The session
   // does not go on without the record.
   witnessLost(reason) {

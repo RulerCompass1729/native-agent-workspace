@@ -916,6 +916,13 @@ class Workspace extends EventEmitter {
     });
     // A tool call's activity and its state 'working', and usage, touch no messages: they name their own session.
     on('activity', (text, uiMessage) => { setActivity(s, text, uiMessage); this.changed(s.id); });
+    on('dshWitnessGap', gap => {
+      if (s.provider !== 'dsh' || !gap || !['at', 'from', 'to', 'missing', 'elapsedMs'].every(key =>
+        Number.isSafeInteger(gap[key]) && gap[key] >= 0) || gap.missing < 1 || gap.to < gap.from) return;
+      (s.dshWitnessGaps ||= []).push({ at: gap.at, from: gap.from, to: gap.to, missing: gap.missing, elapsedMs: gap.elapsedMs });
+      if (s.dshWitnessGaps.length > 200) s.dshWitnessGaps.shift();
+      this.changed(s.id);
+    });
     // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
     // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
     // ended; a new native process starts with none.
