@@ -16,7 +16,7 @@ state = {"clock": 0.0, "reaped": False, "killed": False,
          "group_checks": 0, "loops": 0, "injected": False, "child_alive": True}
 signals, handlers = [], {}
 packet = (json.dumps({"argv": ["synthetic-not-executed"], "cwd": "/"}) + "\n").encode()
-if scenario in ("stubborn-then-reuse", "zombie-eperm"):
+if scenario in ("stubborn-then-reuse", "zombie-eperm", "term-zombie-eperm", "term-live-eperm", "term-surviving-group-eperm"):
     packet += b'{"type":"stop"}\n'
 
 
@@ -45,6 +45,8 @@ def killpg(pid, sig):
     if sig:
         signals.append({"signal": sig, "at": state["clock"],
                         "target": "foreign-reused-group" if state["reaped"] else "owned-group"})
+        if sig == 15 and scenario in ("term-zombie-eperm", "term-live-eperm", "term-surviving-group-eperm"):
+            raise PermissionError(1, "Synthetic group signal denied")
         if sig == 9:
             state["killed"] = True
             state["child_alive"] = False
@@ -55,6 +57,8 @@ def killpg(pid, sig):
         return
     if state["reaped"]:
         state["group_checks"] += 1
+        if scenario == "term-surviving-group-eperm":
+            raise PermissionError(1, "Synthetic surviving group denied")
         # A reused identity may still exist, but must never receive TERM/KILL.
         if state["group_checks"] > 2:
             raise ProcessLookupError()
@@ -77,7 +81,7 @@ def waitpid(pid, flags):
         state["injected"] = True
         handlers[15](15, None)
         return 0, 0
-    if scenario == "zombie-eperm" or state["killed"]:
+    if scenario in ("zombie-eperm", "term-zombie-eperm", "term-surviving-group-eperm") or state["killed"]:
         state["reaped"] = True
         return pid, 0
     return 0, 0
@@ -96,6 +100,8 @@ namespace.update(
                                  signal=lambda sig, handler: handlers.__setitem__(sig, handler)),
     time=types.SimpleNamespace(monotonic=lambda: state["clock"]),
     sys=types.SimpleNamespace(stdin=types.SimpleNamespace(fileno=lambda: 0), stdout=output))
-namespace["main"]()
-print(json.dumps({"scenario": scenario, "signals": signals, "schedule": state,
-                  "records": [json.loads(line) for line in output.getvalue().splitlines()]}))
+try:
+    namespace["main"]()
+finally:
+    print(json.dumps({"scenario": scenario, "signals": signals, "schedule": state,
+                      "records": [json.loads(line) for line in output.getvalue().splitlines()]}))

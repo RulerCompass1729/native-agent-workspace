@@ -66,7 +66,7 @@ def main():
     exit_code = None
 
     def terminate():
-        nonlocal stop_deadline
+        nonlocal stop_deadline, reaped, exit_code
         if reaped or stop_deadline is not None:
             return
         # Preserve the former caller's full five-second graceful-exit budget.
@@ -75,6 +75,15 @@ def main():
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # macOS may deny TERM to a zombie-only group. Reap only an exited
+            # owned leader; a live permission failure stays unconfirmed. The
+            # main loop must still prove group absence before emitting exit.
+            finished, status = os.waitpid(pid, os.WNOHANG)
+            if not finished:
+                raise
+            reaped = True
+            exit_code = os.waitstatus_to_exitcode(status)
 
     def request_stop(*_):
         nonlocal stop_requested
