@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const scratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
+const { openSession } = require('./fixtures/space-membership.cjs');
 // Multi-space records keep membership in roomIds; older ones used roomId.
 const inShared = s => (Array.isArray(s?.roomIds) ? s.roomIds : s?.roomId ? [s.roomId] : []).includes('shared');
 const { _electron } = scratch.playwright(require('playwright'));
@@ -125,16 +126,17 @@ async function run() {
 
     await menu('#session-header-more'); await item('加入此空间').click(); await until(async () => inShared((await snapshot()).sessions.find(s => s.id === id)), 'Explicit join');
     assert.ok((await page.locator('#subtitle').innerText()).includes('参与协作，也可单独操作'));
-    const other = await create('Other member', 'claude'); await page.evaluate(id => workspace.join(id, true), other); await page.locator(`[data-session-id="${id}"]`).click();
+    const other = await create('Other member', 'claude'); await page.evaluate(id => workspace.join(id, true), other); await openSession(page, id);
+    await page.locator('#chat-tab').click(); await page.locator('#messages').waitFor();
     const body = '#messages [data-message-id="header-original"] .message-body', selected = await selectText(body);
     await menu('#session-header-more'); assert.equal(await item('分享选中内容').isDisabled(), false); await item('分享选中内容').click(); await page.locator('#share-dialog').waitFor(); assert.equal(await page.locator('#share-text').inputValue(), selected); await page.locator('#cancel-share').click();
     await selectText('#title'); await menu('#session-header-more'); assert.equal(await item('分享选中内容').isDisabled(), true, 'Header selection is not eligible private conversation content'); await page.keyboard.press('Escape');
     await page.locator('#terminal-tab').click(); await page.evaluate(id => window.headerTerms.get(id).select(0, 0, 22), id); const nativeText = await page.evaluate(id => window.headerTerms.get(id).getSelection(), id); await page.locator('#terminal-copy').click(); assert.equal(await app.evaluate(() => globalThis.headerClipboard.copies.at(-1)), nativeText);
-    await menu('#session-header-more'); await item('离开此空间').click(); await until(async () => !inShared((await snapshot()).sessions.find(s => s.id === id)), 'Explicit leave'); await menu('#session-header-more'); await item('加入此空间').click();
+    await menu('#session-header-more'); await item('移出当前空间').click(); await until(async () => !inShared((await snapshot()).sessions.find(s => s.id === id)), 'Explicit leave'); await menu('#session-header-more'); await item('加入此空间').click();
     check('Explicit join/leave, selected-original sharing preview and persistent terminal Copy retain existing scope; no selected header or text is shared automatically');
 
     await page.evaluate(id => workspace.archiveSession(id), id); await page.getByRole('button', { name: '恢复会话', exact: true }).waitFor();
-    await menu('#session-header-more'); await item('用量').waitFor(); assert.equal(await item('加入此空间').count() + await item('离开此空间').count(), 0); await page.keyboard.press('Escape');
+    await menu('#session-header-more'); await item('用量').waitFor(); assert.equal(await item('加入此空间').count() + await item('移出当前空间').count(), 0); await page.keyboard.press('Escape');
     await menu('#terminal-more'); await fixture('header-facts', id, { activity: 'Retained original terminal' }); await until(async () => (await page.locator('#session-status').innerText()).includes('Retained original terminal'), 'Archived native update'); await item('显示…').click(); await page.locator('#terminal-display-dialog').waitFor(); await page.locator('#close-terminal-display').click(); await fixture('header-facts', id, { activity: '' });
     await page.getByRole('button', { name: '恢复会话', exact: true }).click(); await until(async () => !(await snapshot()).sessions.find(s => s.id === id).archived, 'Explicit restore');
     if (!inShared((await snapshot()).sessions.find(s => s.id === id))) { await menu('#session-header-more'); await item('加入此空间').click(); }
@@ -160,7 +162,7 @@ async function run() {
     await fixture('set-owner', id, 'another-owned-view'); await until(() => page.locator('#take-control').isVisible(), 'Explicit takeover stays visible');
     const status = await page.locator('#session-status').innerText(); assert.ok(status.includes('尚未验证') && status.includes('另一个窗口控制')); assert.equal(await page.locator('#approval').isVisible(), true);
     // Since b6f633f a native-only request is a compact row; its original input is one click away.
-    await page.locator('#approval .native-approval-request', { hasText: 'Original native permission' }).locator(':scope > summary').click(); assert.ok((await page.locator('#approval').innerText()).includes('Read original source? 你好')); await bounds('approval-other-owner'); await capture('approval-other-owner');
+    const nativeRequest = page.locator('#approval .native-approval-request', { hasText: 'Original native permission' }); if (!await nativeRequest.evaluate(el => el.open)) await nativeRequest.locator(':scope > summary').press('Enter'); await page.getByText('Read original source? 你好', { exact: true }).waitFor(); assert.ok((await page.locator('#approval').innerText()).includes('Read original source? 你好')); await bounds('approval-other-owner'); await capture('approval-other-owner');
     await menu('#session-header-more'); await fixture('set-owner', id, original.owner); await page.getByRole('menu').waitFor({ state: 'hidden' }); assert.equal(await page.locator('#session-header-more').getAttribute('aria-expanded'), 'false');
     await fixture('native-permission', id, null); await fixture('set-state', id, 'idle'); await fixture('native-version', id, { version: '0.164.0' });
     await page.locator('#chat-tab').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === id).view === 'chat', 'Chat control settled before bounded claim'); await fixture('hold-claim', id); await page.locator('#terminal-tab').click(); await until(async () => (await fixture()).claims.includes(id), 'Bounded pending view claim');
@@ -173,8 +175,8 @@ async function run() {
     assert.equal(await page.locator('#header').evaluate(n => n.classList.contains('compact-session')), false); assert.equal(await page.locator('#room-session #session-toolbar').count(), 1); assert.equal(await page.locator('#session-files').isVisible(), true);
     assert.equal((await snapshot()).sessions.find(s => s.id === id).owner, ownerBeforeFocus); assert.equal((await fixture()).headerCalls.claim, callsBeforeFocus, 'Passive room focus does not claim input');
     await page.locator('#usage-button').click(); await page.locator('#privacy-dialog').waitFor(); assert.equal(await page.locator('#privacy-dialog h2').innerText(), `${longName} · 用量`); await page.locator('#close-privacy').click();
-    await page.locator('#room-overview').click(); await page.locator(`[data-session-id="${id}"]`).click();
-    await menu('#session-header-more'); await page.locator(`[data-session-id="${other}"]`).click(); await page.getByRole('menu').waitFor({ state: 'hidden' }); await page.locator(`[data-session-id="${id}"]`).click();
+    await page.locator('#room-overview').click(); await openSession(page, id);
+    await menu('#session-header-more'); await openSession(page, other); await page.getByRole('menu').waitFor({ state: 'hidden' }); await openSession(page, id);
     const draftBeforeReload = await input.inputValue(); await page.reload(); await page.locator('#session-header-more').waitFor(); await until(async () => await input.inputValue() === draftBeforeReload, 'Reload retains the draft');
     if ((await fixture()).pending.includes(id)) await fixture('release', id);
     await menu('#terminal-more'); await item('显示…').click(); await page.locator('#terminal-display-dialog').waitFor(); assert.equal(await page.locator('#terminal-font-size').inputValue(), '16'); await page.locator('#close-terminal-display').click();

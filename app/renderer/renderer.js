@@ -573,9 +573,11 @@ function columnTerminalLimits(binding) {
   const input = binding.columnHost, reader = input?.closest('.collaboration-member-reader');
   // Everything else in the column below the conversation: the line, the input, gaps and any footer.
   const others = input ? input.offsetHeight - binding.nativeHost.offsetHeight + (reader.querySelector('.column-native-footer:not([hidden])')?.offsetHeight || 0) : 0;
-  const room = reader ? reader.clientHeight - COLUMN_TERMINAL.conversation - others : COLUMN_TERMINAL.initial;
+  const room = reader ? reader.clientHeight - columnReadingFloor(reader) - others : COLUMN_TERMINAL.initial;
   return { min: COLUMN_TERMINAL.min, max: Math.min(COLUMN_TERMINAL.most, Math.max(COLUMN_TERMINAL.min, Math.floor(room))) };
 }
+// The viewport keeps its floor; a visible prompt slot needs additional room.
+function columnReadingFloor(reader) { return COLUMN_TERMINAL.conversation + (reader?.querySelector('.reading-slot')?.offsetHeight || 0); }
 function columnTerminalHeight(id) { return Number.isSafeInteger(columnTerminalHeights[id]) ? columnTerminalHeights[id] : COLUMN_TERMINAL.initial; }
 // T-163: the hint under a column's input shows up to four of its lines, and never fewer than two.
 const COLUMN_HINT = { line: 16, least: 2, most: 4 };
@@ -586,7 +588,7 @@ function fitColumnHint(binding) {
   const input = binding.columnHost, reader = input?.closest('.collaboration-member-reader'), hint = input?.querySelector('.session-compose-hint');
   if (!reader || !hint) return;
   const rest = input.offsetHeight - binding.nativeHost.offsetHeight - hint.offsetHeight + (reader.querySelector('.column-native-footer:not([hidden])')?.offsetHeight || 0);
-  const fit = Math.floor((reader.clientHeight - COLUMN_TERMINAL.conversation - COLUMN_TERMINAL.min - rest) / COLUMN_HINT.line);
+  const fit = Math.floor((reader.clientHeight - columnReadingFloor(reader) - COLUMN_TERMINAL.min - rest) / COLUMN_HINT.line);
   const lines = String(Math.max(COLUMN_HINT.least, Math.min(COLUMN_HINT.most, fit)));
   if (input.style.getPropertyValue('--column-hint-lines') !== lines) input.style.setProperty('--column-hint-lines', lines);
 }
@@ -1075,6 +1077,7 @@ function renderRoomOverview() {
       paintVendorMark(mark, record); mark.title = makerLabel(record);
     },
     onMemberMenu: openMemberMenu,
+    onOpenSession: id => attempt(() => api.newWindow(id)),
     onSource: (el, key, source) => {
       if (!pointToMessage(el, key, source.messageId)) toastMessage("toast.originalRemoved");
       attempt(persistView);
@@ -1085,7 +1088,11 @@ function renderRoomOverview() {
   for (const person of members()) readLegacyProgress(person);
   roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
   renderHeaderLayout(current(), selected === 'room');
-  $('room-overview').setAttribute('aria-pressed', String(!records && !focused)); $('room-record').setAttribute('aria-pressed', String(records));
+  const overview = $('room-overview');
+  overview.removeAttribute('aria-pressed');
+  if (!records && !focused) overview.setAttribute('aria-current', 'page'); else overview.removeAttribute('aria-current');
+  ui.display.text(overview, focused ? 'room.returnSpace' : 'room.overview', { name: spaceName(state.room) });
+  $('room-record').setAttribute('aria-pressed', String(records));
   $('room-member-tabs').hidden = !focused;
   if (roomOverview) roomOverview.toolbar.hidden = focused || records;
   // The header's row now holds what this page shows of it.
@@ -3246,7 +3253,8 @@ function openSpaceNavigation(kind, anchor) {
 }
 function renderSpaceRail() {
   const active = selected === 'room', surface = $('sidebar-toggle').closest('.naw[data-native-surface="sidebar"]');
-  $('space-rail-routes').hidden = $('switch-space').hidden = !active;
+  $('space-rail-routes').hidden = !active;
+  $('switch-space').hidden = !active || Boolean(focusedRoomMember());
   if (!surface) return;
   const collapsed = surface.dataset.collapsed === 'true';
   if (active && spaceRailBefore === null) { spaceRailBefore = collapsed; if (!collapsed) ui.toggleSidebar(); }
@@ -4472,7 +4480,7 @@ function renderHeaderLayout(s, inRoom) {
   $('conversation-pane-toolbar').hidden = !s || $('conversation-pane').hidden;
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
-  ui.display.computed($('title'), 'title', () => compact ? archivedName(s) : compactRoom || focusedMember ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
+  ui.display.computed($('title'), 'title', () => compact || focusedMember ? archivedName(s) : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
   if (typeof renderSessionChainChip === 'function') renderSessionChainChip(compact ? s : null);
   if (typeof hierHeaderCrumb === 'function') hierHeaderCrumb(compact ? s : null);
   $('title').onfocus = () => { if (header.classList.contains('compact-room') || header.classList.contains('focused-member')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
@@ -4483,7 +4491,7 @@ function renderHeaderLayout(s, inRoom) {
   $('subtitle').onblur = focusedMember ? $('title').onblur : null;
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
   const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
-  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length]);
+  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length, focusedMember && spaceName(state.room)]);
   if (subtitle.dataset.identity !== signature) {
     ui.display.unbind(subtitle); subtitle.replaceChildren();
     if (compact) subtitle.replaceChildren(...values.map((value, index) => {
@@ -4494,7 +4502,7 @@ function renderHeaderLayout(s, inRoom) {
       else { field.title = value; field.setAttribute('aria-label', value); }
       return field;
     }));
-    else ui.display.computed(subtitle, 'text', () => compactRoom ? uiText('header.members', { count: members().length }) : s ? values.slice(0, -1).map((value, index) => index === 2 ? ui.displayText(value, s.modelUiMessage) : value).concat(uiText(values.at(-1))).join(' · ') : uiText(inRoom ? 'header.roomHelp' : 'header.welcomeHelp'));
+    else ui.display.computed(subtitle, 'text', () => compactRoom ? uiText('header.members', { count: members().length }) : focusedMember ? uiText('room.memberContext', { name: spaceName(state.room) }) : s ? values.slice(0, -1).map((value, index) => index === 2 ? ui.displayText(value, s.modelUiMessage) : value).concat(uiText(values.at(-1))).join(' · ') : uiText(inRoom ? 'header.roomHelp' : 'header.welcomeHelp'));
     subtitle.dataset.identity = signature;
   }
   if (sessionMenu?.anchor && sessionMenu.key !== (sessionMenu.kind === 'member' ? memberMenuKey(sessionMenu.id) : headerMenuKey())) sessionMenu.close();
@@ -4598,12 +4606,14 @@ function renderHeader(s, inRoom) {
     const more = button('⋯', () => openRoomMenu(null, more)); more.id = 'room-header-more'; ui.display.attribute(more, 'aria-label', 'header.roomMenu'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
     more.onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
     const compactMore = button('⋯', () => openHeaderMenu(compactMore));
+    const openSession = uiButton('collab.openSession', () => { const s = current(); if (s && selected === 'room') return api.newWindow(s.id); });
+    openSession.id = 'member-open-session'; ui.display.attribute(openSession, 'title', 'collab.openSessionHelp');
     compactMore.id = 'session-header-more'; ui.display.attribute(compactMore, 'aria-label', 'header.sessionMenu'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
     compactMore.onpointerdown = event => { if (sessionMenu?.anchor === compactMore) event.stopPropagation(); };
     for (const control of [membership, selectedText, usage]) control.classList.add('header-secondary');
     spaceMessagePreview = createSpaceMessagePreview();
-    headerControls = { resume, membership, selectedText, restore, more, usage, compactMore };
-    $('header-actions').append(resume, membership, selectedText, spaceMessagePreview.trigger, spaceMessagePreview.panel, usage, restore, more, compactMore);
+    headerControls = { resume, membership, selectedText, restore, more, usage, compactMore, openSession };
+    $('header-actions').append(openSession, resume, membership, selectedText, spaceMessagePreview.trigger, spaceMessagePreview.panel, usage, restore, more, compactMore);
   }
   const h = headerControls;
   const membershipAction = JSON.stringify([spaceId, s?.id, s ? inSpace(s) : false, !!s?.archived]);
@@ -4619,6 +4629,11 @@ function renderHeader(s, inRoom) {
   if (isButler && !inSpace(s)) h.membership.hidden = true;
   const badge = $('steward-badge'); if (badge) { badge.hidden = !isButler; if (isButler) ui.display.computed(badge, 'text', () => '◆ ' + uiText('butler.name')); }
   ui.display.text(h.membership, s && inSpace(s) ? 'header.leave' : 'header.join');
+  // Keep the original control and eligibility for the menu; only its header placement changes.
+  h.membership.classList.toggle('membership-menu-only', Boolean(s && inSpace(s)));
+  h.openSession.hidden = !inRoom || !s;
+  h.openSession.disabled = disconnected;
+  if (s) ui.display.attribute(h.openSession, 'aria-label', 'collab.openSessionNamed', { name: participantLabel(s, state.sessions) });
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
   h.more.disabled = disconnected || state.room.archived || renameTarget?.id === 'room' && renameTarget.roomId === spaceId;
@@ -4969,6 +4984,7 @@ function render() {
     $('panorama-nav').setAttribute('aria-pressed', String(inPanorama));
     $('return-panorama').hidden = !panoramaView.returning || inPanorama;
     if (inRoom && state.room.unavailable) ui.display.text($('title'), 'space.unavailable');
+    else if (inRoom && s) ui.display.computed($('title'), 'text', () => archivedName(s));
     else if (inRoom) ui.display.computed($('title'), 'text', () => spaceName(state.room));
     else if (s?.name) ui.display.computed($('title'), 'text', () => archivedName(s));
     else ui.display.text($('title'), 'header.workspace');
@@ -5775,7 +5791,10 @@ $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared')
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); event.stopPropagation(); openRoomMenu({ x: event.clientX, y: event.clientY }, $('room-more'), 'shared'); };
 $('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(undefined, $('room-more'), 'shared'); } };
-$('room-overview').onclick = () => attempt(() => { captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview'; return selectRoom('', true); });
+$('room-overview').onclick = () => attempt(() => {
+  if (focusedRoomMember()) { roomOverview.focus(''); return; }
+  captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview'; return selectRoom('', true);
+});
 $('room-record').onclick = () => attempt(() => showRoomRecords());
 $('room-tabs').addEventListener('keydown', roomNavigationKey);
 $('member-related-records').onclick = () => attempt(() => showRoomRecords(true));

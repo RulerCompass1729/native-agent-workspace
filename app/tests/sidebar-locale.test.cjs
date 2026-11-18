@@ -216,7 +216,7 @@ test('archive rows offer the same chain list beside restore without adding a men
 
 test('subtitle native fields remain raw while the last own membership label repaints in place', () => {
   const f = fixture(); const from = renderer.indexOf('  const settings = s?.nativeSettings', renderer.indexOf('function renderHeaderLayout(')), to = renderer.indexOf('  if (sessionMenu?.anchor', from);
-  assert.ok(from > 0 && to > from); vm.runInContext('function paintIdentity(s, inRoom, compact, compactRoom) { ' + renderer.slice(from, to) + ' }', f.context);
+  assert.ok(from > 0 && to > from); vm.runInContext('function paintIdentity(s, inRoom, compact, compactRoom) { const focusedMember = Boolean(inRoom && s); ' + renderer.slice(from, to) + ' }', f.context);
   f.people[0].model = 'RAW 模型'; f.run('paintIdentity(state.sessions[0], false, true, false)');
   const fields = [...f.$('subtitle').children]; f.document.activeElement = fields[2]; f.refresh('en');
   assert.deepEqual(f.$('subtitle').children, fields); assert.equal(fields[2].textContent, 'RAW 模型'); assert.equal(f.document.activeElement, fields[2]);

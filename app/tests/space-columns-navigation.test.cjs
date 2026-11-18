@@ -6,6 +6,7 @@ function harness() {
   const calls = [], nodes = new Map(), surface = { dataset: { collapsed: 'false' } }, locale = localeUI('en'); let menu;
   const $ = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, attrs: {}, isConnected: true, setAttribute(k, v) { this.attrs[k] = v; }, getBoundingClientRect: () => ({ left: 0, top: 0 }), getClientRects: () => [{}], focus() {}, closest: () => surface }); return nodes.get(id); };
   const context = vm.createContext({ ...locale, $, selected: 'room', spaceRailBefore: null, spaceNavigationMenu: null,
+    focusedRoomMember: () => Boolean(context.selected === 'room' && context.roomSurface === 'overview' && context.roomSession), roomSurface: 'overview', roomSession: '',
     state: { room: { name: 'Demo' }, sessions: [], steward: {} }, roomList: [{ id: 'shared', name: 'Demo' }, { id: '00000000-0000-4000-8000-000000000001', name: 'Archived', archived: true }],
     allSpaces() { return context.roomList; }, inSpace: (record, id) => spaces.isMember(record, id), members: () => [], orderedMembers: () => context.state.sessions,
     participantLabel: record => record.name, spaceName: room => room.name, sidebarPresentation: () => ({ full: 'Ready' }),

@@ -46,7 +46,7 @@ test('a person\'s change stays within a small window budget below the default he
 test('the actual column budget reserves the conversation even when less than the old default fits', () => {
   const calls = { persist: 0, fit: [], reveal: 0 }, attributes = {};
   const nativeHost = { style: {}, get offsetHeight() { return Number.parseInt(this.style.height, 10) || 112; } };
-  const reader = { clientHeight: 250, querySelector: () => ({ offsetHeight: 12 }) };
+  const reader = { clientHeight: 250, querySelector: selector => selector === '.column-native-footer:not([hidden])' ? { offsetHeight: 12 } : null };
   // The hint under the input (T-163): two lines now; the column says how many it may show.
   const properties = {}, hint = { offsetHeight: 32 }, style = { getPropertyValue: key => properties[key] || '', setProperty: (key, value) => { properties[key] = value; } };
   const input = { closest: () => reader, querySelector: selector => selector === '.session-compose-hint' ? hint : null, style, get offsetHeight() { return nativeHost.offsetHeight + 68; } };
@@ -227,11 +227,12 @@ test('a passive height clamp does not pull a person reading older native content
 test('the actual overview measures column heights after its final header and shared-composer layout', () => {
   const { context, binding, limits, calls } = harness({ min: 64, max: 96 });
   const nodes = new Map();
-  const element = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, setAttribute() {}, querySelector() { return element(id + ":child"); }, classList: { toggle() {} } }); return nodes.get(id); };
+  const element = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, setAttribute() {}, removeAttribute() {}, querySelector() { return element(id + ":child"); }, classList: { toggle() {} } }); return nodes.get(id); };
   Object.assign(context, {
     sessionComposers: new Map([[binding.id, binding]]), columnTerminalBinding: () => binding,
     document: { activeElement: null }, members: () => [], orderedMembers: () => [],
     focusedRoomMember: () => false, roomSurface: 'overview', disconnected: false,
+    state: { room: { id: 'shared', name: 'Fixture space' } }, spaceName: room => room.name, ui: { display: { text() {} } },
     roomOverview: { toolbar: {}, update() { context.applyColumnTerminalHeight(binding, 112); } },
     renderHeaderLayout() { limits.max = 64; }, current: () => null, selected: 'room',
     // T-163: the header's row is fitted once the page has shown or hidden the overview's own controls in it.
@@ -266,4 +267,35 @@ test('the existing resize observer clamps a late overview resize without fitting
   assert.equal(refreshed, 1); assert.deepEqual(fitted, [], 'An overview resize never fits another private native grid');
   callback([{ target: elements.get('terminal-area') }]);
   assert.equal(refreshed, 1); assert.deepEqual(fitted, ['private'], 'The original terminal-only fit remains');
+});
+
+
+function readingSlotBudget() {
+  const sizes = { slot: 0 }, properties = {};
+  const reader = { clientHeight: 300, querySelector: selector => selector === '.reading-slot' ? { offsetHeight: sizes.slot } : selector === '.column-native-footer:not([hidden])' ? { offsetHeight: 12 } : null };
+  const hint = { offsetHeight: 32 };
+  const input = { offsetHeight: 180, closest: () => reader, querySelector: selector => selector === '.session-compose-hint' ? hint : null,
+    style: { getPropertyValue: key => properties[key] || '', setProperty: (key, value) => { properties[key] = value; } } };
+  const binding = { id: 'fixture', columnHost: input, nativeHost: { offsetHeight: 112 } };
+  const context = vm.createContext({ COLUMN_TERMINAL: { initial: 112, min: 64, most: 4000, step: 16, conversation: 80 } });
+  const begin = renderer.indexOf('function columnTerminalLimits(');
+  vm.runInContext(renderer.slice(begin, end), context);
+  return { context, binding, reader, sizes, properties };
+}
+test('the shared height budget subtracts the live reading slot and retains the native terminal minimum', () => {
+  const h = readingSlotBudget();
+  for (const slot of [0, 32, 48, 0]) {
+    h.sizes.slot = slot;
+    assert.equal(h.context.columnTerminalLimits(h.binding).max, 140 - slot, 'count the actual slot height, including hidden/absent zero');
+    assert.equal(h.context.columnTerminalLimits(h.binding).min, 64);
+  }
+  h.reader.clientHeight = 180; h.sizes.slot = 48;
+  assert.equal(h.context.columnTerminalLimits(h.binding).max, 64, 'never take the terminal below its original floor');
+});
+test('hint capacity includes the live reading slot while preserving its two-line minimum', () => {
+  const h = readingSlotBudget(); h.reader.clientHeight = 240;
+  for (const [slot, lines] of [[0, '3'], [32, '2'], [48, '2'], [0, '3']]) {
+    h.sizes.slot = slot; h.context.fitColumnHint(h.binding);
+    assert.equal(h.properties['--column-hint-lines'], lines);
+  }
 });

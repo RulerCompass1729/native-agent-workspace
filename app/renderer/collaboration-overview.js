@@ -105,7 +105,7 @@
     const el = (tag, text, cls) => { const n = doc.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
     const setText = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
-    const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
+    const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, originScroll, briefSelection, dragging;
     const aligned = options.alignedTabs === true, alignedGrid = () => aligned && layout === 'grid' && !focused && contentVisible;
     let alignedWidths = [], activeMember = '', pagerFrame = 0, disposed = false, measuredWidth = 0, snapOrigin = null, snapTimer = 0, lastLeft = 0;
     const roomKey = options.roomId || 'shared';
@@ -258,11 +258,13 @@
       cancelColumnSnap();
       if (id === focused) return;
       if (id && !records.some(s => s.id === id)) return;
+      if (id && !focused) originScroll = { left: readers.scrollLeft, top: readers.scrollTop };
       options.beforeInputLayout?.(); options.beforeLayout?.();
       if (id && !focused && !originSelection) rememberSelection();
       const previous = focused; focused = id; render();
       options.onFocus?.(id, previous, id ? key(id) : key(previous));
       if (!id) {
+        if (originScroll) { readers.scrollLeft = originScroll.left; readers.scrollTop = originScroll.top; originScroll = null; }
         const previousPane = panes.get(previous); previousPane?.name.focus({ preventScroll: true });
         restoreSelection(originSelection);
         originSelection = null;
@@ -294,6 +296,14 @@
     function setWidths() {
       capacity = columnCapacity();
       const total = records.length, allFit = total <= capacity;
+      const extraRows = layout === 'list' ? records.map(record => {
+        const pane = panes.get(record.id);
+        if (pane.openSession.hidden) return 0;
+        const height = pane.openSession.offsetHeight;
+        return height ? height + (Number.parseFloat(doc.defaultView.getComputedStyle(pane.header).rowGap) || 0) : 0;
+      }) : [];
+      const listCount = String(Math.max(1, total));
+      if (host.style.getPropertyValue('--collaboration-list-count') !== listCount) host.style.setProperty('--collaboration-list-count', listCount);
       if (alignedGrid()) {
         measuredWidth = readers.clientWidth;
         const m = alignedColumnWidths(total, measuredWidth, records.map(r => weights.get(r.id) || 1));
@@ -306,7 +316,9 @@
       }
       host.style.setProperty('--collaboration-row-min', `${readers.clientHeight || 300}px`);
       for (let i = 0; i < total; i++) {
-        const pane = panes.get(records[i].id); pane.grip.hidden = (!allFit && !alignedGrid()) || i === total - 1 || layout === 'list' || Boolean(focused);
+        const pane = panes.get(records[i].id), extra = `${extraRows[i] || 0}px`;
+        if (pane.unit.style.getPropertyValue('--collaboration-nav-extra-height') !== extra) pane.unit.style.setProperty('--collaboration-nav-extra-height', extra);
+        pane.grip.hidden = (!allFit && !alignedGrid()) || i === total - 1 || layout === 'list' || Boolean(focused);
         pane.grip.setAttribute('aria-valuenow', String(Math.round((weights.get(records[i].id) || 1) * 100)));
       }
       if (aligned) schedulePager();
@@ -433,7 +445,10 @@
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
       const child = el('span', undefined, 'collaboration-member-child compact-status-hidden'), freshness = el('span', undefined, 'collaboration-member-freshness');
       const compactChild = el('span', undefined, 'collaboration-member-child-compact'); compactChild.setAttribute('aria-hidden', 'true');
-      header.append(heading, status, child, compactChild, freshness);
+      const openSession = button('', () => options.onOpenSession?.(record.id), 'collaboration-member-open');
+      display.text(openSession, 'collab.openSession');
+      display.attribute(openSession, 'title', 'collab.openSessionHelp');
+      header.append(heading, status, child, compactChild, freshness, openSession);
       const reader = el('section', undefined, 'collaboration-member-reader'); reader.dataset.memberId = record.id;
       const messages = el('div', undefined, 'messages collaboration-messages'); display.attribute(messages, 'aria-label', 'collab.originalSession', { name: record.name });
       let pane;
@@ -465,12 +480,13 @@
       reader.append(messages, short, input, nativeFooter, grip);
       // Every member is one card: its head (handle, maker, name, menu, state) above its own conversation and input.
       const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(header, reader);
+      unit.classList.toggle('has-session-open', Boolean(options.onOpenSession));
       if (aligned) { unit.addEventListener('focusin', () => markActive(record.id)); unit.addEventListener('pointerdown', () => markActive(record.id)); }
       // With many members the band above the cards is an index of everyone, including members whose cards are not shown yet.
       const chip = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-chip'); chip.dataset.memberId = record.id;
       const chipName = el('span', undefined, 'collaboration-chip-name'), chipAlert = el('span', undefined, 'collaboration-member-alert');
       chip.append(chipName, chipAlert);
-      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip, chip, chipName, chipAlert };
+      return pane = { header, name, nameText, nameSuffix, more, next, openSession, status, child, compactChild, freshness, alert, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip, chip, chipName, chipAlert };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -522,6 +538,9 @@
         }
         pane.more.hidden = !options.onMemberMenu;
         pane.more.disabled = !connected;
+        pane.openSession.hidden = !options.onOpenSession;
+        pane.openSession.disabled = !connected;
+        display.attribute(pane.openSession, 'aria-label', 'collab.openSessionNamed', { name: fullLabel });
         display.attribute(pane.more, 'aria-label', 'collab.manage', { name: label });
         pane.input.hidden = !columnInput;
         const nativeVisible = options.renderInput?.(pane.input, record, columnInput) || false;

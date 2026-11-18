@@ -1,5 +1,6 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const { textPattern } = require('./fixtures/ui-text.cjs');
+const { openSession } = require('./fixtures/space-membership.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -71,6 +72,9 @@ async function run() {
   // like a person, show all before reaching a session outside the space.
   async function row(id) {
     if (await page.locator('#clear-space-filter').isVisible()) await page.locator('#clear-space-filter').click();
+    if (!await page.locator(`[data-session-id="${id}"]`).isVisible()) {
+      await openSession(page, id);
+    }
     return page.locator(`[data-session-id="${id}"]`);
   }
   // Joining shows a 撤销加入 notice with no time limit; close it as a person would.
@@ -88,9 +92,13 @@ async function run() {
   async function detachMenuByKeyboard(id) { await more(id).press('Enter'); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).press('Enter'); }
   async function left(id) { await until(async () => !(await snapshot()).sessions.find(s => s.id === id).roomId, 'Exact member left'); await settle(); }
   async function archive(id) {
+    const origin = await view();
     await row(id); await page.locator(`.session-more[data-session-menu="${id}"]`).click();
     await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).archived, 'Exact session archived');
+    // The following restoration test starts from the space. Reach the archive
+    // through visible session controls, then explicitly restore that test route.
+    if (origin.selected === 'room') await page.locator('#room-nav').click();
   }
   const ids = [];
   for (const name of ['Navigation A', 'Navigation B', 'Navigation C', 'Navigation D']) {
@@ -122,7 +130,7 @@ async function run() {
   await capture('01-explicit-open');
 
   await joinFromSolo(b); const solo = await view(), soloCalls = await fixture('stats');
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '离开此空间', exact: true }).click(); await left(b);
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '移出当前空间', exact: true }).click(); await left(b);
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No redundant Open for the current solo session');
   assert.equal((await view()).selected, b); assert.equal((await view()).mode, solo.mode); await stableCalls(soloCalls, 'Solo detach');
   assert.equal(await page.locator('#message-input').inputValue(), 'Original private draft Navigation B');
@@ -131,7 +139,8 @@ async function run() {
   await header(b).locator('.collaboration-member-name').click();
   if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
   await hold('join', b, 'after'); const focusedCalls = await fixture('stats');
-  await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click(); await pending('join', b, 'after');
+  await page.locator('#session-header-more').click();
+  await page.getByRole('menuitem', { name: '移出当前空间', exact: true }).click(); await pending('join', b, 'after');
   await left(b); const beforeReply = await view();
   assert.equal(beforeReply.selected, 'room'); assert.equal(beforeReply.roomSession, ''); assert.equal(beforeReply.mode, 'chat');
   await stableCalls(focusedCalls, 'Focused state-before-reply removal'); await capture('02-state-before-reply-stays');
@@ -171,8 +180,24 @@ async function run() {
   // Since a1046f2 (2026-11-09) restoring a session puts it back in the space it was archived from; no join is needed.
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === 'shared', 'Restored session back in its space');
   await (await row(d)).click();
-  await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
-  await until(async () => (await snapshot()).room.archived, 'Owned room archived');
+  if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
+  // Exercise the foreground confirmation without opening an OS dialog. Accept
+  // only this owned space's expected warning; no product gate is bypassed.
+  const catalog = require(path.join(code, 'app/ui-messages.js')).zh;
+  await app.evaluate(({ dialog }, expected) => {
+    globalThis.navigationMessageBox = dialog.showMessageBox; globalThis.navigationArchiveDialogs = 0;
+    dialog.showMessageBox = async (_win, options) => {
+      if (options.type !== 'warning' || options.message !== expected.message ||
+          JSON.stringify(options.buttons) !== JSON.stringify(expected.buttons) || options.defaultId !== 0 || options.cancelId !== 0 ||
+          !options.detail.includes('Navigation A')) throw Error('Unexpected owned navigation confirmation');
+      globalThis.navigationArchiveDialogs++; return { response: 1 };
+    };
+  }, { message: catalog['background.action.archiveRoom'], buttons: [catalog['common.cancel'], catalog['background.confirm']] });
+  try {
+    await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
+    await until(async () => (await snapshot()).room.archived, 'Owned room archived');
+    assert.equal(await app.evaluate(() => globalThis.navigationArchiveDialogs), 1);
+  } finally { await app.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.navigationMessageBox; delete globalThis.navigationMessageBox; }); }
   await hold('restoreRoom', undefined); const roomRestoreCalls = await fixture('stats');
   await page.locator('[data-archived-room]').getByRole('button', { name: '恢复工作区', exact: true }).click(); await pending('restoreRoom', undefined, 'before');
   await page.locator('#message-input').fill('Human draft while room restores'); await release('restoreRoom', undefined);
@@ -183,7 +208,18 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), 'Human newer shared draft');
   check('Archived sessions and room restore in place; current mode and newer drafts survive until deliberate Open');
 
-  await header(a).locator('.collaboration-member-name').dragTo(page.locator('#solo-drop')); await left(a);
+  // Space navigation now hides the legacy sidebar drop target. Keep checking
+  // its registered drag contract with the real source's placement proof; the
+  // visible member-menu detach route is exercised above.
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  try {
+    await header(a).locator('.collaboration-member-name').dispatchEvent('dragstart', { dataTransfer: transfer });
+    assert.equal(await transfer.evaluate(data => data.getData('application/x-native-session')), a);
+    assert.ok(await transfer.evaluate(data => data.getData('application/x-native-placement')));
+    await page.locator('#solo-drop').dispatchEvent('drop', { dataTransfer: transfer });
+    await header(a).locator('.collaboration-member-name').dispatchEvent('dragend', { dataTransfer: transfer });
+  } finally { await transfer.dispose(); }
+  await left(a);
   assert.equal((await view()).selected, 'room'); assert.equal((await view()).roomSession, '');
   assert.equal(await page.locator('.collaboration-member-reader').count(), 0);
   assert.equal(await page.locator('#shared-input').inputValue(), 'Human newer shared draft');
@@ -193,7 +229,8 @@ async function run() {
   // Since T-128 a pointer press clears this notice and joining here shows its own 撤销加入 notice, so the
   // old Open can only outlive the next steps when another window rejoins A and the person uses the keyboard.
   await peer.call('join', a, true); await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId, 'Another window rejoined A');
-  await page.locator(`[data-session-id="${a}"]`).press('Enter'); await until(async () => (await view()).selected === a, 'Keyboard selected A');
+  await page.locator('#panorama-nav').press('Enter');
+  await page.locator(`[data-panorama-focus="${a}"]`).press('Enter'); await until(async () => (await view()).selected === a, 'Keyboard selected A');
   await page.locator('#terminal-tab').press('Enter'); await terminal(a).waitFor({ state: 'attached' }); await page.locator(`#terminal-area [data-terminal-id="${a}"] .terminal-surface`).waitFor();
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'terminal', 'Native view settled');
   await page.locator('#chat-tab').press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'chat', 'Native view back to chat');
@@ -208,7 +245,7 @@ async function run() {
   await staleOpenA.press('Enter');
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, 'terminal');
   assert.ok((await fixture('stats')).navigation.waitingClaims.includes(a), 'An old Open notice cannot replace the pending native view intent');
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '离开此空间', exact: true }).click(); await left(a);
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '移出当前空间', exact: true }).click(); await left(a);
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, 'terminal'); await stableCalls(queued, 'Solo detach with queued input');
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No current-session Open can cancel the queued edit'); await capture('05-native-queue-after-detach');
   assert.equal((await fixture('stats')).navigation.inputs.length, queued.navigation.inputs.length);
@@ -219,7 +256,10 @@ async function run() {
   check('Solo terminal detach keeps the native text already written and its original pending view claim, without cancelling or replaying it');
 
   await joinFromSolo(a); await page.locator('#room-nav').click(); await header(a).locator('.collaboration-member-name').click();
-  await page.locator('#terminal-tab').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'terminal', 'Focused native view settled');
+  const focusedTerminal = page.locator('#terminal-tab');
+  if (await focusedTerminal.isVisible()) await focusedTerminal.click();
+  else await page.locator('#open-native-terminal').click();
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'terminal', 'Focused native view settled');
   if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
   const textarea = terminal(a); await textarea.focus();
   await until(() => textarea.evaluate(el => document.activeElement === el), 'Original native IME origin focused');

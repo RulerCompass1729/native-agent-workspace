@@ -1,6 +1,6 @@
 // Exercise the real desktop and existing idle native sessions. No prompt/input.
 const assert = require('node:assert/strict');
-const { joinSpace } = require('./fixtures/space-membership.cjs');
+const { joinSpace, openSession } = require('./fixtures/space-membership.cjs');
 const snapshot = page => page.evaluate(() => workspace.initial());
 // Playwright's waitForFunction does not await an async predicate: the Promise it returns is truthy, so the wait
 // ends after one evaluation even when that evaluation is false. Poll the service state and await each reading.
@@ -13,9 +13,17 @@ const focus = (page, id) => page.waitForFunction(id => document.activeElement?.c
 const tab = (page, id) => page.locator(`[data-room-session="${id}"]`);
 const openTerminal = async (page, id) => {
   // T-121 A: clicking the open member's tab returns to all members, so click it only when it is not pressed.
-  if (await tab(page, id).getAttribute('aria-pressed') !== 'true') await tab(page, id).click();
+  if (!await tab(page, id).count() || await tab(page, id).getAttribute('aria-pressed') !== 'true') {
+    if (!await page.locator(`.collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`).isVisible()) await page.locator('#room-overview').click();
+    await page.locator(`.collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`).click();
+  }
   // A member tab is passive and restores that member's saved mode.
-  await page.locator('#terminal-tab').click();
+  if (!await page.locator('#terminal-area').isVisible()) {
+    const toggle = page.locator('#terminal-tab');
+    if (await toggle.isVisible()) await toggle.click();
+    else await page.locator('#open-native-terminal').click();
+  }
+  await page.locator(`[data-terminal-id="${id}"] .xterm-helper-textarea`).focus();
   await focus(page, id);
 };
 const placed = s => Boolean(s.roomId || s.roomIds !== undefined && (!Array.isArray(s.roomIds) || s.roomIds.length));
@@ -33,7 +41,7 @@ async function checkRoom(page, application, result) {
   result.before = before;
   result.changed = true; // Cleanup must also run if the next assertion fails.
   for (const person of people) {
-    await page.locator(`[data-session-id="${person.id}"]`).click();
+    await openSession(page, person.id);
     await joinSpace(page);
     await waitForState(page, async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id, 'the member in 共同工作');
   }
@@ -48,8 +56,13 @@ async function checkRoom(page, application, result) {
     assert.match(await page.locator('#room-scope').innerText(), /终端输入不自动共享/);
     // The terminal element survives a shared-record visit, including selection.
     const handle = await page.locator(`[data-terminal-id="${person.id}"]`).elementHandle();
-    await page.locator('#room-record').focus(); await page.keyboard.press('Enter');
-    assert.equal(await page.locator('#room-record-view').isVisible(), true);
+    if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
+    if (await page.locator('#activity-stream').isVisible()) await page.locator('#activity-stream .stream-heading > button').click();
+    await page.locator('#room-record').click();
+    // Shared records now open beside the member in the activity stream.
+    await page.locator('#activity-stream').waitFor();
+    assert.equal(await page.locator('#activity-stream').isVisible(), true);
+    await page.locator('#activity-stream .stream-heading > button').click();
     await openTerminal(page, person.id);
     assert.equal(await handle.evaluate(el => el.isConnected && el === document.querySelector(`[data-terminal-id="${el.dataset.terminalId}"]`)), true);
     await handle.dispose();
@@ -61,8 +74,7 @@ async function checkRoom(page, application, result) {
   // Intentional second view: viewing is read-only until explicit takeover.
   const person = people.at(-1);
   const windowEvent = application.waitForEvent('window');
-  await page.locator(`[data-session-menu="${person.id}"]`).click();
-  await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
+  await page.locator('#member-open-session').click();
   const second = await windowEvent;
   try {
     await second.locator('#take-control').waitFor({ state: 'visible' });
@@ -77,7 +89,8 @@ async function checkRoom(page, application, result) {
   assert.equal(application.windows().length, 1);
 
   const beforeDetach = await snapshot(page);
-  await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click();
+  await page.locator('#session-header-more').click();
+  await page.getByRole('menuitem', { name: '移出当前空间', exact: true }).click();
   await waitForState(page, async id => {
     const state = await workspace.initial();
     return !state.sessions.find(s => s.id === id).roomId && state.viewState.selected === 'room' && state.viewState.roomSession === '';
@@ -90,7 +103,7 @@ async function checkRoom(page, application, result) {
   assert.deepEqual(detached.sessions.map(s => [s.id, s.owner, s.controlRevision]), beforeDetach.sessions.map(s => [s.id, s.owner, s.controlRevision]));
   assert.deepEqual(identity(detached), identity(before));
   // Returning to the detached session is an explicit, separate human action.
-  await page.locator(`[data-session-id="${person.id}"]`).click();
+  await openSession(page, person.id);
   await page.locator('#solo-session #terminal-area').waitFor({ state: 'visible' });
   await joinSpace(page);
   await waitForState(page, async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id, 'the member in 共同工作');
@@ -117,6 +130,7 @@ async function checkRoom(page, application, result) {
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'room-terminal-small.png') });
       await page.locator('#room-record').click();
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'room-record-small.png') });
+      await page.locator('#activity-stream .stream-heading > button').click();
       await openTerminal(page, person.id);
     }
   } finally { await nativeWindow.evaluate((win, value) => win.setBounds(value), bounds); }

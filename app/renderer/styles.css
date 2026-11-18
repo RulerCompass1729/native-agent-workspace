@@ -1,4 +1,4 @@
-:root{--vendor-image-size:26px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;color:var(--ink);background:var(--surface)}
+:root{--vendor-image-size:26px;--reading-slot-height:32px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;color:var(--ink);background:var(--surface)}
 /* "Needs you" status text, 4.5:1 on sidebar rows and on the card over the page (app/tests/approval-ink.test.cjs).
    build-ui nests this file in .naw, so & is each NAW surface there. */
 body[data-ds-dark-theme] &{--approval-ink:#f28d61}
@@ -548,8 +548,17 @@ header h1, header p { overflow-wrap: anywhere; }
 /* Bound layout/paint work to each existing scrolling reader. Keep all original
    rows in the DOM; no estimated heights, paging or deferred draft writes. */
 .messages { contain: strict; }
+/* A fixed footer gives conversation prompts room without covering text.
+   Only the inner bar hides: following never gives back or reclaims these 32px. */
+.reading-surface{display:grid;grid-template-rows:minmax(0,1fr) var(--reading-slot-height);flex:1;min-width:0;min-height:0;overflow:hidden}
+.reading-surface>.messages{min-height:0;height:100%}
+/* Direct child only: changing message descendants cannot invalidate this guard. */
+.reading-surface:has(>.messages[hidden]){display:none}
+.reading-slot{height:var(--reading-slot-height);min-height:var(--reading-slot-height);display:grid;place-items:center;border-top:1px solid var(--border);background:var(--surface)}
 .jump-bar{position:sticky;bottom:12px;height:0;z-index:2}
 .jump-latest{position:absolute;bottom:0;left:50%;transform:translateX(-50%);white-space:nowrap;padding:4px 14px;border:1px solid var(--border);border-radius:999px;background:var(--raised);font-size:12px;box-shadow:0 2px 10px #0002}
+.reading-slot>.jump-bar{position:static;height:auto;display:flex;align-items:center;justify-content:center}
+.reading-slot .jump-latest{position:static;transform:none;padding:2px 14px;line-height:18px;box-shadow:none}
 .split-workspace{position:relative}
 .split-divider{position:absolute;top:0;bottom:0;left:var(--split-left,50%);width:10px;transform:translateX(-50%);cursor:col-resize;z-index:4;touch-action:none}
 .split-divider::after{content:'';position:absolute;top:0;bottom:0;left:4px;width:2px;background:transparent}
@@ -1037,7 +1046,9 @@ main.settings-panel-open{margin-inline-end:340px}
 
 /* Focused member: preserve type sizes and all existing actions, using less
    padding and one scrollable member strip. Full peer state remains one click away. */
-.room-invite-compact, #header.focused-member #session-header-more { display: none; }
+.room-invite-compact, #header-actions .membership-menu-only { display: none; }
+#room-overview { background:transparent;border-color:transparent;box-shadow:none;font-weight:600; }
+#member-open-session { white-space:nowrap;color:var(--ink); }
 #room-member-status-dialog { width: 490px; max-height: 75vh; overflow: auto; padding: 20px; }
 #room-member-status-list { display: grid; gap: 6px; }
 #room-member-status-list > button { display: grid; gap: 3px; width: 100%; padding: 8px; text-align: left; white-space: normal; overflow-wrap: anywhere; }

@@ -386,7 +386,7 @@ function scheduleReading(view, intent = view.intent) {
     view.assignedTop = view.lastTop = el.scrollTop; view.pageChanging = false; updateJump(view); fillShortReadingPage(view);
   });
 }
-function readingView(el, key) {
+function readingView(el, key, room = false) {
   let view = messageViews.get(el);
   if (!view) {
     view = { el, key: '', entries: new Map(), groups: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
@@ -401,6 +401,15 @@ function readingView(el, key) {
     view.jump = button('', () => changeReadingPage(view, 'latest'), 'jump-latest');
     ui.display.text(view.jump, 'reading.latest');
     view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
+    // Keep the original scroll element, rows and reading intent. Only the
+    // prompt moves to a permanent footer outside the conversation viewport.
+    if (!room && el.parentElement) {
+      view.readingSurface = node('div', undefined, 'reading-surface');
+      view.jumpSlot = node('div', undefined, 'reading-slot');
+      el.parentElement.insertBefore(view.readingSurface, el);
+      view.readingSurface.append(el, view.jumpSlot);
+      view.jumpSlot.append(view.jumpBar);
+    }
     const interact = () => { view.intent = null; view.assignedTop = undefined; view.pageChanging = false; view.autoPages = 4; };
     // While following, moving toward the latest is not leaving it, and must not drop
     // the render guard above (T-134): a trackpad keeps sending wheel-downs at the end.
@@ -468,7 +477,7 @@ function readingView(el, key) {
       scheduleReading(view);
     });
     view.observer.observe(el);
-    view.dispose = () => { for (const entry of view.entries.values()) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
+    view.dispose = () => { for (const entry of view.entries.values()) { cancelReadingWakeCollapse(entry); entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; if (view.jumpSlot) { if (view.readingSurface.parentElement) view.readingSurface.before(el); view.jumpBar.remove(); view.jumpSlot.remove(); view.readingSurface.remove(); ui.display.unbind(view.jump); } ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
@@ -717,7 +726,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   const session = context.session || (room ? null : current()), sourceMessages = messages;
   // Row labels need these scalar facts, never the session's full message array.
   const sessionName = session?.name, sessionProvider = session?.provider;
-  const view = readingView(el, key);
+  const view = readingView(el, key, room);
   view.session = session;
   const selection = window.getSelection(), selected = selection && !selection.isCollapsed && el.contains(selection.anchorNode)
     ? { anchor: selection.anchorNode, anchorOffset: selection.anchorOffset, focus: selection.focusNode, focusOffset: selection.focusOffset } : null;
@@ -1153,7 +1162,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   }
   view.older.hidden = room || !range.start; view.newer.hidden = room || range.tail;
   if (!room) { rows.unshift(view.older); rows.push(view.newer); }
-  rows.push(view.jumpBar);
+  if (!view.jumpSlot) rows.push(view.jumpBar);
   // Do not detach/reinsert unchanged rows: that would destroy live selections.
   let cursor = el.firstChild;
   for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }

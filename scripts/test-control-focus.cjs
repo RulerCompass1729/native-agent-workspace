@@ -1,5 +1,6 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
+const { openSession } = require('./fixtures/space-membership.cjs');
 // Actual Electron keyboard controls during synthetic native updates; no model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
@@ -90,7 +91,7 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === b).roomId, 'shared');
   checks.push('Removing the menu member returns focus to invitation, never an adjacent member action');
 
-  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
+  await openSession(page, b); await page.locator('#chat-tab').click();
   await fixture('approval', b, { requestId: 17, method: 'item/commandExecution/requestApproval', params: { command: 'echo synthetic', cwd: '/synthetic', reason: 'Keyboard-only check' } });
   const approve = page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }); await approve.waitFor();
   await hold(approve, () => update(b)); await shot('approval-focus');
@@ -128,7 +129,7 @@ async function run() {
   await shot('question-answered');
   checks.push('A Codex question is answered in the chat view with the native structured reply, an option or other text, never before every question is answered');
 
-  await page.locator(`[data-session-id="${a}"]`).click();
+  await openSession(page, a);
   await page.locator('#session-header-more').click();
   const join = page.getByRole('menuitem', { name: '加入此空间', exact: true });
   await join.focus(); await client.call('join', a, true);
@@ -138,7 +139,7 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, 'shared', 'Old join focus cannot execute opposite leave action');
   assert.equal(await page.getByRole('menu').count(), 0);
   await page.locator('#session-header-more').click();
-  const leave = page.getByRole('menuitem', { name: '离开此空间', exact: true });
+  const leave = page.getByRole('menuitem', { name: '移出当前空间', exact: true });
   await leave.focus(); await client.call('join', a, false);
   await until(() => page.getByRole('menu').count().then(n => n === 0), 'Obsolete leave menu withdrawn');
   await page.keyboard.press('Enter');
@@ -159,7 +160,7 @@ async function run() {
   checks.push('Reused header controls follow later selections and membership changes without duplicate buttons or affecting the other member');
   // The chat/terminal divider drags freely, snaps to the centre within 16 px, resizes the
   // native terminal once on release, and is remembered; the chat can take the full width.
-  await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#terminal-tab').click();
+  await openSession(page, a); await page.locator('#terminal-tab').click();
   await page.locator('#terminal-area .xterm-screen:visible').waitFor();
   // A visible terminal can precede its initial asynchronous fit. Observe that
   // settling before counting only the subsequent, deliberate divider drag.

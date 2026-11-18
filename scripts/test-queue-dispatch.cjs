@@ -2,7 +2,7 @@
 // session rotation (2026-11-08): the real desktop, main-process dispatcher and
 // workspace service, with a synthetic provider transport. No native process, no model.
 const testScratch = require('./fixtures/test-scratch.cjs');
-const { joinSpace } = require('./fixtures/space-membership.cjs');
+const { joinSpace, openSession } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const fs = require('node:fs');
@@ -170,7 +170,7 @@ async function createMember(name) {
   if (process.env.NAW_TEST_UI_LANGUAGE === 'en') {
     await page.locator('#session-header-more').click();
     await page.getByRole('menuitem', { name: 'Join this space', exact: true }).click();
-    await page.locator('#header-actions').getByRole('button', { name: 'Leave this space', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+    await page.locator('#header-actions').getByRole('button', { name: 'Remove from current space', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     await page.locator('#toast-close').click();
   } else await joinSpace(page);
   return (await snapshot()).sessions.find(s => s.name === name).id;
@@ -430,7 +430,7 @@ async function decisionNoticeScenario(a, b) {
   await until(async () => (await notices()).length === 1, 'One decision notification', 5000);
   assert.deepEqual((await notices())[0], { title, body: english ? `队员甲 · Shared work: ${question}` : `队员甲 · 共同工作：${question}` });
   await page.locator('#close-queue').click();
-  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  await openSession(page, b);
   // Preserve a real user draft while the notification navigates away.
   if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Unsent B1 draft');
@@ -442,7 +442,7 @@ async function decisionNoticeScenario(a, b) {
     return row?.dataset.messageId === id && document.activeElement === row;
   }, decision.id);
   await capture('decision-record-' + (english ? 'en' : 'zh'));
-  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  await openSession(page, b);
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent B1 draft');
   await page.locator('#message-input').fill('');
   await openSpace();
@@ -726,7 +726,7 @@ async function successionScenario(a) {
   assert.equal(third.done, false); assert.match(third.error, /quota is exhausted/);
   assert.equal((await snapshot()).sessions.length, before + 1, 'Two a day across the old member and the new one');
   // The old member's card of the grant says which session holds it now.
-  await page.locator(`#session-list .session-link[data-session-id="${a}"]`).click();
+  await openSession(page, a);
   if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
   const oldNative = (await snapshot()).sessions.find(s => s.id === a).nativeId;
   const card = page.locator('#messages [data-message-id=' + JSON.stringify('operator:open:' + JSON.stringify([oldNative, 'by-the-old-member'])) + ']');
@@ -907,7 +907,7 @@ async function waitScenario(b) {
       await page.locator('#close-queue').click();
       await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
     }
-    await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+    await openSession(page, b);
     if (await page.locator('#chat-tab').isVisible()) await page.locator('#chat-tab').click();
     await page.locator('#message-input').fill(text);
     await until(async () => (await member()).liveDraft === text, `Draft ${JSON.stringify(text)} stored`);
@@ -1010,7 +1010,7 @@ async function run() {
     await page.locator('#close-queue').click();
     await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
   }
-  await page.locator(`#session-list .session-link[data-session-id="${a}"]`).click();
+  await openSession(page, a);
   if (await page.locator('#chat-tab').isVisible()) {
     await page.locator('#chat-tab').click();
   }
@@ -1050,7 +1050,7 @@ async function run() {
     await page.locator('#close-queue').click();
     await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
   }
-  await page.locator(`#session-list .session-link[data-session-id="${b}"]`).click();
+  await openSession(page, b);
   if (await page.locator('#chat-tab').isVisible()) {
     await page.locator('#chat-tab').click();
   }
@@ -1154,7 +1154,8 @@ async function run() {
   await page.locator('#close-queue').click();
   await page.locator('#queue-dialog').waitFor({ state: 'hidden' });
   await page.locator('#room-overview').click();
-  await until(async () => await page.locator('#room-overview').getAttribute('aria-pressed') === 'true', 'The space is on its overview tab');
+  await until(async () => await page.locator('#room-overview').getAttribute('aria-current') === 'page', 'The space is on its overview page');
+  assert.equal(await page.locator('#room-overview').getAttribute('aria-pressed'), null, 'Overview navigation is not a layout toggle');
   assert.equal(await page.locator('.timeline-tools').isVisible(), false, 'the record tools stay hidden on the overview tab');
   await page.locator('#room-tabs').getByRole('button', { name: '队列', exact: true }).click();
   await page.locator('#queue-dialog').waitFor();
