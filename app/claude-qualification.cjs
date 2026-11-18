@@ -2,7 +2,7 @@
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { fork } = require('node:child_process');
 const mod = require('./claude-mod-check.cjs');
-const { processIdentity, processGroup } = require('./platform.cjs');
+const { processIdentityUTC: processIdentity, processGroup } = require('./platform.cjs');
 const REFERENCE = '2.1.327';
 const WORK_TIMEOUT_MS = 300000, CLEANUP_GRACE_MS = 20000;
 const JOURNEYS = Object.freeze(['solo-queue', 'shared-queue', 'shared-model']);

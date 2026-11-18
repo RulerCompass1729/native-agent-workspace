@@ -90,6 +90,18 @@ function processIdentity(pid) {
     return started ? { pid, started } : null;
   } catch { return null; }
 }
+// Qualification IPC needs the same birth reading in both environments. Keep
+// processIdentity unchanged: existing persisted owners use its original format.
+// This UTC/C reading is transient and must not replace those stored identities.
+function processIdentityUTC(pid) {
+  if (!Number.isSafeInteger(pid) || pid < 2) return null;
+  try {
+    const started = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+      encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'], env: { TZ: 'UTC', LC_ALL: 'C', LC_TIME: 'C', LANG: 'C' },
+    }).trim();
+    return started ? { pid, started } : null;
+  } catch { return null; }
+}
 function processGroup(pid) {
   if (!Number.isSafeInteger(pid) || pid < 2) return null;
   try {
@@ -104,4 +116,4 @@ function processMayBeAlive(identity) {
   return !identity.started || !current || current.started === identity.started;
 }
 
-module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processGroup, processMayBeAlive, backendPrograms };
+module.exports = { executable, pythonExecutable, nativeEnvironment, processIdentity, processIdentityUTC, processGroup, processMayBeAlive, backendPrograms };

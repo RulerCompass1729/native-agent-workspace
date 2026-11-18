@@ -16,11 +16,11 @@ async function fixture(t, { escapeGroup = false } = {}) {
   const binary = path.join(directory, 'version-only'), marker = path.join(directory, 'started.json'), nonce = randomUUID();
   const program = escapeGroup ? '#!' + pythonExecutable() + '\nimport os,sys,signal,json,time\nassert sys.argv[1:] == ["--version"]\nos.setsid()\n' +
     'signal.signal(signal.SIGTERM,lambda *_:None)\nsignal.signal(signal.SIGHUP,lambda *_:None)\nsignal.signal(signal.SIGUSR2,lambda *_:sys.exit(0))\n' +
-    'open(' + JSON.stringify(marker) + ',"w").write(json.dumps({"pid":os.getpid(),"ppid":os.getppid(),"home":os.environ["HOME"],"nonce":' + JSON.stringify(nonce) + '}))\nwhile True: time.sleep(1)\n'
+    'with open(' + JSON.stringify(marker + '.tmp') + ',"w") as stream: json.dump({"pid":os.getpid(),"ppid":os.getppid(),"home":os.environ["HOME"],"nonce":' + JSON.stringify(nonce) + '},stream)\nos.replace(' + JSON.stringify(marker + '.tmp') + ',' + JSON.stringify(marker) + ')\nwhile True: time.sleep(1)\n'
     : '#!' + process.execPath + '\n' +
     'const fs=require("node:fs"),assert=require("node:assert/strict");assert.deepEqual(process.argv.slice(2),["--version"]);\n' +
     'process.on("SIGTERM",()=>{});process.on("SIGHUP",()=>{});process.on("SIGUSR2",()=>process.exit(0));\n' +
-    'fs.writeFileSync(' + JSON.stringify(marker) + ',JSON.stringify({pid:process.pid,ppid:process.ppid,home:process.env.HOME,nonce:' + JSON.stringify(nonce) + '}));setInterval(()=>{},1000);\n';
+    'fs.writeFileSync(' + JSON.stringify(marker + '.tmp') + ',JSON.stringify({pid:process.pid,ppid:process.ppid,home:process.env.HOME,nonce:' + JSON.stringify(nonce) + '}));fs.renameSync(' + JSON.stringify(marker + '.tmp') + ',' + JSON.stringify(marker) + ');setInterval(()=>{},1000);\n';
   fs.writeFileSync(binary, program, { mode: 0o700 });
   const source = path.resolve(__dirname, '../claude-qualification.cjs'), box = { exports: {} };
   let worker, owner, workerIdentity, versionIdentity, receipt;
@@ -99,7 +99,7 @@ test('force cleanup never signals a reused worker identity, a released child, or
   vm.runInNewContext(fs.readFileSync(source, 'utf8') + '\nmodule.exports.testForceWorker = forceWorker;module.exports.testStopVersion = stopVersionProcess;module.exports.testVersionExited = versionProcessExited;', {
     module: box, exports: box.exports, __dirname: path.dirname(source), console, AbortController, performance, setTimeout, clearTimeout,
     process: { pid: process.pid, kill: (...args) => signals.push(args), getuid: () => process.getuid() },
-    require: name => name === './platform.cjs' ? { processIdentity: () => current, processGroup: () => pgid }
+    require: name => name === './platform.cjs' ? { processIdentityUTC: () => current, processGroup: () => pgid }
       : name.startsWith('.') ? require(path.resolve(path.dirname(source), name)) : require(name),
   }, { filename: source });
   const child = { pid: 424242, exitCode: null, signalCode: null }, owned = { ...current };

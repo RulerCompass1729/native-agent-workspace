@@ -8,7 +8,7 @@ const directoryReceipt = JSON.parse(receipt), root = nativeRoot(directoryReceipt
 const home = path.join(root, 'home'); fs.mkdirSync(home, { mode: 0o700 });
 Object.assign(process.env, { HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: path.join(root, 'config'), NAW_DATA_DIR: path.join(root, 'data'), NAW_RUNTIME_CONFIG: path.join(root, 'locations.json') });
 const { NativeHost } = require('./adapters.cjs'), { Workspace } = require('./workspace.cjs');
-const { pythonExecutable, processIdentity } = require('./platform.cjs');
+const { pythonExecutable, processIdentityUTC: processIdentity } = require('./platform.cjs');
 const loopback = require('./claude-loopback.cjs');
 let cancelled = false, workspace, fixture, release, held, stopVersion, beginCheck, refuseCheck, allowVersion;
 const journeys = {}, owner = 'native-qualification';
