@@ -440,7 +440,12 @@ test('the page loads the view before the entry and the entry before the renderer
   for (const positions of [order(html, ['src="../butler-entry-view.js"', 'src="butler-entry.js"', 'src="renderer.js"']), order(build, ["read('app/butler-entry-view.js')", "'butler-entry.js'", "'renderer.js'"])]) {
     assert.ok(positions.every(value => value > 0) && positions[0] < positions[1] && positions[1] < positions[2]);
   }
-  // The row is in the markup hidden, above "new session"; the dialog is empty until the entry fills it.
-  assert.match(html, /<button id="butler-row" class="butler-row" type="button" aria-haspopup="dialog" hidden><\/button>\n\s*<button class="new-button" id="new-session"/);
+  // The hidden row remains above navigation and creation; unrelated rail
+  // controls need not be adjacent. The dialog stays empty until populated.
+  const entryOrder = require('./fixtures/sidebar-entry-order.cjs');
+  entryOrder(html);
+  const builtIn = html.match(/    <button id="butler-row"[^\n]*\n/)[0];
+  const displaced = html.replace(builtIn, '').replace('    <button id="search-button"', builtIn + '    <button id="search-button"');
+  assert.throws(() => entryOrder(displaced), /Butler entries stay above/, 'Moving the entry below creation must still fail');
   assert.match(html, /<dialog closedby="any" id="butler-dialog" class="butler-dialog"><\/dialog>/);
 });

@@ -145,8 +145,13 @@ test('the chooser lists the butler first, says why a session cannot be chosen, d
 });
 
 test('the page has the entry above everything else, the mark before the title and the chooser among the dialogs; the window wires them', () => {
-  // Under the brand, before the built-in butler's own closed row and "new session".
-  assert.match(html, /<\/div>\n    <div id="steward-entry" class="steward-entry"><button id="steward-empty" class="butler-row steward-empty" type="button" aria-haspopup="dialog" data-butler-state="empty"[^>]* hidden>.*<\/button><div id="steward-slot" class="steward-slot"><\/div><\/div>\n    <button id="butler-row" class="butler-row" type="button" aria-haspopup="dialog" hidden><\/button>\n    <button class="new-button" id="new-session"/);
+  // Under the brand, before the built-in entry and every navigation/create control.
+  const entryOrder = require('./fixtures/sidebar-entry-order.cjs');
+  entryOrder(html);
+  const entry = html.match(/    <div id="steward-entry"[^\n]*\n/)[0];
+  const displaced = html.replace(entry, '').replace('    <button class="new-button"', entry + '    <button class="new-button"');
+  assert.throws(() => entryOrder(displaced), /Butler entries stay above/, 'Moving the designated entry below the rail must still fail');
+  assert.match(html, /<\/div>\n    <div id="steward-entry" class="steward-entry"><button id="steward-empty" class="butler-row steward-empty" type="button" aria-haspopup="dialog" data-butler-state="empty"[^>]* hidden>.*<\/button><div id="steward-slot" class="steward-slot"><\/div><\/div>\n    <button id="butler-row" class="butler-row" type="button" aria-haspopup="dialog" hidden><\/button>/);
   assert.ok(html.includes('data-naw-aria-label="steward.emptyLabel"') && html.includes('<span class="rail-label" data-naw-text="butler.name"></span><span class="butler-state"><span data-naw-text="butler.row.empty"></span></span>'));
   assert.ok(html.includes('<span id="steward-badge" class="steward-badge" hidden></span><h1 id="title"'));
   assert.match(html, /<dialog closedby="any" id="steward-dialog" class="butler-dialog steward-dialog" aria-labelledby="steward-dialog-title">.*<div id="steward-list" class="steward-list" role="radiogroup"[^>]*><\/div>.*<p id="steward-error" role="alert" hidden><\/p>.*<button id="steward-confirm" type="button" class="primary" data-naw-text="steward.choose.confirm"><\/button><\/div><\/dialog>\n  <dialog closedby="any" id="butler-dialog"/);

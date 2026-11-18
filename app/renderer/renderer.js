@@ -2524,7 +2524,7 @@ $('confirm-native-history').onclick = async () => {
 };
 function openRename(id, origin, roomId = spaceId) {
   const record = id === 'room' ? spaceRecord(roomId) : state.sessions.find(s => s.id === id); if (!record) return;
-  const spaceHeading = id === 'room' && selected === 'room' && roomId === spaceId;
+  const spaceHeading = id === 'room' && roomId === spaceId && spaceRows.get(roomId)?.nav?.getAttribute('aria-current') === 'page';
   if (renaming) return toastMessage("toast.nameSaving");
   if (renameTarget) {
     if (renameTarget.id === id && (id !== 'room' || renameTarget.roomId === roomId) || $('rename-name').value !== renameTarget.originalName) {

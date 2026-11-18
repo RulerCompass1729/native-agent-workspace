@@ -75,6 +75,8 @@ for (const changed of [{ servicePid: 42, runtimeVersion: 'test-version' }, { ser
 
 test('an open space reuses the inline name editor in its title without reviving the hidden member sidebar', () => {
   const f = fixture(); f.context.selected = 'room'; f.state.sidebar.workspaceCollapsed = true;
+  // The real renderSpaceNavigation publishes this active-page marker before UI actions.
+  f.context.spaceRows.get('A').nav = { getAttribute: name => name === 'aria-current' ? 'page' : null };
   f.context.renderSidebarGroups(); f.open('room', null, 'A');
   assert.equal(f.target().row, f.$('header-identity'));
   assert.equal(f.$('rename-editor').getClientRects().length, 1);

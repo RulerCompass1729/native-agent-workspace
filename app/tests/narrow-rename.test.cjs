@@ -53,7 +53,7 @@ function fixture({ flat = false, archived = false } = {}) {
     + section('function toggleSidebarGroup(', 'function renderSessions() {')
     + '\nglobalThis.rename={openRename,target:()=>renameTarget};', context);
   render();
-  return { $, rows, roomRow, state, collapsed, groups, persisted, notices, document,
+  return { $, rows, roomRow, spaceRows: context.spaceRows, state, collapsed, groups, persisted, notices, document,
     open: context.rename.openRename, target: context.rename.target,
     narrowAgain() { narrow = true; render(); }, fold(id) { collapsed.add(id); render(); },
   };
@@ -106,6 +106,16 @@ test('flat session and space editors do not change session fold preferences', ()
     assert.equal(f.persisted.length, 0);
     assert.equal(f.document.activeElement, f.$('rename-name'));
   }
+  // renderSpaceNavigation marks the active space even when its sidebar is
+  // collapsed. The existing row map supplies this state without a new global.
+  const f = fixture({ flat: true });
+  f.spaceRows.get('A').nav = { getAttribute: name => name === 'aria-current' ? 'page' : null };
+  f.$('title').parentElement = f.$('header-parent');
+  f.state.sidebar.workspaceCollapsed = true;
+  f.open('room', null, 'A');
+  assert.equal(f.target().row, f.$('title').parentElement);
+  assert.equal(f.persisted.length, 0);
+  assert.deepEqual([...f.collapsed], ['A', 'B', 'independent']);
 });
 
 test('an archived member opens no editor or group and changes no stored draft', () => {
