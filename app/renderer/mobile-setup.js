@@ -307,7 +307,11 @@
           }
           if (opened && revision === ticket) {
             if (['error.mobile.sharedHost','error.mobile.sharedHostPorts'].includes(error?.uiMessage?.key)) sharedHostError(error);
-            else if(error?.uiMessage?.key==='error.mobile.enrollmentActive') {enrollment=true;renewalState('mobile.enrollmentActive','mobile.enrollmentHint');}
+            else if (error?.uiMessage?.key === 'error.mobile.enrollmentActive' && renewable && previous) {
+              enrollment = true;
+              renewalState('mobile.enrollmentActive', 'mobile.enrollmentHint');
+              await enrollmentTick(ticket, previous);
+            }
             else renewalState(renewable?'mobile.renewUnconfirmed':'mobile.connectUnavailable');
           }
         } finally { if (opened && revision === ticket) { busy = false; prepare.disabled = enrollment; } }

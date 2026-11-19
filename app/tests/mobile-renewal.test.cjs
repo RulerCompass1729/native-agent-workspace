@@ -29,3 +29,64 @@ test('an explicit refresh restarts its bounded budget while automatic requests p
 test('completed enrollment leaves no timer or stale in-progress label, including a fast completion',async()=>{for(const observeScan of [false,true]){const f=ui();await f.el('mobile-prepare').listeners.click();const id=(await f.api.mobileSetupStatus()).setupId;if(observeScan){f.redeem();await f.advance(1000);}f.api.mobileSetupStatus=async()=>({setupId:id,state:'complete'});f.api.mobileApprovalStatus=async()=>({paired:true,enabled:false,registered:false});await f.advance(observeScan?5000:1000);assert.equal(f.el('mobile-status').textContent,'手机已连接');assert.equal(f.el('mobile-prepare').disabled,false);assert.equal(f.timers.size,0);f.setup.dispose();}});
 test('the ten-minute stop remains resumable when backend expiry removes metadata first',async()=>{const f=ui();await f.el('mobile-prepare').listeners.click();await f.advance(599000);f.unknown();await f.advance(1000);assert.match(f.el('mobile-status').textContent,/自动换码已暂停/);assert.equal(f.timers.size,0);await f.el('mobile-prepare').listeners.click();assert.equal(f.calls.filter(c=>c[0]==='connect').at(-1)[1].refreshOf,undefined);f.setup.dispose();});
 test('a resumed view never stays disabled on an already-expired redeemed enrollment',async()=>{const f=ui();await f.el('mobile-prepare').listeners.click();const id=(await f.api.mobileSetupStatus()).setupId;f.api.mobileSetupStatus=async()=>({setupId:id,state:'expired',redeemed:true,expiresAt:f.now()-1});await f.advance(1000);assert.equal(f.el('mobile-prepare').disabled,false);assert.equal(f.timers.size,0);assert.equal(f.calls.filter(c=>c[0]==='connect').length,1);f.setup.dispose();});
+
+test('late-scan-completion-updates-desktop after a refused refresh', async t => {
+  for (const language of ['zh', 'en']) {
+    const f = ui(language, true);
+    t.after(() => f.setup.dispose());
+    await f.el('mobile-prepare').listeners.click();
+    const id = (await f.api.mobileSetupStatus()).setupId;
+    let release;
+    let entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const reached = new Promise(resolve => { entered = resolve; });
+    f.api.mobileConnect = async value => {
+      assert.equal(value.refreshOf, id);
+      entered();
+      await gate;
+      throw { uiMessage: { key: 'error.mobile.enrollmentActive' } };
+    };
+    const refreshing = f.el('mobile-prepare').listeners.click();
+    await reached;
+    f.redeem();
+    release();
+    await refreshing;
+    assert.equal(f.el('mobile-prepare').disabled, true);
+    f.api.mobileSetupStatus = async value => {
+      assert.equal(value.setupId, id);
+      return { setupId: id, state: 'complete' };
+    };
+    await f.advance(10000);
+    const connected = require('../ui-locale.js').format(language, 'mobile.connected');
+    assert.equal(f.el('mobile-status').textContent, connected);
+    assert.equal(f.el('mobile-prepare').disabled, false);
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'connect').length, 1);
+    assert.equal(f.calls.some(call => call[0] === 'cancel'), false);
+  }
+});
+
+test('expired-enrollment-refresh-can-recover after a refused refresh', async t => {
+  for (const language of ['zh', 'en']) {
+    const f = ui(language, true);
+    t.after(() => f.setup.dispose());
+    await f.el('mobile-prepare').listeners.click();
+    const id = (await f.api.mobileSetupStatus()).setupId;
+    f.redeem();
+    await f.advance(121000);
+    assert.equal(f.el('mobile-prepare').disabled, false);
+    f.api.mobileConnect = async value => {
+      assert.equal(value.refreshOf, id);
+      throw { uiMessage: { key: 'error.mobile.enrollmentActive' } };
+    };
+    await f.el('mobile-prepare').listeners.click();
+    f.api.mobileSetupStatus = async () => ({ state: 'unconfirmed' });
+    await f.advance(10000);
+    assert.equal(f.el('mobile-prepare').disabled, false);
+    assert.equal(f.timers.size, 0);
+    const unconfirmed = require('../ui-locale.js').format(language, 'mobile.renewUnconfirmed');
+    assert.equal(f.el('mobile-status').textContent, unconfirmed);
+    assert.equal(f.calls.filter(call => call[0] === 'connect').length, 1);
+    assert.equal(f.calls.some(call => call[0] === 'cancel'), false);
+  }
+});
