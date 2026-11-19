@@ -92,7 +92,7 @@
       // (read-only, the same route as the receipt button: no polling, no resend). Opening a session alone does not.
       for (const p of receipts ? state.pending.filter(p => p.action === 'send' && p.deviceId === deviceId && p.sessionId === id && !terminal(p.status)) : []) {
         if (epoch !== readEpoch || state.busy) break;
-        try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId })); } catch { /* The row keeps its status; its receipt button stays. */ }
+        try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId }), authorization); } catch { /* The row keeps its status; its receipt button stays. */ }
       }
       changed();
     }
