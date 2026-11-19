@@ -87,7 +87,7 @@ test('views projection excludes drafts, selected sessions, text, and inactive vi
   assert.throws(() => gate.projectViews([{ owner: 'x', active: true }]), /geometry/);
 });
 test('native projection never retains window titles and geometry matches one-to-one', () => {
-  const windows = gate.projectWindows([{ pid: 100, id: 4, onScreen: true, bounds: box, frame: box, frameBasis: 'native-window-frame-v1', title: 'private sentinel' }], 100);
+  const windows = gate.projectWindows([{ pid: 100, id: 4, owner: 'synthetic', onScreen: true, bounds: box, frame: box, frameBasis: 'electron-getbounds-v1', title: 'private sentinel' }], 100);
   assert.equal(JSON.stringify(windows).includes('private'), false);
   assert.equal(gate.geometry([{ bounds: box }, { bounds: box }], windows), false);
   assert.equal(gate.geometry([{ bounds: box }], [{ bounds: { ...box, x: 20.5 } }]), true);

@@ -21,7 +21,7 @@ function fixture(t){
       if(bin==='/usr/bin/python3'){
         if(observation.frameFailure)throw Error('synthetic native frame unavailable');
         if(observation.guiReplaced)observation.guiStarted='replacement GUI lifetime';
-        return JSON.stringify({pid:observation.wrongFramePid?123457:123456,windows:[{pid:123456,id:1,onScreen:true,bounds:box,frame:box,frameBasis:'native-window-frame-v1'}]});
+        return JSON.stringify({pid:observation.wrongFramePid?123457:123456,windows:[{pid:123456,id:1,owner:'synthetic-view',onScreen:true,bounds:box,frame:box,frameBasis:'electron-getbounds-v1'}]});
       }
       if(bin==='/bin/ps'){
         const pid=Number(args[args.indexOf('-p')+1]),field=args.at(-1);assert.ok([123456,observation.pid].includes(pid));
@@ -64,7 +64,7 @@ for(const file of ['workspace.cjs','dsh-tui.cjs'])test('cached version still rec
   await assert.rejects(f.main('post'),/did not stabilize/);assert.equal(f.observation.queries,1);assert.equal(f.observation.workers,0);
 });
 
-for(const reason of ['missing symbol','nonzero native return'])test('pre refuses '+reason+' without falling back to CG',async t=>{
+for(const reason of ['missing GUI endpoint','invalid GUI response'])test('pre refuses '+reason+' without falling back to CG',async t=>{
   const f=fixture(t);f.observation.frameFailure=reason;await assert.rejects(f.main('pre'),/frame 口径待核实/);assert.equal(f.observation.queries,0);
 });
 

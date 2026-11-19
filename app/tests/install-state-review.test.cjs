@@ -23,6 +23,13 @@ test('H-I2: saved view and native window moving together is not position retenti
   const result = await run((_b, a) => { a.views[0].bounds.x += 200; a.views[0].bounds.y += 100; a.windows[0].bounds = { ...a.views[0].bounds }; });
   assert.equal(result.ok, false);
 });
+test('a format-1 B pre-snapshot is compatible with the new owner-bound A post evidence', async () => {
+  const result = await run((before, after) => {
+    before.windows[0].frameBasis = 'native-window-frame-v1';
+    after.windows[0].frameBasis = 'electron-getbounds-v1'; after.windows[0].owner = 'view';
+  });
+  assert.equal(result.ok, true);
+});
 test('H-I4: missing active runtime can recover only from a recorded qualified donor', async () => {
   const result = await run((b, _a) => { b.dsh = { status: 'degraded', reason: 'runtime-missing', donors: [{ key: 'backends/' + 'c'.repeat(20), status: 'qualified', digest: 'same-tree' }] }; });
   assert.equal(result.ok, true); assert.match(result.rows.find(r => r[0] === 'DSH runtime')[2], /restored.*donor/);

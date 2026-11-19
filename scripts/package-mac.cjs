@@ -266,6 +266,7 @@ async function build() {
       'vendor-icons.cjs',
       'view-drafts.cjs',
       'view-store.cjs',
+      'window-frames.cjs',
       'window-placement.cjs',
       'workspace-client.cjs',
       'workspace.cjs',

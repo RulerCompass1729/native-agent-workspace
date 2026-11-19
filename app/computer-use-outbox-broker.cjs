@@ -2,7 +2,7 @@ const fs = require('node:fs'), path = require('node:path'), net = require('node:
 const { openOutbox } = require('./computer-use-outbox.cjs');
 const { readViewLease } = require('./native-computer-use.cjs');
 const { privateFile } = require('./computer-use-outbox-tool.cjs');
-const { processIdentity, processMayBeAlive } = require('./platform.cjs');
+const { processIdentity, processIdentityUTC, processMayBeAlive } = require('./platform.cjs');
 const { outboxError, classifyOutboxFailure } = require('./computer-use-outbox-native.cjs');
 const FAIL = { status: 'unconfirmed', retry: false, message: 'The authorized outbox could not confirm delivery; do not resend automatically.' };
 const failed = (phase, reason, error) => ({ ...FAIL, ...classifyOutboxFailure(error, phase, reason) });
@@ -58,10 +58,13 @@ async function operateOutbox(binding, createView, signal) {
 // Each connection is answered within this limit or dropped; tests shorten it. Waiting
 // for cleanup stops a second earlier, so a control answer still reaches its caller.
 const CONNECTION_MS = 100000, ANSWER_MARGIN_MS = 1000;
-async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, acquireAccessibility, accessibilityMs = 60000, connectionMs = CONNECTION_MS }) {
+async function createOutboxBroker({ descriptorFile, bind, createView, bindControl, control, acquireAccessibility, windowFrames, accessibilityMs = 60000, connectionMs = CONNECTION_MS }) {
   if (!path.isAbsolute(descriptorFile) || ![bind, createView].every(f => typeof f === 'function')) throw Error('Outbox owner unavailable');
   const issuer = processIdentity(process.pid);
   if (!issuer) throw Error('Outbox process identity unavailable');
+  const profilePath = typeof windowFrames === 'function' ? fs.realpathSync(path.dirname(descriptorFile)) : null;
+  const profileIdentity = () => { const s = fs.statSync(profilePath, { bigint: true }); return { dev: String(s.dev), ino: String(s.ino) }; };
+  const frameProfile = profilePath ? profileIdentity() : null;
   let previous;
   try { previous = fs.lstatSync(descriptorFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (previous) {
@@ -150,6 +153,19 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
+        if (request.kind === 'window-frames') {
+          const target = request.identity;
+          if (closed || Object.keys(request).sort().join(',') !== 'capability,identity,kind,nonce' ||
+              typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
+              !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability)) ||
+              !target || Object.keys(target).sort().join(',') !== 'pid,started' || target.pid !== issuer.pid || target.started !== issuer.started ||
+              typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce) || typeof windowFrames !== 'function' || abort.signal.aborted)
+            return failed('admission', 'invalid-request');
+          const identity = processIdentityUTC(process.pid);
+          if (!identity || JSON.stringify(profileIdentity()) !== JSON.stringify(frameProfile)) return failed('admission', 'invalid-request');
+          const windows = windowFrames();
+          return { version: 1, basis: 'electron-getbounds-v1', ...identity, profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(), windows };
+        }
         if (request.kind === 'accessibility') {
           const target = request.identity;
           if (closed || Object.keys(request).sort().join(',') !== 'capability,identity,kind' ||

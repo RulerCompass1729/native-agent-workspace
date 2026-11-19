@@ -1,10 +1,10 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const gate=require('../../scripts/check-install-state.cjs');
-const pid=424242,basis='native-window-frame-v1';
-const views=[{bounds:{x:285,y:160,width:1904,height:1042}},{bounds:{x:660,y:295,width:1240,height:850}}];
+const pid=424242,basis='electron-getbounds-v1';
+const views=[{owner:'view-a',bounds:{x:285,y:160,width:1904,height:1042}},{owner:'view-b',bounds:{x:660,y:295,width:1240,height:850}}];
 function rows(){return[
-  {pid,id:1,onScreen:true,bounds:{x:297,y:168,width:1867,height:1022},frame:{...views[0].bounds},frameBasis:basis},
-  {pid,id:2,onScreen:true,bounds:{x:672,y:303,width:1216,height:834},frame:{...views[1].bounds},frameBasis:basis},
+  {pid,id:1,owner:'view-a',onScreen:true,bounds:{x:297,y:168,width:1867,height:1022},frame:{...views[0].bounds},frameBasis:basis},
+  {pid,id:2,owner:'view-b',onScreen:true,bounds:{x:672,y:303,width:1216,height:834},frame:{...views[1].bounds},frameBasis:basis},
 ];}
 test('G two-window oracle: CG rectangles alone reproduce the old mismatch',()=>{assert.equal(gate.geometry(views,rows()),false);});
 test('G two-window oracle: verified native frame passes and CG remains observation data',()=>{

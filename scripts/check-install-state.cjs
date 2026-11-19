@@ -81,9 +81,10 @@ function projectWindows(values, pid) {
     const seen = new Set();
     return values.map(w => {
       if (w.pid !== pid || !Number.isSafeInteger(w.id) || w.id <= 0 || w.id > 0xffffffff || seen.has(w.id) ||
-          typeof w.onScreen !== 'boolean' || w.frameBasis !== 'native-window-frame-v1') throw Error();
+          typeof w.onScreen !== 'boolean' || w.frameBasis !== 'electron-getbounds-v1' ||
+          typeof w.owner !== 'string' || !w.owner || w.owner.length > 200 || /[\x00-\x1f\x7f]/.test(w.owner)) throw Error();
       seen.add(w.id);
-      return { pid, id: w.id, onScreen: w.onScreen, bounds: bounds(w.frame), cgBounds: bounds(w.bounds), frameBasis: w.frameBasis };
+      return { pid, id: w.id, owner: w.owner, onScreen: w.onScreen, bounds: bounds(w.frame), cgBounds: bounds(w.bounds), frameBasis: w.frameBasis };
     }).sort((a, b) => a.id - b.id);
   } catch { throw refusal('frame 口径待核实'); }
 }
@@ -92,7 +93,7 @@ const near = (a, b) => ['x', 'y', 'width', 'height'].every(k => Math.abs(a[k] - 
 function geometry(views, windows) {
   // Identical bounds can belong to several views; require a one-to-one match.
   const used = new Set();
-  return views.every(v => { const i = windows.findIndex((w, i) => !used.has(i) && near(v.bounds, w.bounds)); if (i < 0) return false; used.add(i); return true; });
+  return views.every(v => { const i = windows.findIndex((w, i) => !used.has(i) && (w.owner === undefined || w.owner === v.owner) && near(v.bounds, w.bounds)); if (i < 0) return false; used.add(i); return true; });
 }
 function runtimeDigest(root) {
   const digest = createHash('sha256'), started = performance.now(); let entries = 0, bytes = 0;
@@ -210,9 +211,10 @@ function backendState(profile, target, version = {}, fresh = false) {
   version.receipt = receipt;
   return { key, pid: owner.pid, started: owner.started, version: receipt.runtimeVersion, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
 }
-function windowFrames(gui, helper = path.join(__dirname, 'install-window-frames.py')) {
+function windowFrames(gui, helper = path.join(__dirname, 'install-electron-frames.py'), profile) {
   try {
-    const value = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-B', helper, String(gui.pid)], {
+    if (!profile) throw Error();
+    const value = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-B', helper, String(gui.pid), profile, gui.started], {
       encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: { LC_ALL: 'C', TZ: 'UTC' },
     }));
     if (!value || Object.keys(value).sort().join(',') !== 'pid,windows' || value.pid !== gui.pid) throw Error();
@@ -227,7 +229,7 @@ function collector(options, helper, target) {
     const gui = processInfo(options.pid);
     if (gui.executable !== target.executable) throw refusal('GUI executable mismatch');
     const views = projectViews(json(path.join(options.profile, 'views.json')));
-    const windows = windowFrames(gui, helper);
+    const windows = windowFrames(gui, helper, options.profile);
     if (!windows.length) throw refusal('No GUI window metadata; unlock or verify the explicit PID, do not request permissions');
     const backend = backendState(options.profile, target, version, fresh);
     return { profile: options.profile, gui, views, windows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
@@ -295,7 +297,7 @@ async function main(argv = process.argv.slice(2)) {
   options.pid = Number(options.pid); options.profile = safePath(options.profile);
   const target = bundleMetadata(options.bundle);
   const snapshot = snapshotPath(options.snapshot, options.profile, target.bundle);
-  const helper = path.join(__dirname, 'install-window-frames.py');
+  const helper = path.join(__dirname, 'install-electron-frames.py');
   {
     const collect = collector(options, helper, target), expected = { version: options.version, revision: options.revision };
     if (mode === 'pre') {
