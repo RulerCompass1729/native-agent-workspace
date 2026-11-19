@@ -14,7 +14,7 @@ const fs = require('node:fs'), path = require('node:path');
 const opens = /locator\(\s*['"`]#room-nav['"`]\s*\)\s*\.click\(|\.click\(\s*['"`]#room-nav['"`]|移到「(?:共同工作|\$\{)/;
 const usesHelper = source => /\brevealDefaultSpace\(/.test(source);
 // Remove a name when its script adopts the helper or stops opening the space, and lower the cap with it. Never add one.
-const legacyCap = 66;
+const legacyCap = 65;
 const legacy = new Set([
   'check-room.cjs', 'check-tui.cjs', 'test-active-process-fold.cjs', 'test-bounded-away.cjs',
   'test-capacity-room.cjs', 'test-check-room.cjs', 'test-claude-image-reading.cjs', 'test-codex-usability.cjs',
@@ -23,7 +23,7 @@ const legacy = new Set([
   'test-column-terminal-latest.cjs', 'test-column-terminal-visibility.cjs', 'test-column-terminal.cjs',
   'test-command-actions.cjs', 'test-compact-header.cjs', 'test-compact-room.cjs', 'test-context-menu.cjs',
   'test-control-focus.cjs', 'test-desktop-workflow.cjs',
-  'test-english-walkthrough.cjs', 'test-failed-tool-reading.cjs', 'test-five-member-columns.cjs',
+  'test-failed-tool-reading.cjs', 'test-five-member-columns.cjs',
   'test-forget-images.cjs', 'test-grid-follow.cjs', 'test-grouped-space-rename.cjs', 'test-inline-input-reading.cjs',
   'test-inline-rename.cjs', 'test-installed-workspace.cjs', 'test-markdown-copy.cjs', 'test-member-actions.cjs',
   'test-member-header-menu.cjs', 'test-member-order.cjs', 'test-membership-navigation.cjs',

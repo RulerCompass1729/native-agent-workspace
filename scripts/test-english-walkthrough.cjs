@@ -10,6 +10,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const testScratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const locale = require(path.join(code, 'app/ui-locale.js')), en = (key, params) => locale.format('en', key, params);
@@ -76,7 +77,7 @@ async function visit(name, action, expected) {
   try {
     await action();
     // A state page proves its state by its own English text before it counts.
-    if (expected) await (expected.placeholder ? page.getByPlaceholder(expected.placeholder, { exact: true }) : page.getByText(expected, { exact: false })).first().waitFor({ state: 'visible' });
+    if (expected) await (expected.placeholder ? page.getByPlaceholder(expected.placeholder, { exact: true }) : page.getByText(expected, { exact: false }).and(page.locator(':visible'))).first().waitFor({ state: 'visible' });
     await delay(250);
     const hits = await page.evaluate(scanPage);
     if (evidence) await page.screenshot({ path: path.join(evidence, `${String(pages.length + 1).padStart(2, '0')}-${name}.png`) });
@@ -103,6 +104,7 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message));
   await page.locator('#new-session').waitFor({ timeout: 60000 });
   assert.equal(await page.locator('#new-session').getAttribute('aria-label'), en('sidebar.newSession'), 'The walk needs an English interface (English system preference)');
+  await revealDefaultSpace(page);
   // Positive control: the scanner must find one visible Chinese text and ignore a hidden one.
   const control = await page.evaluate(scan => {
     const shown = document.createElement('span'), hidden = document.createElement('span'), style = document.createElement('style');
@@ -125,6 +127,7 @@ async function run() {
   await visit('new-space-dialog', async () => { await page.locator('#new-space').click(); await page.locator('#space-create-dialog').waitFor(); });
   await page.locator('#space-create-name').fill('Gamma'); await page.locator('#confirm-space-create').click();
   await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#panorama-nav').click();
   for (const id of [alpha, beta]) { await more(id).first().click(); await item(en('menu.joinSpace', { name: 'Gamma' })).click(); await delay(400); }
   await visit('join-notice', async () => {}, en('toast.joinedSpace', { arg1: 'Gamma' }));
   await page.keyboard.press('Escape');
@@ -135,11 +138,11 @@ async function run() {
   await visit('space-overview-list', async () => { await page.getByRole('button', { name: en('collab.list'), exact: true }).click(); });
   await page.getByRole('button', { name: en('collab.grid'), exact: true }).click().catch(() => {});
   await visit('space-records', async () => { await page.locator('#room-record').click(); });
-  await visit('space-menu', async () => { await page.getByRole('button', { name: en('sidebar.spaceActions', { name: 'Gamma' }), exact: true }).click(); await page.getByRole('menu').waitFor(); });
+  await visit('space-menu', async () => { await page.locator('#room-header-more').click(); await page.getByRole('menu').waitFor(); });
   await closeMenus();
-  await visit('space-notes', async () => { await page.locator('#room-notes').click(); await page.locator('#notes-dialog').waitFor(); });
+  await visit('space-notes', async () => { await page.locator('#room-header-more').click(); await item(en('menu.notes')).click(); await page.locator('#notes-dialog').waitFor(); });
   await page.locator('#cancel-notes').click().catch(() => {});
-  await visit('space-files', async () => { await page.locator('#room-files').click(); await page.locator('#space-files-dialog').waitFor(); });
+  await visit('space-files', async () => { await page.locator('#room-header-more').click(); await item(en('menu.spaceFiles')).click(); await page.locator('#space-files-dialog').waitFor(); });
   await page.locator('#close-space-files').click().catch(() => {});
   // The space's queue (alpha.227), opened from the Queue button in the space header.
   await visit('space-queue', async () => { await page.locator('#room-queue').click(); await page.locator('#queue-dialog').waitFor(); });
