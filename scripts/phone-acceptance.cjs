@@ -17,6 +17,22 @@ function receiptAssociations(rows, originals) {
   return { pass: originals.length > 1 && matches.every(m => m.length === 1) && new Set(matches.flat()).size === originals.length,
     expected: originals.length, identified: matches.filter(m => m.length === 1).length };
 }
+function messageVisibility(element) {
+  const doc = element.ownerDocument, view = doc.defaultView, r = element.getBoundingClientRect(), v = view.visualViewport;
+  const left = v?.offsetLeft || 0, top = v?.offsetTop || 0, width = v?.width || view.innerWidth, height = v?.height || view.innerHeight;
+  const inViewport = element.isConnected && r.width > 0 && r.height > 0 && r.left >= left && r.top >= top && r.right <= left + width && r.bottom <= top + height;
+  let painted = true;
+  for (let current = element; current; current = current.parentElement) {
+    const style = view.getComputedStyle(current);
+    if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0) painted = false;
+  }
+  const unobscured = inViewport && [0.2, 0.5, 0.8].every(x => [0.2, 0.5, 0.8].every(y => {
+    const hit = doc.elementFromPoint(r.left + r.width * x, r.top + r.height * y);
+    return hit === element || element.contains(hit);
+  }));
+  return { visible: Boolean(inViewport && painted && unobscured), inViewport, unobscured, viewport: { width, height },
+    bounds: { left: r.left, top: r.top, right: r.right, bottom: r.bottom } };
+}
 let activeCleanup = async () => {};
 const ownedRoots = []; let reportDirectory;
 const temporary = prefix => { const root = scratch.directory(prefix); ownedRoots.push(root); process.send?.({ kind: 'phone-acceptance-owned-root', root }); return root; };
@@ -220,10 +236,15 @@ async function scenario(root, engine, language, shape, output, cases) {
       const sendAt = performance.now(); await page.locator('#send-message').tap();
       await until(async () => (await ipc('truth')).calls.some(c => c.text === 'SYNTHETIC_PHONE_SEND'));
       const nativeMs = Math.round(performance.now() - sendAt);
-      await until(async () => (await page.locator('.thread').innerText()).includes('SYNTHETIC_PHONE_SEND'));
-      const visibleMs = Math.round(performance.now() - sendAt);
+      const sent = page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_PHONE_SEND' });
+      await until(async () => await sent.count() === 1 && await sent.innerText() === 'SYNTHETIC_PHONE_SEND');
+      const domMs = Math.round(performance.now() - sendAt);
+      let visibility = await sent.evaluate(messageVisibility);
+      while (!visibility.visible && performance.now() - sendAt < THRESHOLDS.visibleSendMs) { await wait(25); visibility = await sent.evaluate(messageVisibility); }
+      const visibleMs = visibility.visible ? Math.round(performance.now() - sendAt) : null;
       originals.push(['SYNTHETIC_PHONE_SEND']);
-      await check('b-send-visible-within-budget', visibleMs <= THRESHOLDS.visibleSendMs, { nativeMs, visibleMs, budgetMs: THRESHOLDS.visibleSendMs }, true);
+      await check('b-send-visible-within-budget', visibility.visible && visibleMs <= THRESHOLDS.visibleSendMs,
+        { nativeMs, domMs, visibleMs, budgetMs: THRESHOLDS.visibleSendMs, visibility }, true);
       await unobscured('chat/' + ids[0]); await snapshot('send-result-without-overlay');
     }
     await ipc('state', { sessionId: ids[0], state: 'idle' });
@@ -422,4 +443,4 @@ if (require.main === module) {
     console.log('TEMP ' + JSON.stringify(result)); if (remaining.length) process.exitCode = 1;
   });
 }
-module.exports = { THRESHOLDS, messages, defaultShape, validateShape, assertCheckpointChanged, receiptAssociations };
+module.exports = { THRESHOLDS, messages, defaultShape, validateShape, assertCheckpointChanged, receiptAssociations, messageVisibility };

@@ -1,6 +1,20 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process'), path = require('node:path');
-const { messages, defaultShape, THRESHOLDS, validateShape, assertCheckpointChanged, receiptAssociations } = require('../../scripts/phone-acceptance.cjs');
+const { messages, defaultShape, THRESHOLDS, validateShape, assertCheckpointChanged, receiptAssociations, messageVisibility } = require('../../scripts/phone-acceptance.cjs');
+test('send feedback requires an on-screen message with unobscured hit targets, not merely DOM text', () => {
+  function sample(rect, blocked = false, opacity = '1') {
+    const element = { isConnected: true, parentElement: null, getBoundingClientRect: () => rect, contains: hit => hit === element };
+    element.ownerDocument = { defaultView: { innerWidth: 390, innerHeight: 844, visualViewport: { offsetLeft: 0, offsetTop: 0, width: 390, height: 844 },
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity }) }, elementFromPoint: () => blocked ? {} : element };
+    return messageVisibility(element);
+  }
+  const rect = { left: 20, right: 370, top: 200, bottom: 250, width: 350, height: 50 };
+  assert.equal(sample(rect).visible, true);
+  assert.equal(sample({ ...rect, top: 1000, bottom: 1050 }).visible, false, 'the same DOM message below the viewport must fail');
+  assert.equal(sample({ ...rect, left: 400, right: 750 }).visible, false);
+  assert.equal(sample(rect, true).visible, false, 'an overlay may hide otherwise valid geometry');
+  assert.equal(sample(rect, false, '0').visible, false);
+});
 test('a claimed visible transition rejects byte-identical screenshots without rejecting metadata-only checks', () => {
   const before = Buffer.from('synthetic screenshot');
   assert.throws(() => assertCheckpointChanged(before, Buffer.from(before), true), { code: 'HARNESS_DUPLICATE_CHECKPOINT' });

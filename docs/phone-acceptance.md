@@ -61,8 +61,12 @@ decoding message values; only public role/kind enums and UTF-16 lengths survive.
 Never point the browser runner at a daily profile. Neither command needs secrets.
 
 The report keeps failures as failures and exits nonzero. It records browser/DOM
-assertions against daemon calls, queue state and executed confirmations; send
-arrival and visible-result times are separate. The initial send-feedback budget
+assertions against daemon calls, queue state and executed confirmations. Send
+arrival, DOM insertion and first observed on-screen visibility are separate.
+The sent bubble must fit inside the visual viewport, have visible ancestors,
+and retain its own hit targets at nine points. DOM text alone cannot pass b;
+off-screen or occluded messages have a null visible time. No scrolling is added
+to make an acceptance result pass. The initial send-feedback budget
 is 1,500 ms; the blocked-read back budget is 500 ms. Calibrate a small control on
 the same host/network before interpreting performance failures. Do not increase
 a threshold solely to make a failing build pass.
