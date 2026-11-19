@@ -13,6 +13,7 @@ function scene(language, input) {
   let now = Date.now();
   const status = board.bind({ host: f.host, document: f.doc, text: (k, p) => locale.format(language, k, p), now: () => now });
   const scope = vm.createContext({ nativeWorkspaceTaskStream: model });
+  vm.runInContext(fs.readFileSync(require.resolve('../../renderer/disclosure-list.js'), 'utf8'), scope);
   vm.runInContext(fs.readFileSync(require.resolve('../../renderer/activity-stream.js'), 'utf8'), scope);
   const observed = [];
   const stream = scope.nativeWorkspaceActivityStream.bind({ document: f.doc, state: () => ({ sessions: input.sessions, backgroundConfirmations: input.confirmations }),
