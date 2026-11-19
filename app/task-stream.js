@@ -108,9 +108,13 @@
   // native drops it. The rest of the session's requests keep the one approval row. Native may still report its turn
   // as waiting on that question (Codex 0.168, Default mode: waitingOnUserInput); that state alone adds no second row.
   const openQuestions = s => requests(s).filter(r => !r.pending && approvalPolicy.nonBlockingQuestion(r));
-  const onlyQuestions = s => requests(s).length > 0 && requests(s).every(r => approvalPolicy.nonBlockingQuestion(r));
-  const holdsTurn = s => Boolean(s && (s.nativeApproval?.requests?.length || requests(s).some(r => !approvalPolicy.nonBlockingQuestion(r)) ||
-    s.approvalOverflow || s.state === 'approval' && !onlyQuestions(s) || s.claudeQuestion));
+  const holdsTurn = s => {
+    if (!s) return false;
+    const native = s.nativeApproval?.requests || [], known = [...native, ...requests(s), ...(s.claudeQuestion ? [s.claudeQuestion] : [])];
+    // A stale approval state cannot turn an already submitted request into a new ask.
+    return Boolean(native.some(r => !r.pending) || requests(s).some(r => !r.pending && !approvalPolicy.nonBlockingQuestion(r)) ||
+      s.claudeQuestion && !s.claudeQuestion.pending || s.approvalOverflow || s.state === 'approval' && !known.length);
+  };
 
   // The butler's newest reply asks for a decision and nothing came after it.
   function butlerQuestion(session) {
