@@ -18,7 +18,7 @@ CG = dict(x=297, y=168, width=1867, height=1022)
 
 def value():
     return dict(version=1, basis=m.BASIS, pid=PID, started=STARTED, profile=PROFILE, nonce=NONCE, capturedAt=1000,
-                windows=[dict(id=1, owner='synthetic-owner', frame=dict(FRAME))])
+                windows=[dict(id=1, owner='synthetic-owner', frame=dict(FRAME))], hiddenBackgroundWindows=[])
 
 
 def row():
@@ -69,6 +69,28 @@ class Frames(unittest.TestCase):
         for records in [[], [dict(row(), id=2)], [row(), dict(row(), id=2)]]:
             with self.assertRaises(ValueError):
                 m.collect(PID, '/synthetic', STARTED, sample=lambda _: records, frames=lambda *_: live)
+
+    def test_proven_background_is_excluded_but_unknown_or_onscreen_windows_refuse(self):
+        data = value(); data['hiddenBackgroundWindows'] = [dict(id=2, owner='background', frame=dict(FRAME))]
+        live = m.validate(data, PID, STARTED, NONCE, 1001, PROFILE)
+        records = [row(), dict(row(), id=2, onScreen=False)]
+        good = m.collect(PID, '/synthetic', STARTED, sample=lambda _: records, frames=lambda *_: live)
+        self.assertEqual([w['id'] for w in good['windows']], [1])
+        for wrong in [[row(), dict(row(), id=2, onScreen=True)],
+                      records + [dict(row(), id=3)], records + [dict(row(), id=3, onScreen=False)]]:
+            with self.assertRaises(ValueError):
+                m.collect(PID, '/synthetic', STARTED, sample=lambda _: wrong, frames=lambda *_: live)
+        changed = iter([records, [row(), dict(records[1], bounds=dict(CG, x=300))]])
+        with self.assertRaises(ValueError):
+            m.collect(PID, '/synthetic', STARTED, sample=lambda _: next(changed), frames=lambda *_: live)
+
+    def test_background_rows_are_strict_and_cannot_duplicate_human_identity(self):
+        for rows in [None, [dict(id=1, owner='background', frame=dict(FRAME))],
+                     [dict(id=2, owner='synthetic-owner', frame=dict(FRAME))],
+                     [dict(id=2, owner='background', frame=dict(FRAME), title='private')],
+                     [dict(id=2, owner='background', frame=dict(FRAME, width=0))]]:
+            with self.assertRaises(ValueError):
+                m.validate(dict(value(), hiddenBackgroundWindows=rows), PID, STARTED, NONCE, 1001, PROFILE)
 
     def test_wrong_kernel_peer_pid_refuses_before_sending_capability(self):
         class Socket:

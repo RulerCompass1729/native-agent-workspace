@@ -108,29 +108,34 @@ def request(profile, pid, started):
 
 
 def validate(value, pid, started, nonce, now, identity):
-    require(isinstance(value, dict) and set(value) == {'version', 'basis', 'pid', 'started', 'profile', 'nonce', 'capturedAt', 'windows'})
+    require(isinstance(value, dict) and set(value) == {'version', 'basis', 'pid', 'started', 'profile', 'nonce', 'capturedAt', 'windows', 'hiddenBackgroundWindows'})
     require(type(value['version']) is int and value['version'] == 1 and value['basis'] == BASIS and type(value['pid']) is int and value['pid'] == pid and value['started'] == started and value['nonce'] == nonce)
     require(value['profile'] == identity)
     at = value['capturedAt']
     require(type(at) in (int, float) and math.isfinite(at) and 0 <= now - at <= 2000)
-    require(isinstance(value['windows'], list) and 0 < len(value['windows']) <= 1000)
-    result, owners = {}, set()
-    for row in value['windows']:
-        require(isinstance(row, dict) and set(row) == {'id', 'owner', 'frame'})
-        number, owner = row['id'], row['owner']
-        require(type(number) is int and 0 < number <= 0xffffffff and number not in result)
-        require(isinstance(owner, str) and 0 < len(owner) <= 200 and not re.search('[\x00-\x1f\x7f]', owner) and owner not in owners)
-        owners.add(owner)
-        result[number] = dict(row, frame=rectangle(row['frame']))
+    result, owners, ids = {}, set(), set()
+    for key in ['windows', 'hiddenBackgroundWindows']:
+        require(isinstance(value[key], list) and len(value[key]) <= 1000 and (key != 'windows' or value[key]))
+        rows = result[key] = {}
+        for row in value[key]:
+            require(isinstance(row, dict) and set(row) == {'id', 'owner', 'frame'})
+            number, owner = row['id'], row['owner']
+            require(type(number) is int and 0 < number <= 0xffffffff and number not in ids)
+            require(isinstance(owner, str) and 0 < len(owner) <= 200 and not re.search('[\x00-\x1f\x7f]', owner) and owner not in owners)
+            owners.add(owner); ids.add(number)
+            require(len(ids) <= 1000)
+            rows[number] = dict(row, frame=rectangle(row['frame']))
     return result
 
 
 def collect(pid, profile, started, sample=observe, frames=request):
     require(type(pid) is int and 1 < pid < 0x80000000 and isinstance(started, str) and 0 < len(started) <= 200)
     before = windows(sample(pid), pid)
-    live = frames(profile, pid, started)
-    require(set(live) == {row['id'] for row in before})
-    result = [dict(row, frame=live[row['id']]['frame'], owner=live[row['id']]['owner'], frameBasis=BASIS) for row in before]
+    proof = frames(profile, pid, started)
+    live, background = proof['windows'], proof['hiddenBackgroundWindows']
+    require(not set(live).intersection(background) and set(live).union(background) == {row['id'] for row in before})
+    require(all(row['onScreen'] is False for row in before if row['id'] in background))
+    result = [dict(row, frame=live[row['id']]['frame'], owner=live[row['id']]['owner'], frameBasis=BASIS) for row in before if row['id'] in live]
     require(windows(sample(pid), pid) == before)
     return dict(pid=pid, windows=result)
 

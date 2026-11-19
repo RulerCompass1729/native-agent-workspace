@@ -6,19 +6,62 @@ const gate = require('../../scripts/check-install-state.cjs');
 const frame = { x: 285, y: 160, width: 1904, height: 1042 };
 function context(owner = 'synthetic-owner', number = 1) {
   return { view: { owner, bounds: { x: 1, y: 2, width: 3, height: 4 } }, background: false,
-    win: { isDestroyed: () => false, getMediaSourceId: () => `window:${number}:0`, getBounds: () => ({ ...frame }),
+    win: { isDestroyed: () => false, isVisible: () => true, isFocusable: () => true,
+      getMediaSourceId: () => `window:${number}:0`, getBounds: () => ({ ...frame }),
       getTitle() { throw Error('Window titles must never be read'); } } };
 }
+function collectBackground(extra = [], includeUnknown = false) {
+  const { windowFrames } = require('../window-frames.cjs');
+  const background = context('background-owner', 2); background.background = true;
+  background.win.isVisible = () => false; background.win.isFocusable = () => false;
+  const proof = windowFrames([context(), background, ...(includeUnknown ? [context('unknown-owner', 3)] : [])]);
+  const records = [{ pid: 424242, id: 1, onScreen: true, bounds: frame },
+    { pid: 424242, id: 2, onScreen: false, bounds: frame }, ...extra];
+  const code = "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('f',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)\n" +
+    "p=json.load(sys.stdin); proof=p['proof']; live={r['id']:r for r in proof} if isinstance(proof,list) else {k:{r['id']:r for r in rows} for k,rows in proof.items()}\n" +
+    "print(json.dumps(m.collect(424242,'/synthetic','lifetime',sample=lambda _:p['records'],frames=lambda *_:live)))";
+  return require('node:child_process').spawnSync('/usr/bin/python3', ['-I', '-B', '-c', code,
+    path.join(__dirname, '../../scripts/install-electron-frames.py')], { input: JSON.stringify({ proof, records }), encoding: 'utf8', timeout: 5000 });
+}
+test('G F1: correct human frame plus a proven hidden background window is collectable', () => {
+  const result = collectBackground(); assert.equal(result.status, 0, result.stderr);
+  const value = JSON.parse(result.stdout);
+  assert.deepEqual(value.windows.map(w => w.id), [1]); assert.deepEqual(value.windows[0].frame, frame);
+});
+test('G F1: an unknown human window beside a legitimate background window is still refused', () => {
+  const result = collectBackground([{ pid: 424242, id: 3, onScreen: true, bounds: frame }]);
+  assert.equal(result.status, 1); assert.match(result.stderr, /frame 口径待核实/);
+});
+test('an extra managed human owner cannot be hidden behind the background exclusion', () => {
+  const result = collectBackground([{ pid: 424242, id: 3, onScreen: false, bounds: frame }], true);
+  assert.equal(result.status, 0, result.stderr);
+  const windows = gate.projectWindows(JSON.parse(result.stdout).windows, 424242);
+  assert.equal(gate.geometry([{ owner: 'synthetic-owner', bounds: frame }], windows), false);
+});
 test('Electron evidence reads live getBounds and never saved bounds or titles', () => {
   const { windowFrames } = require('../window-frames.cjs');
-  assert.deepEqual(windowFrames([context()]), [{ id: 1, owner: 'synthetic-owner', frame }]);
+  assert.deepEqual(windowFrames([context()]), { windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [] });
 });
-test('Electron evidence excludes background/destroyed windows and rejects duplicate owners or IDs', () => {
+test('Electron evidence separates proven hidden background windows and rejects duplicate owners or IDs', () => {
   const { windowFrames } = require('../window-frames.cjs');
-  assert.deepEqual(windowFrames([context(), { ...context('background', 2), background: true },
-    { ...context('destroyed', 3), win: { isDestroyed: () => true } }]), [{ id: 1, owner: 'synthetic-owner', frame }]);
+  const background = context('background', 2); background.background = true;
+  background.win.isVisible = () => false; background.win.isFocusable = () => false;
+  assert.deepEqual(windowFrames([context(), background, { ...context('destroyed', 3), win: { isDestroyed: () => true } }]),
+    { windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [{ id: 2, owner: 'background', frame }] });
   for (const rows of [[context(), context()], [context(), context('other', 1)]]) assert.throws(() => windowFrames(rows));
   const bad = context(); bad.win.getBounds = () => ({ ...frame, width: NaN }); assert.throws(() => windowFrames([bad]));
+});
+test('background exclusion requires hidden, nonfocusable and stable Main classification', () => {
+  const { windowFrames } = require('../window-frames.cjs');
+  for (const change of [b => { b.win.isVisible = () => true; }, b => { b.win.isFocusable = () => true; },
+    b => { delete b.win.isVisible; }, b => { delete b.win.isFocusable; },
+    b => { b.win.getBounds = () => { b.background = false; return frame; }; },
+    b => { b.win.getBounds = () => { b.win.isVisible = () => true; return frame; }; },
+    b => { b.win.getBounds = () => { b.win.isFocusable = () => true; return frame; }; }]) {
+    const b = context('background', 2); b.background = true;
+    b.win.isVisible = () => false; b.win.isFocusable = () => false; change(b);
+    assert.throws(() => windowFrames([context(), b]));
+  }
 });
 test('a window destroyed or rebound while sampling cannot yield a partial frame proof', () => {
   const { windowFrames } = require('../window-frames.cjs');
@@ -44,7 +87,8 @@ test('existing authenticated GUI socket provides fresh frame metadata without co
   let reads = 0;
   const no = () => { throw Error('No action or AX may run'); };
   const broker = await createOutboxBroker({ descriptorFile: path.join(root, 'owner.json'), bind: no, createView: no,
-    control: no, acquireAccessibility: no, windowFrames: () => { reads++; return [{ id: 1, owner: 'synthetic-owner', frame }]; } });
+    control: no, acquireAccessibility: no, windowFrames: () => { reads++; return {
+      windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [{ id: 2, owner: 'background', frame }] }; } });
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const result = await request(broker.descriptorFile);
   assert.equal(result.basis, 'electron-getbounds-v1'); assert.equal(result.pid, process.pid);
@@ -52,6 +96,8 @@ test('existing authenticated GUI socket provides fresh frame metadata without co
   const directory = fs.statSync(root, { bigint: true });
   assert.deepEqual(result.profile, { dev: String(directory.dev), ino: String(directory.ino) });
   assert.ok(Date.now() - result.capturedAt < 1000); assert.deepEqual(result.windows, [{ id: 1, owner: 'synthetic-owner', frame }]);
+  assert.deepEqual(result.hiddenBackgroundWindows, [{ id: 2, owner: 'background', frame }]);
+  for (const row of [...result.windows, ...result.hiddenBackgroundWindows]) assert.deepEqual(Object.keys(row).sort(), ['frame', 'id', 'owner']);
   assert.equal(reads, 1);
   for (const bad of [{ capability: '0'.repeat(64) }, { nonce: 'bad' }, { identity: { pid: process.pid, started: 'stale' } }, { extra: true }]) {
     assert.equal((await request(broker.descriptorFile, bad)).basis, undefined);

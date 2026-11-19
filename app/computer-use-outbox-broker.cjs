@@ -163,8 +163,9 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
             return failed('admission', 'invalid-request');
           const identity = processIdentityUTC(process.pid);
           if (!identity || JSON.stringify(profileIdentity()) !== JSON.stringify(frameProfile)) return failed('admission', 'invalid-request');
-          const windows = windowFrames();
-          return { version: 1, basis: 'electron-getbounds-v1', ...identity, profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(), windows };
+          const proof = windowFrames();
+          return { version: 1, basis: 'electron-getbounds-v1', ...identity, profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(),
+            windows: proof.windows, hiddenBackgroundWindows: proof.hiddenBackgroundWindows };
         }
         if (request.kind === 'accessibility') {
           const target = request.identity;

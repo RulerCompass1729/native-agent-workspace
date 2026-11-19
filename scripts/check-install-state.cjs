@@ -92,6 +92,7 @@ function projectWindows(values, pid) {
 const near = (a, b) => ['x', 'y', 'width', 'height'].every(k => Math.abs(a[k] - b[k]) <= 1);
 function geometry(views, windows) {
   // Identical bounds can belong to several views; require a one-to-one match.
+  if (views.length !== windows.length) return false;
   const used = new Set();
   return views.every(v => { const i = windows.findIndex((w, i) => !used.has(i) && (w.owner === undefined || w.owner === v.owner) && near(v.bounds, w.bounds)); if (i < 0) return false; used.add(i); return true; });
 }
