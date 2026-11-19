@@ -165,3 +165,10 @@ test('manual success after a model change resolves only this native session; rep
   f.start('manual-b-success'); f.end('manual-b-success', null, 'completed');
   assert.equal(f.s.nativeQuota ?? null, null); assert.equal(ready(f.snapshot()).ready, true);
 });
+test('a later retry that itself observed quota cannot clear the first episode through contradictory success', t => {
+  const f = fixture(t); f.start('quota-a'); f.end('quota-a', rawError());
+  f.start('quota-b'); f.notify('error', { turnId: 'quota-b', error: rawError() });
+  f.end('quota-b', null, 'completed');
+  assert.equal(f.s.nativeQuota?.turnId, 'quota-a');
+  assert.equal(ready(f.snapshot()).ready, false); assert.equal(f.events().length, 1);
+});

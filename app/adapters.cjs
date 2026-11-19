@@ -2744,6 +2744,7 @@ class Codex extends EventEmitter {
   observeQuota(id, error, rpc) {
     const typed = codexQuotaError(error);
     if (!typed || !this.quotaTurnCurrent(id, rpc)) return false;
+    this.turns.get(id).quotaObserved = true;
     // Keep the first failed turn for this blocked episode, including on manual retries.
     if (!codexQuotaBlock(this.record)) {
       this.record.nativeQuota = { ...typed, nativeId: this.record.nativeId, turnId: id,
@@ -2760,7 +2761,7 @@ class Codex extends EventEmitter {
     const pending = this.pending?.turnId === id ? this.pending : null;
     if (turn.completed.status === 'failed') this.observeQuota(id, turn.completed.error, turn.quotaCompletionRpc);
     const quota = codexQuotaBlock(this.record), model = typeof this.record.model === 'string' ? this.record.model : null;
-    if (turn.completed.status === 'completed' && quota && quota.turnId !== id &&
+    if (turn.completed.status === 'completed' && !turn.quotaObserved && quota && quota.turnId !== id &&
         this.quotaTurnCurrent(id, turn.quotaBinding?.rpc) && model === turn.quotaBinding.model) {
       delete this.record.nativeQuota;
       this.emit('nativeQuota');
