@@ -508,7 +508,7 @@ function readingOwnText(message, descriptor) {
   const language = ui.language.getSnapshot().active;
   const archived = readingDispatchMember(message, descriptor);
   if (archived) return uiText(descriptor.key, { ...descriptor.params, name: archivedName(archived, descriptor.params.name) });
-  if (['notice.capacityAutoContinueRouting', 'notice.capacityAutoContinueCapacity', 'notice.capacityAutoContinueForbidden'].includes(descriptor.key) && Number.isFinite(message.time) && Math.abs(message.time) <= 8640000000000000) {
+  if (['notice.capacityAutoContinueRouting', 'notice.capacityAutoContinueCapacity', 'notice.capacityAutoContinueForbidden', 'notice.capacityAutoContinueConnection'].includes(descriptor.key) && Number.isFinite(message.time) && Math.abs(message.time) <= 8640000000000000) {
     const time = new Date(message.time).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
     return uiText(descriptor.key, { ...descriptor.params, time });
   }

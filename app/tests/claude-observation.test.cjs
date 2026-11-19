@@ -1947,6 +1947,66 @@ test('missing native row gets at most five bounded reads, no delayed surprise re
 const refusedText = 'Please run /login · API Error: 403 Attention Required! | Cloudflare';
 const refusedRow = { apiErrorStatus: 403, error: 'authentication_failed' };
 const displayText = (language, message) => require('../ui-locale.js').displayText(language, message.text, message.uiMessage);
+const connectionRow = { apiErrorStatus: null, apiError: 'connection_failed', error: 'server_error' };
+for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end'])
+for (const apiErrorStatus of [null, undefined])
+for (const text of ["API Error: Can't reach the API server (ENOTFOUND)", 'Different localized native error words'])
+test(`Claude typed connection failure crosses the real bridge without matching prose: ${order} ${apiErrorStatus === null ? 'null' : 'omitted'} ${text}`, async t => {
+  const { f, ends, turn } = await capacityThroughBridge(t, '2.1.323', { ...connectionRow, apiErrorStatus }, order, text);
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'connectionFailed' }]);
+  assert.ok(ends.every(event => !Object.hasOwn(event, 'text') && !Object.hasOwn(event, 'errorMessage')), 'Failure events carry typed metadata rather than the native error body');
+});
+for (const change of [{ apiError: 'unknown_error' }, { apiError: null }, { apiError: undefined },
+  { apiErrorStatus: 0 }, { apiErrorStatus: 'null' }, { apiErrorStatus: 500 },
+  { isApiErrorMessage: false }, { isSidechain: true }, { message: { model: 'ordinary-model' } }])
+test('Claude connection continuation rejects other typed metadata: ' + JSON.stringify(change), t => {
+  const f = capacityWorkspace(t, undefined, { ...connectionRow, ...change });
+  f.fail({ errorRowUnclassified: true }); f.stop(); f.w.tickCapacity(Date.now() + 86400000);
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.events.filter(event => event.errorInfo === 'connectionFailed'), []);
+});
+for (const boundary of freshFailureBoundaries)
+test('Claude connection failure keeps the existing fresh-failure guard: ' + boundary,
+  t => freshFailureBoundary(t, boundary, connectionRow, 'connectionFailed'));
+for (const boundary of [...scheduledBoundaries, 'takeover', 'member-change'])
+test('Claude connection continuation yields to ' + boundary, t => scheduledYields(t, boundary, connectionRow));
+test('Claude connection failures share 2/5/10 minutes, stop after three and report every failed end once', async t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.fail({ errorRowUnclassified: true }); f.stop();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const recovery = f.w.capacityStatus(f.s.id); assert.equal(recovery?.reason, 'connection'); assert.equal(recovery.attempt, attempt);
+    assert.ok(recovery.due - Date.now() > [120000, 300000, 600000][attempt] - 1000);
+    f.w.tickCapacity(recovery.due - 1); assert.equal(f.sent.length, attempt);
+    f.w.tickCapacity(recovery.due); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.sent, Array(attempt + 1).fill('继续'), 'Only a new continue, never the original task');
+    nextFailure(f, null);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted');
+  assert.equal(f.s.state, 'error'); assert.equal(f.events.length, 4);
+  assert.ok(f.events.every(event => event.status === 'failed' && event.errorInfo === 'connectionFailed'));
+  assert.equal(new Set(f.events.map(event => event.turnId)).size, 4);
+  f.stop(); f.r.reportCapacityFailure(true); assert.equal(f.events.length, 4);
+  f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+  const limit = f.s.messages.filter(message => message.uiMessage?.key === 'notice.capacityLimitConnection');
+  assert.equal(limit.length, 1);
+  assert.equal(limit[0].text, '无法连接 API 服务，自动继续已达 3 次上限，需要你处理。');
+  assert.equal(displayText('en', limit[0]), 'The API connection failed, and automatic continuation reached its limit of 3 attempts. Your action is needed.');
+  const continues = f.s.messages.filter(message => message.uiMessage?.key === 'notice.capacityAutoContinueConnection');
+  assert.equal(continues.length, 3);
+  assert.match(displayText('en', continues[0]), /Automatic continuation after an API connection failure \(attempt 1\)/);
+});
+test('connection, capacity and forbidden failures use one shared budget rather than resetting it by cause', async t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.fail(); f.stop();
+  for (const [attempt, reason, status] of [[0, 'connection', 529], [1, 'capacity', 403], [2, 'forbidden', null]]) {
+    const recovery = f.w.capacityStatus(f.s.id); assert.equal(recovery.reason, reason); assert.equal(recovery.attempt, attempt);
+    f.w.tickCapacity(recovery.due); await new Promise(resolve => setImmediate(resolve)); nextFailure(f, status);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); assert.equal(f.w.capacityStatus(f.s.id).reason, 'connection');
+  assert.deepEqual(f.sent, ['继续', '继续', '继续']);
+});
+test('only Claude admits the typed connection failure; another provider never acquires this retry reason', t => {
+  const f = capacityWorkspace(t, undefined, connectionRow); f.s.provider = 'codex'; f.fail(); f.stop();
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+});
 for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end']) for (const version of ['2.1.322', '2.1.323'])
 for (const [label, row] of [['authentication_failed', refusedRow], ['network_edge_blocked', { apiErrorStatus: 403, error: 'invalid_request', apiError: 'network_edge_blocked' }]])
 test(`a Claude request refused with a typed 403 is reported for the bounded continuation, through the real bridge: ${version} ${order} ${label}`, async t => {
@@ -2498,4 +2558,95 @@ test(`T32 native draft survives the complete continuation path: ${version} ${whe
   const recorded = f.s.messages.find(m => m.origin === 'capacity-recovery');
   assert.equal(recorded.status, 'unconfirmed', 'The refused attempt stays visible in NAW');
   f.w.tickCapacity(due + 86400000); assert.deepEqual(entered, []);
+});
+
+
+for (const [cause, rowChange, status] of [['connection', connectionRow, null], ['capacity', {}, 529], ['forbidden', refusedRow, 403]])
+test('exhausted ' + cause + ' reaches the butler failure ledger through actual main listeners', async t => {
+  const { RoomState } = require('../room-state.cjs');
+  const { ButlerIngress, bindQueueOutcomes } = require('../butler-ingress.cjs');
+  const rules = require('../queue-dispatch.cjs');
+  const f = capacityWorkspace(t, undefined, rowChange);
+  const room = new RoomState(f.dir);
+  const ingress = new ButlerIngress(f.dir, { roomState: room });
+  bindQueueOutcomes(room, ingress, () => {});
+  const now = Date.now(), tag = 'synthetic-dispatch-tag';
+  const item = room.queueAdd('Synthetic offline task', null, 'shared',
+    { kind: 'secretary', name: 'Synthetic steward', sessionId: 'steward' }, 'steward');
+  room.queueMarkSent('shared', item, f.s.id, 'Synthetic member', now - 30000);
+  room.queueSetDelivery('shared', item, tag, 0);
+  f.s.messages.unshift({ id: tag, role: 'user', text: 'Synthetic offline task', origin: 'naw-dispatch', time: now - 30000 });
+  Object.assign(f.s, { name: 'Synthetic member', roomIds: ['shared'], roomId: 'shared', createdAt: now - 3600000 });
+  f.fail(cause === 'capacity' ? {} : { errorRowUnclassified: true }); f.stop();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);
+    await new Promise(resolve => setImmediate(resolve));
+    nextFailure(f, status);
+  }
+  const member = f.w.snapshot().sessions.find(s => s.id === f.s.id);
+  assert.equal(member.state, 'error');
+  assert.equal(member.capacityRecovery.status, 'exhausted');
+  assert.equal(member.capacityRecovery.attempt, 3);
+  assert.equal(f.events.length, 4, 'the runtime emitted all failed ends');
+  // Execute both actual main state listeners, including the current butler
+  // observers and room monitors; suppress only display/OS operations.
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  const start = main.indexOf("  client.on('state', data => {");
+  const end = main.indexOf("  client.on('terminal', data =>", start);
+  assert.ok(start > 0 && end > start);
+  const listeners = [], client = { on: (name, listener) => { if (name === 'state') listeners.push(listener); } };
+  require('node:vm').runInNewContext(main.slice(start, end), { client, context: { background: true },
+    win: { isDestroyed: () => false }, butlerIngress: ingress, sessionLabels: { labels: new Map() }, roomState: room,
+    broadcastRoom: async () => {}, placeOpened: async () => {}, carryGrants: async () => {} });
+  assert.equal(listeners.length, 2);
+  for (const listener of listeners) listener({ sessions: [member] });
+  const input = m => ({ rooms: [{ ...room.metadata(), id: 'shared' }], sessions: [m], wakePolicy: { enabled: true },
+    idleSince: new Map([[m.id, Date.now() - 60000]]), now: Date.now() });
+  const actions = rules.planDispatch(input(member));
+  for (const action of actions.filter(a => a.kind === 'settle' && a.itemId === item))
+    room.queueSettle('shared', item, action.status, action.reason || '', 'Synthetic member', action.reply || '', action.question, action.ready, action.reportTitle);
+  const failures = ingress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure');
+  const beforeControl = { state: member.state, recovery: member.capacityRecovery, runtimeFailedEnds: f.events.length,
+    actions, itemStatus: room.queueFind('shared', item).status, butlerFailures: failures.length };
+  // Positive control exercises the production queue-outcome callback directly;
+  // it is separate from the exhausted member and does not count as its event.
+  const control = { status: 'failed', reason: 'synthetic-positive-control' };
+  // A separate ledger keeps this independent positive control from adding a
+  // second failure to the actual exhaustion result once the defect is fixed.
+  const controlDir = path.join(f.dir, 'positive-control'); fs.mkdirSync(controlDir, { mode: 0o700 });
+  const controlRoom = new RoomState(controlDir), controlIngress = new ButlerIngress(controlDir, { roomState: controlRoom });
+  bindQueueOutcomes(controlRoom, controlIngress, () => {});
+  const controlItem = controlRoom.queueAdd('Synthetic positive control', null, 'shared');
+  controlRoom.queueMarkSent('shared', controlItem, f.s.id, 'Synthetic member', now);
+  controlRoom.queueSettle('shared', controlItem, control.status, control.reason, 'Synthetic member', '');
+  assert.equal(controlIngress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 1);
+  console.log(JSON.stringify({ actual: beforeControl, positiveControl: { reason: control.reason, butlerFailures: 1 } }));
+  assert.equal(failures.length, 1, 'retry exhaustion must reach the butler failure ledger');
+  assert.deepEqual(failures[0].payload, { memberId: f.s.id, reason: `${cause}-retry-exhausted` });
+  assert.equal(room.queueFind('shared', item).status, 'sent', 'The failure fact does not silently cancel or replay the task');
+  for (const listener of listeners) listener({ sessions: [member] });
+  assert.equal(ingress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 1, 'Repeated live snapshots are one episode');
+});
+
+for (const [cause, rowChange, status] of [['connection', connectionRow, null], ['capacity', {}, 529], ['forbidden', refusedRow, 403]])
+for (const boundary of ['draft', 'input', 'native-id', 'takeover', 'member-change'])
+test('exhausted ' + cause + ' is not exported as a fresh failure after ' + boundary, async t => {
+  const { RoomState } = require('../room-state.cjs'), { ButlerIngress } = require('../butler-ingress.cjs');
+  const f = capacityWorkspace(t, undefined, rowChange); f.fail(); f.stop();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);
+    await new Promise(resolve => setImmediate(resolve)); nextFailure(f, status);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id)?.status, 'exhausted');
+  if (boundary === 'draft') f.w.setDraft(f.s.id, 'Unsent private words', 'window');
+  if (boundary === 'input') f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: randomUUID(), prompt: 'Different task' });
+  if (boundary === 'native-id') f.s.nativeId = randomUUID();
+  if (boundary === 'takeover') f.w.claim(f.s.id, 'other-window');
+  if (boundary === 'member-change') f.w.join(f.s.id, true);
+  const member = f.w.snapshot().sessions.find(s => s.id === f.s.id);
+  assert.equal(member.capacityRecovery, null, 'A stale exhausted episode is not a current failure fact');
+  const room = new RoomState(f.dir), ingress = new ButlerIngress(f.dir, { roomState: room });
+  ingress.observeRecoveryFailures([member]);
+  assert.equal(ingress.ledger.eventsAfter(null).events.filter(event => event.kind === 'failure').length, 0);
+  assert.equal(f.sent.length, 3, 'No fourth retry or replay');
 });

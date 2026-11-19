@@ -410,7 +410,7 @@ function notifyCapacity(snapshot, win) {
         s.approval || s.approvalOverflow || s.claudeQuestion || s.nativeApproval || s.nativeInputRequired ||
         !['idle', 'error'].includes(s.state) || recovery?.nativeId !== s.nativeId ||
         typeof recovery.turnId !== 'string' || !recovery.turnId || recovery.status !== 'exhausted' ||
-        recovery.attempt !== 3 || !['capacity', 'routing', 'forbidden'].includes(recovery.reason)) continue;
+        recovery.attempt !== 3 || !['capacity', 'routing', 'forbidden', 'connection'].includes(recovery.reason)) continue;
     const key = JSON.stringify([recovery.nativeId, recovery.turnId]);
     let notices = capacityNotifications.get(s.id);
     if (!notices) capacityNotifications.set(s.id, notices = { seen: new Set(), active: new Set() });
@@ -865,6 +865,7 @@ function bindClient(context) {
     // Each writer on its own: one that cannot write neither stops the other nor holds state.
     try { butlerIngress?.observeTerminalDialogs(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeNativeQuestions(data?.sessions); } catch { /* Retried on the next state. */ }
+    try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
     const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });
     if (wrote.some(Boolean)) broadcastRoom().catch(() => {});
     if (!context.background) placeOpened(client, data).catch(() => {});

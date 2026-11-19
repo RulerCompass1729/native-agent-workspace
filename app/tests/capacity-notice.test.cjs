@@ -50,12 +50,16 @@ function status(row, badge = true, connected = true, language = 'zh') {
     { ui: { language: { text: (key, params) => locale.format(language, key, params) } }, window: { workspace: {}, nativeWorkspaceFleet: require('../renderer/fleet-observation.js') }, row, badge, connected });
 }
 test('the actual recovery descriptor carries only its failed native identity and existing facts', () => {
-  const value = { ...record().capacityRecovery, runtime: { private: true }, owner: 'window' };
+  const runtime = { private: true }, session = { ...record(), provider: 'codex', owner: 'window' };
+  const value = { ...session.capacityRecovery, runtime, owner: 'window', draft: 0 };
   const w = Object.create(Workspace.prototype); w.capacityRecoveries = new Map([['synthetic-a', value]]);
+  w.sessions = new Map([[session.id, session]]); w.runtimes = new Map([[session.id, runtime]]);
+  w.drafts = new Map(); w.draftRevisions = new Map([[session.id, 0]]);
   const actual = w.capacityStatus('synthetic-a');
   assert.equal(actual.nativeId, value.nativeId); assert.equal(actual.turnId, value.turnId);
   assert.deepEqual(Object.keys(actual).sort(), ['attempt', 'due', 'nativeId', 'reason', 'status', 'turnId']);
   assert.equal(w.capacityStatus('missing'), null);
+  session.nativeId = 'replacement'; assert.equal(w.capacityStatus(session.id), null);
 });
 test('actual state and initial wiring notify each exhausted native episode once, including delayed repeats', async () => {
   const h = harness(), first = record(), before = JSON.stringify(first);
@@ -144,12 +148,13 @@ test('capacity notices localize only owned labels without changing raw recovery 
   }
 });
 
-test('a refused request (403) at its limit is notified and badged like the other causes, in its own words', () => {
+for (const reason of ['forbidden', 'connection'])
+test(`${reason} at its limit is notified and badged like the other causes, in its own words`, () => {
   for (const language of ['zh', 'en']) {
-    const row = record({ capacityRecovery: { ...record().capacityRecovery, reason: 'forbidden' } }), h = harness(language); h.fire([row]);
+    const row = record({ capacityRecovery: { ...record().capacityRecovery, reason } }), h = harness(language); h.fire([row]);
     assert.deepEqual(h.delivered.map(value => ({ ...value })), [{ title: locale.format(language, 'os.capacityTitle'), body: locale.format(language, 'os.capacityBody') }]);
     const refused = status(row, true, true, language);
-    assert.ok(refused.endsWith(locale.format(language, 'capacityBadge.forbiddenStopped') + locale.format(language, 'capacityBadge.retried', { count: 3 })));
+    assert.ok(refused.endsWith(locale.format(language, `capacityBadge.${reason}Stopped`) + locale.format(language, 'capacityBadge.retried', { count: 3 })));
     assert.ok(!refused.includes(locale.format(language, 'capacityBadge.capacityStopped')));
     assert.equal(status(row, false, true, language), status(record(), false, true, language), 'Only the opt-in badge differs by cause');
   }

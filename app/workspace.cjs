@@ -66,11 +66,12 @@ const spliceSaved = (json, text) => {
 // Every persist(), and a timed checkpoint at least this often, serialises all messages again.
 const SAVE_ALL_MS = 30 * 1000;
 // Why a failed native turn is continued automatically: the suffix of its notice keys and the opening of its
-// collaboration pause. All three share one timer, one limit and the same cancellations.
+// collaboration pause. All reasons share one timer, one limit and the same cancellations.
 const RECOVERY_REASONS = Object.freeze({
   capacity: { key: 'Capacity', pause: '模型满载' },
   routing: { key: 'Routing', pause: '路由发现超时' },
   forbidden: { key: 'Forbidden', pause: '请求被拒绝（403）后' },
+  connection: { key: 'Connection', pause: '连接失败后' },
 });
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
@@ -607,6 +608,10 @@ class Workspace extends EventEmitter {
   // restored from history or disk, and the original task is never replayed.
   capacityStatus(id) {
     const r = this.capacityRecoveries.get(id);
+    if (r?.status === 'exhausted') {
+      const s = this.sessions.get(id);
+      if (!s || !this.capacityValid(s, r)) return null;
+    }
     return r ? { status: r.status, attempt: r.attempt, due: r.due, reason: r.reason, nativeId: r.nativeId, turnId: r.turnId } : null;
   }
   tickToolWait() {
@@ -861,9 +866,10 @@ class Workspace extends EventEmitter {
       const codexVersion = runtime.host?.rpc?.nativeVersion;
       const qualified = s.provider === 'codex' ? require('./codex-qualification.cjs').allows('capacity', codexVersion) : s.provider === 'claude' && runtime.nativeCapacityAvailable && !runtime.retainedReader;
       // Other is broad: admit only the observed native routing timeout verbatim.
-      // A refused request (typed HTTP 403) is Claude's own cause; a Codex error kind never arms it.
+      // Typed refusal/connection causes belong to Claude; a Codex error kind never arms them.
       const reason = info.errorInfo === 'serverOverloaded' ? 'capacity' : s.provider === 'codex' && info.errorInfo === 'other' && info.errorMessage === 'workspace routing discovery timed out' ? 'routing'
-        : s.provider === 'claude' && info.errorInfo === 'requestForbidden' ? 'forbidden' : null;
+        : s.provider === 'claude' && info.errorInfo === 'requestForbidden' ? 'forbidden'
+        : s.provider === 'claude' && info.errorInfo === 'connectionFailed' ? 'connection' : null;
       if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);
       else this.cancelCapacity(s.id);
     });

@@ -464,7 +464,7 @@ test('an explicitly owned system error body switches its bound causes while reta
 });
 
 
-for (const [key, label] of [['notice.capacityAutoContinueRouting', ''], ['notice.capacityAutoContinueForbidden', ': refused request (403)']])
+for (const [key, label] of [['notice.capacityAutoContinueRouting', ''], ['notice.capacityAutoContinueForbidden', ': refused request (403)'], ['notice.capacityAutoContinueConnection', ': connection failure']])
 test('an own automatic-continuation clock formats from the original recorded instant and copies only the visible language' + label, async () => {
   const time = new Date(2026, 8, 6, 19, 5).getTime(), rawClock = new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const own = locale.createNotice(key, { time: rawClock, attempt: 2 });
