@@ -341,9 +341,20 @@
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
     }
     el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId, queued = ['queue', 'queueMidturn'].includes(client.state.row?.sendMode);
+      const generation = client.state.authorization, deviceId = client.state.session?.deviceId, scroll = global.scrollY;
       const before = new Set(client.state.pending.map(p => p.requestId)); await client.send();
+      if (generation !== client.state.authorization || deviceId !== client.state.session?.deviceId) return;
       // The result of this click only, found by its own request id, not the last row or the current page.
-      const mine = client.state.pending.find(p => p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = queued && status === 'awaiting-native' ? 'queuedToast' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
+      const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = queued && status === 'awaiting-native' ? 'queuedToast' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
+      if (status === 'submitted' && view?.sessions.some(s => s.id === sessionId) && route?.page === 'chat' && route.id === sessionId && client.state.selected === sessionId) {
+        // Render only a confirmed receipt; the next workspace snapshot replaces this transient row.
+        const follow = global.scrollY === scroll;
+        view = { ...view, sessions: view.sessions.map(s => s.id === sessionId ? { ...s, messages: [...(s.messages || []), {
+          id: 'mobile-receipt:' + mine.requestId, role: 'user', text: mine.text, time: Date.now(), status: 'submitted',
+        }] } : s) };
+        paint();
+        if (follow) el('content').querySelector('.thread')?.lastElementChild?.scrollIntoView({ block: 'center' });
+      }
       if (route?.page === 'chat' && route.id === sessionId) toast(key); else toast(name + ' · ' + t(key)); await refresh(); }); });
     function paint() {
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
