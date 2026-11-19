@@ -10,7 +10,8 @@ let browser;
 async function scene(lang) {
   const context = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' }), page = await context.newPage();
   const sessions = ['a', 'b'].map(id => ({ id, name: 'Synthetic ' + id, provider: 'claude', state: 'idle', available: true, actions: ['read', 'send'] }));
-  let generation = 0, hold = false, releaseNative, releaseWorkspace, message = null;
+  let generation = 0, hold = false, releaseNative, releaseWorkspace;
+  const messages = [];
   const posted = [], held = [];
   page.on('pageerror', e => errors.push(e.message));
   await context.route('**/*', async route => {
@@ -22,11 +23,11 @@ async function scene(lang) {
     else if (url.pathname === '/mobile/send') {
       const value = request.postDataJSON(); posted.push(value);
       const status = await new Promise(resolve => { releaseNative = resolve; });
-      hold = true; if (status === 'submitted') message = value.text;
+      hold = true; if (status === 'submitted') messages.push({ id: value.requestId, role: 'user', text: value.text, time: 1 });
       data = { requestId: value.requestId, sessionId: 'a', action: 'send', status };
     } else if (url.pathname === '/mobile/workspace') {
+      data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'a' ? [...messages] : [] })), rooms: [], confirmations: [], reminders: { count: 0, records: [] }, capabilities: { push: false }, syncedAt: 1 };
       if (hold) { held.push(route); await new Promise(resolve => { releaseWorkspace = resolve; }); }
-      data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'a' && message ? [{ id: 'native-original', role: 'user', text: message, time: 1 }] : [] })), rooms: [], confirmations: [], reminders: { count: 0, records: [] }, capabilities: { push: false }, syncedAt: 1 };
     }
     if (data) return route.fulfill({ json: data }).catch(() => {});
     const name = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice('/mobile/'.length);
@@ -65,6 +66,19 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         check(status + ' never becomes a confirmed input bubble', await count(s.page) === 0);
         check(status + ' preserves draft', await s.page.locator('#message').inputValue() === 'SYNTHETIC_ORIGINAL');
         check(status + ' never retries', s.posted.length === 1);
+      } finally { await s.close(); }
+    }
+    {
+      const s = await scene('zh');
+      try {
+        await s.send(); s.native('submitted'); await until(() => s.held.length);
+        await s.page.locator('#message').fill('SYNTHETIC_SECOND'); await s.page.locator('#send-message').tap(); await until(() => s.posted.length === 2);
+        s.native('submitted'); await until(async () => await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);
+        const response = s.page.waitForResponse(r => r.url().endsWith('/mobile/workspace')); await s.release(); await (await response).finished(); await wait(100);
+        check('older full snapshot cannot remove a newer confirmed input', await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);
+        await s.page.locator('#connection button').click(); await s.page.locator('.thread time[datetime="1970-01-01T00:00:00.001Z"]').first().waitFor();
+        check('later native snapshot replaces both transient rows', await count(s.page) === 1 && await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);
+        check('two explicit sends use exactly two distinct requests', s.posted.length === 2 && s.posted[0].requestId !== s.posted[1].requestId);
       } finally { await s.close(); }
     }
     {

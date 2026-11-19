@@ -340,6 +340,7 @@
       el('compose-note').textContent = t(note);
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
     }
+    let acknowledgedMessages = 0;
     el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId, queued = ['queue', 'queueMidturn'].includes(client.state.row?.sendMode);
       const generation = client.state.authorization, deviceId = client.state.session?.deviceId, scroll = global.scrollY;
       const before = new Set(client.state.pending.map(p => p.requestId)); await client.send();
@@ -348,6 +349,7 @@
       const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = queued && status === 'awaiting-native' ? 'queuedToast' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
       if (status === 'submitted' && view?.sessions.some(s => s.id === sessionId) && route?.page === 'chat' && route.id === sessionId && client.state.selected === sessionId) {
         // Render only a confirmed receipt; the next workspace snapshot replaces this transient row.
+        acknowledgedMessages++;
         const follow = global.scrollY === scroll;
         view = { ...view, sessions: view.sessions.map(s => s.id === sessionId ? { ...s, messages: [...(s.messages || []), {
           id: 'mobile-receipt:' + mine.requestId, role: 'user', text: mine.text, time: Date.now(), status: 'submitted',
@@ -373,13 +375,13 @@
       ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)(); updateCompose();
     }
     async function refresh() {
-      if (busy) return; busy = true; const ticket = ++epoch, generation = client.state.authorization;
+      if (busy) return; busy = true; const ticket = ++epoch, generation = client.state.authorization, acknowledged = acknowledgedMessages;
       try { await client.start(); if (!locked && client.state.session) await client.refresh(); if (locked || !client.state.session) { view = null; return; }
         if(client.state.session.candidate){view=null;return;}
         const next = client.state.session.workspace ? await api('/mobile/workspace') : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
-        if (ticket !== epoch) return; view = next; lastReceived = global.performance.now();
+        if (ticket !== epoch || acknowledged !== acknowledgedMessages) return; view = next; lastReceived = global.performance.now();
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
       } catch { if (generation === client.state.authorization && ticket === epoch) { disconnected = true; toast('offline'); } } finally { if (ticket === epoch) { busy = false; paint(); } }
     }
