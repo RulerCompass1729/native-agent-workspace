@@ -7,6 +7,7 @@ const workers = require('./test-discoveries-bundle.cjs');
 const { literalLists } = require('./runtime-closure-source.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const refusal = reason => Object.assign(new Error(reason), { installStateReason: reason });
+const terminalRefusal = reason => Object.assign(refusal(reason), { installStateFatal: true });
 const invoke = (file, args, timeout = 1000) => execFileSync(file, args, { encoding: 'utf8', timeout, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 const identityFiles = ['daemon.cjs', 'adapters.cjs', 'codex-terminal-bridge.cjs', 'workspace.cjs'];
 function safePath(input) {
@@ -148,14 +149,18 @@ function processInfo(pid) {
   if (!started || !path.isAbsolute(executable)) throw refusal('Process identity unavailable');
   return { pid, started, executable };
 }
-function backendState(profile, target) {
+function backendState(profile, target, version = {}, fresh = false) {
+  if (version.failure) throw version.failure;
   const layout = json(path.join(profile, 'services.json')), key = layout.active;
   if (layout.format !== 1 || !/^backends\/[a-f0-9]{20}$/.test(key) || !Array.isArray(layout.entries) || !layout.entries.includes(key) || layout.pending) throw refusal('Active backend layout unconfirmed');
   const directory = path.join(profile, key);
   if (safePath(directory) !== directory) throw refusal('Backend directory linked');
   const lock = json(path.join(directory, 'service.lock'));
   if (lock.format !== 1 || lock.kind !== 'service' || lock.directory !== directory) throw refusal('Backend ownership unconfirmed');
+  const changed = value => version.owner && (value.pid !== version.owner.pid || value.started !== version.owner.started);
+  if (changed(lock)) throw version.failure = terminalRefusal('Backend process changed');
   const owner = processInfo(lock.pid);
+  if (changed(owner)) throw version.failure = terminalRefusal('Backend process changed');
   if (owner.started !== lock.started || owner.executable !== target.executable) throw refusal('Backend process mismatch');
   const command = invoke('/bin/ps', ['-ww', '-p', String(lock.pid), '-o', 'command=']).trim();
   const suffix = ' ' + directory;
@@ -179,28 +184,35 @@ function backendState(profile, target) {
   const runtimeHash = liveHash.digest('hex').slice(0, 16);
   if (path.basename(runtime) !== runtimeHash || runtimeHash !== closure.hash) throw refusal('Runtime closure hash unconfirmed');
   // Slot names survive reuse; only the verified live daemon can report its version.
-  let receipt;
-  try {
-    receipt = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'install-backend-version.cjs'), directory], {
-      encoding: 'utf8', timeout: 6000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'], env: { ELECTRON_RUN_AS_NODE: '1' },
-    }));
-  } catch { throw refusal('Backend version unconfirmed'); }
+  let receipt = version.receipt;
+  if (!receipt || fresh) {
+    if ((version.queries || 0) >= (fresh ? 2 : 1)) throw version.failure = terminalRefusal('Backend version query limit');
+    version.owner ||= { pid: owner.pid, started: owner.started };
+    version.queries = (version.queries || 0) + 1;
+    try {
+      receipt = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'install-backend-version.cjs'), directory], {
+        encoding: 'utf8', timeout: 6000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'], env: { ELECTRON_RUN_AS_NODE: '1' },
+      }));
+    } catch { throw version.failure = terminalRefusal('Backend version unconfirmed'); }
+  }
   if (!receipt || Object.keys(receipt).sort().join(',') !== 'runtimeVersion,servicePid' || receipt.servicePid !== owner.pid ||
-      typeof receipt.runtimeVersion !== 'string' || !receipt.runtimeVersion || receipt.runtimeVersion !== target.version) throw refusal('Backend version unconfirmed');
+      typeof receipt.runtimeVersion !== 'string' || !receipt.runtimeVersion || receipt.runtimeVersion !== target.version) throw version.failure = terminalRefusal('Backend version unconfirmed');
   const current = processInfo(lock.pid), latest = json(path.join(directory, 'service.lock'));
   if (current.started !== owner.started || current.executable !== owner.executable ||
       invoke('/bin/ps', ['-ww', '-p', String(lock.pid), '-o', 'command=']).trim() !== command ||
-      JSON.stringify(latest) !== JSON.stringify(lock) || JSON.stringify(json(path.join(profile, 'services.json'))) !== JSON.stringify(layout)) throw refusal('Backend process changed');
+      JSON.stringify(latest) !== JSON.stringify(lock) || JSON.stringify(json(path.join(profile, 'services.json'))) !== JSON.stringify(layout)) throw version.failure = terminalRefusal('Backend process changed');
+  version.receipt = receipt;
   return { key, pid: owner.pid, started: owner.started, version: receipt.runtimeVersion, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
 }
 function collector(options, helper, target) {
-  return () => {
+  const version = {};
+  return (fresh = false) => {
     const gui = processInfo(options.pid);
     if (gui.executable !== target.executable) throw refusal('GUI executable mismatch');
     const views = projectViews(json(path.join(options.profile, 'views.json')));
     const windows = projectWindows(JSON.parse(invoke('/usr/bin/osascript', ['-l', 'JavaScript', helper, String(options.pid)], 3000)));
     if (!windows.length) throw refusal('No GUI window metadata; unlock or verify the explicit PID, do not request permissions');
-    const backend = backendState(options.profile, target);
+    const backend = backendState(options.profile, target, version, fresh);
     return { profile: options.profile, gui, views, windows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
   };
 }
@@ -208,7 +220,7 @@ async function stable(collect, { timeoutMs = 60000, minimumMs = 20000, quietMs =
   const start = now(); let previous, unchanged = start, lastReason = 'none';
   while (now() - start <= timeoutMs) {
     let state;
-    try { state = collect(); } catch (error) { lastReason = error.installStateReason || 'metadata-unavailable'; previous = undefined; unchanged = now(); await sleep(intervalMs); continue; }
+    try { state = collect(); } catch (error) { if (error.installStateFatal) throw error; lastReason = error.installStateReason || 'metadata-unavailable'; previous = undefined; unchanged = now(); await sleep(intervalMs); continue; }
     const signature = JSON.stringify(state);
     if (signature !== previous) { previous = signature; unchanged = now(); }
     if (now() - start >= minimumMs && now() - unchanged >= quietMs) return state;
@@ -280,7 +292,7 @@ async function main(argv = process.argv.slice(2)) {
     if (before.format !== 1 || !Number.isFinite(age) || age < 0 || age > 6 * 3600000) throw refusal('Unsupported or stale snapshot');
     let dsh, dshKey;
     const result = await post(before, fresh => {
-      const value = collect();
+      const value = collect(fresh);
       if (fresh || dshKey !== value.backend.key || dsh?.status !== 'qualified') { dsh = dshState(value.backend.directory, target.app); dshKey = value.backend.key; }
       value.dsh = dsh; return value;
     }, expected, () => workers.run(options.bundle));
