@@ -33,15 +33,15 @@ const clean = scratch.cleanup(async () => {
   const entry = createSourceEntry({ profile, code, fixturePid: child.pid }), file = path.join(entry, 'entry.cjs');
   const prefix = `const e=require('electron');e.Notification.isSupported=()=>false;require(${JSON.stringify(path.join(code, 'app/preflight.cjs'))}).preflight=()=>({claude:true,codex:true,python:true,paths:{},configured:{}});for(const k of ['show','showInactive','focus'])e.BrowserWindow.prototype[k]=function(){};for(const k of ['showOpenDialog','showSaveDialog','showMessageBox','showOpenDialogSync','showSaveDialogSync','showMessageBoxSync'])e.dialog[k]=()=>{throw Error('OS dialog forbidden')};e.shell.openExternal=e.shell.openPath=async()=>{throw Error('External open forbidden')};
   const m=require(${JSON.stringify(path.join(code, 'app/regular-popup.cjs'))}),original=m.create;m.create=options=>{const engine=original(options),stats={source:0,selection:0,notices:[],realCalls:0};globalThis.discoveryTest={engine,stats,arm(){engine.permitted=true;engine.now=()=>new Date(2026,10,18,10).getTime();engine.readSource=async()=>{stats.source++;await new Promise(resolve=>globalThis.discoveryTest.release=resolve);return[{id:'fixture-one',title:'demo/local-notes',description:'A synthetic local-first project',url:'https://github.com/demo/local-notes'},{id:'fixture-two',title:'demo/agent-tests',description:'A synthetic agent test fixture',url:'https://github.com/demo/agent-tests'}]};engine.select=async payload=>{stats.selection++;stats.payload=payload;return{picks:[{id:'fixture-one',why:'本地优先的资料整理方式，适合你关注的离线工作流。'},{id:'fixture-two',why:'可借鉴它的合成测试思路，检查 agent 的失败恢复。'}],costMicros:1200}};engine.notify=value=>stats.notices.push(value);}};return engine;};globalThis.fetch=()=>{globalThis.discoveryTest.stats.realCalls++;throw Error('Real fetch forbidden')};`;
-  fs.writeFileSync(file, prefix + fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, `require(${JSON.stringify(path.join(code, 'app/regular-popup-transport.cjs'))}).createTransport=()=>{throw Error('Real transport forbidden in GUI')};` + prefix + fs.readFileSync(file, 'utf8'));
   app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: 'zh' }), timeout: 60000 });
   page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', route => { const u = new URL(route.request().url()); if (u.protocol === 'file:' || ['127.0.0.1', 'localhost'].includes(u.hostname)) return route.continue(); blocked.push(u.hostname); return route.abort(); });
   await page.locator('#discoveries-button').waitFor();
   check('all windows stay hidden', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(w => !w.isVisible() && !w.isFocused())));
   await page.locator('#discoveries-button').click();
-  check('production checkbox disabled and unchecked', await page.locator('#discoveries-enabled').isDisabled() && !await page.locator('#discoveries-enabled').isChecked());
-  check('production explicitly requires approval', (await page.locator('#discoveries-status').textContent()).includes('尚未获批'));
+  check('approved source starts unchecked and permits explicit opt-in', !await page.locator('#discoveries-enabled').isDisabled() && !await page.locator('#discoveries-enabled').isChecked());
+  check('production is off and outbound disclosure is visible', (await page.locator('#discoveries-status').textContent()).includes('关闭') && (await page.locator('.discoveries-privacy').textContent()).includes('DeepSeek'));
   await page.screenshot({ path: path.join(pictures, 'default-off.png'), scale: 'css' });
   await page.locator('.discoveries-dialog>header button').click();
   await app.evaluate(() => discoveryTest.arm());
@@ -86,6 +86,20 @@ const clean = scratch.cleanup(async () => {
   await page.locator('.discoveries-popup [data-label=ignore]').first().click();
   check('ignore hides card and keeps history', await page.locator('.discoveries-popup').isHidden() && await page.locator('#discoveries-badge').textContent() === '');
   await page.locator('#discoveries-button').click(); check('history retains local read and ignored flags', await page.locator('.discoveries-history [data-read=true]').count() === 1 && await page.locator('.discoveries-history [data-ignored=true]').count() === 1);
+  await app.evaluate(async () => {
+    const RegularPopup = discoveryTest.engine.constructor; let at = new Date(2026, 10, 18, 23, 59).getTime(), release;
+    const f = new RegularPopup({ store: { read: () => null, write() {} }, now: () => at, permitted: true,
+      readSource: () => new Promise(resolve => release = resolve), select: async () => { throw Error('Synthetic unknown usage'); } });
+    f.configure({ enabled: true, concern: 'tools', time: '00:00' }); const pending = f.tick(); at += 180000;
+    release([{ id: 'x', title: 'fixture', description: 'public', url: 'https://github.com/example/tool' }]); await pending;
+    discoveryTest.budgetFixture = f; discoveryTest.engine.changed(f.status(), false);
+  });
+  await page.waitForFunction(() => document.querySelector('.discoveries-run-note').textContent.startsWith('2026-11-19'));
+  check('history labels the execution budget date rather than the earlier source period', (await page.locator('.discoveries-run-note').textContent()).startsWith('2026-11-19'));
+  await app.evaluate(async () => { const f = discoveryTest.budgetFixture; await f.tick(); discoveryTest.engine.changed(f.status(), false); f.dispose(); });
+  await page.waitForFunction(() => document.querySelector('.discoveries-run-note').textContent.includes('今日因预算未确认跳过'));
+  check('history makes the unconfirmed-budget skip and reservation visible', (await page.locator('.discoveries-run-note').textContent()).includes('0.007000'));
+  await page.screenshot({ path: path.join(pictures, 'budget-unconfirmed-history.png'), scale: 'css' });
   const stats = await app.evaluate(() => discoveryTest.stats);
   check('exactly one fixture selection and count-only notification; zero real calls', stats.source === 1 && stats.selection === 1 && stats.realCalls === 0 && JSON.stringify(stats.notices) === '[{"count":2}]');
   check('selector receives no URLs or session data', Object.keys(stats.payload).sort().join() === 'candidates,concern' && stats.payload.candidates.every(c => Object.keys(c).sort().join() === 'description,id,title'));

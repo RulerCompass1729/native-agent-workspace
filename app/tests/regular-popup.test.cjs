@@ -12,16 +12,16 @@ function fixture(extra = {}) {
   return { engine, store, saved: () => saved, set: value => { at = value; }, stats: () => ({ reads, selections, notices }) };
 }
 const enable = f => f.engine.configure({ enabled: true, concern: 'Public development tools', time: '09:00' });
-test('production factory starts off and cannot enable or invoke a provider before approval', async () => {
+test('production factory starts off, offers approved opt-in and ignores caller-supplied transports', async () => {
   let calls = 0; const e = create({ store: { read: () => null, write() {} }, permitted: true, readSource: () => calls++, select: () => calls++ });
-  assert.equal(e.status().config.enabled, false); assert.equal(e.status().allowed, false);
-  assert.throws(() => e.configure({ enabled: true, concern: 'Tools', time: '09:00' }), /approval-required/);
+  assert.equal(e.status().config.enabled, false); assert.equal(e.status().allowed, true);
+  e.configure({ enabled: false, concern: 'Tools', time: '09:00' });
   await e.tick(); assert.equal(calls, 0); e.dispose();
 });
 test('an enabled fixture record cannot start production execution after a restart', async () => {
   const stored = emptyState(); stored.config = { enabled: true, concern: 'Fixture only', time: '09:00' };
   const e = create({ store: { read: () => stored, write() { assert.fail(); } } });
-  e.start(); await e.tick(); assert.equal(e.status().allowed, false); assert.equal(e.timer, null); assert.equal(e.status().runs.length, 0); e.dispose();
+  e.start(); await e.tick(); assert.equal(e.status().allowed, true); assert.equal(e.status().config.enabled, false); assert.equal(e.timer, null); assert.equal(e.status().runs.length, 0); e.dispose();
 });
 test('off means no source, selection, notification or timer', async () => {
   let timers = 0; const f = fixture({ setTimer() { timers++; } }); f.engine.start(); await f.engine.tick();

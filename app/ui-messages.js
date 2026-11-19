@@ -3,6 +3,8 @@
   const messages = {
   "zh": {
     "discoveries.title": "每日发现",
+    "discoveries.spent": "当日已确认费用 ${cost}",
+    "discoveries.reserved": "当日费用含未确认预留 ${cost}",
     "discoveries.picked": "今天替你挑了{count}项",
     "discoveries.remaining": "晚点看也在 · {count}项未读",
     "discoveries.entry": "每日发现，{count}项未读",
@@ -31,6 +33,7 @@
     "discoveries.run.source-failed": "未取得有效内容；本次未调用模型。",
     "discoveries.run.unconfirmed": "生成或花费未确认；当天暂停，不自动重试。",
     "discoveries.run.budget": "已到每日预算，本次未调用。",
+    "discoveries.run.budget-unconfirmed": "今日因预算未确认跳过；未再次请求模型。",
     "discoveries.run.daily-limit": "今天已经请求过一次，本次未调用。",
     "discoveries.run.cancelled": "设置已改变，旧结果不会展示。",
     "discoveries.run.fetching": "正在读取来源。",
@@ -3453,6 +3456,8 @@
   },
   "en": {
     "discoveries.title": "Daily discoveries",
+    "discoveries.spent": "Confirmed daily cost ${cost}",
+    "discoveries.reserved": "Daily cost includes unconfirmed reservation ${cost}",
     "discoveries.picked": "Picked {count} for you",
     "discoveries.remaining": "Here for later · {count} unread",
     "discoveries.entry": "Daily discoveries, {count} unread",
@@ -3481,6 +3486,7 @@
     "discoveries.run.source-failed": "No valid source content. No model was called.",
     "discoveries.run.unconfirmed": "Result or cost unconfirmed. Paused today without retry.",
     "discoveries.run.budget": "Daily budget reached. No call was made.",
+    "discoveries.run.budget-unconfirmed": "Skipped today because earlier cost is unconfirmed; no new model request.",
     "discoveries.run.daily-limit": "One request was already made today. No call was made.",
     "discoveries.run.cancelled": "Settings changed. The old result will not appear.",
     "discoveries.run.fetching": "Reading the source.",

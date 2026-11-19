@@ -16,8 +16,8 @@
     sourceLabel.append(make('span'), source); concernLabel.append(make('span'), concern); timeLabel.append(make('span'), time); enableLabel.append(enabled, enableText);
     for (const input of [concern, time, enabled]) input.addEventListener('input', () => { dirty = true; });
     save.type = 'submit'; form.append(sourceLabel, concernLabel, timeLabel, enableLabel, privacy, budget, save);
-    const historyTitle = make('h3'), list = make('div', 'discoveries-history'), empty = make('p');
-    dialog.append(dialogHeading, status, form, historyTitle, list, empty); host.append(popup, dialog);
+    const historyTitle = make('h3'), historyStatus = make('p', 'discoveries-run-note'), list = make('div', 'discoveries-history'), empty = make('p');
+    dialog.append(dialogHeading, status, form, historyTitle, historyStatus, list, empty); host.append(popup, dialog);
     const popupRows = new Map(), historyRows = new Map();
     async function call(action, ...args) {
       try { const value = await api.discoveries(action, ...args); if (!disposed) render(value); return value; }
@@ -50,7 +50,12 @@
     function render(value) {
       current = { ...value, popup: false }; translate();
       badge.textContent = value.unread ? String(value.unread) : ''; button.setAttribute('aria-label', f('entry', { count: value.unread })); button.title = f('entry', { count: value.unread });
-      set(status, f(value.error ? 'storage' : !value.allowed ? 'approval' : !value.config.enabled ? 'off' : value.runs[0] && value.runs[0].state !== 'ready' ? 'run.' + value.runs[0].state : 'on'));
+      const latestRun = value.runs[0], runKey = run => run.skipReason === 'usage-unconfirmed' ? 'run.budget-unconfirmed' : 'run.' + run.state;
+      set(status, f(value.error ? 'storage' : !value.allowed ? 'approval' : !value.config.enabled ? 'off' : latestRun && latestRun.state !== 'ready' ? runKey(latestRun) : 'on'));
+      historyStatus.hidden = !latestRun;
+      const total = latestRun ? value.runs.filter(r => r.budgetDay === latestRun.budgetDay).reduce((n, r) => n + r.chargedMicros, 0) : 0;
+      const uncertain = latestRun && value.runs.some(r => r.budgetDay === latestRun.budgetDay && r.attempted && r.costKnown !== true && r.state !== 'ready');
+      set(historyStatus, latestRun ? latestRun.budgetDay + ' · ' + (latestRun.state === 'ready' ? '' : f(runKey(latestRun)) + ' · ') + f(uncertain ? 'reserved' : 'spent', { cost: (total / 1000000).toFixed(6) }) : '');
       enabled.disabled = !value.allowed; enabled.setAttribute('aria-describedby', 'discoveries-status'); status.id = 'discoveries-status';
       if (!dirty) { source.value = value.source; concern.value = value.config.concern; time.value = value.config.time; enabled.checked = value.config.enabled && value.allowed; }
       const all = value.runs.flatMap(run => run.items.map(item => ({ run, item }))), latest = value.runs.find(r => r.state === 'ready' && r.items.some(i => !i.read && !i.ignored));
