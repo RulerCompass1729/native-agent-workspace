@@ -338,6 +338,8 @@ function wakeDialog(shown, wakeCalls) {
 }
 const all = node => [node, ...(node.children || []).flatMap(all)];
 const find = (dialog, test) => all(dialog).filter(test);
+// A step's line as the person reads it: what, result, and whether it stands out.
+const stepLine = row => [find(row, n => n.className === 'disclosure-title')[0].textContent, find(row, n => n.className === 'disclosure-end')[0].textContent, row.className.split(' ').includes('attention') ? 'attention' : ''];
 
 test('the person sees whether NAW wakes the butler and when it last tried, and can turn it on and off in place', async () => {
   const at = new Date(2026, 10, 13, 15, 0).getTime(), base = { current: { id: 'butler', name: 'Butler', provider: 'claude', usage: null }, entries: [], total: 0, at };
@@ -411,8 +413,8 @@ test('NAW\'s wakes of the butler are rows of the record, under NAW\'s name, with
   // In the dialog: what NAW did and whether it went out; one that did not, or whose outcome is missing, stands out.
   const calls = []; calls.answer = () => { throw Error('not called'); };
   const d = wakeDialog(shown, calls); await d.open();
-  const rows = find(d.dialog, n => n.tag === 'tr' && n.dataset.kind === 'wake');
-  assert.deepEqual(rows.map(row => [row.children[1].textContent, row.children[2].textContent, row.className]),
+  const rows = find(d.dialog, n => n.tag === 'li' && n.dataset.kind === 'wake');
+  assert.deepEqual(rows.map(stepLine),
     [['NAW 唤醒 Butler 来读新事件', '结果没有记下', 'attention'], ['NAW 唤醒 gone-ses 来读新事件', '没有发出', 'attention'], ['NAW 唤醒 Butler 来读新事件', '已发出', '']]);
 });
 
@@ -441,7 +443,7 @@ test('what the butler did with the wake switch reads as words, and the person tu
 
   const calls = []; calls.answer = () => { throw Error('not called'); };
   const d = wakeDialog(shown, calls); await d.open();
-  const rows = find(d.dialog, n => n.tag === 'tr' && n.dataset.kind && n.dataset.kind !== 'role').map(row => [row.children[1].textContent, row.children[2].textContent, row.className]);
+  const rows = find(d.dialog, n => n.tag === 'li' && n.dataset.kind && n.dataset.kind !== 'role').map(stepLine);
   assert.deepEqual(rows, [['你关掉了事件唤醒', '', ''], ['stewardWake', rows[1][1], 'attention'], ['它关掉了事件唤醒', '完成', ''], ['它读了 NAW 记下的事件', '完成', ''],
     ['它查看了唤醒设置', '完成', ''], ['它打开了事件唤醒', '完成', '']], 'an argument NAW does not know keeps the command name');
 });

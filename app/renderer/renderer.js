@@ -6134,9 +6134,11 @@ $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace
 // Space task queue: the person adds items; NAW sends each idle member its next one.
 let queueSpace = null;
 const QUEUE_FINISHED_SHOWN = 10;
+// Finished tasks shown before the latest ten, as the person goes back a page at a time; every one can be reached.
+let queueEarlier = 0;
 function openQueue(requested) {
   queueSpace = typeof requested === 'string' ? requested : spaceId;
-  queueOrder = null; queueOrderFresh = false; queueOpens += 1; queueDropping = '';
+  queueOrder = null; queueOrderFresh = false; queueOpens += 1; queueDropping = ''; queueEarlier = 0;
   queueHandoffError(null);
   $('queue-list').dataset.signature = '';
   renderQueue();
@@ -6375,7 +6377,9 @@ function queueOutcomeNode(item) {
   }
   return null;
 }
-function queueShownItems(room, keep = []) {
+// `items`: what the panel lists on opening. `back`: the earlier finished tasks the person went back to, oldest first,
+// and `hidden`: how many are earlier still.
+function queueShownItems(room, keep = [], earlier = 0) {
   const open = [];
   const finished = [];
   for (const item of room.queue || []) {
@@ -6385,9 +6389,12 @@ function queueShownItems(room, keep = []) {
       finished.push(item);
     }
   }
+  const cut = Math.max(0, finished.length - QUEUE_FINISHED_SHOWN);
   // A finished task whose delivery still waits for the person stays in the list however old it is.
-  const older = finished.slice(0, Math.max(0, finished.length - QUEUE_FINISHED_SHOWN)).filter(item => keep.includes(item.id));
-  return open.concat(older, finished.slice(-QUEUE_FINISHED_SHOWN));
+  const kept = finished.slice(0, cut).filter(item => keep.includes(item.id));
+  const before = finished.slice(0, cut).filter(item => !keep.includes(item.id));
+  const back = before.slice(Math.max(0, before.length - earlier));
+  return { items: open.concat(kept, finished.slice(cut)), back, hidden: before.length - back.length };
 }
 function queueRow(item, memberIds) {
   const row = node('div', undefined, 'queue-row');
@@ -6400,7 +6407,7 @@ function queueRow(item, memberIds) {
   // The butler's own items say so (steward step 2, batch 4); the creator form stays what older builds read.
   const creatorKey = item.addedBy === 'steward' && creator?.kind === 'secretary' ? 'queue.creator.steward' : creator?.kind === 'secretary' ? 'queue.creator.secretary' : creator?.kind === 'person' ? 'queue.creator.person' : 'queue.creator.unknown';
   const creatorParams = creator?.kind === 'secretary' ? { name: creator.name, sessionId: creator.sessionId } : undefined;
-  body.append(uiNode('div', creatorKey, creatorParams, 'queue-creator quiet'), node('div', text));
+  body.append(uiNode('div', creatorKey, creatorParams, 'queue-creator quiet'), text === item.text ? node('div', text) : queueWholeText(item, text));
   let name = '';
   const memberId = item.sentTo || item.assignee;
   if (memberId) {
@@ -6460,6 +6467,18 @@ function queueRow(item, memberIds) {
   }
   return row;
 }
+// A long task lists its beginning and opens in place to all of it; it stays open while the panel redraws.
+const queueOpenText = new Set();
+function queueWholeText(item, start) {
+  const whole = node('details', undefined, 'queue-text-whole');
+  whole.append(node('summary', start), node('div', item.text));
+  whole.open = queueOpenText.has(item.id);
+  whole.addEventListener('toggle', () => {
+    if (whole.open) queueOpenText.add(item.id);
+    else queueOpenText.delete(item.id);
+  });
+  return whole;
+}
 function renderQueue() {
   if (!queueSpace) return;
   const room = spaceRecord(queueSpace);
@@ -6517,7 +6536,8 @@ function renderQueue() {
   const handoff = queueHandoffModel(queueSpace);
   // (Only a window that shows handoffs ever remembers a press; elsewhere this line does nothing.)
   if (queueDropping) queueDropping = handoff ? window.nativeWorkspaceHandoffQueue.pressed(handoff, queueDropping) : '';
-  const items = queueShownItems(room, handoff ? handoff.keep : []);
+  const shown = queueShownItems(room, handoff ? handoff.keep : [], queueEarlier);
+  const items = shown.items;
   // What needs the person comes first when the panel opens; while it stays open nothing changes place.
   // The places are kept as soon as a view read after the opening is here, also when it shows nothing new.
   let placed = null;
@@ -6528,7 +6548,7 @@ function renderQueue() {
     if (queueOrderFresh && handoffView.failed !== true) queueOrder = placed;
   }
   const list = $('queue-list');
-  const signature = JSON.stringify(handoff ? [items, memberSignature, needUpdate, handoff, disconnected, placed] : [items, memberSignature, needUpdate]);
+  const signature = JSON.stringify(handoff ? [items, shown.back, shown.hidden, memberSignature, needUpdate, handoff, disconnected, placed] : [items, shown.back, shown.hidden, memberSignature, needUpdate]);
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   renderQueueHandoff(handoff ? handoff.block : null);
@@ -6547,11 +6567,43 @@ function renderQueue() {
     }
     rows.sort((a, b) => placed.indexOf(a.dataset.queueItem) - placed.indexOf(b.dataset.queueItem));
   }
+  if (shown.back.length || shown.hidden) queueEarlierRows(shown, rows, memberIds, handoff, (room.queue || []).length);
+  else if (queuePager) queuePager.status.hidden = true;
   list.replaceChildren(...rows);
   restoreQueueAnswerFocus(answering);
   if (!rows.length) {
     list.append(uiNode('p', 'queue.empty', undefined, 'quiet'));
   }
+}
+// Earlier finished tasks go above the latest finished ones, under the button that brings the next ones; after a press
+// keyboard and screen reader go on from the first task that appeared. One button and one count for the panel: the
+// count stays in place outside the list, so a screen reader reads it out when it changes.
+let queuePager = null;
+let queueBackShown = new Set();
+function queueEarlierRows(shown, rows, memberIds, handoff, total) {
+  const back = shown.back.map(item => {
+    const row = queueRow(item, memberIds);
+    if (handoff) queueHandoffRow(row, handoff.rows[item.id]);
+    row.setAttribute('tabindex', '-1');
+    return row;
+  });
+  queueBackShown = new Set(shown.back.map(item => item.id));
+  if (!queuePager) {
+    queuePager = window.nativeWorkspaceDisclosure.pager({ document, say: (el, key, params) => ui.display.text(el, key, params), onMore: () => {
+      const before = queueBackShown;
+      queueEarlier += QUEUE_FINISHED_SHOWN;
+      renderQueue();
+      const first = [...$('queue-list').querySelectorAll('.queue-row')].find(row => row.hasAttribute('tabindex') && !before.has(row.dataset.queueItem));
+      if (first) first.focus();
+    } });
+  }
+  const list = $('queue-list');
+  if (queuePager.status.parentElement !== list.parentElement) list.after(queuePager.status);
+  queuePager.status.hidden = false;
+  queuePager.show({ count: Math.min(QUEUE_FINISHED_SHOWN, shown.hidden), total, shown: shown.items.length + back.length });
+  const latest = new Set(shown.items.slice(-QUEUE_FINISHED_SHOWN).map(item => item.id));
+  const at = rows.findIndex(row => latest.has(row.dataset.queueItem));
+  rows.splice(at < 0 ? rows.length : at, 0, queuePager.button, ...back);
 }
 // The sessions behind one continuing conversation, oldest first, with their ids.
 function renderRotationChains() {

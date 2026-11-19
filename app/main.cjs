@@ -2067,7 +2067,8 @@ async function boot() {
   applicationHandlers.delete('records');
   // 「大管家的记录」: the person's window only, never an agent command (removed from the agent catalog below), so the
   // butler cannot read or shape its own record through NAW.
-  register('stewardRecord', async c => {
+  // `request.limit`: how many of the latest steps the dialog lists now; it asks for more as the person goes back.
+  register('stewardRecord', async (c, request = null) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.stewardRecord.personOnly');
     // One that could not be opened is the bell's to explain; one that stopped taking lines still shows what it holds.
     if (!stewardRecord || stewardRecord.loadError) throw uiError('error.stewardRecord.unavailable');
@@ -2093,7 +2094,8 @@ async function boot() {
     };
     // NAW's switch for waking the butler, shown with the record so the person sees it and can turn it off.
     let wake = null; try { wake = stewardWake ? stewardWake.view() : null; } catch { wake = null; }
-    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf, wake });
+    const limit = request && typeof request === 'object' ? request.limit : undefined;
+    return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf, wake, limit });
   });
   applicationHandlers.delete('stewardRecord');
   register('queueSecretary', async (c, id) => {

@@ -255,7 +255,8 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     for (const row of s?.messages || []) {
       const wake = row.wake;
       if (!wake || wake.senderId !== period.session.id || wake.nativeId !== period.session.nativeId || !Number.isSafeInteger(wake.time) || wake.time < period.from || (period.to !== null && wake.time >= period.to)) continue;
-      entries.push({ at: wake.time, kind: 'message', target: nameOf(wake.recipientId), ...archived(wake.recipientId), text: cut(wake.body), state: typeof wake.status === 'string' ? wake.status : null });
+      // Whole: the dialog lists it on one line and opens it in place to all of it.
+      entries.push({ at: wake.time, kind: 'message', target: nameOf(wake.recipientId), ...archived(wake.recipientId), text: typeof wake.body === 'string' ? wake.body : null, state: typeof wake.status === 'string' ? wake.status : null });
     }
   }
   entries.sort((a, b) => b.at - a.at);
@@ -267,7 +268,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
   return { current: s ? { id: s.id, name: s.name, provider: s.provider, usage: s.usage || null } : current ? { id: current.sessionId, name: null, provider: null, usage: null } : null,
     waiting: held.length ? { count: held.length, since: Math.min(...held) } : null,
     wake: wake && typeof wake.on === 'boolean' ? { on: wake.on, at: Number.isSafeInteger(wake.at) ? wake.at : null, failed: wake.failed === true } : null,
-    total: entries.length, entries: entries.slice(0, limit), at: now, writeFailed: record.failed && !record.loadError };
+    total: entries.length, entries: entries.slice(0, Number.isSafeInteger(limit) && limit > 0 ? limit : 300), at: now, writeFailed: record.failed && !record.loadError };
 }
 
 module.exports = Object.freeze({ RECORD, ARGUMENTS_MAX, check, argumentsOf, outcomeOf, StewardRecord, cachedSteward, view });

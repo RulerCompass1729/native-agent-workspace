@@ -174,7 +174,7 @@ async function stewardFixture(t, steps) {
   dialog.id = 'steward-record-dialog';
   const l = localeUI();
   const shown = bind({ dialog, document: { createElement: tag => new El(tag), createTextNode: text => new Text(text) }, api, text: l.uiText, display: l.ui.display });
-  return { dialog, shown, marks, asked };
+  return { dialog, shown, marks, asked, api };
 }
 
 test('every step in the butler\'s record can be reached in its dialog, the earliest included', async t => {
@@ -213,7 +213,7 @@ function queueFixture(items, { handoff = null } = {}) {
   };
   const context = vm.createContext({
     ...l, $, document, state, api, structuredClone, setTimeout, clearTimeout, console,
-    window: { nativeWorkspaceHandoffQueue: handoffQueue, nativeWorkspaceSpaces: spaces },
+    window: { nativeWorkspaceHandoffQueue: handoffQueue, nativeWorkspaceSpaces: spaces, nativeWorkspaceDisclosure: require('../renderer/disclosure-list.js') },
     node: (tag, text, cls) => new El(tag, text, cls),
     button: (text, action, cls) => { const el = new El('button', text, cls); el.onclick = action; return el; },
     spaceId: 'shared', disconnected: false, spaceName: value => value?.name, spaceRecord: id => state.rooms.find(r => r.id === id), allSpaces: () => state.rooms,
@@ -281,4 +281,113 @@ test('a task left for the person to look at is listed when the queue opens, howe
   const rows = queueRows(f), screen = onScreen(f.root);
   assert.ok(rows.includes('old-returned') && screen.includes('[QKEEP]'), 'a finished task whose delivery waits for the person is listed without pressing anything');
   assert.ok(rows.includes('old-look') && screen.includes('[QLOOK]'), 'a task left for the person to look at is listed without pressing anything');
+});
+
+// The approved defaults (the person, 2026-11-19 09:3x: 「渐进式的 UI 改动看着可以,继续」): 15 lines a page in the
+// butler's record and 10 finished tasks in the queue, the button says how many come and how many in all, the count is
+// read out (role=status), and focus goes on from the first item that appeared.
+test('the butler\'s record opens on its latest 15 steps, and each press brings 15 earlier ones, focus on the first of them', async t => {
+  const f = await stewardFixture(t, 40);
+  const { total } = await f.api.stewardRecord({ limit: 1 });
+  f.asked.length = 0;
+  assert.ok(total >= 40 && total < 45, 'the 40 steps, and the record\'s own lines');
+  await f.shown.open();
+  const lines = () => f.dialog.querySelectorAll('li.disclosure-item');
+  const more = f.dialog.querySelector('button.disclosure-more'), status = f.dialog.querySelector('p.disclosure-status');
+  assert.equal(lines().length, 15);
+  assert.deepEqual(f.asked, [[{ limit: 15 }]], 'NAW is asked for one page');
+  assert.ok(onScreen(lines()[0]).includes(f.marks.at(-1)), 'newest first');
+  assert.equal(more.textContent, `显示更早的 15 条 · 共 ${total} 条`);
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.textContent, `已显示 15/${total} 条`);
+  await more.click();
+  await settle();
+  assert.equal(lines().length, 30);
+  assert.deepEqual(f.asked.at(-1), [{ limit: 30 }]);
+  assert.equal(focus.active, lines()[15].querySelector('summary'), 'focus on the first step that appeared');
+  assert.ok(onScreen(focus.active).includes(f.marks[40 - 16]));
+  assert.equal(more.textContent, `显示更早的 ${Math.min(15, total - 30)} 条 · 共 ${total} 条`);
+  assert.equal(status.textContent, `已显示 30/${total} 条`);
+  await more.click();
+  await settle();
+  assert.equal(lines().length, total);
+  assert.equal(more.hidden, true, 'no button once every step is shown');
+  assert.equal(status.textContent, `已显示 ${total}/${total} 条`);
+});
+
+test('a long message the butler sent is one line in its record and opens in place to the whole of it', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reach-message-'));
+  fs.chmodSync(dir, 0o700);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let clock = Date.parse('2026-11-12T10:00:00Z');
+  const record = new StewardRecord(dir, { steward: () => butler, selected: () => butler, now: () => clock += 1000 });
+  record.designated(butler);
+  const long = '[MLONG] ' + '合成的长消息内容，'.repeat(60) + '[MEND]';
+  assert.ok(long.length > 300);
+  const snapshot = { sessions: [{ ...butlerSender, messages: [{ id: 'w', wake: { senderId: 'butler', nativeId: 'native-butler', recipientId: 'member-a', body: long, time: clock + 5000, status: 'submitted' } }] },
+    { id: 'member-a', name: '合成成员 A', messages: [] }], rooms: [] };
+  const shown = view(record, snapshot, { current: butler, now: clock + 10_000, limit: 15 });
+  assert.equal(shown.entries[0].text, long, 'NAW gives the dialog the whole message');
+  const dialog = new El('dialog');
+  const l = localeUI();
+  await bind({ dialog, document: { createElement: tag => new El(tag), createTextNode: text => new Text(text) }, api: { stewardRecord: async () => shown }, text: l.uiText, display: l.ui.display }).open();
+  const line = dialog.querySelector('li.disclosure-item');
+  const details = line.querySelector('details');
+  assert.equal(line.dataset.kind, 'message');
+  assert.equal(details.open, false, 'closed: one line');
+  assert.ok(onScreen(line).includes('[MLONG]'));
+  details.open = true;
+  await details.dispatch('toggle');
+  assert.ok(onScreen(line.querySelector('.disclosure-body')).includes(long), 'opened: the whole message');
+});
+
+test('the queue opens on its latest 10 finished tasks, and each press brings 10 earlier ones above them, focus on the first', async () => {
+  const items = Array.from({ length: 25 }, (_, i) => finishedTask(i + 1));
+  const f = queueFixture(items);
+  f.context.openQueue('shared');
+  await settle();
+  const list = f.$('queue-list');
+  const more = () => list.querySelector('button.disclosure-more'), status = () => f.root.querySelector('p.disclosure-status');
+  assert.deepEqual(queueRows(f), items.slice(-10).map(item => item.id));
+  assert.equal(more().textContent, '显示更早的 10 条 · 共 25 条');
+  assert.equal(status().getAttribute('role'), 'status');
+  assert.equal(status().textContent, '已显示 10/25 条');
+  await more().click();
+  await settle();
+  assert.deepEqual(queueRows(f), items.slice(-20).map(item => item.id), 'the earlier ten above the latest ten, in order');
+  assert.equal(focus.active?.dataset.queueItem, items.at(-20).id, 'focus on the first task that appeared');
+  assert.equal(more().textContent, '显示更早的 5 条 · 共 25 条');
+  assert.equal(status().textContent, '已显示 20/25 条');
+  await more().click();
+  await settle();
+  assert.deepEqual(queueRows(f), items.map(item => item.id));
+  assert.equal(focus.active?.dataset.queueItem, items[0].id);
+  assert.ok(!more() || more().hidden, 'no button once every task is shown');
+  assert.equal(status().textContent, '已显示 25/25 条');
+  assert.deepEqual(acted(f), [], 'looking back does nothing to any task');
+  assert.equal(f.root.querySelectorAll('p.disclosure-status').length, 1, 'one count, kept in place, read out as it changes');
+  f.context.openQueue('shared');
+  await settle();
+  assert.deepEqual(queueRows(f), items.slice(-10).map(item => item.id), 'opened again: the latest ten');
+});
+
+test('a long task is one preview line in the queue that opens in place to its whole text', async () => {
+  const long = '[QLONG] ' + '这是一段很长的合成任务说明，'.repeat(40) + '[QEND]';
+  const f = queueFixture([finishedTask(1, { text: long })]);
+  f.context.openQueue('shared');
+  await settle();
+  const whole = f.$('queue-list').querySelector('details.queue-text-whole');
+  assert.ok(whole, 'a text over the preview length is a disclosure');
+  assert.equal(whole.open, false);
+  const screen = onScreen(f.root);
+  assert.ok(screen.includes('[QLONG]') && !screen.includes('[QEND]'), 'closed: the start of it');
+  whole.open = true;
+  await whole.dispatch('toggle');
+  assert.ok(onScreen(f.root).includes(long), 'opened: all of it');
+  f.context.renderQueue();
+  assert.equal(f.$('queue-list').querySelector('details.queue-text-whole').open, true, 'it stays open when the queue is drawn again');
+  const short = queueFixture([finishedTask(1)]);
+  short.context.openQueue('shared');
+  await settle();
+  assert.equal(short.$('queue-list').querySelector('details.queue-text-whole'), null, 'a short task is plain text');
 });

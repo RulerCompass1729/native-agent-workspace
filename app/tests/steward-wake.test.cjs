@@ -419,15 +419,15 @@ test('the person turning the switch off is one line of the record; nothing else 
 // stewardRecord, the real handler): a switch that cannot be read leaves the record as it is, without the switch.
 test('the person\'s record shows how the switch stands; a switch that is missing or cannot be read leaves the record without it', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
-  const start = source.indexOf("  register('stewardRecord', async c => {"), end = source.indexOf("  applicationHandlers.delete('stewardRecord');", start);
+  const start = source.indexOf("  register('stewardRecord', async (c, request = null) => {"), end = source.indexOf("  applicationHandlers.delete('stewardRecord');", start);
   assert.ok(start > 0 && end > start);
-  const run = async (wake, c = { background: false, client: { call: async () => ({ sessions: [] }) } }) => {
+  const run = async (wake, c = { background: false, client: { call: async () => ({ sessions: [] }) } }, request, records = stewardRecords) => {
     let registered;
     const context = vm.createContext({ register: (name, fn) => { assert.equal(name, 'stewardRecord'); registered = fn; }, uiError, isCurrentHumanContext: x => !x.background,
       stewardRecord: { loadError: null, failed: false, sync() {}, entries: () => [], periods: () => [] }, stewardOf: () => BUTLER, stewardRecords,
-      sessionLabels: { apply: x => x }, roomState: { apply: x => x }, backgroundControl: null, backgroundOperation: null, stewardWake: wake });
+      sessionLabels: { apply: x => x }, roomState: { apply: x => x }, backgroundControl: null, backgroundOperation: null, stewardWake: wake, stewardRecords: records });
     vm.runInContext(source.slice(start, end), context);
-    return registered(c);
+    return request === undefined ? registered(c) : registered(c, request);
   };
   assert.deepEqual((await run({ view: () => ({ on: true, at: NOW, failed: false }) })).wake, { on: true, at: NOW, failed: false });
   assert.deepEqual((await run({ view: () => ({ on: false, at: null, failed: true }) })).wake, { on: false, at: null, failed: true });
@@ -435,6 +435,13 @@ test('the person\'s record shows how the switch stands; a switch that is missing
   const broken = await run({ view: () => { throw Error('unreadable'); } });
   assert.deepEqual([broken.wake, broken.entries], [null, []], 'the record is still shown');
   await assert.rejects(run({ view: () => ({ on: true }) }, { background: true }), error => error?.uiMessage?.key === 'error.stewardRecord.personOnly');
+  // The dialog asks for its page (progressive disclosure, 11-19); without one, NAW's own default applies.
+  const limits = [];
+  const spy = { view: (...args) => { limits.push(args[2].limit); return stewardRecords.view(...args); } };
+  await run(null, undefined, { limit: 15 }, spy);
+  await run(null, undefined, undefined, spy);
+  await run(null, undefined, 'odd', spy);
+  assert.deepEqual(limits, [15, undefined, undefined]);
 });
 
 test('the switch is a local call the butler finds in the catalog, the page can reach, and the dispatcher is given', () => {

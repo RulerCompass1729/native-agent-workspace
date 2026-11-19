@@ -3631,7 +3631,9 @@
     "error.dsh.witnessUnavailable": "NAW 读不到 DSH 沙盒的拦截记录，没有启动会话。",
     "error.dsh.homeUnsafe": "DSH 的会话目录里有链接或文件挡在 NAW 自己的文件夹位置上，没有启动会话。",
     "notice.activity.dshEgressBlocked": "外联被拦：{target}；会话已停止",
-    "notice.activity.dshWitnessLost": "沙盒拦截记录中断；会话已停止"
+    "notice.activity.dshWitnessLost": "沙盒拦截记录中断；会话已停止",
+    "disclosure.older": "显示更早的 {count} 条 · 共 {total} 条",
+    "disclosure.shown": "已显示 {shown}/{total} 条"
   },
   "en": {
     "taskBoard.title": "Task board",
@@ -7263,7 +7265,9 @@
     "error.dsh.witnessUnavailable": "NAW cannot read the DSH sandbox's refusal records, so the session was not started.",
     "error.dsh.homeUnsafe": "A link or file sits where NAW's own folder belongs in the DSH session home, so the session was not started.",
     "notice.activity.dshEgressBlocked": "Blocked a connection to {target}; the session was stopped",
-    "notice.activity.dshWitnessLost": "The sandbox refusal record stopped; the session was stopped"
+    "notice.activity.dshWitnessLost": "The sandbox refusal record stopped; the session was stopped",
+    "disclosure.older": "Show {count} earlier · {total} in all",
+    "disclosure.shown": "{shown} of {total} shown"
   }
 };
   Object.freeze(messages.zh); Object.freeze(messages.en); Object.freeze(messages);

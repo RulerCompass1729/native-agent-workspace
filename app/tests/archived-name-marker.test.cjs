@@ -96,7 +96,7 @@ test('the butler record flags archived sessions it names, and its dialog marks t
   for (const lang of ['zh', 'en']) {
     const dialog = { ...el('dialog'), id: 'd', open: false, showModal() { this.open = true; }, close() {} };
     await bind({ dialog, document: { createElement: el }, api: { stewardRecord: async () => shown }, text: (key, params) => locale.format(lang, key, params) }).open();
-    const what = kind => find(dialog, n => n.tag === 'tr' && n.dataset.kind === kind).map(row => row.children[1].textContent);
+    const what = kind => find(dialog, n => n.tag === 'li' && n.dataset.kind === kind).map(row => find(row, n => n.className === 'disclosure-title')[0].textContent);
     assert.deepEqual(what('invoke'), [
       locale.format(lang, 'stewardRecord.step.queueAddTo', { text: 'Fix the footer', space: 'Room A', target: 'Claude 2' }),
       locale.format(lang, 'stewardRecord.step.queueAddTo', { text: 'Fix the header', space: 'Room A', target: marker[lang] + 'Claude 2' }),

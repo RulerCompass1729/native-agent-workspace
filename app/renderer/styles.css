@@ -737,6 +737,9 @@ header h1, header p { overflow-wrap: anywhere; }
 .queue-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;column-gap:12px;row-gap:4px;padding:8px 0;border-bottom:1px solid var(--border)}
 .queue-status{grid-row:1;grid-column:1;overflow-wrap:anywhere;font-size:12px;color:var(--muted)}
 .queue-text{grid-row:2;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.queue-text-whole>summary{cursor:pointer}
+.queue-text-whole[open]>summary{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#queue-list>.disclosure-more{margin:8px 0}
 .queue-outcome{grid-row:3;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px;color:var(--muted)}
 .queue-actions{grid-row:1;grid-column:2;display:flex;gap:6px}
 /* The answer to a waiting row, under the member's question: the box, its send button and the receipt. */
@@ -1223,12 +1226,27 @@ dialog p.records-note { color: var(--ink); }
 .records-block[hidden] { display: none; }
 /* 「大管家的记录」: one row per step; the rows that wait for the person or were stopped stand out. */
 .steward-record { width: min(760px, calc(100vw - 48px)); }
-.steward-record-steps { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 10px; }
-.steward-record-steps th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--border); }
-.steward-record-steps td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
-.steward-record-time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; width: 1%; }
-.steward-record-result { width: 11em; }
-.steward-record-steps tr.attention .steward-record-result { color: #8a4b14; font-weight: 500; }
+/* disclosure-list.js: one line per item that opens in place, and the button that brings the earlier ones. */
+.disclosure-list { list-style: none; margin: 0; padding: 0; }
+.disclosure-item { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid var(--border); }
+.disclosure-item details { flex: 1; min-width: 0; }
+.disclosure-item summary { display: flex; align-items: baseline; gap: 10px; padding: 7px 2px; cursor: pointer; list-style: none; font-size: 13px; }
+.disclosure-item summary::-webkit-details-marker { display: none; }
+.disclosure-item summary::before { content: '▸'; color: var(--muted); flex: none; width: 10px; }
+.disclosure-item details[open] > summary::before { content: '▾'; }
+.disclosure-item summary:focus-visible { outline: 2px solid var(--green, #2f6f3e); outline-offset: 1px; border-radius: 4px; }
+.disclosure-time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.disclosure-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disclosure-end { flex: none; color: var(--muted); }
+.disclosure-item.attention .disclosure-end { color: #8a4b14; font-weight: 500; }
+.disclosure-body { padding: 2px 4px 10px 22px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.disclosure-body p { margin: 0 0 4px; }
+.disclosure-actions:empty { display: none; }
+.disclosure-item > .disclosure-actions { flex: none; margin: 4px 0; }
+.disclosure-more { display: block; width: 100%; margin: 8px 0; padding: 7px 10px; font-size: 13px; }
+.disclosure-more[hidden] { display: none; }
+.disclosure-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: 0; }
+.steward-record-steps { margin: 4px 0 10px; }
 .steward-record-usage { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px; font-size: 13px; margin: 8px 0; }
 .steward-record-usage p { margin: 0 0 4px; }
 .steward-record-error { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }

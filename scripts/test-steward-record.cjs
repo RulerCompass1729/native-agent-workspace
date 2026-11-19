@@ -47,11 +47,12 @@ async function size(width, height) {
   await (await app.browserWindow(page)).evaluate((win, [w, h]) => win.setContentSize(w, h), [width, height]);
   await until(() => page.evaluate(w => innerWidth === w, width), `Window ${width} wide`); await wait(300);
 }
-// The dialog as a person reads it: the line under the title, and each row's three cells.
+// The dialog as a person reads it: the line under the title, and each step's line: its time, what and result.
 const dialogText = () => page.evaluate(() => {
   const d = document.getElementById('steward-record-dialog');
-  return { open: d.open, current: d.querySelector('p')?.innerText.trim(), rows: [...d.querySelectorAll('tbody tr')].map(tr => [...tr.cells].map(td => td.innerText.trim().replace(/\s+/g, ' '))),
-    attention: [...d.querySelectorAll('tbody tr.attention')].length, note: [...d.querySelectorAll('p.quiet')].map(p => p.innerText.trim()) };
+  const cells = li => ['.disclosure-time', '.disclosure-title', '.disclosure-end'].map(c => li.querySelector(`summary ${c}`).innerText.trim().replace(/\s+/g, ' '));
+  return { open: d.open, current: d.querySelector('p')?.innerText.trim(), rows: [...d.querySelectorAll('li.disclosure-item')].map(cells),
+    attention: [...d.querySelectorAll('li.disclosure-item.attention')].length, note: [...d.querySelectorAll('p.quiet')].map(p => p.innerText.trim()) };
 });
 async function openRecord() {
   await page.locator('#steward-slot .session-row').click({ button: 'right' });

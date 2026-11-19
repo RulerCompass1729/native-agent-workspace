@@ -183,8 +183,8 @@ async function run() {
     const d = document.getElementById('steward-record-dialog'), box = d.querySelector('.steward-record-wake'), input = box?.querySelector('input[type=checkbox]');
     return { open: d.open, switch: box ? { label: box.querySelector('label').innerText.trim(), checked: input.checked, disabled: input.disabled, status: box.querySelector('.steward-record-wake-status').innerText.trim(),
       notes: [...box.querySelectorAll('p')].filter(p => !p.hidden).map(p => p.innerText.trim()), probe: input.dataset.probe || null } : null,
-      wakes: [...d.querySelectorAll('tbody tr[data-kind=wake]')].map(tr => [...tr.cells].map(td => td.innerText.trim().replace(/\s+/g, ' '))),
-      steps: [...d.querySelectorAll('tbody tr')].map(tr => tr.cells[1]?.innerText.trim().replace(/\s+/g, ' ')) };
+      wakes: [...d.querySelectorAll('li.disclosure-item[data-kind=wake]')].map(li => ['.disclosure-time', '.disclosure-title', '.disclosure-end'].map(c => li.querySelector(`summary ${c}`).innerText.trim().replace(/\s+/g, ' '))),
+      steps: [...d.querySelectorAll('li.disclosure-item')].map(li => li.querySelector('summary .disclosure-title')?.innerText.trim().replace(/\s+/g, ' ')) };
   });
   const openRecord = async language => {
     await page.locator('#steward-slot .session-row').click({ button: 'right' });

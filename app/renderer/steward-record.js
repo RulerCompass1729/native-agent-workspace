@@ -11,6 +11,7 @@
   const WAKE_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.wakeOn', off: 'stewardRecord.step.wakeOff', check: 'stewardRecord.step.wakeCheck' });
   function bind({ dialog, document, api, text, display, usageLines = null, language = () => 'zh' }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
+    const disclosure = global.nativeWorkspaceDisclosure || require('./disclosure-list.js');
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, typeof params === 'function' ? params() : params); return el; };
     const make = (tag, cls, key, params) => { const el = document.createElement(tag); if (cls) el.className = cls; if (key) say(el, key, params); return el; };
@@ -63,6 +64,18 @@
       if (entry.duplicate) return ['stewardRecord.result.duplicate', {}];
       if (entry.state === 'not-executed') return REASONS.includes(entry.reason) ? [`stewardRecord.reason.${entry.reason}`, {}] : ['stewardRecord.result.refused', { reason: dash(entry.reason) }];
       return STATES.includes(entry.state) ? [`stewardRecord.result.${entry.state}`, {}] : ['stewardRecord.result.other', { state: entry.state }];
+    }
+    function line(entry, { row, time, text, end, body }, now) {
+      if (attention(entry)) row.className += ' attention';
+      row.dataset.kind = entry.kind;
+      time.textContent = when(entry.at, now);
+      const [key, params] = what(entry, now);
+      say(text, key, marked(entry, params));
+      const outcome = result(entry);
+      if (outcome) say(end, ...outcome);
+      // Opened: the whole sentence, and NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
+      body.append(say(make('p'), key, marked(entry, params)));
+      if (entry.error) { const why = make('p', 'steward-record-error'); why.textContent = entry.error; body.append(why); }
     }
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;
     // NAW's switch for waking the butler when it records something new: the person's to see and turn off here (the
@@ -124,20 +137,14 @@
       const entries = view?.entries || [];
       if (!entries.length) dialog.append(make('p', 'quiet', 'stewardRecord.empty'));
       else {
-        const table = make('table', 'steward-record-steps'), head = make('thead'), row = make('tr'), body = make('tbody');
-        for (const key of ['stewardRecord.col.time', 'stewardRecord.col.what', 'stewardRecord.col.result']) { const th = make('th', '', key); th.scope = 'col'; row.append(th); }
-        head.append(row); table.append(head, body);
-        for (const entry of entries) {
-          const tr = make('tr', attention(entry) ? 'attention' : ''), time = make('td', 'steward-record-time'), step = make('td'), end = make('td', 'steward-record-result');
-          tr.dataset.kind = entry.kind; time.textContent = when(entry.at, view.at);
-          const [key, params] = what(entry, view.at); say(step, key, marked(entry, params));
-          const outcome = result(entry); if (outcome) say(end, ...outcome);
-          // NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
-          if (entry.error) { const why = make('small', 'steward-record-error'); why.textContent = entry.error; end.append(document.createElement('br'), why); }
-          tr.append(time, step, end); body.append(tr);
-        }
-        dialog.append(table);
-        if (view.total > entries.length) dialog.append(make('p', 'quiet', 'stewardRecord.more', { shown: entries.length, total: view.total }));
+        // One line a step, newest first; earlier steps are read from NAW a page at a time, so every one can be reached.
+        let now = view.at;
+        const steps = disclosure.create({ document, say, older: 'below', key: entry => `${entry.at}|${entry.kind}`,
+          fill: (entry, parts) => line(entry, parts, now),
+          load: async limit => { const next = await api.stewardRecord({ limit }); now = next?.at ?? now; return { items: next?.entries || [], total: next?.total || 0 }; } });
+        steps.box.className += ' steward-record-steps';
+        dialog.append(steps.box);
+        steps.update(entries, view.total);
       }
       dialog.append(make('p', 'quiet', 'stewardRecord.note'));
       // The provider's own numbers for the butler's session, as the session shows them; NAW sets no limit.
@@ -154,7 +161,7 @@
     }
     async function open() {
       let view = null, failure = null;
-      try { view = await api.stewardRecord(); } catch (error) { failure = error; }
+      try { view = await api.stewardRecord({ limit: disclosure.PAGE }); } catch (error) { failure = error; }
       if (failure) { dialog.replaceChildren(make('h2', '', 'stewardRecord.title'), make('p', 'records-note', 'stewardRecord.failed', { reason: failure?.message || '—' })); const foot = make('div', 'dialog-actions'), done = make('button', 'primary', 'common.done'); done.type = 'button'; done.addEventListener('click', () => dialog.close()); foot.append(done); dialog.append(foot); }
       else draw(view);
       if (!dialog.open) dialog.showModal();
