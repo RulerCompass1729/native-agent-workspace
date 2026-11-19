@@ -47,9 +47,20 @@ function conversation(rows = [], sessionId, budget) {
   return { messages: result.reverse(), earlierMessagesOmitted: omitted };
 }
 class MobileWorkspace {
-  constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now }) {
+  constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now, steward }) {
     if (typeof snapshot !== 'function' || !roomState || !records || typeof records.status !== 'function' || typeof records.acknowledge !== 'function') throw denied();
-    Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now });
+    Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now, steward });
+  }
+  // Which phone entry the Mac's butler gets. Only a session this phone already reads is named; otherwise only why not.
+  stewardEntry(all, permitted, scopes) {
+    let current = null;
+    try { current = this.steward(); } catch { return { state: 'unavailable' }; }
+    if (!current) return { state: 'none' };
+    const record = permitted.get(current.sessionId);
+    // A selected pairing still reads an ended or closed session; only a current one is the butler's entry.
+    if (record && record.nativeId === current.nativeId) return currentTarget(record) ? { state: 'shared', sessionId: record.id } : { state: 'unavailable' };
+    const chosen = scopes.some(s => s.sessionId === current.sessionId && s.nativeId === current.nativeId && s.actions.includes('read'));
+    return { state: all || chosen ? 'unavailable' : 'notSelected' };
   }
   grant(client, value) {
     if (exact(value, ['allRooms', 'records']) && value.allRooms === true && typeof value.records === 'boolean') return structuredClone(value);
@@ -129,6 +140,7 @@ class MobileWorkspace {
       ...(shared.temp ? { temp: tempSummary(shared.temp) } : {}),
       ...(shared.confirmations ? { confirmations: [...cards.values()].map(confirmationSummary) } : {}) };
     const result = { sessions, rooms, confirmations: [...cards.values()], reminders, syncedAt: this.now(),
+      ...(typeof this.steward === 'function' ? { steward: this.stewardEntry(all, permitted, scopes) } : {}),
       capabilities: { queue: grant.roomIds.length > 0, records: grant.records, sensitiveDecisions: false, nativeTerminal: false } };
     if (Buffer.byteLength(JSON.stringify(result)) > 8 * 1024 * 1024) throw denied();
     return result;
