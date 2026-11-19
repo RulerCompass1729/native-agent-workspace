@@ -10,7 +10,7 @@ const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placemen
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { archiveIdle, currentFleet } = require('./renderer/fleet-observation.js');
-const { queueOutcomeSource, storedQueueSource, noReplyContext } = require('./butler-ingress.cjs');
+const { queueOutcomeSource, storedQueueSource, noReplyContext, noReplyFact } = require('./butler-ingress.cjs');
 const { queueReadySource, queueDoneSource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
@@ -845,7 +845,8 @@ class RoomState {
     const decisionQuestion = question ?? queueRules.shortText(item.text);
     if (event && noReply) {
       event.id = randomUUID();
-      event.butlerNoReplySource = noReplyContext(item, session);
+      event.queueSettlement = noReplyFact(id, event.id, item, session);
+      event.butlerNoReplySource = noReplyContext(event.queueSettlement);
     }
     if (event && needsPerson) {
       // The event and its B4 source must share this exact persisted identity.

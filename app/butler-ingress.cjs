@@ -15,16 +15,47 @@ const clipped = (value, limit) => typeof value === 'string' && value ? value.sli
 const recoveryFailureReasons = Object.freeze({ capacity: 'capacity-retry-exhausted', routing: 'routing-retry-exhausted',
   forbidden: 'forbidden-retry-exhausted', connection: 'connection-retry-exhausted' });
 const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
-const exactFields = (value, keys) => value && !Array.isArray(value) &&
+const exactFields = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+  [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
   Object.keys(value).sort().join(',') === keys;
 function quotaSource(memberId, quota) {
   return { eventId: `codex-quota:${hash([memberId, quota.nativeId, quota.turnId])}`,
     sourceRef: `codex-quota:${memberId}`, kind: 'blocked', payload: { memberId, reason: 'codex-usage-limit-exceeded' } };
 }
-function noReplyContext(item, session) {
+function noReplyFact(roomId, eventId, item, session) {
   const quota = session?.id === item.sentTo && !session.archived && session.nativeId === item.sentNative ? codexQuotaBlock(session) : null;
-  return { version: 1, itemId: item.id, memberId: item.sentTo,
-    quota: quota && sourceId(quota.nativeId) && sourceId(quota.turnId) ? { nativeId: quota.nativeId, turnId: quota.turnId } : null };
+  return { version: 1, roomId, eventId, itemId: item.id, memberId: item.sentTo,
+    dispatch: { nativeId: item.sentNative ?? null, sentAt: item.sentAt, tag: item.tag ?? null, control: item.control ?? null },
+    status: 'waiting', reason: 'no-reply', quota: quota && sourceId(quota.nativeId) && sourceId(quota.turnId) ? {
+      provider: 'codex', kind: quota.kind, nativeId: quota.nativeId, turnId: quota.turnId, observedAt: quota.observedAt } : null };
+}
+function noReplyContext(fact) {
+  const d = fact.dispatch, q = fact.quota;
+  return { version: 2, roomId: fact.roomId, eventId: fact.eventId, itemId: fact.itemId, memberId: fact.memberId,
+    quota: q ? { nativeId: q.nativeId, turnId: q.turnId } : null,
+    factHash: hash([fact.roomId, fact.eventId, fact.itemId, fact.memberId, [d.nativeId, d.sentAt, d.tag, d.control],
+      fact.status, fact.reason, q && [q.provider, q.kind, q.nativeId, q.turnId, q.observedAt]]) };
+}
+function checkedNoReplyFact(roomId, event) {
+  const fact = event.queueSettlement, context = event.butlerNoReplySource, d = fact?.dispatch, q = fact?.quota;
+  if (!exactFields(fact, 'dispatch,eventId,itemId,memberId,quota,reason,roomId,status,version') || fact.version !== 1 ||
+      fact.roomId !== roomId || fact.eventId !== event.id || !sourceId(fact.roomId) || !sourceId(fact.eventId) ||
+      !sourceId(fact.itemId) || !sourceId(fact.memberId) || fact.itemId !== event.itemId || fact.memberId !== event.sessionId ||
+      fact.status !== 'waiting' || fact.reason !== 'no-reply' || event.kind !== 'queue' || event.role !== 'system' ||
+      event.uiMessage?.key !== 'notice.queue.lookAt' || event.monitor !== undefined ||
+      Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource') ||
+      !exactFields(d, 'control,nativeId,sentAt,tag') || !Number.isFinite(d.sentAt) || d.sentAt < 0 ||
+      d.nativeId !== null && !(typeof d.nativeId === 'string' && d.nativeId.length > 0 && d.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(d.nativeId)) ||
+      d.tag !== null && !sourceId(d.tag) || d.control !== null && !(Number.isSafeInteger(d.control) && d.control >= 0) ||
+      q !== null && (!exactFields(q, 'kind,nativeId,observedAt,provider,turnId') || q.provider !== 'codex' || q.kind !== 'usage_limit_exceeded' ||
+        !sourceId(q.nativeId) || q.nativeId !== d.nativeId || !sourceId(q.turnId) || !Number.isSafeInteger(q.observedAt) || q.observedAt < 0)) throw unavailable();
+  const expected = noReplyContext(fact);
+  if (!exactFields(context, 'eventId,factHash,itemId,memberId,quota,roomId,version') || context.version !== expected.version ||
+      context.roomId !== expected.roomId || context.eventId !== expected.eventId || context.itemId !== expected.itemId ||
+      context.memberId !== expected.memberId || context.factHash !== expected.factHash ||
+      (q === null ? context.quota !== null : !exactFields(context.quota, 'nativeId,turnId') ||
+        context.quota.nativeId !== q.nativeId || context.quota.turnId !== q.turnId)) throw unavailable();
+  return fact;
 }
 
 function queueOutcomeSource(outcome) {
@@ -59,21 +90,19 @@ function queueOutcomeSource(outcome) {
 // newly rejected source cannot change the availability of its original space.
 function storedQueueSource(roomId, event) {
   const source = event.butlerDoneSource ?? event.butlerSource;
-  if (Object.hasOwn(event, 'butlerDoneSource') || event.monitor?.kind === 'done' || source?.kind === 'done' ||
+  const noReply = Object.hasOwn(event, 'butlerNoReplySource');
+  if (!noReply && (Object.hasOwn(event, 'butlerDoneSource') || event.monitor?.kind === 'done' || source?.kind === 'done' ||
       typeof source?.eventId === 'string' && source.eventId.startsWith('butler-done:') ||
-      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-done:')) return storedDoneSource(roomId, event);
-  if (event.monitor?.kind === 'ready' || source?.kind === 'ready' ||
+      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-done:'))) return storedDoneSource(roomId, event);
+  if (!noReply && (event.monitor?.kind === 'ready' || source?.kind === 'ready' ||
       typeof source?.eventId === 'string' && source.eventId.startsWith('butler-ready:') ||
-      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-ready:')) return storedReadySource(roomId, event);
+      typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-ready:'))) return storedReadySource(roomId, event);
   const parent = [roomId, event.id], sourceRef = `queue-outcome:${roomId}:${event.id}`;
   try {
-    if (Object.hasOwn(event, 'butlerNoReplySource')) {
-      const context = event.butlerNoReplySource, quota = context?.quota;
-      if (!exactFields(context, 'itemId,memberId,quota,version') || context.version !== 1 ||
-          !sourceId(context.memberId) || !sourceId(context.itemId) || event.kind !== 'queue' ||
-          event.sessionId !== context.memberId || event.itemId !== context.itemId ||
-          quota !== null && (!exactFields(quota, 'nativeId,turnId') || !sourceId(quota.nativeId) || !sourceId(quota.turnId))) throw unavailable();
-      return queueOutcomeSource({ roomId, eventId: event.id, status: 'waiting', reason: 'no-reply', ...context });
+    if (noReply) {
+      const fact = checkedNoReplyFact(roomId, event);
+      return queueOutcomeSource({ roomId, eventId: event.id, itemId: fact.itemId, memberId: fact.memberId,
+        status: fact.status, reason: fact.reason, quota: fact.quota });
     }
     const value = validateEvent(event.butlerSource);
     if (value.eventId !== `butler-source:${hash(parent)}` || value.sourceRef !== sourceRef ||
@@ -315,4 +344,4 @@ function bindQueueOutcomes(roomState, ingress, notify) {
     finally { notify(outcome, receipt); }
   };
 }
-module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes, noReplyContext };
+module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes, noReplyContext, noReplyFact };
