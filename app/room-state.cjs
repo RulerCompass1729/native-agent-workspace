@@ -1581,4 +1581,4 @@ class RoomState {
     return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning || this.spacesWarning, roomStorageWarningUiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage, rooms, room: rooms.find(r => r.id === selected) || { id: selected, name: '空间资料未能读取', unavailable: true, archived: true, messages: [], events: [], files: [], notes: '', memberOrder: [], metadataRevision: 0 } };
   }
 }
-module.exports = { RoomState };
+module.exports = { RoomState, sameHome };

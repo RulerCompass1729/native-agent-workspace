@@ -140,6 +140,7 @@ async function build() {
       'computer-use-outbox-view.cjs',
       'computer-use-outbox.cjs',
       'confirmation-inbox.cjs',
+      'confirmation-notifications.cjs',
       'creation-defaults.cjs',
       'daemon.cjs',
       'dsh-egress.cjs',
