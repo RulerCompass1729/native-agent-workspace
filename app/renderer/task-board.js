@@ -201,7 +201,7 @@
         if (!item.target || item.expiresAt !== null && item.expiresAt <= now()) { update(); return; }
         close(false); onConfirmation?.(item.target); return;
       }
-      const session = input.sessions?.find(s => s.id === item.memberKey && !s.archived);
+      const session = (item.source !== 'space' || item.actualRecipient) && input.sessions?.find(s => s.id === item.memberKey && !s.archived);
       close(false);
       if (session && onSession) onSession(session.id, session.nativeId);
       else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
