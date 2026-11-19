@@ -1,15 +1,23 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm'), crypto = require('node:crypto'), assert = require('node:assert/strict');
-const scratch = require('./fixtures/test-scratch.cjs'), current = require('./check-install-state.cjs');
+const testScratch = require('./fixtures/test-scratch.cjs'), current = require('./check-install-state.cjs');
 const [input, gateFile] = process.argv.slice(2);
 if (!input || !path.isAbsolute(input) || gateFile && !path.isAbsolute(gateFile)) throw Error('Usage: node scripts/test-install-dsh-recovery.cjs /absolute/exported/app [absolute/check-install-state.cjs]');
 const app = fs.realpathSync(input), gate = gateFile ? require(gateFile) : current;
-const registry = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-i4-registry-'))), registryIdentity = fs.lstatSync(registry), oldRegistry = process.env.NAW_TEMP_REGISTRY_DIR;
+const registry = fs.realpathSync(testScratch.directory(path.join(os.tmpdir(), 'naw-i4-registry-'))), registryIdentity = fs.lstatSync(registry), oldRegistry = process.env.NAW_TEMP_REGISTRY_DIR;
 process.env.NAW_TEMP_REGISTRY_DIR = registry;
 const cp = require('node:child_process'); let launchCalls = 0;
-const originals = [cp.spawn, cp.execFile];
+const originals = [cp.spawn, cp.execFile], patched = [];
+const cleanup = testScratch.cleanup(async () => {
+  for (const [object, key, value] of patched.reverse()) object[key] = value;
+  [cp.spawn, cp.execFile] = originals;
+  try {
+    const now = fs.lstatSync(registry); assert.ok(now.isDirectory() && !now.isSymbolicLink() && now.uid === registryIdentity.uid && now.dev === registryIdentity.dev && now.ino === registryIdentity.ino);
+  } finally {
+    if (oldRegistry === undefined) delete process.env.NAW_TEMP_REGISTRY_DIR; else process.env.NAW_TEMP_REGISTRY_DIR = oldRegistry;
+  }
+});
 cp.spawn = cp.execFile = () => { launchCalls++; throw Error('This recovery fixture must not launch a provider or credential program'); };
 const helper = require(path.join(app, 'tests/helpers/dsh-runtime.cjs')), tui = require(path.join(app, 'dsh-tui.cjs')), layout = require(path.join(app, 'service-layout.cjs')), locks = require(path.join(app, 'service-lock.cjs'));
-const patched = [];
 helper.qualification({ mock: { method(object, key, value) { patched.push([object, key, object[key]]); object[key] = value; } } });
 const source = fs.readFileSync(path.join(app, 'service-client.cjs'), 'utf8'), start = source.indexOf('async function ensureService(dataDir,'), end = source.indexOf('\nfunction continuationStatus', start);
 assert.ok(start > 0 && end > start, 'Use the actual exported startup function');
@@ -20,7 +28,7 @@ function envelope(root, key, dsh, after = false) {
 let passed = 0, failed = 0;
 (async () => {
   for (const mode of ['retained', 'empty-donor-retired', 'transient-retry']) {
-    const root = fs.realpathSync(scratch.directory(path.join(os.tmpdir(), 'naw-i4-recovery-'))), active = 'backends/' + 'd'.repeat(20), donor = 'backends/' + 'e'.repeat(20);
+    const root = fs.realpathSync(testScratch.directory(path.join(os.tmpdir(), 'naw-i4-recovery-'))), active = 'backends/' + 'd'.repeat(20), donor = 'backends/' + 'e'.repeat(20);
     const destination = path.join(root, active), donorDir = path.join(root, donor), donorTree = helper.runtime(donorDir);
     fs.mkdirSync(destination, { recursive: true, mode: 0o700 }); fs.mkdirSync(donorTree.home, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(donorTree.home, 'sentinel'), 'synthetic donor home');
     layout.writeLayout(root, { format: 1, active, entries: [donor, active] });
@@ -60,11 +68,7 @@ let passed = 0, failed = 0;
   assert.equal(launchCalls, 0); console.log(JSON.stringify({ passed, failed, launchCalls, modelCalls: 0, realServices: 0, qualificationFixture: 'G test helper: synthetic update source only' }));
   if (failed) process.exitCode = 1;
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
-  for (const [object, key, value] of patched.reverse()) object[key] = value;
-  [cp.spawn, cp.execFile] = originals;
-  try { await scratch.release(); } finally {
+  try { await cleanup(); } finally {
     if (oldRegistry === undefined) delete process.env.NAW_TEMP_REGISTRY_DIR; else process.env.NAW_TEMP_REGISTRY_DIR = oldRegistry;
-    const now = fs.lstatSync(registry); assert.ok(now.isDirectory() && !now.isSymbolicLink() && now.uid === registryIdentity.uid && now.dev === registryIdentity.dev && now.ino === registryIdentity.ino);
-    fs.rmSync(registry, { recursive: true });
   }
 });
