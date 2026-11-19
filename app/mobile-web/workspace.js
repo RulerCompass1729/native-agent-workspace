@@ -2,7 +2,17 @@
 (function (global) {
   'use strict';
   const ACTION_KEY = 'naw.mobile.workspace.v1';
+  const { receiptContext, validReceiptContext } = typeof module === 'object' && module.exports ? require('./client.js') : global.NAWMobile;
   const terminal = s => ['complete', 'not-sent'].includes(s);
+  function receiptVisible(row, session, view) {
+    if (!session || session.candidate || row.deviceId !== session.deviceId) return false;
+    if (row.native) return session.sessions.some(s => s.id === row.sessionId && s.available !== false && s.actions?.includes('read') &&
+      (!row.context || row.context.scope === 'session' && row.context.targetId === s.id && (!row.context.nativeId || row.context.nativeId === s.nativeId)));
+    if (!session.workspace || !view) return false;
+    if (!row.context) return true;
+    if (row.context.scope === 'room') return view.rooms.some(r => r.id === row.context.targetId);
+    return row.context.scope === 'record' && view.capabilities?.records === true && view.reminders?.records.some(r => r.record === row.context.targetId);
+  }
   function createWorkspaceActions({ storage, request, newId, changed = () => {} }) {
     const state = { pending: [], busy: false, storageError: false };
     try {
@@ -11,15 +21,19 @@
         if (raw.length > 256 * 1024) throw Error('limit');
         const saved = JSON.parse(raw);
         const uuid = v => typeof v === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
-        if (saved.version !== 1 || !Array.isArray(saved.pending) || saved.pending.length > 64 || saved.pending.some(p => !p || !uuid(p.deviceId) || !uuid(p.requestId) || !['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge'].includes(p.action) || !['unconfirmed', 'complete', 'not-sent'].includes(p.status)) || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
+        if (saved.version !== 1 || !Array.isArray(saved.pending) || saved.pending.length > 64 || saved.pending.some(p => !p || !uuid(p.deviceId) || !uuid(p.requestId) || !['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge'].includes(p.action) || !['unconfirmed', 'complete', 'not-sent'].includes(p.status) || !validReceiptContext(p.context)) || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
         state.pending = saved.pending;
       }
     } catch { state.storageError = true; }
-    function save() { try { storage.setItem(ACTION_KEY, JSON.stringify({ version: 1, pending: state.pending })); } catch { state.storageError = true; throw Error('MOBILE_STORAGE_UNAVAILABLE'); } }
-    async function act(session, fields) {
+    function save() { try { const raw = JSON.stringify({ version: 1, pending: state.pending }); if (raw.length > 256 * 1024) throw Error('limit'); storage.setItem(ACTION_KEY, raw); } catch { state.storageError = true; throw Error('MOBILE_STORAGE_UNAVAILABLE'); } }
+    async function act(session, fields, local = {}) {
       if (state.storageError || state.busy || !session || state.pending.some(p => p.deviceId === session.deviceId && !terminal(p.status)) || state.pending.length >= 64) throw Error('MOBILE_ACTION_UNCONFIRMED');
-      const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action };
-      state.pending.push(row); save(); state.busy = true; changed();
+      const context = receiptContext({ target: local.target, text: local.text || fields.text || '',
+        scope: fields.action === 'recordAcknowledge' ? 'record' : 'room', targetId: fields.record || fields.roomId || '' });
+      const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action, context };
+      state.pending.push(row);
+      try { save(); } catch (error) { state.pending.pop(); throw error; }
+      state.busy = true; changed();
       try { const result = await request('/mobile/workspace/action', { ...fields, requestId }, session.csrf); if (result.requestId !== requestId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); Object.assign(row, { status: result.status, itemId: result.itemId }); save(); return result; }
       finally { state.busy = false; changed(); }
     }
@@ -51,6 +65,8 @@
   Object.assign(words.en, { submitted: 'The session received it', 'reply-written': 'Answer written', 'awaiting-native': 'Not yet confirmed that the session received it', prepared: 'Prepared, not submitted', unknown: 'Unknown', ended: 'Ended', failed: 'Failed', removeReceipt: 'Remove confirmed receipt', invalidated: 'No longer valid · Not executed', replaced: 'Replaced by a new confirmation' });
   Object.assign(words.zh, { registerKey: '登记敏感确认凭证', registrationCode: 'Mac 显示的六位登记码', registerHelp: '先在 Mac 发起登记；完成后核对两边公钥指纹，再在 Mac 确认和启用。', registrationReady: '请在 Mac 核对指纹并确认；手机批准仍未启用。', verifyPhone: '每张卡片都需系统验证本人；配对本身不能批准。', verifyFailed: '未完成或结果未确认；请查询回执或回 Mac 核对，不会重发。' });
   Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
+  Object.assign(words.zh, { receiptTitle: '回执', receiptSend: '发给', receiptAnswer: '回答', receiptTime: '发起', receiptTimeUnknown: '时间未记录', receiptMissing: '原任务内容未保存，请回 Mac 核对', receiptHidden: '关联内容已不在本次授权范围内，请回 Mac 核对', receiptFull: '查看完整原输入', receiptExcerpt: '查看已保存片段', receiptHelp: '移除回执不会撤回消息或任务。', removeReceipt: '移除此条回执', unsentDraft: '未发送的草稿', taskAdded: '任务已添加', taskCancelled: '任务已取消', taskHandled: '任务已标为处理', reminderAcknowledged: '提醒已确认', receiptOperations: '操作记录', receiptSteward: '大管家记录', answerPending: '回答已写入；原生处理仍待确认', messageNotSent: '未发送，草稿保留' });
+  Object.assign(words.en, { receiptTitle: 'Receipts', receiptSend: 'To', receiptAnswer: 'Answer to', receiptTime: 'started', receiptTimeUnknown: 'Time not saved', receiptMissing: 'Original task was not saved; check on the Mac', receiptHidden: 'Associated content is outside this grant; check on the Mac', receiptFull: 'View full original input', receiptExcerpt: 'View saved excerpt', receiptHelp: 'Removing a receipt keeps the message or task.', removeReceipt: 'Remove receipt', unsentDraft: 'Unsent draft', taskAdded: 'Task added', taskCancelled: 'Task cancelled', taskHandled: 'Task marked handled', reminderAcknowledged: 'Reminder acknowledged', receiptOperations: 'Operations record', receiptSteward: 'Butler record', answerPending: 'Answer written; native processing is still unconfirmed', messageNotSent: 'Not sent; draft kept' });
   function mount() {
     const d = global.document, el = id => d.getElementById(id);
     let pairSecret=global.location.hash.startsWith('#pair=')?global.location.hash.slice(6):undefined;
@@ -103,12 +119,49 @@
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
     function receipts(container) {
       const native = (client.state.pending || []).map(p => ({ ...p, native: true }));
-      for (const row of [...native, ...actions.state.pending]) {
-        const item = node('div', undefined, 'receipt'); item.append(node('p', row.deviceId !== client.state.session?.deviceId ? t('oldPair') : t(row.native && row.status === 'unconfirmed' ? 'messageUnconfirmed' : row.status)));
-        if (row.deviceId === client.state.session?.deviceId && !['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status)) item.append(button(t(row.native ? 'messageReceipt' : 'receipt'), async () => { if (row.native) await client.receipt(row.requestId); else await actions.receipt(client.state.session, row); await refresh(); }));
-        if (['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status)) item.append(button(t('removeReceipt'), () => { if (row.native) client.forget(row.requestId); else actions.forget(row); paint(); }));
-        container.append(item);
+      const rows = [...native, ...actions.state.pending];
+      if (!rows.length) return;
+      const list = node('ol', undefined, 'receipt-list'); list.setAttribute('role', 'list');
+      container.append(node('h2', t('receiptTitle') + ' · ' + rows.length, 'receipt-heading'), list);
+      for (const row of rows) {
+        const visible = receiptVisible(row, client.state.session, view), context = visible ? row.context : null;
+        const item = node('li', undefined, 'receipt context-receipt'), top = node('div', undefined, 'receipt-top');
+        const target = context?.target || (visible && row.native ? client.state.session.sessions.find(s => s.id === row.sessionId)?.name || row.sessionId : '');
+        const action = row.native ? t(row.action === 'answer' ? 'receiptAnswer' : 'receiptSend') : t(({ queueAdd: 'add', queueCancel: 'cancelTask', queueResolve: 'handled', recordAcknowledge: 'ack' })[row.action]);
+        top.append(node('strong', visible ? action + (target ? ' · ' + target : '') : t(row.deviceId !== client.state.session?.deviceId ? 'oldPair' : 'receiptHidden')));
+        let time = t('receiptTimeUnknown');
+        if (context) {
+          const at = new Date(context.at), today = at.toDateString() === new Date().toDateString();
+          time = (today ? at.toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en')) + ' ' + t('receiptTime');
+          const stamp = node('time', time); stamp.dateTime = at.toISOString(); top.append(stamp);
+        } else if (visible) top.append(node('span', time, 'quiet'));
+        item.append(top);
+        const original = visible ? row.native && row.action === 'send' ? row.text : context?.text || t('receiptMissing') : '';
+        const description = node('p', Array.from(original).slice(0, 85).join('') + (Array.from(original).length > 85 ? '…' : ''), 'receipt-original');
+        description.id = 'receipt-' + row.requestId;
+        if (visible) item.append(description);
+        if (Array.from(original).length > 85) {
+          const full = node('details', undefined, 'receipt-full'); full.append(node('summary', t(context?.clipped ? 'receiptExcerpt' : 'receiptFull')), node('p', original)); item.append(full);
+        }
+        const bottom = node('div', undefined, 'receipt-bottom'), settled = ['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status);
+        const outcome = row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
+          : row.status === 'complete' ? ({ queueAdd: 'taskAdded', queueCancel: 'taskCancelled', queueResolve: 'taskHandled', recordAcknowledge: 'reminderAcknowledged' })[row.action] : row.status;
+        if (visible) bottom.append(node('span', t(outcome), 'receipt-state' + (settled ? '' : ' uncertain')));
+        if (visible && !settled) {
+          const query = button(t(row.native ? 'messageReceipt' : 'receipt'), async () => { if (row.native) await client.receipt(row.requestId); else await actions.receipt(client.state.session, row); await refresh(); }, 'receipt-control');
+          query.setAttribute('aria-describedby', description.id); bottom.append(query);
+        }
+        if (settled) {
+          const remove = button(t('removeReceipt'), () => { if (row.native) client.forget(row.requestId); else actions.forget(row); paint(); }, 'receipt-control');
+          remove.setAttribute('aria-label', [t('removeReceipt'), target, Array.from(original).slice(0, 85).join(''), visible ? time : '', row.requestId].filter(Boolean).join(' · ')); bottom.append(remove);
+        }
+        if (visible && rows.some(other => other !== row && other.deviceId === row.deviceId && other.context?.target === row.context?.target && (other.text || other.context?.text) === (row.text || row.context?.text) && Math.floor(other.context?.at / 60000) === Math.floor(row.context?.at / 60000))) {
+          const suffix = row.requestId.slice(-8), short = rows.some(other => other !== row && other.requestId.endsWith(suffix)) ? row.requestId : '…' + suffix;
+          item.append(node('p', short, 'quiet'));
+        }
+        item.append(bottom); list.append(item);
       }
+      container.append(node('p', t('receiptHelp'), 'receipt-help'));
     }
     function login() {
       const form = node('form', undefined, 'auth-form'); form.method = 'post'; form.action = '/mobile/pair';
@@ -223,7 +276,7 @@
       for (const s of room.members) { const option = node('option', s.name); option.value = s.id; select.append(option); }
       const assigned = node('label', t('assignee')); assigned.htmlFor = select.id;
       const send = node('button', t('add'), 'primary'); send.type = 'submit'; form.append(label, input, assigned, select, send);
-      form.addEventListener('submit', event => { event.preventDefault(); run(async () => { const original = input.value; send.disabled = true; try { const result = await actions.act(client.state.session, { action: 'queueAdd', roomId: room.id, text: original, assignee: select.value || null }); toast(result.status); if (result.status === 'complete' && input.value === original) el('dialog').close(); await refresh(); } finally { send.disabled = false; } }); }); dialog(t('add'), form);
+      form.addEventListener('submit', event => { event.preventDefault(); run(async () => { const original = input.value; send.disabled = true; try { const result = await actions.act(client.state.session, { action: 'queueAdd', roomId: room.id, text: original, assignee: select.value || null }, { target: room.name, text: original }); toast(result.status); if (result.status === 'complete' && input.value === original) el('dialog').close(); await refresh(); } finally { send.disabled = false; } }); }); dialog(t('add'), form);
     }
     function queue() {
       const r = view.rooms.find(r => r.id === route.id) || view.rooms[0]; heading('queue');
@@ -233,7 +286,7 @@
         const card = node('article', undefined, 'queue-card'); card.dataset.itemId = i.id; const meta = node('div', undefined, 'queue-meta'); meta.append(node('span', stateText(i.status), 'tag ' + (i.status === 'sent' ? 'work' : 'neutral')), node('span', r.members.find(s => s.id === (i.sentTo || i.assignee))?.name || t('any'), 'small-author'));
         card.append(meta, node('h3', i.text), node('p', i.reply || i.reason || '', 'quiet')); const bottom = node('div', undefined, 'queue-bottom');
         if (view.sessions.some(s => s.id === (i.sentTo || i.assignee))) bottom.append(link(t('openSession'), 'chat/' + (i.sentTo || i.assignee)));
-        if (i.status === 'queued' || i.status === 'waiting') bottom.append(button(t(i.status === 'queued' ? 'cancelTask' : 'handled'), async () => { const result = await actions.act(client.state.session, { action: i.status === 'queued' ? 'queueCancel' : 'queueResolve', roomId: r.id, itemId: i.id }); toast(result.status); await refresh(); }));
+        if (i.status === 'queued' || i.status === 'waiting') bottom.append(button(t(i.status === 'queued' ? 'cancelTask' : 'handled'), async () => { const result = await actions.act(client.state.session, { action: i.status === 'queued' ? 'queueCancel' : 'queueResolve', roomId: r.id, itemId: i.id }, { target: r.name, text: i.text }); toast(result.status); await refresh(); }));
         card.append(bottom); list.append(card);
       } if (!list.childElementCount) list.append(node('p', t('noData'), 'quiet')); }
       for (const key of ['all', 'working', 'queued']) filters.append(button(t(key), () => show(key)));
@@ -317,7 +370,7 @@
       for (const r of view.reminders.records) for (const i of r.items.filter(i => i.shown)) {
         const card = node('article', undefined, 'reminder-card'); card.dataset.record = r.record;
         card.append(node('div', t(r.record), 'record'), node('h3', (i.kind === 'age' ? i.blocks + ' ' : '') + t(i.kind)), node('p', r.blocks + ' · ' + Math.round(r.bytes / 1024 / 1024) + ' MiB', 'quiet'));
-        const actionsBar = node('div', undefined, 'reminder-actions'); actionsBar.append(button(t('export'), () => dialog(t('export'), t('mac'))), button(t('ack'), async () => { const result = await actions.act(client.state.session, { action: 'recordAcknowledge', record: r.record, kind: i.kind, level: i.level }); toast(result.status); await refresh(); })); card.append(actionsBar); el('content').append(card);
+        const actionsBar = node('div', undefined, 'reminder-actions'); actionsBar.append(button(t('export'), () => dialog(t('export'), t('mac'))), button(t('ack'), async () => { const result = await actions.act(client.state.session, { action: 'recordAcknowledge', record: r.record, kind: i.kind, level: i.level }, { target: t(r.record === 'operations' ? 'receiptOperations' : 'receiptSteward'), text: t('ack') + ' · ' + t(i.kind) }); toast(result.status); await refresh(); })); card.append(actionsBar); el('content').append(card);
       }
       if (!view.reminders.count) el('content').append(node('p', t('noData'), 'quiet'));
     }
@@ -333,7 +386,7 @@
       const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
       if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
       if (composeKey !== route.id) {
-        composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('chat'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
+        composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('unsentDraft'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
         input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit'; const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
       }
       const input = el('message'), state = client.state; if (input.value !== state.draft) input.value = state.draft;
@@ -440,7 +493,7 @@
     client.ready = (async () => { await started; await scheduleNavigate(); })(); paint();
     return { client, actions, refresh, navigate };
   }
-  const exported = { createWorkspaceActions, ACTION_KEY, mount };
+  const exported = { createWorkspaceActions, ACTION_KEY, mount, receiptVisible };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobileWorkspace = exported; global.nawPhone = mount(); }
 })(globalThis);

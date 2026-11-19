@@ -11,6 +11,15 @@
     unconfirmed: '结果未确认，请查原回执，勿重复发送', 'not-sent': '未发送，草稿保留', 'reply-written': '回答已写入；原生处理仍待确认',
   };
   const failure = code => Object.assign(new Error(code), { code });
+  const bounded = (value, limit) => typeof value === 'string' ? value.toWellFormed().slice(0, limit).replace(/[\uD800-\uDBFF]$/, '') : '';
+  function receiptContext({ target, text = '', scope, targetId, nativeId = '' }) {
+    return { target: bounded(target, 200), text: bounded(text, 16000), clipped: text.length > 16000,
+      at: Date.now(), scope, targetId: bounded(targetId, 200), nativeId: bounded(nativeId, 200) };
+  }
+  const validReceiptContext = c => c === undefined || c && !Array.isArray(c) &&
+    Object.keys(c).sort().join(',') === 'at,clipped,nativeId,scope,target,targetId,text' &&
+    ['target', 'targetId', 'nativeId'].every(k => typeof c[k] === 'string' && c[k].length <= 200 && c[k].isWellFormed()) &&
+    text(c.text) && typeof c.clipped === 'boolean' && Number.isSafeInteger(c.at) && c.at >= 0 && c.at <= 8640000000000000 && ['session', 'room', 'record'].includes(c.scope);
   // Same rule as the broker (mobile-broker.cjs): these prefixes have native terminal meaning, also after leading
   // invisible characters or in full-width form.
   const nativePrefix = value => /^[!#/]/.test(value.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
@@ -25,7 +34,7 @@
         if (saved.version !== 1 || !Array.isArray(saved.drafts) || saved.drafts.length > 8 || !Array.isArray(saved.pending) || saved.pending.length > 16 ||
             saved.drafts.some(d => !uuid(d.deviceId) || typeof d.sessionId !== 'string' || !text(d.text) || !Number.isSafeInteger(d.revision) || d.revision < 0) ||
             saved.pending.some(p => !uuid(p.deviceId) || typeof p.sessionId !== 'string' || !uuid(p.requestId) || !['send', 'answer'].includes(p.action) ||
-              !Number.isSafeInteger(p.revision) || p.revision < 0 || !text(p.text) || typeof p.status !== 'string') ||
+              !Number.isSafeInteger(p.revision) || p.revision < 0 || !text(p.text) || typeof p.status !== 'string' || !validReceiptContext(p.context)) ||
             new Set(saved.drafts.map(d => d.deviceId + '/' + d.sessionId)).size !== saved.drafts.length || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
         state.drafts = saved.drafts; state.pending = saved.pending;
       }
@@ -122,7 +131,10 @@
       }
       const requestId = newId(); if (!uuid(requestId)) throw failure('MOBILE_BAD_REQUEST_ID');
       const contextId = state.row.contextId, deviceId = state.session.deviceId, csrf = state.session.csrf, authorization = state.authorization;
-      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed' };
+      const target = state.session.sessions.find(s => s.id === state.selected);
+      const context = receiptContext({ target: target.name || state.row.name || target.id, scope: 'session', targetId: state.selected, nativeId: target.nativeId,
+        text: action === 'answer' ? state.row.question.questions.map(q => q.question).join('\n') + '\n' + Object.values(answers || {}).flat().join(', ') : '' });
+      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed', context };
       const value = { contextId, requestId, ...(action === 'send' ? { text: state.draft } : { answers }) };
       state.pending.push(pending);
       if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
@@ -229,7 +241,7 @@
     el('refresh').addEventListener('click', () => run(() => client.refresh())); el('logout').addEventListener('click', () => run(() => client.logout()));
     render(client.state); client.ready = client.start(pairSecret); return client;
   }
-  const exported = { createMobileClient, mount, KEY };
+  const exported = { createMobileClient, mount, KEY, receiptContext, validReceiptContext };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobile = exported; if (!global.document.documentElement.hasAttribute('data-workspace-ui')) mount(global.document, global.location, global.history,
     { getItem: key => global.localStorage.getItem(key), setItem: (key, value) => global.localStorage.setItem(key, value) }, global.fetch.bind(global), global.crypto); }
