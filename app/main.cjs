@@ -1512,7 +1512,9 @@ async function boot() {
     const descriptorFile = path.join(dataDir, 'outbox-owner.json');
     delete process.env.NAW_OUTBOX_DESCRIPTOR;
     try {
-      outboxBroker = await createOutboxBroker({ descriptorFile,
+      const acquireAX = require('./native-accessibility.cjs').createAccessibilityScope(app, id => BrowserWindow.getAllWindows().some(win =>
+        !win.isDestroyed() && win.getMediaSourceId().split(':')[1] === String(id)));
+      outboxBroker = await createOutboxBroker({ descriptorFile, acquireAccessibility: target => acquireAX(target.windowId),
         bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
         bindControl: (identity, args, signal) => bindOriginalControl({ contexts: () => windows.values(), roomState }, identity, args, signal),
         control: async (binding, args) => {

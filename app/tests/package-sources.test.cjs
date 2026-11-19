@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Include path-spawned entries as well as local require() dependencies.
-function missingSources(entries) {
+// dsh-tui-preload.mjs: loaded by path (--import) into the DSH TUI process.
+function missingSources(entries, roots = ['main.cjs', 'butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs', 'dsh-tui-preload.mjs']) {
   const app = path.resolve(__dirname, '..'), listed = new Set(entries), seen = new Set(), missing = [];
   function visit(relative) {
     if (seen.has(relative)) return;
@@ -18,8 +19,7 @@ function missingSources(entries) {
       if (!target.startsWith('..')) visit(target);
     }
   }
-  // dsh-tui-preload.mjs: loaded by path (--import) into the DSH TUI process.
-  for (const root of ['main.cjs', 'butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs', 'dsh-tui-preload.mjs']) visit(root);
+  for (const root of roots) visit(root);
   assert.ok(seen.size > 50, 'the require walk reached the application modules');
   return missing;
 }
@@ -29,6 +29,26 @@ test('every local module reachable from desktop and dedicated DSH entry points i
 test('omitting any independently loaded DSH entry fails the package closure guard', () => {
   for (const name of ['butler-dsh-host.mjs', 'butler-dsh-launch.py', 'butler-dsh-privacy.cjs', 'dsh-tui-preload.mjs']) {
     assert.ok(missingSources(sourceList().entries.filter(entry => entry !== name)).includes(name), name);
+  }
+});
+
+// The service hashes every names entry before it can start. A module need not be
+// reachable by require() to be required in the installed payload.
+function runtimeSources() {
+  const text = fs.readFileSync(path.join(__dirname, '../service-client.cjs'), 'utf8');
+  const declaration = text.match(/const names = (\[[\s\S]*?\]);/);
+  assert.ok(declaration, 'Read the actual runtime-copy declaration');
+  const names = [...declaration[1].matchAll(/'([^']+)'/g)].map(match => match[1]);
+  assert.ok(names.length > 10, 'The runtime declaration contains its modules');
+  return names;
+}
+test('the package contains every runtime-copy input and every local Main dependency', () => {
+  assert.deepEqual(missingSources(sourceList().entries, ['main.cjs', ...runtimeSources()]), []);
+});
+test('omitting any runtime-copy input fails the package closure guard', () => {
+  const roots = ['main.cjs', ...runtimeSources()], entries = sourceList().entries;
+  for (const name of runtimeSources()) {
+    assert.ok(missingSources(entries.filter(entry => entry !== name), roots).includes(name), name);
   }
 });
 

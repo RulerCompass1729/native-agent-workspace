@@ -16,11 +16,12 @@ const NAW_EXECUTABLE = '/Applications/Native Agent Workspace.app/Contents/MacOS/
 function computerUseMcpServer({ viewLeaseFile } = {}) {
   if (viewLeaseFile !== undefined && (typeof viewLeaseFile !== 'string' || !path.isAbsolute(viewLeaseFile))) throw Error('An explicit absolute view lease file is required.');
   return { command: process.execPath, args: ['--disable-sigusr1', __filename,
-    ...(viewLeaseFile === undefined ? ['--serve'] : ['--serve-view', viewLeaseFile])], env: { ELECTRON_RUN_AS_NODE: '1' } };
+    ...(viewLeaseFile === undefined ? ['--serve'] : ['--serve-view', viewLeaseFile])], env: { ELECTRON_RUN_AS_NODE: '1',
+      ...(viewLeaseFile === undefined && process.env.NAW_OUTBOX_DESCRIPTOR ? { NAW_AX_OUTBOX_DESCRIPTOR: process.env.NAW_OUTBOX_DESCRIPTOR } : {}) } };
 }
 function codexComputerUseMcpArgs(options) {
   const server = computerUseMcpServer(options);
-  return [['command', server.command], ['args', server.args], ['env.ELECTRON_RUN_AS_NODE', '1']]
+  return [['command', server.command], ['args', server.args], ...Object.entries(server.env).map(([key, value]) => ['env.' + key, value])]
     .flatMap(([key, value]) => ['-c', `mcp_servers.peekaboo.${key}=${JSON.stringify(value)}`]);
 }
 function bridgeSocket(home = os.homedir()) {
@@ -172,7 +173,7 @@ function canObserveUnverifiedClick(output, previous) {
     identity?.kind === 'window' && identity.pid === previous.pid && identity.window_id === previous.windowId &&
     identity.process_start_identity_decimal === previous.generation;
 }
-function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now } = {}) {
+function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now, acquireAccessibility = async () => () => {} } = {}) {
   let receipt = null, busy = false, completionUnknown = null, recovery = null, recoveredSnapshot = null;
   const markUnknown = (previous, postSnapshot) => {
     completionUnknown = { pid: previous.pid, windowId: previous.windowId, started: previous.started,
@@ -184,7 +185,7 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
     const name = params?.name, args = params?.arguments;
     if (!['see', 'inspect_ui', 'click', 'type', 'recover_input'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
     if (completionUnknown && !['see', 'inspect_ui', 'recover_input'].includes(name)) throw Error('Previous input completion unknown; further input is blocked. Review a fresh see/inspect_ui of the same exact window, then use recover_input to acknowledge it. Do not retry the previous action.');
-    busy = true;
+    busy = true; let releaseAccessibility;
     try {
       if (name === 'recover_input') {
         const previous = recovery; recovery = null; receipt = null;
@@ -208,6 +209,7 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
             args.path !== undefined || args.snapshot !== undefined || args.ocr === true || args.web_focus === true) throw Error('Observation requires one exact NAW PID/window and fresh capture; broad targets and capture overrides are refused.');
         const pid = Number(args.app_target.slice(4)), before = identity(pid);
         if (!before) throw Error('The requested process is not the current user\'s installed NAW.');
+        releaseAccessibility = await acquireAccessibility({ pid, started: before.started, windowId: args.window_id });
         const result = await invoke(params), after = identity(pid), meta = result?._meta, snapshot = meta?.snapshot_id;
         if (result?.isError === true) return result;
         if (result?.isError !== false) throw Error('Observation has no explicit protocol success; no input authority was created.');
@@ -283,6 +285,7 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
         throw Error('Input requires the exact focused settable field; terminal and unknown focus are refused.');
       }
       const { expect: _expect, ...wireArgs } = args;
+      releaseAccessibility = await acquireAccessibility({ pid: previous.pid, started: previous.started, windowId: previous.windowId });
       let output;
       try { output = await invoke({ ...params, arguments: wireArgs }); }
       catch (error) { markUnknown(previous); throw error; }
@@ -311,7 +314,7 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
       if (!verified) markUnknown(previous, postResult?._meta?.snapshot_id);
       return actionResult(output, verified, name === 'type' ? 'text_and_focus' : expect.focused ? 'focus' : 'page',
         verified ? undefined : 'Requested page, focus or complete literal text was not observed. Do not retry; further input is blocked until a fresh observation and explicit recover_input acknowledgement.');
-    } finally { busy = false; }
+    } finally { try { releaseAccessibility?.(); } finally { busy = false; } }
   };
 }
 // Main owns the independent view and stock MCP connection. Native children get
@@ -523,7 +526,7 @@ async function serve() {
   const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
   const child = spawn(config.command, config.args, { env: config.env, stdio: ['pipe', 'pipe', 'inherit'] });
   const bridge = new JsonRpcLineTransport(child.stdout, child.stdin), client = new JsonRpcLineTransport(process.stdin, process.stdout);
-  const gate = createComputerUseGate();
+  const gate = createComputerUseGate({ acquireAccessibility: require('./native-accessibility.cjs').acquireAccessibility });
   bridge.start();
   const request = (method, params) => bridge.request(method, params, AbortSignal.timeout(25000));
   client.onRequest(async (method, params) => {
