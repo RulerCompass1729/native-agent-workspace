@@ -9,6 +9,14 @@ const browsers = require('playwright');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, ms = 90000) { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return; await wait(25); } throw Error('acceptance-timeout'); }
 const THRESHOLDS = { backMs: 500, visibleSendMs: 1500, rttMs: 80, bytesPerSecond: 256 * 1024 };
+function assertCheckpointChanged(previous, current, visibleChange) {
+  if (visibleChange && previous?.equals(current)) throw Object.assign(Error('Claimed visual transition has an identical screenshot'), { code: 'HARNESS_DUPLICATE_CHECKPOINT' });
+}
+function receiptAssociations(rows, originals) {
+  const matches = originals.map(cues => rows.flatMap((text, index) => cues.every(cue => text.includes(cue)) ? [index] : []));
+  return { pass: originals.length > 1 && matches.every(m => m.length === 1) && new Set(matches.flat()).size === originals.length,
+    expected: originals.length, identified: matches.filter(m => m.length === 1).length };
+}
 let activeCleanup = async () => {};
 const ownedRoots = []; let reportDirectory;
 const temporary = prefix => { const root = scratch.directory(prefix); ownedRoots.push(root); process.send?.({ kind: 'phone-acceptance-owned-root', root }); return root; };
@@ -55,7 +63,7 @@ function executable(engine) {
   return engine === 'webkit' ? path.join(cache, 'webkit-2336/pw_run.sh') : path.join(cache, 'chromium_headless_shell-1254/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 }
 async function scenario(root, engine, language, shape, output, cases) {
-  const selected = name => !cases || cases.includes(name);
+  const selected = name => !cases || cases.includes(name) || cases.includes('receipts') && ['busy', 'steer', 'reminders'].includes(name);
   const profile = fs.realpathSync(temporary(path.join(os.tmpdir(), 'naw-phone-acceptance-'))), cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd);
   const load = createRequire(path.join(root, 'package.json'));
   const results = [], requests = [], errors = [], contexts = [], active = new Set(), pendingReads = []; let sequence = 0, child, owner, carrier, app, browser, background, localPort, heldRead, stopping, externalRequests = 0;
@@ -75,12 +83,21 @@ async function scenario(root, engine, language, shape, output, cases) {
   })();
   activeCleanup = stop;
   const shots = path.join(output, engine + '-' + language); fs.mkdirSync(shots, { recursive: true });
-  let page;
-  const check = async (name, pass, actual = null) => {
-    results.push({ name, pass: Boolean(pass), actual });
+  let page, previousFrame;
+  const checkpoints = [], originals = [];
+  const snapshot = async (name, { subject = page, visibleChange = true } = {}) => {
+    await subject.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const screenshot = String(checkpoints.length + 1).padStart(2, '0') + '.png';
+    const bytes = await subject.screenshot({ path: path.join(shots, screenshot) });
+    checkpoints.push({ name, screenshot, visibleChange, page: await subject.evaluate(() => document.documentElement.dataset.page || 'unpaired') });
+    fs.writeFileSync(path.join(shots, 'checkpoints.json'), JSON.stringify(checkpoints, null, 2));
+    assertCheckpointChanged(previousFrame, bytes, visibleChange); previousFrame = bytes;
+    return screenshot;
+  };
+  const check = async (name, pass, actual = null, frame = false) => {
+    results.push({ name, pass: Boolean(pass), actual, ...(frame ? { screenshot: await snapshot(name, frame === true ? {} : frame) } : {}) });
     fs.appendFileSync(path.join(shots, 'steps.jsonl'), JSON.stringify(results.at(-1)) + '\n');
     console.log(JSON.stringify({ engine, language, ...results.at(-1) }));
-    if (page && !page.isClosed()) await page.screenshot({ path: path.join(shots, String(results.length).padStart(2, '0') + '.png') });
   };
   const ipc = (phoneAcceptance, extra = {}) => new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { child.off('message', receive); reject(Error('fixture-timeout')); }, 30000);
@@ -149,6 +166,18 @@ async function scenario(root, engine, language, shape, output, cases) {
     let context = await browser.newContext({ ...browsers.devices['iPhone 13'], viewport: { width: 390, height: 844 }, deviceScaleFactor: 3,
       locale: language === 'zh' ? 'zh-CN' : 'en-US', ignoreHTTPSErrors: true, serviceWorkers: 'block' }); contexts.push(context);
     await context.route('**/*', route => { if (new URL(route.request().url()).origin === site) return route.continue(); externalRequests++; return route.abort(); });
+    await context.addInitScript(() => {
+      if (typeof CredentialsContainer === 'undefined') return;
+      const original = CredentialsContainer.prototype.get;
+      CredentialsContainer.prototype.get = async function (...args) {
+        globalThis.phoneAcceptanceVerificationPending = true;
+        try {
+          if (globalThis.phoneAcceptanceHoldVerification) await new Promise(resolve => { globalThis.phoneAcceptanceReleaseVerification = resolve; });
+          return await Reflect.apply(original, this, args);
+        }
+        finally { globalThis.phoneAcceptanceVerificationPending = false; }
+      };
+    });
     page = await context.newPage(); page.on('pageerror', () => errors.push('page-error'));
     const uv = { registrations: 0, assertions: 0 };
     if (engine === 'chromium') {
@@ -158,47 +187,63 @@ async function scenario(root, engine, language, shape, output, cases) {
     }
     await page.goto(site + '/mobile/'); await page.locator('#pair-code').waitFor();
     const denied = await context.request.get(site + '/mobile/session', { headers: { 'X-NAW-Mobile': '1' } });
-    await check('unpaired-denied', denied.status() !== 200 && await page.locator('a.row').count() === 0);
+    await check('unpaired-denied', denied.status() !== 200 && await page.locator('a.row').count() === 0, null, true);
     await page.goto(site + '/mobile/#pair=' + pairing.secret); await page.locator('#complete-phone-pairing').waitFor();
-    await check('candidate-cannot-read', await page.locator('a.row').count() === 0);
+    await check('candidate-cannot-read', await page.locator('a.row').count() === 0, null, true);
     await page.locator(engine === 'chromium' ? '#complete-phone-pairing' : '#basic-phone-pairing').tap();
     await page.waitForFunction(() => nawPhone.client.state.session && !nawPhone.client.state.session.candidate && document.querySelectorAll('a.row').length > 3, null, { timeout: 120000 });
     await until(() => page.evaluate(() => document.documentElement.dataset.loading === 'false'));
-    const go = async destination => { await page.evaluate(hash => { location.hash = hash; }, '#' + language + '/' + destination); await page.waitForFunction(hash => document.documentElement.dataset.route === hash && document.documentElement.dataset.loading === 'false' && (!hash.includes('/chat/') || nawPhone.client.state.row?.id === nawPhone.client.state.selected), '#' + language + '/' + destination, { timeout: 120000 }); };
-    await go('home'); await check('home-count-matches-service', await page.locator('a.row').count() === ids.length, { expected: ids.length, actual: await page.locator('a.row').count() });
+    const go = async destination => {
+      const hash = '#' + language + '/' + destination, [routePage, id] = destination.split('/');
+      await page.evaluate(hash => { location.hash = hash; }, hash);
+      await page.waitForFunction(({ hash, routePage, id }) => document.documentElement.dataset.route === hash && document.documentElement.dataset.page === routePage && document.documentElement.dataset.loading === 'false' &&
+        (routePage !== 'chat' || nawPhone.client.state.selected === id && nawPhone.client.state.row?.id === id && document.querySelector('.thread')), { hash, routePage, id }, { timeout: 120000 });
+    };
+    const unobscured = async destination => {
+      await go('home'); await go(destination);
+      await page.locator('#toast').waitFor({ state: 'hidden' });
+    };
+    await go('home'); await check('home-count-matches-service', await page.locator('a.row').count() === ids.length, { expected: ids.length, actual: await page.locator('a.row').count() }, true);
+    if (process.argv.includes('--duplicate-checkpoint-fault')) await snapshot('deliberately-unchanged-home');
     await check('unsupported-create-controls-absent', await page.locator('.section-title button').count() === 0);
     if (engine === 'chromium') await check('pairing-uv-count', uv.registrations === 1 && uv.assertions === 1, { ...uv, simulated: true });
     if (selected('read')) {
       await go('chat/' + ids[0]);
       const original = await page.locator('.thread').innerText(), latest = await page.locator('.bubble').filter({ hasText: 'SYNTHETIC_LATEST_REPLY_0' }).last().evaluate(e => { const b = e.getBoundingClientRect(); return b.top < innerHeight && b.bottom > 0; }).catch(() => false);
-      await check('a-latest-reply-readable-at-entry', latest && original.includes('SYNTHETIC_LATEST_QUESTION_0'), { latestVisible: latest, placeholders: await page.locator('.thread .small-note').count(), bubbles: await page.locator('.thread .bubble').count() });
+      await check('a-latest-reply-readable-at-entry', latest && original.includes('SYNTHETIC_LATEST_QUESTION_0'), { latestVisible: latest, placeholders: await page.locator('.thread .small-note').count(), bubbles: await page.locator('.thread .bubble').count() }, true);
       const visible = await page.locator('.thread .bubble').evaluateAll(rows => rows.filter(r => { const b = r.getBoundingClientRect(); return b.bottom > 0 && b.top < innerHeight - 180; }).slice(0, 5).map(r => ({ omitted: Boolean(r.querySelector('.small-note')), blank: ![...r.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() })));
       await check('a-visible-replies-not-placeholder-flood', visible.length > 0 && visible.every(r => !r.omitted && !r.blank), { visible });
     }
     if (selected('send')) {
       await go('chat/' + ids[0]);
-      await page.locator('#message').fill('SYNTHETIC_PHONE_SEND'); const sendAt = performance.now(); await page.locator('#send-message').tap();
+      await page.locator('#message').fill('SYNTHETIC_PHONE_SEND'); await snapshot('send-input-before-submit');
+      const sendAt = performance.now(); await page.locator('#send-message').tap();
       await until(async () => (await ipc('truth')).calls.some(c => c.text === 'SYNTHETIC_PHONE_SEND'));
       const nativeMs = Math.round(performance.now() - sendAt);
       await until(async () => (await page.locator('.thread').innerText()).includes('SYNTHETIC_PHONE_SEND'));
       const visibleMs = Math.round(performance.now() - sendAt);
-      await check('b-send-visible-within-budget', visibleMs <= THRESHOLDS.visibleSendMs, { nativeMs, visibleMs, budgetMs: THRESHOLDS.visibleSendMs });
+      originals.push(['SYNTHETIC_PHONE_SEND']);
+      await check('b-send-visible-within-budget', visibleMs <= THRESHOLDS.visibleSendMs, { nativeMs, visibleMs, budgetMs: THRESHOLDS.visibleSendMs }, true);
+      await unobscured('chat/' + ids[0]); await snapshot('send-result-without-overlay');
     }
     await ipc('state', { sessionId: ids[0], state: 'idle' });
     if (selected('navigation')) {
       await go('home'); heldRead = ids[0]; await page.locator('a.butler-entry').tap(); await until(() => pendingReads.length > 0);
-      await page.locator('#message').fill('SYNTHETIC_UNSENT_DRAFT'); const backAt = performance.now(); await page.locator('#top a[href="#' + language + '/home"]').tap();
+      await page.locator('#message').fill('SYNTHETIC_UNSENT_DRAFT'); await snapshot('chat-before-return-with-read-stalled');
+      const backAt = performance.now(); await page.locator('#top a[href="#' + language + '/home"]').tap();
       await page.waitForFunction(() => document.documentElement.dataset.page === 'home', null, { timeout: 2000 });
       const backMs = Math.round(performance.now() - backAt); heldRead = null; releaseRead();
-      await check('c-back-before-stalled-read', backMs <= THRESHOLDS.backMs, { backMs, budgetMs: THRESHOLDS.backMs });
+      await check('c-back-before-stalled-read', backMs <= THRESHOLDS.backMs, { backMs, budgetMs: THRESHOLDS.backMs }, true);
     }
     if (selected('busy') || selected('steer')) {
       await ipc('state', { sessionId: ids[3], state: 'working' }); await ipc('capabilities', { sessionId: ids[3], values: { queueAvailable: false } });
       for (const index of [1, 2, 3].filter(i => i === 2 ? selected('steer') : selected('busy'))) {
         await go('chat/' + ids[index]); await page.locator('#message').fill('SYNTHETIC_BUSY_' + index);
         const state = await page.evaluate(() => ({ enabled: !document.querySelector('#send-message').disabled, mode: nawPhone.client.state.row?.sendMode, blocked: nawPhone.client.state.row?.sendBlocked }));
+        await snapshot('busy-' + index + '-input-before-submit');
         if (state.enabled) await page.locator('#send-message').tap();
         if (state.enabled) await until(() => page.evaluate(() => !nawPhone.client.state.busy));
+        if (state.enabled) { originals.push(['SYNTHETIC_BUSY_' + index]); await snapshot('busy-' + index + '-submission-feedback'); }
         const truth = await ipc('truth'), calls = truth.calls.filter(c => c.text === 'SYNTHETIC_BUSY_' + index);
       if (index === 2) await check('codex-steer-once-to-original-turn', state.enabled && state.mode === 'steer' && calls.length === 1 && calls[0].type === 'steer' && calls[0].turnId === 'synthetic-turn' && truth.states.find(s => s.id === ids[2])?.nativeId === initial.sessions.find(s => s.id === ids[2]).nativeId, { mode: state.mode, calls: calls.map(c => ({ type: c.type, turnId: c.turnId })) });
       if (index !== 2) {
@@ -215,26 +260,38 @@ async function scenario(root, engine, language, shape, output, cases) {
         if (await receipt.count() > 1) throw Error('ambiguous-original-receipt');
         if (await receipt.count() === 1) await receipt.tap();
         await until(() => page.evaluate(id => nawPhone.client.state.pending.filter(p => p.sessionId === id).every(p => ['submitted', 'not-sent', 'reply-written'].includes(p.status)), ids[index]));
+        await unobscured('chat/' + ids[index]); await snapshot('busy-' + index + '-receipt-without-overlay');
       }
       }
     }
     if (selected('workspace')) {
-      await go('space/shared'); await check('space-route', await page.locator('#room-members').count() === 1);
+      await go('space/shared'); await check('space-route', await page.locator('#room-members').count() === 1, null, true);
       await go('queue/shared'); const count = room.queueItems('shared').length;
       await page.locator('#content > button.primary').tap(); await page.locator('#new-task-text').fill('SYNTHETIC_QUEUE_TASK'); await page.locator('#dialog form button[type="submit"]').tap();
-      await until(() => room.queueItems('shared').length === count + 1); await check('queue-write-matches-desktop', room.queueItems('shared').at(-1).text === 'SYNTHETIC_QUEUE_TASK');
+      await until(() => room.queueItems('shared').length === count + 1); originals.push(['SYNTHETIC_QUEUE_TASK']);
+      await check('queue-write-matches-desktop', room.queueItems('shared').at(-1).text === 'SYNTHETIC_QUEUE_TASK', null, true);
     }
     if (selected('consent')) {
       for (let i = 0; i < cards.length; i++) {
         await go('confirm/' + encodeURIComponent(cards[i])); const before = uv.assertions;
         if (engine === 'chromium') {
+          await page.locator('#consent-approve:not(:disabled)').waitFor();
+          await snapshot('card-' + i + '-before-approval');
+          await page.evaluate(() => { globalThis.phoneAcceptanceHoldVerification = true; });
           await page.locator('.confirm-actions').getByRole('button', { name: language === 'zh' ? '批准本次' : 'Approve once', exact: true }).tap();
+        await page.waitForFunction(() => globalThis.phoneAcceptanceVerificationPending === true);
+        await check('card-' + i + '-verification-is-pending', executions === i && uv.assertions === before && await page.locator('.confirm-actions button:not(:disabled)').count() === 0,
+          { verificationRequested: true, pausedAtNativeGetEntry: true, executions, assertions: uv.assertions - before }, true);
+        await page.evaluate(() => { globalThis.phoneAcceptanceHoldVerification = false; globalThis.phoneAcceptanceReleaseVerification(); });
         await until(() => executions === i + 1);
         await until(async () => (await page.locator('#toast').innerText()) === (language === 'zh' ? '操作已完成' : 'Action completed'));
-        await check('e-card-' + i + '-one-uv-one-execution', uv.assertions - before === 1 && executions === i + 1 && background.data.records.find(r => cards[i] === [r.actor.id, r.actor.nativeId, r.id].join(':'))?.state === 'complete', { assertions: uv.assertions - before, executions });
-        } else await check('cookie-alone-cannot-approve-' + i, await page.locator('.confirm-actions button:not(:disabled)').count() === 0 && executions === 0);
+        await page.waitForFunction(pending => document.querySelector('.card-detail > p.quiet')?.textContent !== pending && document.querySelector('.card-detail > p.quiet')?.textContent,
+          language === 'zh' ? '待你批准' : 'Awaiting your approval');
+        await check('e-card-' + i + '-one-uv-one-execution', uv.assertions - before === 1 && executions === i + 1 && background.data.records.find(r => cards[i] === [r.actor.id, r.actor.nativeId, r.id].join(':'))?.state === 'complete', { assertions: uv.assertions - before, executions }, true);
+        await unobscured('confirm/' + encodeURIComponent(cards[i])); await snapshot('card-' + i + '-completed-without-overlay');
+        } else await check('cookie-alone-cannot-approve-' + i, await page.locator('.confirm-actions button:not(:disabled)').count() === 0 && executions === 0, null, { visibleChange: i === 0 });
       }
-      await go('confirm/' + encodeURIComponent(expiredCard)); await check('expired-card-cannot-execute', await page.locator('.confirm-actions button:not(:disabled)').count() === 0 && executions === (engine === 'chromium' ? 2 : 0));
+      await go('confirm/' + encodeURIComponent(expiredCard)); await check('expired-card-cannot-execute', await page.locator('.confirm-actions button:not(:disabled)').count() === 0 && executions === (engine === 'chromium' ? 2 : 0), null, true);
     }
     if (selected('reminders')) {
       await go('reminders');
@@ -242,7 +299,14 @@ async function scenario(root, engine, language, shape, output, cases) {
       const reminder = page.locator('.reminder-card[data-record="operations"]');
       await reminder.getByRole('button', { name: language === 'zh' ? '知道了' : 'Got it', exact: true }).tap();
       await until(() => load('./app/record-reminders.cjs').status(profile, Date.now()).count === beforeReminder - 1);
-      await check('reminders-same-source', beforeReminder > 0 && load('./app/record-reminders.cjs').status(profile, Date.now()).count === beforeReminder - 1);
+      originals.push(language === 'zh' ? ['操作记录', '知道了'] : ['Operations record', 'Got it']);
+      await check('reminders-same-source', beforeReminder > 0 && load('./app/record-reminders.cjs').status(profile, Date.now()).count === beforeReminder - 1, null, true);
+    }
+    if (selected('receipts')) {
+      await go('chat/' + ids[0]);
+      if (originals.length < 3 || await page.locator('.receipt').count() < 3) throw Error('receipt-originals-not-exercised');
+      const association = receiptAssociations(await page.locator('.receipt').allInnerTexts(), originals);
+      await check('h-cr1-each-receipt-identifies-original-input-or-action', association.pass, { expected: association.expected, identified: association.identified }, true);
     }
     if (selected('keyboard')) {
       await go('chat/' + ids[0]); await page.locator('#message').focus(); await page.setViewportSize({ width: 390, height: 460 });
@@ -264,14 +328,21 @@ async function scenario(root, engine, language, shape, output, cases) {
         return { visualHeight: visualViewport.height, layoutHeight: innerHeight, replyTop: r.top, replyBottom: r.bottom, composerTop: c.top,
           fieldReachable: f.top >= 0 && f.bottom <= visualViewport.height && (hit === field || field.contains(hit)) };
       });
-      await check('keyboard-surrogate-keeps-reply-and-input-reachable', geometry.replyTop >= 0 && geometry.replyBottom <= geometry.composerTop + 1 && geometry.fieldReachable, geometry);
+      await check('keyboard-surrogate-keeps-reply-and-input-reachable', geometry.replyTop >= 0 && geometry.replyBottom <= geometry.composerTop + 1 && geometry.fieldReachable, geometry, true);
       await page.evaluate(() => document.querySelector('#phone-fixture-shield')?.remove());
       await page.setViewportSize({ width: 390, height: 844 });
     }
     if (selected('lifecycle')) {
-      await go('chat/' + ids[0]); if (!selected('navigation')) await page.locator('#message').fill('SYNTHETIC_UNSENT_DRAFT'); await check('draft-survives-route-roundtrip', await page.locator('#message').inputValue() === 'SYNTHETIC_UNSENT_DRAFT');
-      await context.setOffline(true); await page.locator('#connection > button').tap(); await wait(20000); await check('offline-never-replays', (await ipc('truth')).calls.filter(c => c.text === 'SYNTHETIC_PHONE_SEND').length === (selected('send') ? 1 : 0) && await page.locator('#message').inputValue() === 'SYNTHETIC_UNSENT_DRAFT');
+      await unobscured('chat/' + ids[0]); await page.waitForLoadState('networkidle');
+      if (!selected('navigation')) await page.locator('#message').fill('SYNTHETIC_UNSENT_DRAFT');
+      await check('draft-survives-route-roundtrip', await page.locator('#message').inputValue() === 'SYNTHETIC_UNSENT_DRAFT', null, true);
+      const offlineRoute = route => route.abort('internetdisconnected'), offlinePattern = site + '/mobile/**';
+      await context.route(offlinePattern, offlineRoute); await context.setOffline(true);
+      await page.locator('#connection > button').tap(); await page.locator('#toast').waitFor({ state: 'visible' });
+      await wait(20000); await check('offline-never-replays', (await ipc('truth')).calls.filter(c => c.text === 'SYNTHETIC_PHONE_SEND').length === (selected('send') ? 1 : 0) && await page.locator('#message').inputValue() === 'SYNTHETIC_UNSENT_DRAFT', null, true);
       await context.setOffline(false);
+      await context.unroute(offlinePattern, offlineRoute);
+      await unobscured('chat/' + ids[0]); await snapshot('reconnected-without-overlay');
       const beforeReload = { ...uv };
       await page.reload(); await page.waitForFunction(() => document.documentElement.dataset.loading === 'false', null, { timeout: 120000 });
       await check('reload-restores-draft-without-send', await page.locator('#message').inputValue() === 'SYNTHETIC_UNSENT_DRAFT' && (await ipc('truth')).calls.filter(c => c.text === 'SYNTHETIC_PHONE_SEND').length === (selected('send') ? 1 : 0));
@@ -286,24 +357,24 @@ async function scenario(root, engine, language, shape, output, cases) {
       let nextPair = await replacement(); await other.goto(site + '/mobile/#pair=' + nextPair.secret); await other.locator('#cancel-phone-pairing').tap();
       await until(() => other.evaluate(() => !nawPhone.client.state.session));
       const retained = await context.request.get(site + '/mobile/session', { headers: { 'X-NAW-Mobile': '1' } });
-      await check('cancel-replacement-keeps-old-device', retained.status() === 200);
+      await check('cancel-replacement-keeps-old-device', retained.status() === 200, null, { subject: other });
       nextPair = await replacement(); await other.goto(site + '/mobile/#pair=' + nextPair.secret); await other.locator('#basic-phone-pairing').tap();
       await other.waitForFunction(() => nawPhone.client.state.session && !nawPhone.client.state.session.candidate && document.querySelectorAll('a.row').length > 3, null, { timeout: 120000 });
       const superseded = await context.request.get(site + '/mobile/session', { headers: { 'X-NAW-Mobile': '1' } });
       page = other; context = second;
-      await check('activated-replacement-revokes-old-device', superseded.status() !== 200);
+      await check('activated-replacement-revokes-old-device', superseded.status() !== 200, null, true);
       if (language === 'en') { await page.locator('#language-link').tap(); await page.waitForFunction(() => document.documentElement.lang === 'en'); }
       await page.getByRole('button', { name: language === 'zh' ? '管理' : 'Manage', exact: true }).tap();
       await page.locator('#dialog-body').getByRole('button', { name: language === 'zh' ? '撤销此手机并退出' : 'Revoke this phone and sign out', exact: true }).tap();
       await until(() => page.evaluate(() => !nawPhone.client.state.session));
       const revoked = await context.request.get(site + '/mobile/session', { headers: { 'X-NAW-Mobile': '1' } });
-      await check('revocation-denies-old-browser', revoked.status() !== 200 && await page.locator('a.row').count() === 0);
+      await check('revocation-denies-old-browser', revoked.status() !== 200 && await page.locator('a.row').count() === 0, null, true);
     }
-  } catch (error) { await check('harness-or-step-error', false, { code: error.name, message: String(error.message).split('\n')[0].replace(/https?:\/\/\S+/g, '[local-url]') }); }
+  } catch (error) { await check('harness-or-step-error', false, { code: error.code || error.name, message: String(error.message).split('\n')[0].replace(/https?:\/\/\S+/g, '[local-url]') }); }
   finally {
     await stop(); activeCleanup = async () => {};
   }
-  const result = { engine, language, results, requests, pass: results.filter(r => r.pass).length, fail: results.filter(r => !r.pass).length };
+  const result = { engine, language, results, checkpoints, requests, pass: results.filter(r => r.pass).length, fail: results.filter(r => !r.pass).length };
   fs.writeFileSync(path.join(output, engine + '-' + language + '.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ engine, language, pass: result.pass, fail: result.fail, failures: results.filter(r => !r.pass) })); return result;
 }
@@ -329,7 +400,7 @@ async function main() {
   const measuredStewardMessages = shape.sessions[0].messages;
   shape.sessions[0] = defaultShape().sessions[0];
   const cases = value('--cases')?.split(',');
-  if (cases?.some(c => !['read','send','navigation','busy','steer','workspace','consent','reminders','keyboard','lifecycle','pairing'].includes(c))) throw Error('Unknown acceptance case');
+  if (cases?.some(c => !['read','send','navigation','busy','steer','workspace','consent','reminders','receipts','keyboard','lifecycle','pairing'].includes(c))) throw Error('Unknown acceptance case');
   const engines = (value('--engines') || 'webkit,chromium').split(','), languages = (value('--languages') || 'zh,en').split(','), results = [];
   for (const engine of engines) for (const language of languages) results.push(await scenario(root, engine, language, shape, output, cases));
   const report = { target: /^[a-f0-9]{7,40}$/.test(target) ? target : 'explicit-local-tree', cases: cases || 'all', thresholds: THRESHOLDS, sessions: shape.sessions.length,
@@ -337,8 +408,9 @@ async function main() {
     pass: results.reduce((n, r) => n + r.pass, 0), fail: results.reduce((n, r) => n + r.fail, 0) };
   fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
   fs.writeFileSync(path.join(output, 'report.md'), '# Phone acceptance\n\n' + `Target: ${report.target}. ${report.pass} pass / ${report.fail} fail. Failures remain failures; exit code is nonzero.\n\n` +
-    results.map(r => '## ' + r.engine + ' / ' + r.language + '\n\n| Step | Result | Readings | Screenshot |\n|---|---|---|---|\n' + r.results.map((s, i) => `| ${s.name} | ${s.pass ? 'PASS' : 'FAIL'} | ${JSON.stringify(s.actual)} | [${i + 1}](${r.engine}-${r.language}/${String(i + 1).padStart(2, '0')}.png) |`).join('\n')).join('\n\n'));
-  fs.writeFileSync(path.join(output, 'cold-read.md'), '# Screenshot-only cold read\n\nDo not read code or prior explanations. Using only the numbered screenshots, explain where you would: (1) say one sentence to the Butler and find its latest reply; (2) send a note while a member is busy; (3) return home; (4) find a pending confirmation and explain whether it executed. State the exact screenshot and unclear words, missing feedback or ambiguous controls. Do not infer success from a button label.\n');
+    results.map(r => '## ' + r.engine + ' / ' + r.language + '\n\n| Step | Result | Readings | Screenshot |\n|---|---|---|---|\n' + r.results.map(s => `| ${s.name} | ${s.pass ? 'PASS' : 'FAIL'} | ${JSON.stringify(s.actual)} | ${s.screenshot ? `[frame](${r.engine}-${r.language}/${s.screenshot})` : 'metadata only'} |`).join('\n') +
+      '\n\n| Frame | Actual checkpoint |\n|---|---|\n' + r.checkpoints.map(s => `| [${s.screenshot}](${r.engine}-${r.language}/${s.screenshot}) | ${s.name} |`).join('\n')).join('\n\n'));
+  fs.writeFileSync(path.join(output, 'cold-read.md'), '# Screenshot-only cold read\n\nDo not read code or prior explanations. Using only the numbered screenshots, explain where you would: (1) say one sentence to the Butler and find its latest reply; (2) send a note while a member is busy; (3) return home; (4) find a pending confirmation and distinguish before verification, verification in progress and completion; (5) identify which original input or action each receipt belongs to. State the exact screenshot and unclear words, missing feedback or ambiguous controls. Do not infer success from a button label. Chromium uses a virtual authenticator: the system biometric UI itself is not captured.\n');
   console.log('SUMMARY ' + JSON.stringify({ pass: report.pass, fail: report.fail, output })); process.exitCode = report.fail ? 1 : 0;
 }
 if (require.main === module) {
@@ -350,4 +422,4 @@ if (require.main === module) {
     console.log('TEMP ' + JSON.stringify(result)); if (remaining.length) process.exitCode = 1;
   });
 }
-module.exports = { THRESHOLDS, messages, defaultShape, validateShape };
+module.exports = { THRESHOLDS, messages, defaultShape, validateShape, assertCheckpointChanged, receiptAssociations };

@@ -1,6 +1,21 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process'), path = require('node:path');
-const { messages, defaultShape, THRESHOLDS, validateShape } = require('../../scripts/phone-acceptance.cjs');
+const { messages, defaultShape, THRESHOLDS, validateShape, assertCheckpointChanged, receiptAssociations } = require('../../scripts/phone-acceptance.cjs');
+test('a claimed visible transition rejects byte-identical screenshots without rejecting metadata-only checks', () => {
+  const before = Buffer.from('synthetic screenshot');
+  assert.throws(() => assertCheckpointChanged(before, Buffer.from(before), true), { code: 'HARNESS_DUPLICATE_CHECKPOINT' });
+  assert.doesNotThrow(() => assertCheckpointChanged(before, Buffer.from('changed frame'), true));
+  assert.doesNotThrow(() => assertCheckpointChanged(null, before, true));
+  assert.doesNotThrow(() => assertCheckpointChanged(before, Buffer.from(before), false));
+});
+test('each receipt must identify its original input or action, independently of its generic outcome', () => {
+  const original = [['SYNTHETIC_INPUT_ONE'], ['SYNTHETIC_INPUT_TWO'], ['Operations record', 'Got it']];
+  assert.equal(receiptAssociations(['The session received it', 'The session received it', 'Action completed'], original).pass, false);
+  const readable = ['The session received it: SYNTHETIC_INPUT_ONE', 'The session received it: SYNTHETIC_INPUT_TWO', 'Operations record: Got it. Action completed'];
+  assert.equal(receiptAssociations(readable, original).pass, true);
+  assert.equal(receiptAssociations([readable.join('\n')], original).pass, false, 'one combined receipt does not identify three separate outcomes');
+  assert.equal(receiptAssociations([...readable, readable[0]], original).pass, false, 'ambiguous duplicate outcomes remain ambiguous');
+});
 test('synthetic workload retains every role and text length without copying original bodies', () => {
   const profile = { messages: 4, distribution: [{ role: 'tool', kind: 'tool', length: 3, count: 2 }, { role: 'assistant', kind: 'other', length: 25, count: 2 }] };
   const rows = messages(profile, 0);

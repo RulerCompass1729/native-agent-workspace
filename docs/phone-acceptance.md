@@ -34,7 +34,7 @@ node scripts/phone-acceptance.cjs <lane> --cases keyboard --output /private/evid
 ```
 
 Cases: `read`, `send`, `navigation`, `busy`, `steer`, `workspace`, `consent`,
-`reminders`, `keyboard`, `lifecycle`, `pairing`. `busy` requires queued input;
+`reminders`, `receipts`, `keyboard`, `lifecycle`, `pairing`. `busy` requires queued input;
 `steer` separately verifies one instruction into the original Codex native turn.
 The native stub holds a queued message until the harness explicitly drains it.
 Cancellation of a replacement must preserve the old device; activation of its
@@ -72,6 +72,29 @@ network timings and a screenshot-only `cold-read.md`. Give a new reader only the
 numbered screenshots and that task sheet, not code or the assertion report.
 Cold reading is a separate human judgment; the runner does not score visual
 comprehension by itself.
+
+Numbers identify actual visual checkpoints, not every assertion. Metadata-only
+checks have no extra image. `checkpoints.json` and the report link each captured
+frame to its action; a claimed visible transition with byte-identical consecutive
+images is a harness error. `--duplicate-checkpoint-fault` deliberately repeats
+the unchanged home screen and must fail that guard. No copied or relabelled frame
+stands in for an action. Toasts in this target have no automatic dismissal: after
+recording feedback, the runner returns home and reopens the original route for
+an unobscured frame, preserving the original receipt and draft without resending.
+
+Chromium approval checkpoints show the enabled card before the click, the actual
+page after it requests verification, and the completed page after the durable
+desktop record and visible outcome agree. A test-only gate at the credential API
+entry makes that middle frame repeatable, then delegates once to the real API
+and virtual authenticator; it does not replace credentials or approval results.
+The native system dialog itself is not a browser screenshot. Basic WebKit pairing instead records the
+unsupported approval state; it never fabricates a verification ceremony.
+
+`--cases receipts` exercises two distinct native inputs and a reminder action.
+Each receipt must visibly identify its own original input or action; three generic
+outcomes do not pass. This remains a product failure on the original baseline,
+independent of screenshot integrity. The runner records narrow-button wrapping
+as a product observation rather than changing the target's CSS.
 
 Chromium's virtual authenticator counts credential creation and verified
 assertion ceremonies. These are not counts of physical Face ID dialogs. WebKit
