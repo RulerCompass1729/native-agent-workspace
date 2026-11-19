@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
 const { connectService } = require('./service-connection.cjs');
 const addressed = require('./addressed-handoffs.cjs');
+const guidelines = require('./discussion-guidelines.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const roomAt = (w, id = 'shared') => w.roomFor ? w.roomFor(id) : w.room;
 const allRooms = w => w.rooms ? [...w.rooms.values()] : [w.room];
@@ -214,7 +215,7 @@ class PeerRunner {
         this.routes = routes; this.identities = identities; room.run = this.run; room.messages.push(source); this.w.changed();
         this.w.runEvent(`已授权跨后台${mode === 'directed' ? '由 agent 选择接收者' : '按顺序核查'}，最多 ${maxSteps} 次回复、10 分钟；原生进程保持不变。`, roomId, uiActivity(mode === 'directed' ? 'notice.peer.authorizedDirected' : 'notice.peer.authorizedReplies', { maxSteps })[1]);
         this.w.persist(); valid();
-        await this.deliver(ids[0], mode === 'directed' ? addressed.taskText(this.run, this.run.goal) : this.run.goal, source.id, null, this.run.goal);
+        await this.deliver(ids[0], mode === 'directed' ? addressed.taskText(this.run, this.run.goal) : guidelines.attach(this.run.goal), source.id, null, this.run.goal);
         return true;
       } catch (error) { await this.pause(error.message, error.uiMessage); throw error; }
     })();
@@ -276,7 +277,7 @@ class PeerRunner {
     if (run.replies[awaiting.sessionId] === source.text.trim()) return this.pause('同一成员重复上一份回复，已停止交接。', uiActivity('notice.peer.duplicateReply')[1]);
     run.replies[awaiting.sessionId] = source.text.trim();
     const next = run.ids[run.steps % run.ids.length];
-    const text = `共同任务：${run.goal}\n\n${run.names[awaiting.sessionId]} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${source.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
+    const text = guidelines.sequentialHandoff(run.goal, run.names[awaiting.sessionId], source.text);
     await this.deliver(next, text, source.id, awaiting.sessionId, source.text);
   }
   async revoke() {

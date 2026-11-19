@@ -9,6 +9,7 @@ const { ProgressJournal } = require('./observation.cjs');
 const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress, persistedMessages } = require('./native-blocks.cjs');
 const { SharedReplies } = require('./shared-replies.cjs');
 const addressed = require('./addressed-handoffs.cjs');
+const guidelines = require('./discussion-guidelines.cjs');
 const { nativeApprovalPolicy, nonBlockingQuestion, ApprovalQueue } = require('./approval-policy.js');
 const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('./native-history.cjs');
 const spaces = require('./collaboration-spaces.cjs');
@@ -1926,7 +1927,7 @@ class Workspace extends EventEmitter {
     run.sourceId = sourceMessage.id;
     room.run = run; room.messages.push(sourceMessage); this.changed();
     this.runEvent(mode === 'directed' ? `已授权成员选择接收者，最多 ${maxSteps} 次回复、10 分钟；没有定向调用就结束，不广播或轮询。` : mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。', roomId, uiActivity(mode === 'directed' ? 'notice.run.authorizedDirected' : mode === 'replies' ? 'notice.run.authorizedReplies' : 'notice.run.authorizedStrict', mode === 'directed' || mode === 'replies' ? { maxSteps } : undefined)[1]);
-    await this.send(ids[0], mode === 'directed' ? addressed.taskText(run, goal) : goal, null, run, null, sourceMessage);
+    await this.send(ids[0], mode === 'directed' ? addressed.taskText(run, goal) : guidelines.attach(goal), null, run, null, sourceMessage);
   }
   async advance(s, info) {
     const run = this.activeRun(s.id), a = run?.awaiting;
@@ -1972,7 +1973,7 @@ class Workspace extends EventEmitter {
     run.replies[s.id] = normalized;
     const next = run.ids[run.steps % run.ids.length];
     if (info.text.length > 10000) return pause('回复较长，请选定需要交接的内容。', uiActivity('notice.run.replyLong')[1]);
-    const text = `共同任务：${run.goal}\n\n${run.names?.[s.id] || s.name} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${info.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
+    const text = guidelines.sequentialHandoff(run.goal, run.names?.[s.id] || s.name, info.text);
     this.changed(); await this.send(next, text, null, run, null, sourceMessage);
   }
   configureGoalContinuation(authorization) { return this.goalContinuation.configure(authorization); }

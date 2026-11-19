@@ -4,6 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { Workspace } = require('../workspace.cjs');
 const { Claude } = require('../adapters.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity, mergePeerMessages } = require('../peer-handoffs.cjs');
+const { attach } = require('../discussion-guidelines.cjs');
 const tick = () => new Promise(r => setImmediate(r));
 async function wait(fn) { for (let i = 0; i < 100; i++) { if (fn()) return; await tick(); } assert.fail('Expected state did not settle'); }
 async function fixture(t) {
@@ -244,7 +245,7 @@ test('native input ABA before the second initial read cannot refresh the authori
 
 test('peer pause display metadata preserves the existing remote generic receipt and never resends native input', async t => {
   const f = await fixture(t), locale = require('../ui-locale.js'); await f.runner.start('owner', f.spec);
-  assert.equal(f.sends.length, 1); assert.equal(f.sends[0].text, f.spec.goal);
+  assert.equal(f.sends.length, 1); assert.equal(f.sends[0].text, attach(f.spec.goal));
   const identities = [f.a, f.b].map(service => { const s = service.w.get(service.id); return [s.id, s.nativeId, s.owner, s.name]; });
   await f.runner.pause(); assert.equal(f.runner.run.status, 'paused');
   assert.equal(locale.displayText('en', f.runner.run.reason, f.runner.run.reasonUiMessage), 'You paused handoffs across backends. Already accepted native work is retained.');
@@ -264,5 +265,5 @@ test('observed native work carries its own reason through the existing peer comp
   f.finish(sent, 'RAW final reply 中文', { background: 1 }); await wait(() => f.runner.run.status === 'paused');
   assert.equal(f.sends.length, 1); assert.equal(f.runner.run.reason, '原生报告仍有后台或定时工作，请核对后再交接。');
   assert.equal(locale.displayText('en', f.runner.run.reason, f.runner.run.reasonUiMessage), 'Native reports background or scheduled work. Check it before handing off again.');
-  assert.ok(f.a.w.room.messages.some(row => row.text === 'RAW final reply 中文')); assert.equal(sent.text, f.spec.goal);
+  assert.ok(f.a.w.room.messages.some(row => row.text === 'RAW final reply 中文')); assert.equal(sent.text, attach(f.spec.goal));
 });
