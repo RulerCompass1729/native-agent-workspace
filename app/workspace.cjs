@@ -187,6 +187,7 @@ class Workspace extends EventEmitter {
     // Waits that may become stuck, in memory only: a restart leaves no interrupt or approval pending.
     this.stuckWaits = new Map();
     this.stops = new Map();
+    this.preflightFailures = new WeakMap();
     this.progress = new Map(); this.observedTerminals = new Map();
     this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -548,6 +549,7 @@ class Workspace extends EventEmitter {
       if (runtime.start) await runtime.start();
       return id;
     } catch (error) {
+      if (!runtime && this.host.isPreflightRefusal?.(error)) this.preflightFailures.set(record, record.connectionRevision || 0);
       if (worktreePlan) {
         if (record.worktreePreparation.status !== 'ready') record.worktreePreparation.status = 'unconfirmed';
         const cause = { message: error.message, uiMessage: error.uiMessage };
@@ -2122,6 +2124,13 @@ class Workspace extends EventEmitter {
     if (this.stops.has(id)) return this.stops.get(id);
     const s = this.get(id);
     if (['ended', 'background'].includes(s.state)) return Promise.resolve();
+    // Only a refusal minted before runtime construction permits a process-free local end.
+    const failedGeneration = this.preflightFailures?.get(s);
+    if (!maintenance && s.state === 'error' && failedGeneration !== undefined && failedGeneration === (s.connectionRevision || 0) &&
+        !this.runtimes.has(id) && s.pid == null && !s.processIdentity && !s.serverIdentity) {
+      this.preflightFailures.delete(s); s.state = 'ended'; s.owner = null; s.controlRevision++;
+      this.changed(); this.persist(); return Promise.resolve();
+    }
     if (s.worktreePreparation && s.state === 'starting' && !this.runtimes.has(id)) {
       s.state = 'ended'; s.owner = null; s.controlRevision++;
       setActivity(s, ...uiActivity("notice.activity.gitStartCancelled", { arg1: s.worktreePreparation.target, arg2: s.worktreePreparation.branch }));

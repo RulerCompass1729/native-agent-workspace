@@ -950,7 +950,7 @@ test('NativeHost offers dsh only with an installed runtime and creates the DSH r
   const host = new NativeHost(dir, dir);
   t.after(() => host.close());
   assert.equal(host.resolvePrograms().dsh, undefined);
-  assert.throws(() => host.create({ id: 'a', provider: 'dsh', cwd: dir }), error => error.uiMessage?.key === 'error.nativeRuntimeMissing');
+  assert.throws(() => host.create({ id: 'a', provider: 'dsh', cwd: dir }), error => error.uiMessage?.key === 'error.dsh.runtimeUnqualified');
   const { dataDir } = fakeRuntime(t);
   const offered = new NativeHost(dir, dataDir);
   t.after(() => offered.close());
