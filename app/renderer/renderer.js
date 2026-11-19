@@ -3359,10 +3359,13 @@ function backendVersionNotice(record, applicationVersion) {
 }
 function backendVersionSummary(records, applicationVersion) {
   const unique = new Map(records.filter(record => !record.archived).map(record => [record.id, record]));
-  const result = { old: 0, different: 0, unknown: 0, count: 0, label: '' };
+  const result = { old: 0, oldEnded: 0, ended: 0, different: 0, unknown: 0, count: 0, label: '' };
   for (const record of unique.values()) {
     const notice = backendVersionNotice(record, applicationVersion);
-    if (notice) { result[notice.kind]++; result.count++; }
+    if (notice) {
+      result[notice.kind]++; result.count++;
+      if (record.state === 'ended') { result.ended++; if (notice.kind === 'old') result.oldEnded++; }
+    }
   }
   result.label = [result.old && uiText('version.oldSessions', { count: result.old }), result.different && uiText('version.differentSessions', { count: result.different }), result.unknown && uiText('version.unknownSessions', { count: result.unknown })].filter(Boolean).join(' · ');
   return result;
@@ -3455,7 +3458,8 @@ async function openBackendVersions() {
     const interrupted = settings.interrupted.length ? () => uiText('version.interruptedSessions', { names: settings.interrupted.join('、') }) : null;
     if (!options.length && !interrupted) return toastMessage('version.noneToCheck');
     backendVersionMenu = ui.menu({
-      items: [...options.map((option, index) => ({ id: String(index), labelRead: () => backendOptionLabel(option) })),
+      items: [{ type: 'label', labelRead: () => backendMigrationSummary(settings) },
+        { type: 'label', labelKey: 'version.migrationHelp' }, ...options.map((option, index) => ({ id: String(index), labelRead: () => backendOptionLabel(option) })),
         ...(interrupted ? [{ id: 'interrupted', labelRead: interrupted }] : []),
         { id: 'auto', label: uiText(settings.auto ? 'version.autoOn' : 'version.autoOff'), labelKey: settings.auto ? 'version.autoOn' : 'version.autoOff' },
         { id: 'migrate', label: uiText(settings.migrate ? 'version.migrateOn' : 'version.migrateOff'), labelKey: settings.migrate ? 'version.migrateOn' : 'version.migrateOff' }],
@@ -3481,7 +3485,35 @@ function backendOptionLabel(option) {
   const short = name => name.length > 16 ? name.slice(0, 16) + '…' : name;
   const names = [...new Set(Array.isArray(option.sessions) ? option.sessions.map(s => shown(s.id) || s.name).filter(Boolean) : [])].slice(0, 3);
   const who = names.length ? uiText('version.optionNames', { names: names.map(short).join('、'), more: option.count > names.length ? uiText('version.moreNames') : '' }) : '';
-  return uiText('version.connectionOption', { version: option.version ? compactAppVersion(option.version) : uiText('version.kindUnknown'), action: uiText(option.ready ? 'version.updateAction' : option.switch?.ready ? 'version.endUpdateAction' : 'version.keepAction'), count: option.count, who });
+  return uiText('version.connectionOption', { version: option.version ? compactAppVersion(option.version) : uiText('version.kindUnknown'), action: uiText(option.ready ? 'version.updateAction' : option.switch?.ready ? 'version.endUpdateAction' : 'version.keepAction'), count: option.count, who, reason: backendOptionReason(option) });
+}
+function backendMigrationSummary(settings) {
+  const summary = backendVersionSummary(state.sessions || [], state.appVersion);
+  const status = uiText(settings.migrate === true ? 'version.migrationOn' : settings.migrate === false ? 'version.migrationOff' : 'version.migrationUnknown');
+  return uiText('version.recordsSummary', { count: summary.count, ended: summary.ended, status });
+}
+function backendOptionReason(option) {
+  const plan = option.switch?.reason && !option.switch.auto ? option.switch : option;
+  const message = window.nativeWorkspaceLocale.displayMessage(plan.reasonUiMessage);
+  const valid = message && ['zh', 'en'].some(language => window.nativeWorkspaceLocale.format(language, message.key, message.params) === plan.reason);
+  const keys = {
+    'error.planProcessMayRun': 'version.reasonProcess', 'error.planWorking': 'version.reasonWorking',
+    'error.planBackgroundRunning': 'version.reasonWorking', 'error.planScheduledWork': 'version.reasonWorking',
+    'error.planInputUnreported': 'version.reasonInput', 'error.planTerminalInput': 'version.reasonInput',
+    'error.planCurrentChildren': 'version.reasonChildren', 'error.planEarlierChildren': 'version.reasonChildren',
+    'error.planTeamUnconfirmed': 'version.reasonChildren', 'error.planOldBackend': 'version.reasonBackend',
+    'error.planPendingApproval': 'version.reasonApproval', 'error.planPendingQuestion': 'version.reasonApproval',
+    'error.planStorageWarning': 'version.reasonStorage',
+  };
+  const reasons = new Set();
+  const visit = value => {
+    if (value.cause) visit(value.cause);
+    else if (value.parts) for (const part of value.parts) { if (part.uiMessage) visit(part.uiMessage); else reasons.add('version.reasonCheck'); }
+    else reasons.add(keys[value.key] || 'version.reasonState');
+  };
+  if (valid) visit(message);
+  else if (!option.ready) reasons.add('version.reasonCheck');
+  return reasons.size ? ' · ' + [...reasons].map(key => uiText(key)).join(' / ') : '';
 }
 function runBackendOption(option) {
   if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(result)); } });

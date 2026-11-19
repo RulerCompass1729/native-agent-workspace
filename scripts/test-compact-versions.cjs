@@ -91,7 +91,7 @@ async function run() {
   lease = true; started = Date.now(); fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: 'T81 compact versions six groups', token, pid: process.pid, time: new Date().toISOString() }));
   fs.mkdirSync(evidence, { recursive: true }); process.env.NAW_EVIDENCE_DIR = path.join(evidence, 'scratch'); frozen = hashes(); await seed();
   await group('01 inline compact version markers retain exact own versions and a unique-session summary', async () => {
-    assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
+    assert.equal(await page.locator('#backend-version-summary').innerText(), '4条旧后台记录');
     assert.equal(await page.locator('#app-version-label').innerText(), 'v' + initial.appVersion);
     assert.equal(await rows().locator('.session-backend-version:visible').count(), 4);
     const row = page.locator(`[data-session-row="${trials[0].ids[0]}"]`), name = row.locator('.label > span').first(), badge = row.locator('.session-backend-version');
@@ -100,19 +100,19 @@ async function run() {
   });
   await group('02 grouping repeats occurrences, and opening a space keeps every occurrence and the global unique count', async () => {
     await page.locator('#sessions-grouped').click(); const listed = await rows().count(); assert.ok(listed > 7);
-    assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
+    assert.equal(await page.locator('#backend-version-summary').innerText(), '4条旧后台记录');
     // T-145: in the grouped view a space is opened from its group heading (the 协作空间 rows are not repeated there).
-    await page.locator(`#session-list [data-session-group="${roomB}"] .session-space-heading`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
+    await page.locator(`#session-list [data-session-group="${roomB}"] .session-space-heading`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4条旧后台记录');
     assert.equal(await rows().count(), listed, 'Opening a space keeps every session listed (T-132)'); await page.locator('#sessions-flat').click();
   });
   await group('03 an idle old backend offers end-and-update, and canceled confirmations (end-and-update, then ended-service) perform no update', async () => {
     const before = identity(await snapshot());
-    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: 'α120 · 结束并更新… · 4 个会话：Repeated member 等', exact: true }).click();
+    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: 'α120 · 结束并更新… · 原生状态未确认 · 4条记录：Repeated member 等', exact: true }).click();
     await until(async () => (await app.evaluate(() => globalThis.t81Compact.switchDialogs.length)) === 1, 'Exactly one synthetic end-and-update confirmation');
     assert.deepEqual(await app.evaluate(() => globalThis.t81Compact.switchDialogs), ['结束并更新这个后台的 4 个会话？']);
     assert.deepEqual(identity(await snapshot()), before, 'Canceling ends nothing and keeps identity and drafts');
     await fixture(trials[0], 'ended'); await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Space');
-    await page.getByRole('menuitem', { name: 'α120 · 核对并更新连接… · 4 个会话：Repeated member 等', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'α120 · 核对并更新连接… · 4条记录：Repeated member 等', exact: true }).click();
     await until(async () => (await app.evaluate(() => globalThis.t81Compact.cancelDialogs)) === 1, 'Exactly one synthetic cancel confirmation');
   });
   await group('04 newer and unknown reports remain honest; matching all versions naturally removes both marker and summary', async () => {
@@ -127,7 +127,7 @@ async function run() {
     }
     await fixture(trials[0], 'version', initial.appVersion); await until(() => page.locator('#backend-version-summary').isHidden(), 'All versions match');
     assert.equal(await rows().locator('.session-backend-version:visible').count(), 0); await capture('04-all-current');
-    await fixture(trials[0], 'version', '0.1.0-alpha.120'); await until(async () => (await page.locator('#backend-version-summary').innerText()) === '4 旧版会话', 'Own old report restored');
+    await fixture(trials[0], 'version', '0.1.0-alpha.120'); await until(async () => (await page.locator('#backend-version-summary').innerText()) === '4条旧后台记录', 'Own old report restored');
   });
   await group('05 actual DSH collapsed rail keeps version and update-summary controls reachable', async () => {
     const win = await app.browserWindow(page); await win.evaluate(window => window.setContentSize(950, 700));

@@ -35,7 +35,7 @@ test('summary counts unique nonarchived sessions, including hidden and grouped o
     { id: 'unknown' }, { id: 'archived', runtimeVersion: '0.1.0-alpha.114', archived: true }];
   const before = JSON.stringify(records), summary = plain(context.backendVersionSummary(records, current));
   assert.equal(summary.old, 2); assert.equal(summary.different, 1); assert.equal(summary.unknown, 1);
-  assert.equal(summary.count, 4); assert.match(summary.label, /2 个旧后台会话/);
+  assert.equal(summary.count, 4); assert.match(summary.label, /2条旧后台记录/);
   assert.equal(JSON.stringify(records), before);
   assert.equal(context.backendVersionSummary([{ id: 's', runtimeVersion: current }], current).count, 0);
 });
@@ -163,14 +163,14 @@ function menuFixture() {
   const pending = new Promise(value => resolve = value), control = { isConnected: true, hidden: false }, toast = { childElementCount: 0 }, calls = { updates: [], toasts: [], renders: 0, settings: [], switches: [] };
   const settings = { auto: true, interrupted: [] };
   const toastClose = {}, toastContainer = { childElementCount: 2, children: [toast, toastClose] };
-  const c = vm.createContext({ uiText, toastMessage: (key, params) => calls.toasts.push(uiText(key, params)), checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, selectionRevision: 1, disconnected: false, state: {},
+  const c = vm.createContext({ uiText, toastMessage: (key, params) => calls.toasts.push(uiText(key, params)), checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, selectionRevision: 1, disconnected: false, state: {}, window: { nativeWorkspaceLocale: locale },
     $: id => id === 'toast' ? toastContainer : id === 'toast-text' ? toast : control, document: { activeElement: control, querySelector: () => null },
     api: { connectionUpdates() { requestCount++; return pending; }, async continueConnection(...args) { calls.updates.push(args); return false; },
       async backendSwitchSettings(value) { calls.settings.push(value); if (typeof value === 'boolean') settings.auto = value; return { ...settings }; },
       async switchBackend(value) { calls.switches.push(value); return { key: value.backendKey, resumed: ['s'], left: [] }; } },
     ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
     versionValue: value => value, toast: value => calls.toasts.push(value), attempt: work => work() });
-  vm.runInContext(source.slice(source.indexOf('function compactAppVersion('), source.indexOf('function backendVersionNotice(')), c);
+  vm.runInContext(source.slice(source.indexOf('function compactAppVersion('), source.indexOf('function sidebarPresentation(')), c);
   vm.runInContext(source.slice(source.indexOf('function backendSwitchedText('), source.indexOf("$('backend-version-summary').onclick")), c);
   // Model a browser dropping focus on native disable. This is an async focus
   // contract test, not a claim that a real Chromium GUI has been exercised.
@@ -190,9 +190,9 @@ test('changing language during a version check preserves the pending request, fo
   const f = menuFixture(), opening = f.c.open(); f.switch('en');
   assert.equal(f.control.textContent, 'Checking backends…'); assert.equal(f.requests, 1); assert.equal(f.c.document.activeElement, f.control); assert.equal(f.control.disabled, false);
   const option = { id: 'session-original', backendKey: 'backend-original', nativeId: 'native-original', version: '0.1.0-alpha.120', count: 1, ready: true }, before = structuredClone(option);
-  f.resolve([option]); await opening; const action = f.menu.items[0], select = f.menu.onSelect;
-  assert.equal(action.id, '0'); assert.match(action.labelRead(), /Review and update connection… · Sessions: 1/);
-  f.switch('zh'); assert.match(action.labelRead(), /核对并更新连接… · 1 个会话/); assert.equal(f.menu.items[0], action); assert.equal(f.menu.onSelect, select);
+  f.resolve([option]); await opening; const action = f.menu.items.find(item => item.type !== 'label'), select = f.menu.onSelect;
+  assert.equal(action.id, '0'); assert.match(action.labelRead(), /Review and update connection… · Records: 1/);
+  f.switch('zh'); assert.match(action.labelRead(), /核对并更新连接… · 1条记录/); assert.equal(f.menu.items.find(item => item.type !== 'label'), action); assert.equal(f.menu.onSelect, select);
   assert.equal(f.requests, 1); assert.equal(f.calls.updates.length, 0); assert.deepEqual(option, before); assert.equal(f.c.document.activeElement, f.control);
 });
 test('an earlier read-only version check cannot open a menu after navigation or focus leaves its button', async () => {
@@ -218,7 +218,7 @@ test('an idle old backend offers one explicit end-and-update, and the automatic 
   const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
   f.resolve([{ id: 's', backendKey: 'old', nativeId: 'native-s', version: '0.1.0-alpha.120', count: 1, ready: false, reason: 'Working connection retained',
     switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）', '自动迁移需确认的旧后台：关（点此打开）']);
+  assert.deepEqual(plain(f.menu.items.filter(item => item.type !== 'label').map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 原因待核实 · 1条记录', '空闲时自动更新：开（点此关闭）', '自动迁移需确认的旧后台：关（点此打开）']);
   await f.menu.onSelect('0');
   assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
   assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['']);
@@ -261,7 +261,7 @@ test('a legacy maintenance refusal reaches the actual menu instead of a generic 
 
 test('sessions ended by an unfinished update are named in the menu even with no old backend left', async () => {
   const f = menuFixture(); f.settings.interrupted = ['Claude 2', 'Codex 秘书']; const opening = f.c.open(); f.resolve([]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.id)), ['interrupted', 'auto', 'migrate']);
+  assert.deepEqual(plain(f.menu.items.filter(item => item.type !== 'label').map(item => item.id)), ['interrupted', 'auto', 'migrate']);
   await f.menu.onSelect('interrupted'); assert.match(f.calls.toasts[0], /上次更新时结束了 Claude 2、Codex 秘书/);
   assert.equal(f.c.backendSwitchedText({ resumed: 1, left: 2 }), '后台已更新；2 个会话没能自动接回，请在会话里点“继续原生会话”。');
   assert.match(f.c.backendSwitchedText({ error: '旧后台尚未确认关闭' }), /没有完成：旧后台尚未确认关闭/);
@@ -311,13 +311,13 @@ test('each old backend names the sessions it holds, only the visible ones', t =>
   const [option] = mainOptions(client, current, profile);
   assert.deepEqual(option.sessions.map(s => s.id), ['a', 'b']); assert.equal(option.sessions[1].name.length, 80);
   const label = (o, sessions = []) => { const f = menuFixture(); f.c.state.sessions = sessions; return f.c.backendOptionLabel(o); };
-  assert.equal(label({ version: '0.1.0-alpha.118', count: 2, ready: false, switch: { ready: true }, sessions: [{ id: 'a', name: 'Claude · NAW 开发' }, { id: 'b', name: '秘书' }] }), 'α118 · 结束并更新… · 2 个会话：Claude · NAW 开发、秘书');
-  assert.equal(label({ version: '0.1.0-alpha.120', count: 4, ready: true, sessions: ['A', 'B', 'C', 'D'].map(name => ({ id: name, name })) }), 'α120 · 核对并更新连接… · 4 个会话：A、B、C 等');
-  assert.equal(label({ version: '0.1.0-alpha.120', count: 1, ready: false }), 'α120 · 保留连接，查看原因 · 1 个会话');
-  assert.equal(label({ version: '0.1.0-alpha.120', count: 3, ready: true, sessions: ['Same', 'Same', ''].map((name, i) => ({ id: String(i), name })) }), 'α120 · 核对并更新连接… · 3 个会话：Same 等');
+  assert.equal(label({ version: '0.1.0-alpha.118', count: 2, ready: false, switch: { ready: true }, sessions: [{ id: 'a', name: 'Claude · NAW 开发' }, { id: 'b', name: '秘书' }] }), 'α118 · 结束并更新… · 原因待核实 · 2条记录：Claude · NAW 开发、秘书');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 4, ready: true, sessions: ['A', 'B', 'C', 'D'].map(name => ({ id: name, name })) }), 'α120 · 核对并更新连接… · 4条记录：A、B、C 等');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 1, ready: false }), 'α120 · 查看原因 · 原因待核实 · 1条记录');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 3, ready: true, sessions: ['Same', 'Same', ''].map((name, i) => ({ id: String(i), name })) }), 'α120 · 核对并更新连接… · 3条记录：Same 等');
   // The name this window shows (a local rename) wins over the backend's stored name; long names are shortened.
   assert.equal(label({ version: '0.1.0-alpha.120', count: 2, ready: true, sessions: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'x'.repeat(40) }] }, [{ id: 'a', name: 'NAW 开发' }]),
-    `α120 · 核对并更新连接… · 2 个会话：NAW 开发、${'x'.repeat(16)}…`);
+    `α120 · 核对并更新连接… · 2条记录：NAW 开发、${'x'.repeat(16)}…`);
 });
 test('a session\'s own menu runs the update of the backend that holds it, or says why not', async () => {
   const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
