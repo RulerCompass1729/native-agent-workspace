@@ -109,7 +109,7 @@ test('shutdown prevents new B1 notifications after the owned epoch is closed', t
 });
 
 test('Main retries reuse the same epoch owner and quit closes it without starting a model', t => {
-  let created = 0, opened = 0, recovered = 0, closed = 0, dispatcherClosed = 0;
+  let created = 0, opened = 0, recovered = 0, closed = 0, dispatcherClosed = 0, notificationsDisposed = 0;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-question-main-epoch-')); fs.chmodSync(dataDir, 0o700);
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const { ButlerLedger } = require('../butler-ledger.cjs');
@@ -124,7 +124,8 @@ test('Main retries reuse the same epoch owner and quit closes it without startin
   const boot = section('    // One writer owns the display-measurement epoch.', '\n    butlerIngress.recover();') + '\n    butlerIngress.recover();';
   vm.runInContext(boot, context); context.roomState = { id: 'second' }; vm.runInContext(boot, context);
   assert.equal(created, 1); assert.equal(opened, 1); assert.equal(recovered, 2); assert.equal(context.butlerIngress.roomState.id, 'second');
+  context.backgroundNotifications = { dispose: () => notificationsDisposed++ };
   context.app = { on: (_event, fn) => fn() }; context.queueDispatcher = { close: () => dispatcherClosed++ };
   vm.runInContext(section("app.on('will-quit',", '\n// A session rotation'), context);
-  assert.equal(closed, 1); assert.equal(dispatcherClosed, 1);
+  assert.equal(closed, 1); assert.equal(dispatcherClosed, 1); assert.equal(notificationsDisposed, 1);
 });

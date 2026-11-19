@@ -157,7 +157,7 @@ const windows = new Map();
 const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
 const queueOutcomeSeen = new Set(), queueOutcomeNotifications = new Map();
-let pendingReveal = null;
+let pendingReveal = null, backgroundNotifications = null;
 const confirmationProjectionKeys = new WeakMap();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
@@ -590,24 +590,24 @@ function auditBackgroundOperation(record) {
   broadcastRoom().catch(() => {});
 }
 function notifyBackgroundConfirmation(record) {
-  const key = `background:${record.actor.nativeId}:${record.id}`;
-  if (queueOutcomeSeen.has(key)) return;
-  queueOutcomeSeen.add(key);
-  if (queueOutcomeSeen.size > 200) queueOutcomeSeen.delete(queueOutcomeSeen.values().next().value);
-  try {
-    if (!Notification.isSupported()) return;
-    const action = backgroundOperation.maintenanceAction(record.command.method, record.command.arguments, record.actor);
-    const notification = new Notification({ title: displayText('os.decisionTitle'),
-      body: action === 'readConversation' && record.confirmation?.options?.message ? backgroundOperation.visibleText(record.confirmation.options.message) : displayText('os.backgroundConfirmationBody', { name: backgroundOperation.visibleText(record.actor.name),
-        command: action ? displayText('background.action.' + action) : record.command.method }) });
-    queueOutcomeNotifications.set(key, notification);
-    if (queueOutcomeNotifications.size > 50) queueOutcomeNotifications.delete(queueOutcomeNotifications.keys().next().value);
-    notification.once('close', () => queueOutcomeNotifications.delete(key));
-    notification.once('click', () => { queueOutcomeNotifications.delete(key);
-      revealRecord({ sessionId: record.actor.id, nativeId: record.actor.nativeId, messageId: key }); });
-    notification.show();
-  } catch { queueOutcomeNotifications.delete(key); }
+  backgroundNotifications ||= new (require('./confirmation-notifications.cjs').ConfirmationNotifications)({
+    Notification, control: backgroundControl, format: displayText, reveal: revealRecord,
+    active: () => primary && !quitting, seen: queueOutcomeSeen,
+    snapshot: async row => {
+      const context = await backgroundControl.view(row.actor, row.command.view_id); await context.checkActor();
+      const state = sessionLabels.apply(roomState.apply(confirmationSnapshot(context.client)));
+      const fields = ['id', 'nativeId', 'name', 'provider', 'archived', 'roomId', 'roomIds', 'roomMembershipRevisions', 'memberRevision', 'transportDisconnected', 'backendUnavailable', 'nativeContextPending'];
+      const saved = row.command.method === 'restoreSession' && roomState.value.sessionArchives[row.command.arguments[0]];
+      return { state: { unavailable: state.unavailable, roomStorageWarning: state.roomStorageWarning,
+        sessions: state.sessions.map(s => Object.fromEntries(fields.filter(key => Object.hasOwn(s, key)).map(key => [key, s[key]]))),
+        rooms: state.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived })) },
+        archives: saved ? { [row.command.arguments[0]]: { nativeId: saved.nativeId, detached: Boolean(saved.detached), rooms: saved.rooms.map(r => ({ id: r.id })) } } : {} };
+
+    },
+  });
+  return backgroundNotifications.notify(record);
 }
+
 function notifyQueueOutcome(outcome, source) {
   const { roomId, eventId, status, reason, memberId, memberName, task, reply, question } = outcome;
   if (quitting || !eventId || queueOutcomeSeen.has(eventId) || !(status === 'failed' || status === 'waiting' && !reason)) return;
@@ -1582,7 +1582,7 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
-  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { backgroundNotifications?.sync(); broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
     confirmationFingerprint: (row, snapshot, view, live) => backgroundOperation.controlFingerprint(row.command,
       { state: snapshot, actor: row.actor, context: live || { view }, roomState, sessionLabels, client: live?.client }),
     confirmationPending: notifyBackgroundConfirmation,
@@ -2796,6 +2796,7 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
+  backgroundNotifications?.dispose();
   queueDispatcher?.close();
   try { butlerIngress?.ledger.closeQuestionMetricEpoch(); } catch { /* An unclosed epoch remains unverified. */ }
 });
