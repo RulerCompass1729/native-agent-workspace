@@ -7,6 +7,8 @@ const { validateEvent } = require('./butler-policy.cjs');
 const { storedReadySource, storedDoneSource } = require('./butler-ready.cjs');
 const { nonBlockingQuestion } = require('./approval-policy.js');
 const { codexQuotaBlock } = require('./native-usage.js');
+const { automaticInput } = require('./queue-dispatch.cjs');
+const { roomIds } = require('./collaboration-spaces.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
@@ -64,11 +66,14 @@ function storedQueueSource(roomId, event) {
 }
 
 class ButlerIngress {
-  constructor(directory, { roomState, ledger = new ButlerLedger(directory) } = {}) {
+  constructor(directory, { roomState, ledger = new ButlerLedger(directory), now = Date.now } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
     this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
+    this.now = now; this.humanSince = now(); this.humanInputs = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
+      if (event.eventId.startsWith('human-input:') && event.kind === 'blocked' &&
+          ['human-message', 'human-message-content-unavailable'].includes(event.payload.reason)) this.humanInputs.add(event.eventId);
       const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
       if (failure && event.kind === 'failure' && Object.values(recoveryFailureReasons).includes(event.payload.reason) &&
           (failure[1] !== 'connection' || event.payload.reason === recoveryFailureReasons.connection) && event.sourceRef === `${failure[1]}-exhausted:${event.payload.memberId}`)
@@ -135,6 +140,50 @@ class ButlerIngress {
       if (failed) throw unavailable();
       this.errors.delete('source-store'); return { status: 'recorded', count };
     } catch { this.errors.set('source-store', 'source-unavailable'); throw unavailable(); }
+  }
+  humanInputTask(session, message, spaces, index) {
+    const matches = [];
+    for (const spaceId of spaces) {
+      let items; try { items = this.roomState.queueItems(spaceId); } catch { continue; }
+      for (const item of items) {
+        if (item.sentTo !== session.id || item.sentNative && item.sentNative !== session.nativeId ||
+            !Number.isFinite(item.sentAt) || item.sentAt > message.time ||
+            Number.isFinite(item.finishedAt) && item.finishedAt < message.time ||
+            !['sent', 'waiting', 'done', 'failed', 'cancelled'].includes(item.status)) continue;
+        const anchor = session.messages.findIndex(row => row?.id === item.tag);
+        if (anchor >= index || anchor < 0 && item.sentNative !== session.nativeId) continue;
+        matches.push({ spaceId, itemId: item.id });
+      }
+    }
+    return matches.length === 1 ? matches[0] : {};
+  }
+  observeHumanInputs(sessions = [], { steward, name = s => s.name } = {}) {
+    const now = this.now();
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (typeof s?.id !== 'string' || !s.id || s.archived || this.roomState.value?.archivedSessions?.includes(s.id) || !Array.isArray(s.messages)) continue;
+      let spaces; try { spaces = roomIds(s).filter(id => !this.roomState.metadata(id).archived); } catch { continue; }
+      if (!spaces.length) continue;
+      for (let index = 0; index < s.messages.length; index++) {
+        const message = s.messages[index];
+        if (!Number.isSafeInteger(message?.time) || message.time < this.humanSince || message.time > now ||
+            message.role !== 'user' || message.agentControl || typeof message.id !== 'string' || !message.id) continue;
+        const human = ['human', 'human-mobile'].includes(message.origin) && message.inputSource === undefined ||
+          message.origin === 'native' && message.inputSource === 'user';
+        if (!human || automaticInput(message)) continue;
+        const eventId = `human-input:${hash([s.id, message.id])}`;
+        if (this.humanInputs.has(eventId)) continue;
+        const designated = steward?.();
+        if (!designated?.sessionId || s.id === designated.sessionId) continue;
+        if (typeof message.text !== 'string' || !message.text.trim()) continue;
+        const payload = { memberId: s.id, reason: 'human-message', title: new Date(message.time).toISOString(),
+          text: Array.from(message.text.slice(0, 401)).slice(0, 200).join(''), ...this.humanInputTask(s, message, spaces, index) };
+        const memberName = clipped(name(s), 200); if (memberName) payload.memberName = memberName;
+        const event = { eventId, sourceRef: `human-input:${s.id}`, kind: 'blocked', payload };
+        try { validateEvent(event); }
+        catch { delete payload.text; delete payload.memberName; payload.reason = 'human-message-content-unavailable'; }
+        this.record(event); this.humanInputs.add(eventId);
+      }
+    }
   }
   // The backend validates the live failed turn; intake never settles or replays its task.
   observeRecoveryFailures(sessions = []) {

@@ -1022,7 +1022,7 @@ class Workspace extends EventEmitter {
         : peer ? { name: peer.name, uiNameMessage: peer.uiNameMessage, ...(peer.body !== null ? { displayText: peer.body } : {}) }
         : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入', uiNameMessage: uiNotice(inputSource.endsWith('_wakeup') ? 'notice.name.scheduledWake' : 'notice.name.nativeAutomaticInput').uiMessage } : {};
       if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) {
-        s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
+        s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : item?.source === 'user' ? { inputSource: 'user' } : {}), time: Date.now() });
         if (peer) this.mirrorPeer(s, peer, Date.now(), text);
       }
       this.changed();
