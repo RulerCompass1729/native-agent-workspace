@@ -7,9 +7,18 @@ const { verifyPackageFuses } = require('./package-fuses.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const signingOptions = { timeout: 20000, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 };
 const verifySignature = bundle => execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], signingOptions);
-function reports() {
-  const directory = path.join(os.homedir(), 'Library/Logs/DiagnosticReports');
-  return fs.readdirSync(directory).filter(name => /^(Electron-|Native Agent Workspace-|NAW-|node-).*\.ips$/.test(name) && fs.lstatSync(path.join(directory, name)).isFile()).sort();
+function reportNames(main, helpers) {
+  const families = ['Electron', 'Native Agent Workspace', 'NAW'], names = new Set([...families, 'node', main]);
+  for (const name of helpers) {
+    if (typeof name !== 'string' || !name || /[\n\r/\0]/.test(name)) throw Error('Invalid packaged Helper name');
+    names.add(name);
+    const helper = name.match(/ Helper( \([^()]+\))?$/);
+    if (helper) for (const family of families) names.add(family + ' Helper' + (helper[1] || ''));
+  }
+  return [...names].sort();
+}
+function reports(names, directory = path.join(os.homedir(), 'Library/Logs/DiagnosticReports')) {
+  return fs.readdirSync(directory).filter(name => name.endsWith('.ips') && names.some(stem => name.startsWith(stem + '-')) && fs.lstatSync(path.join(directory, name)).isFile()).sort();
 }
 function within(root, file) { const real = fs.realpathSync(file); if (!real.startsWith(root + path.sep)) throw Error('Bundle resource escaped its root'); return real; }
 function removeOwned(root, identity) {
@@ -34,12 +43,19 @@ function target(input) {
   if (!fs.statSync(executable).isFile()) throw Error('Bundle executable is not a regular file');
   const app = within(bundle, path.join(bundle, 'Contents/Resources/app'));
   for (const file of ['regular-popup.cjs', 'regular-popup-transport.cjs', 'regular-popup-worker.mjs', 'regular-popup-dsh.cjs']) within(bundle, path.join(app, 'app', file));
-  return { bundle, app, executable, revision: info.NAWSourceRevision, identifier: info.CFBundleIdentifier, version: info.CFBundleShortVersionString };
+  const helpers = [], frameworks = within(bundle, path.join(bundle, 'Contents/Frameworks'));
+  for (const entry of fs.readdirSync(frameworks, { withFileTypes: true }).filter(entry => entry.name.endsWith('.app'))) {
+    if (!entry.isDirectory()) throw Error('Packaged Helper is not a directory');
+    const helper = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', within(bundle, path.join(frameworks, entry.name, 'Contents/Info.plist'))], signingOptions));
+    helpers.push(entry.name.slice(0, -4), helper.CFBundleExecutable, ...[helper.CFBundleName, helper.CFBundleDisplayName].filter(value => value !== undefined));
+  }
+  if (!helpers.length) throw Error('Packaged Helper inventory is empty');
+  return { bundle, app, executable, revision: info.NAWSourceRevision, identifier: info.CFBundleIdentifier, version: info.CFBundleShortVersionString, reportNames: reportNames(info.CFBundleExecutable, helpers) };
 }
 async function run(input) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('This check requires Apple Silicon macOS');
   const t = target(input); verifySignature(t.bundle); await verifyPackageFuses(t.bundle); const initialSeal = seal(t);
-  const before = reports(), root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-discoveries-bundle-'))), identity = fs.lstatSync(root);
+  const before = reports(t.reportNames), root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-discoveries-bundle-'))), identity = fs.lstatSync(root);
   let runWorker, RegularPopup, create, probeSource, wireSource;
   try {
     ({ runWorker } = require(path.join(t.app, 'app/regular-popup-transport.cjs')));
@@ -112,7 +128,7 @@ async function run(input) {
     for (const child of children) child.kill('SIGKILL');
     await pause(20000);
     try {
-      verifySignature(t.bundle); assert.deepEqual(seal(t), initialSeal, 'The bundle changed during its check'); const after = reports(), added = after.filter(name => !before.includes(name));
+      verifySignature(t.bundle); assert.deepEqual(seal(t), initialSeal, 'The bundle changed during its check'); const after = reports(t.reportNames), added = after.filter(name => !before.includes(name));
       console.log(JSON.stringify({ revision: t.revision, version: t.version, identifier: t.identifier, cases: cases.length, bundleUnchanged: true, before, after, added, realSourceCalls: 0, realCredentialReads: 0, realModelCalls: 0, osNotifications: 0 }));
       if (added.length) failure ||= Error('New crash reports were generated');
     } catch (error) { failure ||= error; }
@@ -127,4 +143,4 @@ if (require.main === module) {
   else if (args.length !== 1 || !path.isAbsolute(args[0])) { console.error('Expected one absolute NAW bundle path'); process.exitCode = 1; }
   else run(args[0]).then(value => console.log('PASS ' + JSON.stringify(value)), error => { console.error('BLOCKED ' + error.message); process.exitCode = 1; });
 }
-module.exports = { run, target };
+module.exports = { run, target, reportNames, reports };
