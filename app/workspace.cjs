@@ -1173,9 +1173,26 @@ class Workspace extends EventEmitter {
     // Identity, old-context references and the boundary are one saved snapshot.
     // A failed write leaves GUI submission closed; retrying metadata cannot add
     // a second boundary or replay a model task.
-    const pending = s.nativeContextPending; s.nativeContextPending = null; setActivity(s, ''); this.persist();
-    if (this.storageWarning) s.nativeContextPending = pending;
-    else info.committed = true;
+    const pending = s.nativeContextPending, episode = s.rotationEpisode;
+    const boundary = s.nativeContexts?.at(-1);
+    const retire = info.nativeId !== info.previousId && episode?.state === 'waiting-provider' &&
+      episode.nativeId === info.previousId && boundary?.nativeId === info.previousId;
+    const disposition = retire ? { actor: { kind: 'native-context', id: info.previousId }, at: boundary.endedAt,
+      reason: 'native-context-changed', action: 'context-switch', outcome: 'failed',
+      boundaryId: boundary.boundaryId, nextNativeId: info.nativeId } : null;
+    setActivity(s, '');
+    const next = { ...s, nativeContextPending: null, ...(retire ? {
+      rotationEpisode: { ...episode, state: 'released', disposition },
+      nativeContexts: s.nativeContexts.map(context => context.boundaryId === boundary.boundaryId
+        ? { ...context, rotationDisposition: { ...disposition, epoch: episode.epoch, tag: episode.tag } } : context),
+      messages: s.messages.map(m => m.id === episode.tag
+        ? { ...m, status: 'failed', rotationDisposition: { ...disposition, epoch: episode.epoch } } : m),
+    } : {}) };
+    if (this.persist({ id: s.id, next }) && !this.storageWarning) {
+      s.nativeContextPending = null;
+      if (retire) { s.rotationEpisode = next.rotationEpisode; s.nativeContexts = next.nativeContexts; s.messages = next.messages; }
+      info.committed = true;
+    } else s.nativeContextPending = pending;
     this.changed();
   }
   // T-137: a resident wake also appears in the spaces its sender and recipient share (else in the

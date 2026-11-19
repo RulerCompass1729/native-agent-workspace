@@ -2691,7 +2691,7 @@ class QueueDispatcher {
         current = this.view();
       }
     }
-    if (rotating || recoveringTrust) {
+    if (rotating || recoveringTrust || Object.values(this.rotations).some(record => record.phase === 'waiting-provider')) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
@@ -3291,11 +3291,26 @@ class QueueDispatcher {
     await this.broadcast();
   }
 
+  retiredProviderWait(session, record) {
+    if (!session || session.nativeContextPending || record.phase !== 'waiting-provider') return false;
+    const episode = session.rotationEpisode, disposition = episode?.disposition;
+    if (episode?.state !== 'released' || episode.nativeId !== record.oldNativeId || episode.epoch !== record.episodeEpoch || episode.tag !== record.tag ||
+        disposition?.action !== 'context-switch' || disposition.outcome !== 'failed' || disposition.reason !== 'native-context-changed' ||
+        disposition.actor?.kind !== 'native-context' || disposition.actor.id !== record.oldNativeId) return false;
+    const boundary = session.nativeContexts?.find(context => context.nativeId === record.oldNativeId && context.boundaryId === disposition.boundaryId);
+    const audit = boundary?.rotationDisposition;
+    return Boolean(boundary && boundary.endedAt === disposition.at && audit?.epoch === record.episodeEpoch && audit.tag === record.tag &&
+      audit.action === 'context-switch' && audit.outcome === 'failed' && audit.boundaryId === boundary.boundaryId &&
+      audit.nextNativeId === disposition.nextNativeId && audit.actor?.kind === 'native-context' && audit.actor.id === record.oldNativeId);
+  }
+
   async advanceRotations(snapshot, now) {
     for (const [id, record] of Object.entries(this.rotations)) {
       const session = snapshot.sessions.find(s => s.id === id), episode = session?.rotationEpisode;
       if (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
-          episode.epoch === record.episodeEpoch && episode.tag === record.tag) { delete this.rotations[id]; this.save(); }
+          episode.epoch === record.episodeEpoch && episode.tag === record.tag || this.retiredProviderWait(session, record)) {
+        delete this.rotations[id]; this.save();
+      }
     }
     for (const [oldId, record] of Object.entries(this.rotations)) {
       if (this.closed) return;
