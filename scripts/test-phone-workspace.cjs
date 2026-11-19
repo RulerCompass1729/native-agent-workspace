@@ -16,8 +16,11 @@ const { BlockLog } = require('../app/record-history.cjs');
 const root = path.resolve(__dirname, '..'), evidence = process.env.NAW_EVIDENCE_DIR;
 if (!evidence || !path.isAbsolute(evidence) || path.resolve(evidence).startsWith(root + path.sep)) throw Error('Private evidence directory required');
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
-const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), '2026-11/naw-remote-20261115/phase1');
-const prototypes = process.env.NAW_PHONE_PROTOTYPES || path.join(path.dirname(pictures));
+const pictureRoot = process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood');
+// A default run gets its own folder so it never overwrites earlier screenshots.
+let pictures = path.join(pictureRoot, new Date().toISOString().slice(0, 7), 'phone-workspace-' + randomUUID());
+if (process.env.NAW_PICTURES_DIR) pictures = path.join(pictureRoot, '2026-11/naw-remote-20261115/phase1');
+const prototypes = process.env.NAW_PHONE_PROTOTYPES || path.join(pictureRoot, '2026-11/naw-remote-20261115');
 fs.mkdirSync(pictures, { recursive: true });
 const checks = [], secrets = new Set();
 const clean = s => { for (const value of secrets) s = s.replaceAll(value, '[redacted]'); return s; };

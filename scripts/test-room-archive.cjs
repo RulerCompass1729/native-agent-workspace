@@ -19,7 +19,10 @@ fs.mkdirSync(path.dirname(slot), { recursive: true });
 const token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no launch.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, task: 'room archive window test', pid: process.pid }));
-const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), '2026-11/room-archive-20261115');
+const pictureRoot = process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood');
+// A default run gets its own folder so it never overwrites earlier screenshots.
+let pictures = path.join(pictureRoot, new Date().toISOString().slice(0, 7), 'room-archive-' + token);
+if (process.env.NAW_PICTURES_DIR) pictures = path.join(pictureRoot, '2026-11/room-archive-20261115');
 const checks = [], trace = [], errors = [];
 let profile, child, client, app, page, helper, source, sequence = 0;
 const save = (name, value) => fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(value, null, 2), { mode: 0o600 });
