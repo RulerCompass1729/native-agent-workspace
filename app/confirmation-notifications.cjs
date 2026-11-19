@@ -39,7 +39,7 @@ function shortPresentation(record, { state, archives = {} }, format, now) {
       if (method === 'archiveSession') { if (target.archived) return null; place = home(target); }
       else {
         const saved = archives[target.id];
-        if (!target.archived || !saved?.detached || saved.nativeId !== target.nativeId || !Array.isArray(saved.rooms) || saved.rooms.length > 1 || roomIds(target).length) return null;
+        if (!target.archived || saved?.restorable !== true || saved.nativeId !== target.nativeId || !Array.isArray(saved.rooms) || saved.rooms.length > 1 || roomIds(target).length) return null;
         place = saved.rooms.length ? room(saved.rooms[0].id) : format('notification.standalone');
       }
       description = format('notification.' + method, { target: target.name, provider: providers[target.provider], room: place });
@@ -54,18 +54,46 @@ function shortPresentation(record, { state, archives = {} }, format, now) {
     return { title, body };
   } catch { return null; }
 }
+class NotificationScreen {
+  constructor(monitor) {
+    this.state = 'unknown'; this.disposed = false; this.revision = 0; this.listeners = new Set(); this.monitor = monitor;
+    // macOS idle queries start from event defaults, not an authenticated unlock.
+    this.handlers = Object.fromEntries(['lock-screen', 'unlock-screen', 'suspend', 'resume', 'user-did-resign-active'].map(event => [event, () => {
+      if (this.disposed) return;
+      const state = event === 'unlock-screen' ? 'unlocked' : event === 'lock-screen' ? 'locked' : 'unknown';
+      if (state === this.state && event !== 'unlock-screen') return;
+      this.state = state; this.revision++; for (const listener of this.listeners) listener();
+    }]));
+    try { for (const [event, handler] of Object.entries(this.handlers)) monitor?.on?.(event, handler); }
+    catch { this.dispose(); }
+  }
+  isUnlocked() {
+    if (this.disposed || this.state !== 'unlocked') return false;
+    let idle; try { idle = this.monitor?.getSystemIdleState?.(1); } catch { /* Missing evidence retires this unlock. */ }
+    if (['active', 'idle'].includes(idle)) return true;
+    this.state = idle === 'locked' ? 'locked' : 'unknown'; this.revision++; return false;
+  }
+  subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  dispose() {
+    this.disposed = true;
+    for (const [event, handler] of Object.entries(this.handlers)) try { this.monitor?.off?.(event, handler); } catch { /* The disposed latch still rejects input. */ }
+    this.listeners.clear(); this.state = 'unknown'; this.revision++;
+  }
+}
 class ConfirmationNotifications {
-  constructor({ Notification, control, snapshot, format, reveal, active = () => true, now = Date.now, schedule = setTimeout, cancel = clearTimeout, seen = new Set() }) {
+  constructor({ Notification, control, snapshot, format, reveal, active = () => true, now = Date.now, schedule = setTimeout, cancel = clearTimeout, seen = new Set(), screen = null }) {
     Object.assign(this, { Notification, control, snapshot, format, reveal, active, now, schedule, cancel, seen });
-    this.entries = new Map(); this.disposed = false;
+    this.entries = new Map(); this.deferred = new Map(); this.disposed = false;
+    this.screen = screen || { isUnlocked: () => false, revision: 0 };
+    this.unsubscribeScreen = this.screen.subscribe?.(() => { this.sync(); this.flushDeferred(); });
   }
   async notify(record) {
     const key = `background:${record.actor.nativeId}:${record.id}`, expiresAt = confirmationExpiresAt(record);
     if (this.disposed || !this.active() || this.seen.has(key) || this.entries.has(key) || record.state !== 'confirmation-required' || !expiresAt || this.now() < record.at || this.now() >= expiresAt) return;
     this.seen.add(key); if (this.seen.size > 200) this.seen.delete(this.seen.values().next().value);
     if (!this.Notification.isSupported()) return;
-    let presentation, binding;
-    if (shortMethods.has(record.command.method) && !record.handlerStarted) try {
+    let presentation, binding; const screenRevision = this.screen.revision;
+    if (this.unlocked() && shortMethods.has(record.command.method) && !record.handlerStarted) try {
       if (!sameCard(record, this.control.receipt(record.actor, record.id))) throw Error('Changed card');
       binding = this.control.mobileBinding(record.actor.id, record.actor.nativeId, record.id, 1);
       if (binding?.sessionId !== record.actor.id || binding.nativeId !== record.actor.nativeId || binding.operationId !== record.id || binding.expiresAt !== expiresAt ||
@@ -73,13 +101,13 @@ class ConfirmationNotifications {
       const metadata = await this.snapshot(record);
       if (!sameCard(record, this.control.receipt(record.actor, record.id))) throw Error('Changed card');
       presentation = shortPresentation(record, metadata, this.format, this.now());
-      if (!presentation || !sameBinding(binding, this.control.mobileBinding(record.actor.id, record.actor.nativeId, record.id, 1))) binding = null;
+      if (!this.unlocked() || screenRevision !== this.screen.revision || !presentation || !sameBinding(binding, this.control.mobileBinding(record.actor.id, record.actor.nativeId, record.id, 1))) binding = null;
     } catch { binding = null; }
     if (this.disposed || !this.active() || this.now() >= expiresAt) return;
     const options = binding ? { ...presentation, actions: [{ type: 'button', text: this.format('notification.confirm') }, { type: 'button', text: this.format('notification.reject') }] }
       : { title: this.format('os.decisionTitle'), body: this.format('notification.openFull') + '\n' + deadlineText(expiresAt, this.now(), this.format) };
     const notification = new this.Notification(options);
-    const entry = { key, notification, binding: binding && Object.freeze({ ...binding }), actor: { id: record.actor.id, nativeId: record.actor.nativeId, provider: record.actor.provider }, id: record.id, at: record.at, expiresAt, claimed: false };
+    const entry = { key, notification, binding: binding && Object.freeze({ ...binding }), actor: { id: record.actor.id, nativeId: record.actor.nativeId, provider: record.actor.provider }, id: record.id, at: record.at, expiresAt, claimed: false, screenRevision };
     this.entries.set(key, entry);
     entry.timer = this.schedule(() => this.remove(entry), Math.max(0, expiresAt - this.now())); entry.timer?.unref?.();
     notification.on('action', (event, index) => { void this.action(entry, event, index); });
@@ -90,20 +118,37 @@ class ConfirmationNotifications {
     try { notification.show(); } catch { this.remove(entry); }
   }
   assertCurrent(entry, response) {
-    if (this.disposed || !this.active() || this.entries.get(entry.key) !== entry || !entry.binding || this.now() < entry.at || this.now() >= entry.expiresAt ||
+    if (this.disposed || !this.active() || !this.unlocked() || entry.screenRevision !== this.screen.revision || this.entries.get(entry.key) !== entry || !entry.binding || this.now() < entry.at || this.now() >= entry.expiresAt ||
         !sameBinding(entry.binding, this.control.mobileBinding(entry.actor.id, entry.actor.nativeId, entry.id, response, entry.claimed))) throw Error('Notification decision is no longer current');
   }
   async action(entry, event, legacyIndex) {
-    if (this.disposed || this.entries.get(entry.key) !== entry || !entry.binding) return;
+    if (this.disposed || !entry.binding) return;
     const index = event?.actionIndex ?? legacyIndex;
     if (!Number.isSafeInteger(index) || ![0, 1].includes(index) || event?.actionIndex !== undefined && legacyIndex !== undefined && legacyIndex !== index || entry.claimed) return;
+    if (!this.unlocked() || entry.screenRevision !== this.screen.revision) {
+      if (!entry.blockedRecorded) { entry.blockedRecorded = true; this.remove(entry); this.openOrDefer(entry); }
+      return;
+    }
+    if (this.entries.get(entry.key) !== entry) return;
     const response = index === 0 ? 1 : 0;
     try {
       this.assertCurrent(entry, response); entry.claimed = true;
       try { entry.notification.close(); } catch { /* The decision still rechecks its binding. */ }
       await this.control.decide(entry.actor.id, entry.actor.nativeId, entry.id, response, () => this.assertCurrent(entry, response));
-    } catch { this.revealRecord(entry); }
+    } catch { this.openOrDefer(entry); }
     finally { this.remove(entry); }
+  }
+  unlocked() { try { return this.screen.isUnlocked() === true; } catch { return false; } }
+  openOrDefer(entry) {
+    if (this.disposed || !this.active()) return;
+    if (this.unlocked()) { this.revealRecord(entry); return; }
+    this.deferred.set(entry.key, { key: entry.key, actor: entry.actor, id: entry.id, blockedAt: this.now(), reason: 'screen-unavailable' });
+    while (this.deferred.size > 50) this.deferred.delete(this.deferred.keys().next().value);
+  }
+  flushDeferred() {
+    if (!this.unlocked() || this.disposed) return;
+    const pending = [...this.deferred.values()]; this.deferred.clear();
+    for (const entry of pending) this.openOrDefer(entry);
   }
   revealRecord(entry) { try { this.reveal({ sessionId: entry.actor.id, nativeId: entry.actor.nativeId, messageId: entry.key }); } catch { /* The original card stays in records. */ } }
   remove(entry, close = true) {
@@ -118,6 +163,6 @@ class ConfirmationNotifications {
     } catch { this.remove(entry); }
   }
 
-  dispose() { this.disposed = true; for (const entry of this.entries.values()) this.remove(entry); }
+  dispose() { this.disposed = true; this.unsubscribeScreen?.(); this.deferred.clear(); for (const entry of this.entries.values()) this.remove(entry); }
 }
-module.exports = { shortPresentation, ConfirmationNotifications };
+module.exports = { shortPresentation, ConfirmationNotifications, NotificationScreen };

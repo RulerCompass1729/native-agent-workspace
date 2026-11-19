@@ -5,7 +5,7 @@ const { ConfirmationNotifications } = require('../confirmation-notifications.cjs
 const { RoomState } = require('../room-state.cjs'), { SessionLabels } = require('../session-labels.cjs');
 const operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function fixture(t) {
+async function fixture(t, screen = { isUnlocked: () => true, revision: 0 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-notification-consent-'));
   let now = Date.now(), writes = 0, audits = 0, controller, notifier;
   const actor = { id: 'agent', nativeId: 'native-agent', name: 'Lead', provider: 'codex' };
@@ -25,7 +25,7 @@ async function fixture(t) {
     handlers: new Map([['rename', async (_c, id, name) => { writes++; labels.set(id, name); }]]),
     confirmation: () => ({ message: 'Synthetic rename', detail: 'SYNTHETIC_DETAIL_NOT_FOR_NOTIFICATION', buttons: ['Cancel', 'Confirm'], cancelId: 0 }),
     audit: () => { audits++; }, confirmationPending: row => notifier.notify(row), changed: () => notifier?.sync() });
-  notifier = new ConfirmationNotifications({ Notification, control: controller, now: () => now, snapshot: async () => ({ state: labels.apply(rooms.apply(snapshot)), archives: rooms.value.sessionArchives }),
+  notifier = new ConfirmationNotifications({ Notification, screen, control: controller, now: () => now, snapshot: async () => ({ state: labels.apply(rooms.apply(snapshot)), archives: rooms.value.sessionArchives }),
     format: (key, params) => locale.format('en', key, params), reveal: value => reveals.push(value) });
   t.after(async () => { notifier.dispose(); await controller.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const row = await controller.call({ sender: actor, identity: { callId: 'call', turnId: 'turn' }, valid: () => true }, { action: 'invoke', operation_id: 'operation', method: 'rename', arguments: ['target', 'Next'] });
@@ -59,4 +59,11 @@ test('clock expiry between action and authorization never reaches handler', asyn
 test('failed OS close is best effort and does not skip real checks or duplicate execution', async t => {
   const h = await fixture(t); h.notices[0].close = () => { throw Error('OS removal unavailable'); };
   h.notices[0].emit('action', { actionIndex: 0 }); await flush(); assert.equal(h.writes, 1); assert.equal(h.receipt().state, 'complete');
+});
+test('lock after checkActor starts still makes zero handler writes and reveals only after unlock', async t => {
+  const { NotificationScreen } = require('../confirmation-notifications.cjs'), monitor = new EventEmitter(), screen = new NotificationScreen(monitor);
+  monitor.getSystemIdleState = () => 'active'; t.after(() => screen.dispose()); monitor.emit('unlock-screen'); const h = await fixture(t, screen);
+  h.context.checkActor = async () => { monitor.emit('lock-screen'); };
+  h.notices[0].emit('action', { actionIndex: 0 }); await flush(); assert.equal(h.writes, 0); assert.equal(h.reveals.length, 0);
+  monitor.emit('unlock-screen'); assert.equal(h.reveals.length, 1); assert.equal(h.writes, 0);
 });
