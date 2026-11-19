@@ -129,9 +129,11 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   const source = paths(path.resolve(sourceDataDir)), target = paths(path.resolve(targetDataDir));
   let deadlineStarted = started;
   const tick = () => { if (performance.now() - deadlineStarted > 30000) throw Error('Runtime inheritance deadline'); };
+  const refusal = (message, file, s) => Object.assign(Error(message), { runtimeEntry: [path.relative(targetDataDir, file),
+    s.dev, s.ino, s.uid, s.mode, s.nlink, s.size, s.mtimeMs, s.ctimeMs] });
   const directory = file => {
     const s = fs.lstatSync(file);
-    if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== uid || s.mode & 0o022) throw Error('Unsafe runtime directory');
+    if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== uid || s.mode & 0o022) throw refusal('Unsafe runtime directory', file, s);
     return s;
   };
   const rootState = (data, where) => {
@@ -155,10 +157,10 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
           if (!links) throw Error('Linked staging entry');
           entry.link = fs.readlinkSync(file);
         }
-        else if (s.mode & 0o022) throw Error('Writable runtime entry');
+        else if (s.mode & 0o022) throw refusal('Writable runtime entry', file, s);
         else if (s.isDirectory()) { entry.kind = 'dir'; dirs.push(relative); }
         else if (s.isFile() && s.nlink === 1 && s.size <= 256 * 1024 * 1024) { entry.kind = 'file'; bytes += s.size; }
-        else throw Error('Unsafe runtime entry');
+        else throw refusal('Unsafe runtime entry', file, s);
         if (bytes > 2 * 1024 * 1024 * 1024) throw Error('Runtime byte limit');
         entries.set(relative, entry);
         if (count % 128 === 0) { tick(); await new Promise(resolve => setImmediate(resolve)); }
@@ -264,7 +266,8 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   } catch (cause) {
     // Refused before the source was read: the source's qualification is unknown.
     const reason = cause.message === 'Runtime inheritance deadline' ? 'deadline' : checkingTarget ? 'target' : cause.code ? 'filesystem' : 'unqualified';
-    throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', reason, cause });
+    throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', reason, cause,
+      ...(reason === 'target' && cause.runtimeEntry ? { targetEntry: cause.runtimeEntry } : {}) });
   } finally {
     if (placeholder && !published) {
       const current = lstatOrNull(target.root);

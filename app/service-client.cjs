@@ -133,16 +133,19 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     }
     for (const key of layout.entries) states.set(key, await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace));
     const dsh = require('./dsh-tui.cjs'), version = process.env.NAW_APP_VERSION, retryVersion = version || 'development';
-    const targetWarnings = ensureService.targetWarnings ||= new Map();
+    const targetWarnings = ensureService.targetWarnings ||= new Map(), warningLimit = 64;
+    const trimWarnings = () => { while (targetWarnings.size > warningLimit) targetWarnings.delete(targetWarnings.keys().next().value); };
+    trimWarnings();
     const targetWarningState = (target, error) => {
       try {
+        if (!Array.isArray(error?.targetEntry)) return null;
         const directory = path.join(dataDir, target), where = dsh.paths(directory);
         const identity = file => {
           try { const s = fs.lstatSync(file); return [s.dev, s.ino, s.uid, s.mode, ...(file === directory ? [] : [s.mtimeMs, s.ctimeMs])]; }
           catch (cause) { if (cause.code === 'ENOENT') return null; throw cause; }
         };
         const cause = error?.cause;
-        return JSON.stringify([retryVersion, cause?.code || null,
+        return JSON.stringify([retryVersion, error.targetEntry, cause?.code || null,
           crypto.createHash('sha256').update(typeof cause?.message === 'string' ? cause.message : '').digest('hex'),
           ...[directory, where.base, where.root].map(identity)]);
       } catch { return null; }
@@ -177,7 +180,8 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           // Only diagnostics are cached; every startup still performs preflight.
           const state = reason === 'target' ? targetWarningState(target, error) : null;
           if (!state || targetWarnings.get(warningKey) !== state) console.warn('DSH runtime inheritance skipped:', reason);
-          if (state) targetWarnings.set(warningKey, state); else targetWarnings.delete(warningKey);
+          targetWarnings.delete(warningKey);
+          if (state) { targetWarnings.set(warningKey, state); trimWarnings(); }
           if (reason !== 'unqualified') return;
         }
       }
@@ -225,6 +229,10 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       } finally { client.close(); }
       layout.entries = layout.entries.filter(entry => entry !== key);
       failures = failures.filter(row => row.source !== key && row.target !== key); saveDsh(true);
+      for (const slot of targetWarnings.keys()) {
+        const [directory, source, target] = JSON.parse(slot);
+        if (directory === dataDir && (source === key || target === key)) targetWarnings.delete(slot);
+      }
     }
   } finally { releaseLock(lockFile, lock); }
 }
