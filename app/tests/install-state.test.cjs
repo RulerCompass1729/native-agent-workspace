@@ -2,14 +2,15 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const vm = require('node:vm');
+const runtimeFixture = require('../../scripts/fixtures/install-runtime.cjs');
 const gate = require('../../scripts/check-install-state.cjs');
 const revision = 'a'.repeat(40), expected = { version: '0.1.0-alpha.999', revision };
 const box = { x: 20, y: 30, width: 1240, height: 820 };
 function state() {
   return { profile: '/synthetic/profile', gui: { pid: 100, started: 'before' }, views: [{ owner: 'synthetic-view', bounds: { ...box } }],
-    windows: [{ id: 1, onScreen: true, bounds: { ...box } }], bundle: { ...expected },
-    backend: { key: 'old', ...expected, evidence: 'active-key+live-lock+runtime-source' }, dsh: { status: 'qualified', digest: 'same-tree' } };
+    windows: [{ id: 1, onScreen: true, bounds: { ...box } }], bundle: { ...expected, runtimeHash: 'b'.repeat(16) },
+    backend: { key: 'old', ...expected, runtimeHash: 'b'.repeat(16), evidence: 'active-key+live-lock+runtime-source' }, dsh: { status: 'qualified', digest: 'same-tree' } };
 }
 function pair() { const before = state(), after = state(); after.gui = { pid: 101, started: 'after' }; after.backend.key = 'new'; return { before, after }; }
 const instant = { minimumMs: 0, quietMs: 0 };
@@ -19,7 +20,7 @@ for (const [name, change] of [
   ['DSH downgrade', s => { s.dsh = { status: 'degraded', reason: 'runtime-missing' }; }],
   ['wrong bundle version', s => { s.bundle.version = '0.1.0-alpha.998'; }],
   ['wrong backend version', s => { s.backend.version = '0.1.0-alpha.998'; }],
-  ['wrong backend SHA', s => { s.backend.revision = 'b'.repeat(40); }],
+  ['wrong backend runtime hash', s => { s.backend.runtimeHash = 'c'.repeat(16); }],
   ['changed DSH tree', s => { s.dsh.digest = 'different-tree'; }],
   ['lost view replaced at same count', s => { s.views[0].owner = 'replacement'; }],
   ['old GUI not restarted', s => { s.gui = { pid: 100, started: 'before' }; }],
@@ -144,32 +145,22 @@ test('pre metadata accepts an older bundle without discoveries modules and refus
     assert.throws(() => gate.bundleMetadata(app), /escaped/);
   } finally { fs.rmSync(root, { recursive: true }); }
 });
-test('backend metadata binds live process lifetime, active key and copied runtime source without RPC', async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'install-state-backend-')));
-  let child;
+test('backend metadata binds live process lifetime and the complete bootstrap closure without RPC', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'install-state-backend-'))); let live;
   try {
-    const app = path.join(root, 'app'), profile = path.join(root, 'profile with spaces'); fs.mkdirSync(path.join(app, 'app'), { recursive: true }); fs.mkdirSync(profile);
-    const names = ['daemon.cjs', 'adapters.cjs', 'codex-terminal-bridge.cjs', 'workspace.cjs'], digest = createHash('sha256').update(expected.version);
-    for (const name of names) { const source = name === 'daemon.cjs' ? 'setTimeout(() => {}, 30000);' : '// synthetic fixture'; fs.writeFileSync(path.join(app, 'app', name), source); digest.update(source); }
-    const key = 'backends/' + digest.digest('hex').slice(0, 20), directory = path.join(profile, key), runtime = path.join(directory, 'runtimes', 'c'.repeat(16)); fs.mkdirSync(runtime, { recursive: true });
-    for (const name of names) fs.copyFileSync(path.join(app, 'app', name), path.join(runtime, name));
-    child = spawn(process.execPath, [path.join(runtime, 'daemon.cjs'), directory], { stdio: 'ignore' });
-    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-    const started = execFileSync('/bin/ps', ['-p', String(child.pid), '-o', 'lstart='], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).trim();
-    fs.writeFileSync(path.join(profile, 'services.json'), JSON.stringify({ format: 1, active: key, entries: [key] }));
-    const lock = { format: 1, kind: 'service', directory, pid: child.pid, started }; fs.writeFileSync(path.join(directory, 'service.lock'), JSON.stringify(lock));
-    const target = { app, executable: process.execPath, ...expected };
-    const value = gate.backendState(profile, target); assert.equal(value.revision, revision); assert.equal(value.version, expected.version);
-    fs.writeFileSync(path.join(runtime, 'workspace.cjs'), '// old source'); assert.throws(() => gate.backendState(profile, target), /source mismatch/);
-    fs.copyFileSync(path.join(app, 'app/workspace.cjs'), path.join(runtime, 'workspace.cjs'));
-    fs.writeFileSync(path.join(directory, 'service.lock'), JSON.stringify({ ...lock, started: 'wrong lifetime' })); assert.throws(() => gate.backendState(profile, target), /process mismatch/);
-  } finally {
-    if (child && child.exitCode === null) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill(); await exited; }
-    fs.rmSync(root, { recursive: true });
-  }
+    const f = runtimeFixture.fixture(root); live = await runtimeFixture.start(f);
+    const value = gate.backendState(f.profile, live.target);
+    assert.equal(value.version, expected.version); assert.equal(value.runtimeHash, f.runtimeHash);
+    assert.equal(Object.hasOwn(value, 'revision'), false); assert.equal(value.files, f.entries.length);
+    fs.writeFileSync(path.join(f.runtime, 'workspace.cjs'), '// old source'); assert.throws(() => gate.backendState(f.profile, live.target), /source mismatch/);
+    fs.copyFileSync(path.join(f.app, 'app/workspace.cjs'), path.join(f.runtime, 'workspace.cjs'));
+    fs.writeFileSync(path.join(f.directory, 'service.lock'), JSON.stringify({ ...live.lock, started: 'wrong lifetime' }));
+    assert.throws(() => gate.backendState(f.profile, live.target), /process mismatch/);
+  } finally { await live?.close(); fs.rmSync(root, { recursive: true }); }
 });
-test('CoreGraphics reader reads only the owned CLI PID without AX, compilation or screenshots', async () => {
-  if (process.platform !== 'darwin') { await assert.rejects(gate.main(['pre', '--bundle', '/synthetic.app', '--profile', '/synthetic', '--pid', '100', '--snapshot', '/synthetic-before']), /macOS/); return; }
-  const helper = path.join(__dirname, '../../scripts/fixtures/install-windows.js');
-  assert.deepEqual(JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', helper, String(process.pid)], { encoding: 'utf8', timeout: 3000 })), []);
+test('CoreGraphics helper refuses unavailable native metadata without requesting access', () => {
+  const context = vm.createContext({ ObjC: { import() {}, unwrap: x => x, castRefToObject: x => x }, $: { CGWindowListCopyWindowInfo: () => null } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../scripts/fixtures/install-windows.js'), 'utf8'), context);
+  assert.throws(() => context.run(['100']), /metadata unavailable/);
+  assert.throws(() => context.run([]), /Explicit PID/);
 });

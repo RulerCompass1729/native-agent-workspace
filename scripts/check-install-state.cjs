@@ -28,6 +28,24 @@ function bundleMetadata(input) {
   if (![executable, app].every(p => p.startsWith(bundle + path.sep))) throw refusal('Bundle resource escaped');
   return { bundle, executable, app, version: info.CFBundleShortVersionString, revision: info.NAWSourceRevision };
 }
+function runtimeClosure(app) {
+  let source;
+  try { source = read(path.join(app, 'app/service-client.cjs')).toString('utf8'); }
+  catch { throw refusal('Runtime closure definition unconfirmed'); }
+  const lists = {};
+  for (const name of ['names', 'pluginFiles', 'pluginTests']) {
+    const matches = [...source.matchAll(new RegExp('const ' + name + ' = (\\[[^;\\n]+\\]);', 'g'))];
+    if (matches.length !== 1 || !/^\[\s*'[A-Za-z0-9_./@-]+'(?:,\s*'[A-Za-z0-9_./@-]+')*\s*\]$/.test(matches[0][1])) throw refusal('Runtime closure definition unconfirmed');
+    lists[name] = [...matches[0][1].matchAll(/'([^']+)'/g)].map(m => m[1]);
+    if (lists[name].some(file => file.startsWith('/') || file.split('/').includes('..'))) throw refusal('Runtime closure path unconfirmed');
+  }
+  if (!identityFiles.every(file => lists.names.includes(file)) || !lists.names.includes('dsh-tui.cjs')) throw refusal('Runtime closure coverage unconfirmed');
+  const files = [...lists.names.map(file => [file, file]), ...lists.pluginFiles.map(file => ['claude-bridge/' + file, 'claude-bridge/' + file]), ...lists.pluginTests.map(file => ['claude-bridge/' + file, 'claude-bridge-tests/' + file])];
+  const digest = createHash('sha256');
+  try { for (const [file] of files) digest.update(read(path.join(app, 'app', file))); }
+  catch { throw refusal('Runtime closure inputs unconfirmed'); }
+  return { files, hash: digest.digest('hex').slice(0, 16) };
+}
 function snapshotPath(input, profile, bundle) {
   const requested = path.resolve(input), parent = safePath(path.dirname(requested)), stat = fs.statSync(parent);
   const destination = path.join(parent, path.basename(requested));
@@ -103,6 +121,25 @@ function dshState(backend, app) {
     return { status: 'qualified', ...inventory };
   } catch { return { status: 'degraded', reason: 'runtime-unqualified-or-inspection-failed' }; }
 }
+function preDsh(profile, backend, app) {
+  const state = dshState(backend.directory, app);
+  if (state.reason !== 'runtime-missing') return state;
+  const layout = json(path.join(profile, 'services.json'));
+  if (!Array.isArray(layout.entries) || layout.entries.length > 100) throw refusal('Donor layout unconfirmed');
+  state.donors = [];
+  for (const key of layout.entries) {
+    if (key === backend.key) continue;
+    if (!(key === '.' || /^backends\/[a-f0-9]{20}$/.test(key))) throw refusal('Donor directory unconfirmed');
+    const directory = path.join(profile, key);
+    if (safePath(directory) !== directory) throw refusal('Donor directory linked');
+    const donor = dshState(directory, app);
+    if (donor.status === 'qualified') state.donors.push({ key, ...donor });
+  }
+  return state;
+}
+const qualified = state => state?.status === 'qualified' && typeof state.digest === 'string' && state.digest.length > 0;
+const donorKey = key => key === '.' || /^backends\/[a-f0-9]{20}$/.test(key);
+const preDshReady = state => Boolean(qualified(state) || state?.status === 'degraded' && state.reason === 'runtime-missing' && state.donors?.some(d => qualified(d) && donorKey(d.key)));
 function processInfo(pid) {
   if (!Number.isSafeInteger(pid) || pid < 2) throw refusal('Explicit GUI PID required');
   const env = { ...process.env, LC_ALL: 'C', TZ: 'UTC' };
@@ -126,13 +163,24 @@ function backendState(profile, target) {
   const runtimeMatch = command.slice(0, -suffix.length).match(/ (\/.*\/runtimes\/[a-f0-9]{16})\/daemon\.cjs$/);
   if (!runtimeMatch || !runtimeMatch[1].startsWith(directory + '/runtimes/')) throw refusal('Backend runtime unconfirmed');
   const runtime = runtimeMatch[1], digest = createHash('sha256').update(target.version);
+  if (safePath(runtime) !== runtime) throw refusal('Runtime closure directory unconfirmed');
   for (const name of identityFiles) {
     const source = read(path.join(target.app, 'app', name)), running = read(path.join(runtime, name));
     if (!source.equals(running)) throw refusal('Backend source mismatch');
     digest.update(source);
   }
   if (key !== 'backends/' + digest.digest('hex').slice(0, 20)) throw refusal('Backend version unconfirmed');
-  return { key, pid: process.pid, started: process.started, version: target.version, revision: target.revision, evidence: 'active-key+live-lock+runtime-source', directory };
+  const closure = runtimeClosure(target.app), liveHash = createHash('sha256');
+  for (const [source, destination] of closure.files) {
+    let actual, expected;
+    try { actual = read(path.join(runtime, destination)); expected = read(path.join(target.app, 'app', source)); }
+    catch { throw refusal('Runtime closure source unconfirmed'); }
+    if (!actual.equals(expected)) throw refusal('Runtime closure source unconfirmed');
+    liveHash.update(actual);
+  }
+  const runtimeHash = liveHash.digest('hex').slice(0, 16);
+  if (path.basename(runtime) !== runtimeHash || runtimeHash !== closure.hash) throw refusal('Runtime closure hash unconfirmed');
+  return { key, pid: process.pid, started: process.started, version: target.version, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
 }
 function collector(options, helper, target) {
   return () => {
@@ -142,7 +190,7 @@ function collector(options, helper, target) {
     const windows = projectWindows(JSON.parse(invoke('/usr/bin/osascript', ['-l', 'JavaScript', helper, String(options.pid)], 3000)));
     if (!windows.length) throw refusal('No GUI window metadata; unlock or verify the explicit PID, do not request permissions');
     const backend = backendState(options.profile, target);
-    return { profile: options.profile, gui, views, windows, backend, bundle: { version: target.version, revision: target.revision } };
+    return { profile: options.profile, gui, views, windows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
   };
 }
 async function stable(collect, { timeoutMs = 60000, minimumMs = 20000, quietMs = 5000, intervalMs = 1000, now = () => performance.now(), sleep = wait } = {}) {
@@ -159,16 +207,23 @@ async function stable(collect, { timeoutMs = 60000, minimumMs = 20000, quietMs =
 }
 function compare(before, after, expected) {
   const count = state => state.windows.filter(w => w.onScreen).length;
-  const inherited = after.dsh.status === 'qualified' && before.dsh.status === 'qualified' && before.dsh.digest === after.dsh.digest;
+  const inherited = qualified(after.dsh) && qualified(before.dsh) && before.dsh.digest === after.dsh.digest;
+  const donor = before.dsh.status === 'degraded' && before.dsh.reason === 'runtime-missing' && before.dsh.donors?.find(d => qualified(d) && donorKey(d.key) && d.digest === after.dsh.digest);
+  const restored = qualified(after.dsh) && Boolean(donor);
+  const dshNotice = inherited ? (before.backend.key === after.backend.key ? 'retained, qualified' : 'inherited (identical tree), qualified') : restored ? 'restored, qualified; donor=' + donor.key : after.dsh.status === 'qualified' ? 'qualified; recovery provenance unconfirmed' : 'degraded: ' + after.dsh.reason;
+  const saved = new Map(before.views.map(v => [v.owner, v.bounds]));
+  const retainedBounds = after.views.every(v => saved.has(v.owner) && near(saved.get(v.owner), v.bounds));
+  const closureMatches = /^[a-f0-9]{16}$/.test(after.backend.runtimeHash || '') && after.backend.runtimeHash === after.bundle.runtimeHash;
   return [
     ['on-screen windows', count(before), count(after), count(before) === count(after)],
     ['active view owners', before.views.length, after.views.length, JSON.stringify(before.views.map(v => v.owner)) === JSON.stringify(after.views.map(v => v.owner))],
+    ['saved bounds retained (±1px)', 'same owner / same bounds', retainedBounds ? 'preserved' : 'changed; no automatic display/clamp exception', retainedBounds],
     ['views ↔ native bounds (±1px)', 'one-to-one', geometry(after.views, after.windows) ? 'match' : 'mismatch', geometry(after.views, after.windows)],
     ['profile identity', 'same', before.profile === after.profile ? 'same' : 'different', before.profile === after.profile],
     ['GUI restarted', 'new process lifetime', 'checked', before.gui.pid !== after.gui.pid || before.gui.started !== after.gui.started],
     ['bundle version / SHA', expected.version + ' / ' + expected.revision, after.bundle.version + ' / ' + after.bundle.revision, after.bundle.version === expected.version && after.bundle.revision === expected.revision],
-    ['active backend (inferred)', expected.version + ' / ' + expected.revision, after.backend.version + ' / ' + after.backend.revision, after.backend.version === expected.version && after.backend.revision === expected.revision && after.backend.evidence === 'active-key+live-lock+runtime-source'],
-    ['DSH runtime', 'inherited, qualified', inherited ? (before.backend.key === after.backend.key ? 'retained, qualified' : 'inherited (identical tree), qualified') : 'degraded/unconfirmed: ' + (after.dsh.reason || 'source-tree-not-identical'), inherited],
+    ['active backend closure', 'release-matching version / complete runtime hash', after.backend.version + ' / ' + (after.backend.runtimeHash || 'unconfirmed'), after.backend.version === expected.version && closureMatches && after.backend.evidence === 'active-key+live-lock+runtime-source'],
+    ['DSH runtime', 'qualified inheritance or proved donor recovery', dshNotice, inherited || restored],
   ];
 }
 async function post(before, collect, expected, gate, options) {
@@ -200,11 +255,11 @@ async function main(argv = process.argv.slice(2)) {
   {
     const collect = collector(options, helper, target), expected = { version: options.version, revision: options.revision };
     if (mode === 'pre') {
-      const state = collect(); state.dsh = dshState(state.backend.directory, target.app);
+      const state = collect(); state.dsh = preDsh(options.profile, state.backend, target.app);
       if (!geometry(state.views, state.windows)) throw refusal('Pre-install views/native geometry mismatch');
       fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), ...state }, null, 2), { flag: 'wx', mode: 0o600 });
-      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['active backend (inferred)', state.backend.version, state.backend.revision, true], ['DSH runtime', 'qualified', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : ''), state.dsh.status === 'qualified']]);
-      return state.dsh.status === 'qualified' ? 0 : 1;
+      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]]);
+      return preDshReady(state.dsh) ? 0 : 1;
     }
     if (!/^0\.1\.0-alpha\.\d+$/.test(expected.version || '') || !/^[a-f0-9]{40}$/.test(expected.revision || '')) throw refusal('Post requires explicit release version and full revision');
     const s = fs.lstatSync(snapshot);
@@ -222,4 +277,4 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(error => { console.error('FAIL: ' + (error.installStateReason || 'Metadata unavailable; verify input files and OS metadata access without changing permissions') + '. No settings or permissions were changed.'); process.exitCode = 1; });
-module.exports = { snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
+module.exports = { runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
