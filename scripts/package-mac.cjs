@@ -122,6 +122,7 @@ async function build() {
       'claude-native-journeys.cjs',
       'claude-pin.cjs',
       'claude-qualification.cjs',
+      'claude-session-list.cjs',
       'claude-submit.cjs',
       'claude_hook.py',
       'codex-profile.cjs',

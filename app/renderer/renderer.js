@@ -2459,6 +2459,10 @@ $('create-dialog').addEventListener('close', event => {
   if (!event.currentTarget.open) invalidateGitPreview();
 });
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
+// Which provider the picker lists, and for Claude the name and permission choice made in 新建会话 before it opened.
+let historyProvider = 'codex', historyOptions = {};
+const historyText = key => historyProvider === 'claude' ? { 'history.title': 'history.claudeTitle', 'history.intro': 'history.claudeIntro', 'history.help': 'history.claudeHelp',
+  'history.unnamed': 'history.claudeUnnamed', 'history.loading': 'history.claudeLoading', 'history.empty': 'history.claudeEmpty' }[key] || key : key;
 function renderNativeHistory() {
   if (!$('native-history-dialog').open) return;
   const list = $('native-history-list'); list.replaceChildren();
@@ -2469,9 +2473,10 @@ function renderNativeHistory() {
     const text = node('span'), stamp = node('small');
     ui.display.computed(stamp, 'text', () => {
       const time = Number.isFinite(row.updatedAt) && Math.abs(row.updatedAt * 1000) <= 8640000000000000 ? new Date(row.updatedAt * 1000).toLocaleString(ui.language.getSnapshot().active) : uiText('history.unknownTime');
-      return [time, row.existingIds?.length && uiText('history.inWorkspace')].filter(Boolean).join(' · ');
+      // A session already open here runs in NAW itself, not elsewhere.
+      return [time, row.existingIds?.length && uiText('history.inWorkspace'), row.running && !row.existingIds?.length && uiText('history.claudeRunning')].filter(Boolean).join(' · ');
     });
-    text.append(row.name ? node('strong', row.name) : uiNode('strong', 'history.unnamed'), node('small', row.cwd), stamp);
+    text.append(row.name ? node('strong', row.name) : uiNode('strong', historyText('history.unnamed')), node('small', row.cwd), stamp);
     label.append(input, text); list.append(label);
     input.onchange = () => { historySelected = row.nativeId; updateNativeHistoryControls(); };
   }
@@ -2490,12 +2495,21 @@ async function loadNativeHistory(more = false) {
   if (historyLoading || historyImporting || !$('native-history-dialog').open) return;
   const generation = ++historyGeneration; historyLoading = true;
   if (!more) { historySearch = $('native-history-search').value; historyRows = []; historySelected = null; historyCursor = null; }
-  renderNativeHistory(); ui.display.text($('native-history-status'), 'history.loading');
+  renderNativeHistory(); ui.display.text($('native-history-status'), historyText('history.loading'));
   try {
-    const result = await api.nativeHistory({ search: historySearch, ...(more ? { cursor: historyCursor } : {}) });
+    const claude = historyProvider === 'claude';
+    const result = await api.nativeHistory({ ...(claude ? { provider: 'claude' } : {}), search: historySearch, ...(more ? { cursor: historyCursor } : {}) });
     if (generation !== historyGeneration || !$('native-history-dialog').open) return;
     const seen = new Set(historyRows.map(r => r.nativeId)); historyRows.push(...result.data.filter(r => !seen.has(r.nativeId))); historyCursor = result.nextCursor;
-    ui.display.text($('native-history-status'), historyRows.length ? 'history.count' : 'history.empty', historyRows.length ? () => ({ count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(historyRows.length) }) : undefined);
+    const number = count => new Intl.NumberFormat(ui.language.getSnapshot().active).format(count);
+    // Claude's own records could not be read as expected: say why and point to pasting the ID, without guessing.
+    const unavailable = claude && result.unavailable;
+    const skipped = claude && !unavailable && result.skipped > 0 ? result.skipped : 0, unknown = claude && !unavailable && result.runningUnknown === true;
+    if (unavailable) ui.display.computed($('native-history-status'), 'text', () => unavailable.reason === 'format' ? uiText('history.claudeFormat', { count: number(unavailable.count) })
+      : unavailable.version ? uiText('history.claudeVersion', { version: unavailable.version }) : uiText('history.claudeVersionUnknown'));
+    else if (skipped || unknown) ui.display.computed($('native-history-status'), 'text', () => [historyRows.length ? uiText('history.count', { count: number(historyRows.length) }) : uiText('history.claudeEmpty'),
+      skipped && uiText('history.claudeSkipped', { count: number(skipped) }), unknown && uiText('history.claudeRunningUnknown')].filter(Boolean).join(' '));
+    else ui.display.text($('native-history-status'), historyRows.length ? 'history.count' : historyText('history.empty'), historyRows.length ? () => ({ count: number(historyRows.length) }) : undefined);
   } catch (error) { if (generation === historyGeneration && $('native-history-dialog').open) ui.showError($('native-history-status'), error); }
   finally { if (generation === historyGeneration) { historyLoading = false; renderNativeHistory(); } }
 }
@@ -2531,9 +2545,20 @@ $('open-native-history').onclick = () => {
       throw error;
     } finally { creatingSession = false; createReadiness(); }
   });
+  openNativeHistory('codex');
+};
+function openNativeHistory(provider) {
   if (historyImporting) return;
+  // The name and permission choice already made in 新建会话 apply to the session continued from the list.
+  historyProvider = provider; historyOptions = provider === 'claude' ? { name: $('session-name').value, skipPermissions: $('skip-permissions').checked } : {};
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
+  for (const [id, key] of [['native-history-heading', 'history.title'], ['native-history-intro', 'history.intro'], ['native-history-help', 'history.help']]) ui.display.text($(id), historyText(key));
   $('native-history-search').value = ''; $('native-history-dialog').showModal(); loadNativeHistory();
+}
+$('open-claude-sessions').onclick = () => {
+  const ticket = dialogTickets.get($('create-dialog'));
+  if (!currentDialogTicket(ticket) || creatingSession || ticket.created || ticket.creation) return;
+  openNativeHistory('claude');
 };
 $('native-history-search-form').onsubmit = event => { event.preventDefault(); loadNativeHistory(); };
 $('more-native-history').onclick = () => loadNativeHistory(true);
@@ -2550,8 +2575,12 @@ $('confirm-native-history').onclick = async () => {
   const fresh = () => $('native-history-dialog').open && generation === historyGeneration;
   historyImporting = true; renderNativeHistory(); ui.display.text($('native-history-status'), 'history.importing');
   try {
-    const id = await api.importHistory(historySelected); updateState(await api.initial()); render();
-    if (fresh() && revision === selectionRevision) { $('native-history-dialog').close(); await select(id, 'chat'); }
+    // A Claude row continues through the same import as a pasted ID, in the row's own folder.
+    const row = historyRows.find(r => r.nativeId === historySelected), claude = historyProvider === 'claude';
+    const id = claude ? await api.importHistory(row.nativeId, { provider: 'claude', cwd: row.cwd, name: historyOptions.name, skipPermissions: historyOptions.skipPermissions })
+      : await api.importHistory(historySelected);
+    updateState(await api.initial()); render();
+    if (fresh() && revision === selectionRevision) { $('native-history-dialog').close(); await select(id, claude ? 'terminal' : 'chat'); }
     else toastMessage('history.retained');
     if (state.sessions.find(s => s.id === id)?.archived) toastMessage('history.archived');
   } catch (error) { if (fresh()) ui.showError($('native-history-status'), error); else toastError(error); }
@@ -3669,6 +3698,7 @@ function createReadiness() {
   // A DSH session has no history to continue here.
   $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
+  $('open-claude-sessions').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeSessionList');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
   const gitSelected = $('git-worktree').checked, gitSupported = state.capabilities?.includes('gitWorktreeV1');
@@ -3691,6 +3721,8 @@ function createReadiness() {
   }
   ui.display.text($('open-native-history'), historyProvider === 'codex' ? 'create.codexHistory' : takeover ? 'create.claudeTakeover' : 'create.claudeFork');
   $('open-native-history').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || gitSelected || (historyProvider === 'claude' && newDirectory);
+  // A listed session brings its own folder, so the chosen one does not matter here.
+  $('open-claude-sessions').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || gitSelected;
   if (historyProvider === 'claude' && newDirectory) ui.display.text($('open-native-history'), 'create.chooseOriginal');
   $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
   $('new-folder').disabled = $('choose-folder').disabled = creatingSession;
