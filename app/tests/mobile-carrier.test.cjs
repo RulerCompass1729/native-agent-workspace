@@ -27,3 +27,5 @@ test('unverifiable foreground configuration and duplicate entry ownership fail c
   const f=state();f.serve.TCP[443]={TCPForward:'127.0.0.1:8001',TerminateTLS:'other.example.ts.net'};
   assert.equal(load().inspect(f.status,f.serve,{port:48765}).port,48765,'another exact TLS SNI does not share this cookie host');
 });
+
+test('shared-host error includes only structured other ports and keeps its original trust predicate',()=>{const f=state();for(const p of [443,8443]){f.serve.TCP[p]={HTTPS:true};f.serve.Web['demo.example.ts.net:'+p]={Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}};}assert.throws(()=>load().inspect(f.status,f.serve),e=>{assert.equal(e.code,'MOBILE_SHARED_HOST');assert.deepEqual(e.otherPorts,[443,8443]);assert.ok(!JSON.stringify(e.otherPorts).includes('demo'));return true;});assert.equal(load().inspect(f.status,f.serve,{sharedHostConfirmed:true}).port,48765);});

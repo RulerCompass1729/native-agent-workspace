@@ -6,6 +6,7 @@
   // remembered/remember carry the last checked address, Tailscale user and port across restarts. Never secrets or links.
   function bind({ container, document, api, getSessions, getRooms = () => [], now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout, text, display, remembered = () => null, remember = () => {} }) {
     const oneStep = typeof api.mobileConnect === 'function';
+    const renewable = oneStep && typeof api.mobileSetupStatus === 'function';
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const { validActor } = global.nativeWorkspaceMobileIdentity || (typeof require === 'function' ? require('../mobile-identity.js') : {});
     const format = text || ((key, params) => locale.format('zh', key, params));
@@ -30,7 +31,7 @@
       return box;
     };
     const section = node('details'), summary = node('summary', 'mobile.title'); section.append(summary);
-    section.addEventListener('toggle', () => { if (section.open) summary.scrollIntoView?.({ block: 'start' }); });
+    section.addEventListener('toggle', () => { if (section.open) summary.scrollIntoView?.({ block: 'start' }); else if (renewable && opened) invalidatePairing(); });
     const status = document.createElement('p'); status.id = 'mobile-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     section.append(node('p', 'mobile.introCompact'));
     const advanced = node('details'), advancedTitle = node('summary', 'mobile.advanced'); advanced.id = 'mobile-advanced'; advancedTitle.id = 'mobile-advanced-title'; advanced.append(advancedTitle);
@@ -80,6 +81,9 @@
     const matched = checkbox('mobile-approval-matched'), enabled = checkbox('mobile-approval-enabled');
     approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); advanced.append(approval);
     const allSessions = checkbox('mobile-all-sessions'), sharedHost = checkbox('mobile-shared-host'), qr = document.createElement('img');
+    const sharedError=node('div'),sharedErrorTitle=node('strong','mobile.sharedHostBlocked'),sharedErrorBody=node('p');
+    sharedError.id='mobile-shared-error';sharedError.className='mobile-shared-error';sharedError.hidden=true;sharedError.setAttribute('role','alert');sharedError.append(sharedErrorTitle,sharedErrorBody);
+    const renewalHint=node('p');renewalHint.className='quiet mobile-renewal-hint';renewalHint.hidden=true;
     const qrTrust=node('p','mobile.qrTrust');qrTrust.className='quiet';qrTrust.hidden=true;
     qr.id = 'mobile-pair-qr'; qr.hidden = true; attribute(qr, 'alt', 'mobile.qrAlt');
     const fullScope = node('p', 'mobile.fullScope'), fullBoundary = node('p', 'mobile.fullStage1');
@@ -91,14 +95,14 @@
       if (port.parentElement) port.parentElement.hidden = all;
       fullScope.hidden = fullBoundary.hidden = !all;
       if (!all) showConnection(recall());
-      say(prepare, all ? approvalValue?.paired ? 'mobile.replacePhone' : 'mobile.connect' : 'mobile.prepare');
+      say(prepare, all ? setupId && renewable ? 'mobile.refreshQr' : approvalValue?.paired ? 'mobile.replacePhone' : 'mobile.connect' : 'mobile.prepare');
       if(oneStep)say(fullBoundary,approvalValue?.paired?'mobile.replaceAfterComplete':'mobile.fullStage2');
     }
     if (oneStep) {
       allSessions.checked = true;
-      advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), checkRow(sharedHost, node('span', 'mobile.sharedHost')));
+      advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), sharedError, checkRow(sharedHost, node('span', 'mobile.sharedHost')));
       advanced.append(connection, connectionFields, carrierRow, choices);
-      section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.append(qr,qrTrust);
+      section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.insertBefore(status,actions);section.insertBefore(renewalHint,actions);section.append(qr,qrTrust);
       allSessions.addEventListener('change', () => { invalidatePairing(); showScope(); });
       sharedHost.addEventListener('change', invalidatePairing);
     }
@@ -126,6 +130,7 @@
     });
     enabled.addEventListener('change', () => { updateAdvanced(); approvalAction('mobileApprovalEnable', { enabled: enabled.checked, registrationId: approvalValue?.registrationId }); });
     let revision = 0, timer, opened = false, busy = false, selections = [], roomSelections = [],setupId=null;
+    let renewUntil=0,qrUntil=0,nextCheck=0,renewedAt=0,enrollment=false;
     function updateAdvanced() {
       const count = Number(port.value !== '0') + roomSelections.filter(r => r.input.checked).length + Number(records.checked) + Number(replace.checked) +
         Number(matched.checked) + Number(enabled.checked || enabled.indeterminate) + Number(Boolean(approvalValue?.registered || approvalValue?.pending));
@@ -136,10 +141,71 @@
     records.addEventListener('change', configurationChanged); replace.addEventListener('change', configurationChanged);
     carrier.addEventListener('change', invalidatePairing);
     const cancelCode = id => {if(id && typeof api.mobileCancelSetup==='function')Promise.resolve(api.mobileCancelSetup({setupId:id})).catch(()=>{});};
-    const clearLink = (cancel=true) => { if(cancel){const old=setupId;setupId=null;cancelCode(old);}clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true;qrTrust.hidden=true; } };
+    const clearLink = (cancel=true) => { if(cancel){const old=setupId;setupId=null;renewUntil=0;enrollment=false;cancelCode(old);}clearTimer(timer); timer = undefined; link.value = ''; linkBox.hidden = true; if (oneStep) { qr.removeAttribute('src'); qr.hidden = true;qrTrust.hidden=true; } };
     function invalidatePairing() {
-      revision++; clearLink(); busy = false; prepare.disabled = false;
+      revision++; clearLink(); hideSharedError();quiet(renewalHint);renewalHint.hidden=true;status.setAttribute('role','status');status.setAttribute('aria-live','polite');busy = false; prepare.disabled = false;showScope();
       if (opened) say(status, oneStep && allSessions.checked ? 'mobile.autoReady' : 'mobile.idle');
+    }
+    function hideSharedError() {
+      sharedError.hidden=true;sharedHost.setAttribute('aria-invalid','false');sharedHost.setAttribute('aria-describedby','');quiet(sharedErrorBody);
+    }
+    function sharedHostError(error) {
+      const value=error?.uiMessage?.params?.ports;
+      const ports=typeof value==='string' && /^\d{1,5}(?:, \d{1,5}){0,31}$/.test(value) && value.split(', ').every(p=>Number(p)>0 && Number(p)<=65535)?value:null;
+      advanced.open=true;say(sharedErrorBody,ports?'error.mobile.sharedHostPorts':'error.mobile.sharedHost',ports?{ports}:undefined);
+      sharedError.hidden=false;sharedHost.setAttribute('aria-invalid','true');sharedHost.setAttribute('aria-describedby',sharedError.id);quiet(status);
+      sharedHost.focus?.();sharedHost.scrollIntoView?.({block:'center'});
+    }
+    function renewalState(key,hint) {
+      status.className='mobile-renewal-state'+(key==='mobile.renewPaused'?' mobile-renewal-paused':'');status.setAttribute('role','status');status.setAttribute('aria-live','polite');say(status,key);
+      renewalHint.hidden=!hint;if(hint)say(renewalHint,hint);else quiet(renewalHint);
+    }
+    function countdown() {
+      const seconds=Math.max(0,Math.ceil((qrUntil-now())/1000)),time=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
+      status.className='mobile-countdown';status.setAttribute('role','timer');status.setAttribute('aria-live','off');
+      const fresh=renewedAt>0 && now()-renewedAt<5000;say(status,fresh?'mobile.qrRenewed':'mobile.qrCountdown',{time});
+      renewalHint.hidden=false;say(renewalHint,fresh?'mobile.qrOldInvalid':'mobile.autoRenewHint');
+    }
+    async function completedEnrollment(ticket,id) {
+      let value;try{value=await api.mobileApprovalStatus();}catch{}
+      if(!opened || !section.open || revision!==ticket || setupId!==id)return;
+      clearLink(false);enrollment=false;prepare.disabled=false;
+      if(value?.paired===true) {setupId=null;showApproval(value);renewalState('mobile.connected');}
+      else renewalState('mobile.renewUnconfirmed');
+    }
+    async function enrollmentTick(ticket,id) {
+      timer=undefined;
+      if(!opened || !section.open || revision!==ticket || setupId!==id)return;
+      let info;try{info=await api.mobileSetupStatus({setupId:id});}catch{}
+      if(!opened || !section.open || revision!==ticket || setupId!==id)return;
+      if(info?.setupId===id && info.state==='complete') {await completedEnrollment(ticket,id);return;}
+      if(info?.setupId!==id || info.state!=='redeemed' || info.redeemed!==true || !Number.isSafeInteger(info.expiresAt) || info.expiresAt<=now()) {
+        clearLink(false);enrollment=false;prepare.disabled=false;renewalState('mobile.renewUnconfirmed');return;
+      }
+      timer=setTimer(()=>enrollmentTick(ticket,id),Math.min(5000,info.expiresAt-now()));
+    }
+    function pauseRenewal() {clearLink(false);setupId=null;renewalState('mobile.renewPaused','mobile.renewContinue');say(prepare,'mobile.refreshQr');}
+    async function renewalTick(ticket) {
+      timer=undefined;
+      if(!opened || !section.open || revision!==ticket || !setupId)return;
+      const id=setupId;
+      if(now()>=nextCheck || now()>=qrUntil || now()>=renewUntil) {
+        let info;try{info=await api.mobileSetupStatus({setupId:id});}catch{}
+        if(!opened || !section.open || revision!==ticket || setupId!==id)return;
+        if(info?.setupId===id && info.state==='complete') {await completedEnrollment(ticket,id);return;}
+        if(info?.setupId!==id || !['waiting','expired','redeemed'].includes(info.state) || typeof info.redeemed!=='boolean') {
+          if(now()>=renewUntil)pauseRenewal();else {clearLink(false);renewUntil=0;renewalState('mobile.renewUnconfirmed');}return;
+        }
+        if(info.redeemed) {
+          clearLink(false);
+          if(info.state!=='redeemed' || !Number.isSafeInteger(info.expiresAt) || info.expiresAt<=now()) {enrollment=false;prepare.disabled=false;renewalState('mobile.renewUnconfirmed');return;}
+          enrollment=true;prepare.disabled=true;renewalState('mobile.enrollmentActive','mobile.enrollmentHint');timer=setTimer(()=>enrollmentTick(ticket,id),Math.min(5000,info.expiresAt-now()));return;
+        }
+        nextCheck=now()+5000;
+      }
+      if(now()>=renewUntil) {pauseRenewal();return;}
+      if(now()>=qrUntil) {await pair(true);return;}
+      countdown();timer=setTimer(()=>renewalTick(ticket),Math.min(1000,qrUntil-now()));
     }
     function counted() {
       say(count, 'mobile.selectedCount', { count: selections.filter(s => s.read.checked).length, total: selections.length });
@@ -181,7 +247,7 @@
       endpoint.setAttribute('title', valid ? `${origin.value} · ${actor.value} · ${port.value}` : '');
     }
     function open() {
-      revision++; opened = true; busy = false; prepare.disabled = false; clearLink(); selections = [];
+      revision++; opened = true; busy = false; prepare.disabled = false; clearLink();hideSharedError();renewalHint.hidden=true;status.className='';status.setAttribute('role','status');status.setAttribute('aria-live','polite'); selections = [];
       records.checked = false; search.value = ''; approval.open = advanced.open = false; showConnection(recall());
       choices.replaceChildren(node('legend', 'mobile.sessionsCompact'), search, count, list, noMatch);
       roomSelections = []; spaces.replaceChildren(node('legend', 'mobile.spaces'));
@@ -215,23 +281,36 @@
       say(status, oneStep ? 'mobile.autoReady' : 'mobile.idle');
       showApproval(null); approvalAction('mobileApprovalStatus');
     }
-    async function pair() {
-      if (!opened || busy) return;
-      clearLink();
+    async function pair(automatic=false) {
+      automatic=automatic===true;
+      if (!opened || busy || enrollment || renewable && !section.open) return;
+      const previous=setupId;
+      if(renewable && oneStep && allSessions.checked) {
+        if(automatic && (!previous || now()>=renewUntil))return;
+        if(!automatic)renewUntil=now()+600000;
+        clearLink(false);hideSharedError();
+      } else clearLink();
       if (oneStep && allSessions.checked) {
-        const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
+        const ticket = ++revision; busy = true; prepare.disabled = true;status.setAttribute('role','status');status.setAttribute('aria-live','polite');renewalHint.hidden=true; say(status, 'mobile.preparing');
         try {
-          const result = await api.mobileConnect({ sharedHostConfirmed: sharedHost.checked,...(approvalValue?.paired?{replace:true}:{}) });
+          const result = await api.mobileConnect({ sharedHostConfirmed: sharedHost.checked,...(approvalValue?.paired?{replace:true}:{}),...(renewable?{renew:true,...(previous?{refreshOf:previous}:{}),...(automatic?{automatic:true}:{})}:{}) });
           if (!opened || revision !== ticket) {cancelCode(result.setupId);return;}
           if (typeof result.qr !== 'string' || result.qr.length > 350000 || !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.qr) || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= now()) throw Error('unconfirmed');
-          setupId=result.setupId || null;qr.src = result.qr; qr.hidden = false;qrTrust.hidden=false; say(status, 'mobile.qrReady');
-          timer = setTimer(() => { if (revision === ticket) { clearLink(false); say(status, 'mobile.expired'); } }, Math.min(120000, result.expiresAt - now()));
+          setupId=result.setupId || null;advanced.open=false;qr.src = result.qr; qr.hidden = false;qrTrust.hidden=false;
+          if(renewable && setupId) {
+            qrUntil=Math.min(result.expiresAt,now()+120000);nextCheck=now();renewedAt=automatic?now():0;
+            say(prepare,'mobile.refreshQr');countdown();timer=setTimer(()=>renewalTick(ticket),Math.min(1000,qrUntil-now()));
+          } else {say(status, 'mobile.qrReady');timer = setTimer(() => { if (revision === ticket) { clearLink(false); say(status, 'mobile.expired'); } }, Math.min(120000, result.expiresAt - now()));}
         } catch (error) {
           if(opened && revision===ticket && typeof api.mobileApprovalStatus==='function'){
             try{const current=await api.mobileApprovalStatus();if(opened && revision===ticket)showApproval(current);}catch{}
           }
-          if (opened && revision === ticket) { if (error?.uiMessage?.key === 'error.mobile.sharedHost') { advanced.open = true; say(status, 'error.mobile.sharedHost'); } else say(status, 'mobile.connectUnavailable'); }
-        } finally { if (opened && revision === ticket) { busy = false; prepare.disabled = false; } }
+          if (opened && revision === ticket) {
+            if (['error.mobile.sharedHost','error.mobile.sharedHostPorts'].includes(error?.uiMessage?.key)) sharedHostError(error);
+            else if(error?.uiMessage?.key==='error.mobile.enrollmentActive') {enrollment=true;renewalState('mobile.enrollmentActive','mobile.enrollmentHint');}
+            else renewalState(renewable?'mobile.renewUnconfirmed':'mobile.connectUnavailable');
+          }
+        } finally { if (opened && revision === ticket) { busy = false; prepare.disabled = enrollment; } }
         return;
       }
       const account = actor.value.trim();
@@ -265,20 +344,20 @@
     }
     async function stop() {
       if (!opened) return;
-      const ticket = ++revision; clearLink(); busy = false; prepare.disabled = false; say(status, 'mobile.revoking');
+      const ticket = ++revision; clearLink(); busy = false; prepare.disabled = false;status.setAttribute('role','status');status.setAttribute('aria-live','polite'); say(status, 'mobile.revoking');
       try {
         const result = await api.mobileRevoke();
         if (opened && revision === ticket) say(status, result.authorizationRevoked ? 'mobile.revoked' : 'mobile.revokeUnconfirmed');
       } catch { if (opened && revision === ticket) say(status, 'mobile.revokeFailed'); }
     }
     function close() {
-      revision++; opened = false; busy = false; clearLink(); origin.value = actor.value = search.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
+      revision++; opened = false; busy = false; clearLink();hideSharedError();quiet(renewalHint);renewalHint.hidden=true; origin.value = actor.value = search.value = ''; port.value = '0'; carrier.checked = replace.checked = false;
       clearActorError();
       selections = []; roomSelections = []; records.checked = false; spaces.replaceChildren(); choices.replaceChildren(); list.replaceChildren(); quiet(status); quiet(count); prepare.disabled = false; section.open = false; approval.open = advanced.open = false;
       connection.hidden = true; connectionFields.hidden = false; endpointHost.textContent = endpointActor.textContent = ''; quiet(endpointPort); endpoint.setAttribute('title', '');
       showApproval(null);
     }
-    prepare.addEventListener('click', pair); revoke.addEventListener('click', stop);
+    prepare.addEventListener('click', () => pair(false)); revoke.addEventListener('click', stop);
     return { open, close, dispose() { close(); section.remove(); } };
   }
   const value = { bind };

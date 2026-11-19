@@ -269,16 +269,17 @@ async function startAppMobileListener(options,handler,generation) {
   const address=server.address();if(!address || address.address!=='127.0.0.1' || !Number.isSafeInteger(address.port))throw Error('Mobile listener binding unconfirmed.');
   entry.ready=true;return entry;
 }
-async function beginQrAppMobile(carrier,replace,validate) {
+async function beginQrAppMobile(carrier,replace,validate,renewal={}) {
   if(mobileOpening)throw Error('Mobile setup unavailable');const broker=appMobileBroker(),existing=mobileListener;
   if(existing && (!existing.ready || existing.origin!==carrier.origin || existing.actor!==carrier.actor || existing.server.address()?.port!==carrier.port))throw Error('Existing mobile entry differs');
-  const generation=++mobileGeneration;mobileOpening=true;let result;
+  let generation=renewal.renew?mobileGeneration:++mobileGeneration;mobileOpening=true;let result;
   try {
-    result=await broker.beginCandidate({actor:carrier.actor,origin:carrier.origin,replace,validate});
+    result=await broker.beginCandidate({actor:carrier.actor,origin:carrier.origin,replace,validate,...renewal});
     if(generation!==mobileGeneration || quitting)throw Error('Mobile setup cancelled');
+    if(renewal.renew)generation=++mobileGeneration;
     if(!existing){if(!await mobileStopped || mobileListener)throw Error('Mobile entry close unconfirmed');await startAppMobileListener(carrier,require('./mobile-http.cjs').createMobileHandler({broker,origin:carrier.origin,actor:carrier.actor}),generation);}
     return result;
-  }catch{if(result)broker.cancelCandidate(result.id);if(!broker.openUntil())stopAppMobileListener();throw uiError('error.mobile.carrierUnavailable');}
+  }catch(error){if(result)broker.cancelCandidate(result.id,{unredeemedOnly:true});if(!broker.openUntil())stopAppMobileListener();if(error.code==='MOBILE_SETUP_REDEEMED')throw uiError('error.mobile.enrollmentActive');throw uiError('error.mobile.carrierUnavailable');}
   finally{mobileOpening=false;watchAppMobile();}
 }
 async function detectAppMobile(context, value) {
@@ -286,31 +287,46 @@ async function detectAppMobile(context, value) {
   const savedPort = Number(context.view?.mobileEndpoint?.port);
   const rememberedPort = Number.isSafeInteger(savedPort) && savedPort >= 1024 && savedPort <= 65535 ? savedPort : 48765;
   try { return await require('./mobile-carrier.cjs').detect({ port: rememberedPort, sharedHostConfirmed: value.sharedHostConfirmed }); }
-  catch (error) { throw uiError(error.code === 'MOBILE_SHARED_HOST' ? 'error.mobile.sharedHost' : 'error.mobile.carrierUnavailable'); }
+  catch (error) {
+    if (error.code !== 'MOBILE_SHARED_HOST') throw uiError('error.mobile.carrierUnavailable');
+    const ports=Array.isArray(error.otherPorts)?[...new Set(error.otherPorts.filter(p=>Number.isSafeInteger(p)&&p>0&&p<=65535))].slice(0,32):[];
+    throw uiError(ports.length?'error.mobile.sharedHostPorts':'error.mobile.sharedHost',ports.length?{ports:ports.join(', ')}:undefined);
+  }
 }
 async function connectAppMobile(context, value) {
-  if(!value || typeof value!=='object' || Array.isArray(value) || !Object.hasOwn(value,'sharedHostConfirmed') || Object.keys(value).some(k=>!['sharedHostConfirmed','replace'].includes(k)) || value.replace!==undefined && (!Object.hasOwn(value,'replace') || typeof value.replace!=='boolean'))throw uiError('error.mobile.carrierUnavailable');
+  if(!value || typeof value!=='object' || Array.isArray(value) || !Object.hasOwn(value,'sharedHostConfirmed') || Object.keys(value).some(k=>!['sharedHostConfirmed','replace','renew','refreshOf','automatic'].includes(k)) || value.replace!==undefined && (!Object.hasOwn(value,'replace') || typeof value.replace!=='boolean'))throw uiError('error.mobile.carrierUnavailable');
+  if (value.renew!==undefined && value.renew!==true || value.refreshOf!==undefined && (!validMobileSetupId(value.refreshOf) || value.renew!==true) || value.automatic!==undefined && (value.automatic!==true || !value.refreshOf)) throw uiError('error.mobile.carrierUnavailable');
+  const renewal=value.renew?{renew:true,...(value.refreshOf?{refreshOf:value.refreshOf}:{}),...(value.automatic?{automatic:true}:{})}:{};
   const detection={sharedHostConfirmed:value.sharedHostConfirmed},request=++mobileQrRequest;
   const carrier = await detectAppMobile(context, detection);
   // No renderer-supplied address, login, scope list, or arbitrary listener port.
   if(request!==mobileQrRequest)throw uiError('error.mobile.carrierUnavailable');
-  let generation;
+  let generation=mobileGeneration;
   const validate=async()=>{const fresh=await detectAppMobile(context,detection);return JSON.stringify(carrier)===JSON.stringify(fresh) && generation===mobileGeneration && !quitting && primary && isCurrentHumanContext(context);};
-  const result=await beginQrAppMobile(carrier,value.replace===true,validate);generation=mobileGeneration;
+  const result=await beginQrAppMobile(carrier,value.replace===true,validate,renewal);generation=mobileGeneration;context.mobileSetupId=result.id;
   try {
     if(request!==mobileQrRequest || !await validate())throw Error('Changed mobile carrier');
     const qr = await require('./mobile-qr.cjs').generate(carrier.origin + '/mobile/#pair=' + result.secret);
-    if (generation !== mobileGeneration || result.expiresAt <= Date.now() || quitting || !primary) throw Error('Expired local code');
+    if (generation !== mobileGeneration || result.expiresAt <= Date.now() || quitting || !primary || !isCurrentHumanContext(context)) throw Error('Expired local code');
     return { qr, expiresAt: result.expiresAt,setupId:result.id };
   } catch {
-    const broker=appMobileBroker();broker.cancelCandidate(result.id);if(!broker.openUntil())stopAppMobileListener();watchAppMobile(MOBILE_RESPONSE_GRACE_MS);
+    const broker=appMobileBroker();broker.cancelCandidate(result.id,{unredeemedOnly:true});if(!broker.openUntil())stopAppMobileListener();watchAppMobile(MOBILE_RESPONSE_GRACE_MS);
     throw uiError('error.mobile.carrierUnavailable');
   }
 }
+function validMobileSetupId(id) { return typeof id==='string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id); }
+function appMobileSetupStatus(_context,value) {
+  if(!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length!==1 || !validMobileSetupId(value.setupId))throw uiError('error.mobile.carrierUnavailable');
+  return mobileBroker?mobileBroker.candidateInfo(value.setupId):{state:'unconfirmed'};
+}
 function cancelAppMobileSetup(_context,value) {
   if(!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).length!==1 || !Object.hasOwn(value,'setupId') || typeof value.setupId!=='string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value.setupId))throw uiError('error.mobile.carrierUnavailable');
-  if(!mobileBroker)return {cancelled:false};const result=mobileBroker.cancelCandidate(value.setupId);
+  if(!mobileBroker)return {cancelled:false};const result=mobileBroker.cancelCandidate(value.setupId,{unredeemedOnly:true});
   if(result.cancelled){mobileGeneration++;mobileQrRequest++;watchAppMobile(MOBILE_RESPONSE_GRACE_MS);}return result;
+}
+function closeAppMobileSetup(context) {
+  const id=context.mobileSetupId;context.mobileSetupId=null;
+  if(id)try{cancelAppMobileSetup(context,{setupId:id});}catch{}
 }
 function revokeAppMobile() {
   mobileGeneration++;mobileQrRequest++; clearTimeout(mobileExpiry); mobileExpiry = undefined;
@@ -1099,6 +1115,7 @@ async function openWindow(saved) {
     catch { view.active = wasActive; event.preventDefault(); }
   });
   win.on('closed', () => {
+    closeAppMobileSetup(context);
     discardReveal(context);
     // A renderer/webContents shutdown can bypass the cancellable close event.
     if (!quitting && !context.failed && view.active !== false) {
@@ -2552,7 +2569,7 @@ async function boot() {
   });
   applicationHandlers.delete('mobilePairing');
   applicationHandlers.delete('mobileRevoke');
-  for (const [name, action] of Object.entries({ mobileDetect: detectAppMobile, mobileConnect: connectAppMobile,mobileCancelSetup:cancelAppMobileSetup })) {
+  for (const [name, action] of Object.entries({ mobileDetect: detectAppMobile, mobileConnect: connectAppMobile,mobileCancelSetup:cancelAppMobileSetup,mobileSetupStatus:appMobileSetupStatus })) {
     register(name, (c, value) => {
       if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
       return action(c, value);

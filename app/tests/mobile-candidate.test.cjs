@@ -196,3 +196,25 @@ test('cancelling only a candidate preserves the old key and authority even if it
  try{assert.throws(()=>f.broker.cancelCandidate(next.challenge.id));assert.ok(f.broker.session(old));assert.equal(f.broker.approvalStatus().enabled,true);assert.throws(()=>f.broker.session(next.auth));}
  finally{restore();}
 });
+
+test('a scan during the refresh validation await preserves enrollment and rejects replacement',async t=>{
+ const f=brokerFixture(t),first=await f.broker.beginCandidate({actor,origin,renew:true});let a;
+ await assert.rejects(f.broker.beginCandidate({actor,origin,renew:true,refreshOf:first.id,validate:async()=>{a={...f.auth,actor,origin};const paired=await f.broker.pair({secret:first.secret,actor,origin});a={token:paired.cookieValue,actor,origin};return true;}}),e=>e.code==='MOBILE_SETUP_REDEEMED');
+ assert.equal(f.broker.session(a).candidate,true);assert.equal(f.broker.candidateInfo(first.id).redeemed,true);
+ const stopped=f.broker.cancelCandidate(first.id,{unredeemedOnly:true});assert.equal(stopped.cancelled,false);assert.equal(stopped.redeemed,true);assert.equal(f.broker.session(a).candidate,true);
+});
+test('a bounded renewal lease keeps only the expired candidate metadata alive, never its QR',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:1700000000000});const f=brokerFixture(t),c=await f.broker.beginCandidate({actor,origin,renew:true});
+ t.mock.timers.tick(120001);assert.equal(f.broker.candidateInfo(c.id).state,'expired');assert.equal(f.broker.openUntil(),1700000600000);
+ await assert.rejects(async()=>f.broker.pair({secret:c.secret,actor,origin}));assert.equal(f.broker.candidateInfo(c.id).redeemed,false);
+ t.mock.timers.tick(480000);assert.equal(f.broker.openUntil(),0);assert.equal(f.broker.candidateInfo(c.id).state,'unconfirmed');
+});
+test('a concurrent exchange during refresh preparation wins without losing its candidate',async t=>{
+ const f=brokerFixture(t),c=await f.broker.beginCandidate({actor,origin,renew:true});
+ const refresh=f.broker.beginCandidate({actor,origin,renew:true,refreshOf:c.id});
+ const rejection=assert.rejects(refresh,e=>e.code==='MOBILE_SETUP_REDEEMED');
+ const paired=await f.broker.pair({secret:c.secret,actor,origin});await rejection;
+ assert.equal(f.broker.session({token:paired.cookieValue,actor,origin}).candidate,true);
+});
+test('completed setup status is bound to the activated generation and never survives revocation',async t=>{const f=brokerFixture(t),next=await f.candidate({renew:true});await f.broker.activateCandidate(next.auth,{mode:'basic'});const info=f.broker.candidateInfo(next.challenge.id);assert.equal(info.state,'complete');assert.equal(info.setupId,next.challenge.id);assert.deepEqual(Object.keys(info).sort(),['setupId','state']);f.broker.revoke();assert.equal(f.broker.candidateInfo(next.challenge.id).state,'unconfirmed');});
+test('a transport cleanup failure cannot leave an undisplayed replacement candidate behind',async t=>{const f=brokerFixture(t),old=await f.paired(),first=await f.broker.beginCandidate({actor,origin,replace:true,renew:true}),client=f.clients.at(-1),close=client.close.bind(client);let created;const original=MobileAccess.prototype.beginCandidate;t.mock.method(MobileAccess.prototype,'beginCandidate',function(value){const r=original.call(this,value);created=r.id;return r;});client.close=()=>{throw Error('Synthetic candidate transport refusal')};try{await assert.rejects(f.broker.beginCandidate({actor,origin,replace:true,renew:true,refreshOf:first.id}));assert.ok(created);assert.equal(f.broker.candidateInfo(created).state,'unconfirmed');assert.ok(f.broker.session(old));}finally{client.close=close;close();}});

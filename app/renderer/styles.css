@@ -1311,3 +1311,12 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 .conversation-pane-toolbar #room-member-tabs .room-member-heading { min-width: 0; align-items: center; }
 .conversation-pane-toolbar #room-member-tabs .room-member-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; line-height: 18px; }
 .conversation-pane-toolbar #room-member-tabs :is(.room-member-id, .room-member-state) { display: none; }
+
+#mobile-setup .mobile-shared-error{border:1px solid var(--approval-ink);border-inline-start-width:4px;border-radius:7px;padding:10px;margin:8px 0 12px;background:var(--raised);color:var(--ink);font-size:12px;line-height:1.65}
+#mobile-setup .mobile-shared-error strong{display:block;color:var(--approval-ink);margin-bottom:4px}
+#mobile-setup .mobile-shared-error p{font-size:12px;line-height:1.65;margin:4px 0}
+#mobile-setup #mobile-status[role=timer],#mobile-setup .mobile-renewal-state{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums}
+#mobile-setup .mobile-renewal-hint{margin:4px 0 8px}
+#mobile-setup #mobile-shared-host[aria-invalid=true]{outline:2px solid var(--approval-ink);outline-offset:3px}
+#mobile-setup #mobile-status[role=timer],#mobile-setup .mobile-renewal-state{color:var(--ink)}
+#mobile-setup .mobile-renewal-paused{color:var(--approval-ink)}

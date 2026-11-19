@@ -34,7 +34,7 @@ test('QR activation keeps every fixed transport gate and accepts only its exact 
  for(const value of [{},{mode:'all'},{mode:'verified',enabled:true},{mode:'basic',actor:'other'}])assert.notEqual((await f.invoke({url:'/mobile/pair/activate',method:'POST',value})).statusCode,200);
  for(const mode of ['verified','basic'])assert.equal((await f.invoke({url:'/mobile/pair/activate',method:'POST',value:{mode}})).statusCode,200);
  assert.equal(activated,2);
- for(const method of ['beginCandidate','approvalConfirm','approvalEnable','cancelCandidate'])assert.equal((await f.invoke({url:'/mobile/'+method,method:'POST',value:{}})).statusCode,404);
+ for(const method of ['beginCandidate','approvalConfirm','approvalEnable','cancelCandidate','candidateInfo','mobileSetupStatus'])assert.equal((await f.invoke({url:'/mobile/'+method,method:'POST',value:{}})).statusCode,404);
 });
 test('authenticated phone workspace uses only the fixed app-local projection endpoint', async () => {
   const f = fixture();

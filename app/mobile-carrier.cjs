@@ -48,7 +48,7 @@ function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = 
    }
   }
   if (matches.length !== 1) throw fail();
-  if ((peers.size !== 1 || unproven) && !sharedHostConfirmed) throw fail('MOBILE_SHARED_HOST');
+  if ((peers.size !== 1 || unproven) && !sharedHostConfirmed) throw Object.assign(fail('MOBILE_SHARED_HOST'), { otherPorts: [...peers].filter(site => site !== matches[0]).map(site => Number(new URL(site).port || 443)).sort((a,b)=>a-b) });
   return Object.freeze({ origin: matches[0], actor, port });
 }
 function binary(io = fs) {

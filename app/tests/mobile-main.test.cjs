@@ -42,7 +42,7 @@ function fixture() {
   const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
     applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, tempReminders: null, tempQuitWaiting: false,
     require(name) {
-      if (name === './mobile-carrier.cjs') return { detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST' }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; } };
+      if (name === './mobile-carrier.cjs') return { detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST',otherPorts:context.carrierPorts }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; } };
       if (name === './mobile-qr.cjs') return { generate: async link => { assert.ok(link.startsWith('https://mobile.invalid/mobile/#pair=')); if (context.qrFailure) throw Error('Synthetic local image failure'); calls.push({ method: 'localQR' }); return 'data:image/png;base64,c3ludGhldGlj'; } };
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
       if (name === './mobile-workspace.cjs') return require('../mobile-workspace.cjs');
@@ -66,7 +66,7 @@ function fixture() {
   const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
   return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
-for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
+for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
   const f = fixture(); f.context.windows.get(7).background = true;
   const result = await f.handlers.get('workspace:' + method)(f.event, f.selection);
   assert.equal(result.ok, false);
@@ -76,7 +76,7 @@ for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileCo
 test('mobile pairing and revocation are absent from the agent control catalog and invocation handlers', () => {
   const f = fixture(), { BackgroundControl } = require('../background-control.cjs');
   const methods = BackgroundControl.prototype.catalog.call({ handlers: f.context.applicationHandlers }).map(row => row.method);
-  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
+  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
     assert.equal(methods.includes(method), false);
     assert.equal(f.context.applicationHandlers.has(method), false);
   }
@@ -201,7 +201,7 @@ test('preload exposes explicit desktop-only mobile management methods', async ()
     contextBridge: { exposeInMainWorld(key, value) { assert.ok(['workspace', '__DSH_LOCALE__'].includes(key), key); if (key === 'workspace') api = value; } },
     ipcRenderer: { on() {}, invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
   }; } });
-  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus','mobileCancelSetup', 'mobileConnect', 'mobileDetect', 'mobilePairing', 'mobileRevoke']);
+  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus','mobileCancelSetup', 'mobileConnect', 'mobileDetect', 'mobilePairing', 'mobileRevoke', 'mobileSetupStatus']);
   assert.equal(await api.mobileRevoke(), 'synthetic-result'); assert.deepEqual(calls, [['workspace:mobileRevoke']]);
 });
 test('the existing GUI payload list includes the app-local broker and its existing authority modules without running a package build', () => {
@@ -274,3 +274,7 @@ test('a logout grace check that finds access open again keeps watching instead o
   f.context.openUntil = f.context.now + 120000; const before = revokes(); f.fire();
   assert.equal(revokes(), before); assert.equal(server.listening, true); assert.equal(only(f).ms, 60000);
 });
+
+test('closing an owning human window cancels only its candidate and clears the window-only identity',async()=>{const f=fixture(),connected=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(connected.ok,true);const c=f.context.windows.get(7);assert.equal(c.mobileSetupId,connected.value.setupId);f.context.closeAppMobileSetup(c);assert.equal(c.mobileSetupId,null);assert.equal(f.context.broker.setupId,null);assert.equal(f.calls.filter(x=>x.method==='revoke').length,0);});
+
+test('shared-host IPC exposes only bounded numeric ports, never raw carrier text',async()=>{const f=fixture();f.context.carrierFailure=true;f.context.carrierPorts=[443,8443,443,'PRIVATE_CARRIER_TEXT',-1,65536];const result=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(result.ok,false);assert.equal(result.uiMessage.key,'error.mobile.sharedHostPorts');assert.equal(result.uiMessage.params.ports,'443, 8443');assert.ok(!JSON.stringify(result).includes('PRIVATE_CARRIER_TEXT'));assert.equal(f.servers.length,0);});

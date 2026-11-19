@@ -109,12 +109,32 @@ class MobileAccess {
   }
   // Desktop-issued enrollment intent stays in memory, separate from the active
   // file. Neither preparing nor exchanging this QR grants ordinary API access.
-  beginCandidate({actor,origin:site,replace=false}) {
+  candidateInfo(id) {
+    this.owner();
+    const c=this.#candidate;
+    try {
+      if (!uuid(id) || !c || c.id!==id || c.base!==this.#base(this.load())) return {state:'unconfirmed'};
+      return {setupId:c.id,expiresAt:c.until,renewUntil:c.renewUntil || c.until,redeemed:!!c.state.device,
+        state:c.until<=this.time()?'expired':c.state.device?'redeemed':'waiting'};
+    } catch { return {state:'unconfirmed'}; }
+  }
+  assertCandidateRefresh(id, automatic=false) {
+    const info=this.candidateInfo(id);
+    if (info.redeemed) throw denied('MOBILE_SETUP_REDEEMED');
+    if (!['waiting','expired'].includes(info.state) || automatic && info.renewUntil<=this.time()) throw denied('MOBILE_SETUP_UNCONFIRMED');
+    return info;
+  }
+  beginCandidate({actor,origin:site,replace=false,renew=false,refreshOf,automatic=false}) {
     const s=this.load(),time=this.time();
+    if (typeof renew!=='boolean' || typeof automatic!=='boolean' || (refreshOf!==undefined && (!renew || !uuid(refreshOf))) || automatic && (!renew || !refreshOf)) throw denied();
+    const previous=refreshOf!==undefined?this.assertCandidateRefresh(refreshOf,automatic):null;
+    if (renew && !previous && this.#candidate) this.assertCandidateRefresh(this.#candidate.id);
+    // The listener lease may outlive this QR; #pending still enforces its 120 seconds.
+    const renewUntil=renew ? automatic ? previous.renewUntil : time+600000 : time+PAIR_MS;
     if (!text(actor,320) || !origin(site) || typeof replace !== 'boolean') throw denied();
     if (s.enabled && s.device?.until > time && (!replace || s.actor !== actor || s.origin !== site)) throw denied('MOBILE_REPLACE_REQUIRED');
     const value=secret(),id=randomUUID();
-    this.#candidate={id,base:this.#base(s),until:time+PAIR_MS,failures:0,csrf:null,state:{...s,version:2,sessionPolicy:'all',generation:randomUUID(),enabled:false,actor,origin:site,scopes:[],pairing:{hash:hash(value),until:time+PAIR_MS},device:null}};
+    this.#candidate={id,base:this.#base(s),until:time+PAIR_MS,renewUntil,failures:0,csrf:null,state:{...s,version:2,sessionPolicy:'all',generation:randomUUID(),enabled:false,actor,origin:site,scopes:[],pairing:{hash:hash(value),until:time+PAIR_MS},device:null}};
     return {id,secret:value,expiresAt:time+PAIR_MS};
   }
   cancelCandidate(id) { if (this.#candidate?.id===id) { this.#candidate=null;return true; } return false; }
