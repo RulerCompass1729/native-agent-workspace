@@ -605,10 +605,13 @@ function notifyBackgroundConfirmation(record) {
       const target = state.sessions.find(s => s.id === row.command.arguments[0]);
       const saved = row.command.method === 'restoreSession' && roomState.value.sessionArchives[row.command.arguments[0]];
       const restorable = Boolean(saved && target && saved.nativeId === target.nativeId && require('./room-state.cjs').sameHome(target, saved.detached));
+      const restoreGuard = restorable ? JSON.stringify(context.fingerprint(row.command)) : null;
       return { state: { unavailable: state.unavailable, roomStorageWarning: state.roomStorageWarning,
         sessions: state.sessions.map(s => Object.fromEntries(fields.filter(key => Object.hasOwn(s, key)).map(key => [key, s[key]]))),
         rooms: state.rooms.map(r => ({ id: r.id, name: r.name, archived: r.archived })) },
-        archives: saved ? { [row.command.arguments[0]]: { nativeId: saved.nativeId, restorable, rooms: saved.rooms.map(r => ({ id: r.id })) } } : {} };
+        archives: saved ? { [row.command.arguments[0]]: { nativeId: saved.nativeId, restorable, rooms: saved.rooms.map(r => ({ id: r.id })) } } : {},
+        // Keep the fingerprint private; the notice receives only a live equality check.
+        ...(restorable ? { restoreCurrent: () => typeof restoreGuard === 'string' && JSON.stringify(context.fingerprint(row.command)) === restoreGuard } : {}) };
 
     },
   });

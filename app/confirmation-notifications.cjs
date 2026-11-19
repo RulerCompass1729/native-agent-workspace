@@ -92,7 +92,7 @@ class ConfirmationNotifications {
     if (this.disposed || !this.active() || this.seen.has(key) || this.entries.has(key) || record.state !== 'confirmation-required' || !expiresAt || this.now() < record.at || this.now() >= expiresAt) return;
     this.seen.add(key); if (this.seen.size > 200) this.seen.delete(this.seen.values().next().value);
     if (!this.Notification.isSupported()) return;
-    let presentation, binding; const screenRevision = this.screen.revision;
+    let presentation, binding, restoreCurrent; const screenRevision = this.screen.revision;
     if (this.unlocked() && shortMethods.has(record.command.method) && !record.handlerStarted) try {
       if (!sameCard(record, this.control.receipt(record.actor, record.id))) throw Error('Changed card');
       binding = this.control.mobileBinding(record.actor.id, record.actor.nativeId, record.id, 1);
@@ -101,13 +101,17 @@ class ConfirmationNotifications {
       const metadata = await this.snapshot(record);
       if (!sameCard(record, this.control.receipt(record.actor, record.id))) throw Error('Changed card');
       presentation = shortPresentation(record, metadata, this.format, this.now());
+      if (record.command.method === 'restoreSession') {
+        restoreCurrent = metadata.restoreCurrent;
+        if (typeof restoreCurrent !== 'function' || restoreCurrent() !== true) binding = null;
+      }
       if (!this.unlocked() || screenRevision !== this.screen.revision || !presentation || !sameBinding(binding, this.control.mobileBinding(record.actor.id, record.actor.nativeId, record.id, 1))) binding = null;
     } catch { binding = null; }
     if (this.disposed || !this.active() || this.now() >= expiresAt) return;
     const options = binding ? { ...presentation, actions: [{ type: 'button', text: this.format('notification.confirm') }, { type: 'button', text: this.format('notification.reject') }] }
       : { title: this.format('os.decisionTitle'), body: this.format('notification.openFull') + '\n' + deadlineText(expiresAt, this.now(), this.format) };
     const notification = new this.Notification(options);
-    const entry = { key, notification, binding: binding && Object.freeze({ ...binding }), actor: { id: record.actor.id, nativeId: record.actor.nativeId, provider: record.actor.provider }, id: record.id, at: record.at, expiresAt, claimed: false, screenRevision };
+    const entry = { key, notification, binding: binding && Object.freeze({ ...binding }), actor: { id: record.actor.id, nativeId: record.actor.nativeId, provider: record.actor.provider }, id: record.id, at: record.at, expiresAt, claimed: false, screenRevision, restoreCurrent: binding && restoreCurrent };
     this.entries.set(key, entry);
     entry.timer = this.schedule(() => this.remove(entry), Math.max(0, expiresAt - this.now())); entry.timer?.unref?.();
     notification.on('action', (event, index) => { void this.action(entry, event, index); });
@@ -119,6 +123,7 @@ class ConfirmationNotifications {
   }
   assertCurrent(entry, response) {
     if (this.disposed || !this.active() || !this.unlocked() || entry.screenRevision !== this.screen.revision || this.entries.get(entry.key) !== entry || !entry.binding || this.now() < entry.at || this.now() >= entry.expiresAt ||
+        (entry.restoreCurrent && entry.restoreCurrent() !== true) ||
         !sameBinding(entry.binding, this.control.mobileBinding(entry.actor.id, entry.actor.nativeId, entry.id, response, entry.claimed))) throw Error('Notification decision is no longer current');
   }
   async action(entry, event, legacyIndex) {
@@ -134,7 +139,8 @@ class ConfirmationNotifications {
     try {
       this.assertCurrent(entry, response); entry.claimed = true;
       try { entry.notification.close(); } catch { /* The decision still rechecks its binding. */ }
-      await this.control.decide(entry.actor.id, entry.actor.nativeId, entry.id, response, () => this.assertCurrent(entry, response));
+      const result = await this.control.decide(entry.actor.id, entry.actor.nativeId, entry.id, response, () => this.assertCurrent(entry, response));
+      if (entry.restoreCurrent && response === 1 && result?.state !== 'complete') this.openOrDefer(entry);
     } catch { this.openOrDefer(entry); }
     finally { this.remove(entry); }
   }
