@@ -56,6 +56,8 @@ const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeCon
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
 const background = require('./background-control.cjs');
 const recordReminders = require('./record-reminders.cjs');
+const regularPopup = require('./regular-popup.cjs');
+let discoveries;
 const { inspectTextPaths, openTextPath } = require('./text-paths.cjs');
 const { TempReminders, readSummary: readTempSummary, tempSummary } = require('./temp-reminders.cjs');
 const confirmationInbox = require('./confirmation-inbox.cjs');
@@ -1506,6 +1508,10 @@ async function autoBackendSwitchOnce() {
 let backendSwitchTimer;
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
+  discoveries ||= regularPopup.create({ directory: dataDir, changed: (value, popup) => {
+    for (const c of windows.values()) if (!c.background && !c.win.isDestroyed()) sendToPage(c, 'workspace:discoveries', { ...value, popup });
+  }, notify: ({ count }) => { if (Notification.isSupported()) new Notification({ title: displayText('discoveries.title'), body: displayText('discoveries.notification', { count }) }).show(); } });
+  discoveries.start();
   try {
     currentTempReminders().status().catch(() => recordsChanged(true));
   } catch { tempReminders = null; }
@@ -2363,6 +2369,13 @@ async function boot() {
     const client = await connect(dataDir, c.view.owner, { page: !c.background }), old = c.client;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
   });
+  register('discoveries', (c, action, ...args) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.discoveries.personOnly');
+    if (action === 'status' && !args.length) return discoveries.status();
+    if (action === 'configure' && args.length === 1) return discoveries.configure(args[0]);
+    if (action === 'mark' && args.length === 3) return discoveries.mark(...args);
+    throw uiError('error.discoveries.invalid');
+  });
   register('connectionUpdates', async c => {
     await c.client.refresh();
     return connectionUpdateOptions(c.client, app.getVersion(), roomState);
@@ -2796,6 +2809,7 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
+  discoveries?.dispose();
   queueDispatcher?.close();
   try { butlerIngress?.ledger.closeQuestionMetricEpoch(); } catch { /* An unclosed epoch remains unverified. */ }
 });

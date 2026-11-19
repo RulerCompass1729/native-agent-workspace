@@ -212,6 +212,7 @@ async function build() {
       'reading-state.cjs',
       'record-history.cjs',
       'record-reminders.cjs',
+      'regular-popup.cjs',
       'renderer/cmd-links.js',
       'renderer/fleet-observation.js',
       'renderer/local-search.js',
