@@ -120,6 +120,132 @@ function verifyRuntime(dataDir) {
   return where;
 }
 
+// Only the immutable runtime crosses backends; each backend keeps its own home and guards.
+async function inheritRuntime(sourceDataDir, targetDataDir) {
+  const { performance } = require('node:perf_hooks');
+  const started = performance.now(), io = fs.promises, uid = process.getuid?.();
+  if (uid === undefined) return { status: 'unsupported' };
+  if (![sourceDataDir, targetDataDir].every(value => typeof value === 'string' && path.isAbsolute(value))) throw uiError('error.dsh.runtimeUnqualified');
+  const source = paths(path.resolve(sourceDataDir)), target = paths(path.resolve(targetDataDir));
+  const tick = () => { if (performance.now() - started > 30000) throw Error('Runtime inheritance deadline'); };
+  const directory = file => {
+    const s = fs.lstatSync(file);
+    if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== uid || s.mode & 0o022) throw Error('Unsafe runtime directory');
+    return s;
+  };
+  const rootState = (data, where) => {
+    directory(data);
+    if (!lstatOrNull(where.base)) return null;
+    directory(where.base);
+    const found = lstatOrNull(where.root);
+    if (found) directory(where.root);
+    return found;
+  };
+  const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid && a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && b.nlink === 1;
+  async function tree(root) {
+    const entries = new Map(), dirs = ['']; let bytes = 0, count = 0;
+    while (dirs.length) {
+      const rel = dirs.shift(), dir = path.join(root, rel); directory(dir);
+      for (const name of fs.readdirSync(dir)) {
+        const relative = path.join(rel, name), file = path.join(root, relative), s = fs.lstatSync(file);
+        if (++count > 120000 || relative.split(path.sep).length > 32 || s.uid !== uid) throw Error('Runtime tree limit or owner');
+        const entry = { relative, stat: s };
+        if (s.isSymbolicLink()) entry.link = fs.readlinkSync(file);
+        else if (s.mode & 0o022) throw Error('Writable runtime entry');
+        else if (s.isDirectory()) { entry.kind = 'dir'; dirs.push(relative); }
+        else if (s.isFile() && s.nlink === 1 && s.size <= 256 * 1024 * 1024) { entry.kind = 'file'; bytes += s.size; }
+        else throw Error('Unsafe runtime entry');
+        if (bytes > 2 * 1024 * 1024 * 1024) throw Error('Runtime byte limit');
+        entries.set(relative, entry);
+        if (count % 128 === 0) { tick(); await new Promise(resolve => setImmediate(resolve)); }
+      }
+    }
+    // Resolve links from the inventory, never by following an unchecked path on disk.
+    for (const entry of entries.values()) if (entry.link !== undefined) {
+      let parts = entry.relative.split(path.sep), hops = 0;
+      for (let index = 0; index < parts.length; index++) {
+        const item = entries.get(parts.slice(0, index + 1).join(path.sep));
+        if (!item) throw Error('Dangling runtime link');
+        if (item.link !== undefined) {
+          if (++hops > 32 || path.isAbsolute(item.link)) throw Error('Unsafe runtime link');
+          const next = path.normalize(path.join(path.dirname(item.relative), item.link, ...parts.slice(index + 1)));
+          if (next === '..' || next.startsWith('..' + path.sep) || path.isAbsolute(next)) throw Error('Runtime link escapes');
+          parts = next.split(path.sep); index = -1;
+        } else if (index < parts.length - 1 && item.kind !== 'dir') throw Error('Invalid runtime link path');
+      }
+    }
+    tick(); return { entries, bytes };
+  }
+  let staging, stagingIdentity, placeholder, published = false;
+  try {
+    if (rootState(targetDataDir, target)) { await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' }; }
+    if (!rootState(sourceDataDir, source)) return { status: 'absent' };
+    if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
+    const inventory = await tree(source.root); verifyRuntime(sourceDataDir); tick();
+    staging = await io.mkdtemp(path.join(targetDataDir, '.dsh-tui-inherit-')); stagingIdentity = directory(staging);
+    const staged = paths(staging); await io.mkdir(staged.root, { recursive: true, mode: 0o700 });
+    for (const entry of inventory.entries.values()) if (entry.kind === 'dir') await io.mkdir(path.join(staged.root, entry.relative), { mode: 0o700 });
+    const files = [...inventory.entries.values()].filter(entry => entry.kind === 'file'); let cursor = 0, failure;
+    await Promise.all(Array.from({ length: Math.min(8, files.length) }, async () => {
+      const buffer = Buffer.allocUnsafe(128 * 1024);
+      while (!failure && cursor < files.length) {
+        const entry = files[cursor++]; let input, output;
+        try {
+          tick(); input = await io.open(path.join(source.root, entry.relative), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+          if (!same(entry.stat, await input.stat())) throw Error('Runtime source changed');
+          output = await io.open(path.join(staged.root, entry.relative), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, entry.stat.mode & 0o700);
+          let position = 0;
+          while (position < entry.stat.size) {
+            tick();
+            const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, entry.stat.size - position), position);
+            if (!bytesRead) throw Error('Short runtime read');
+            let written = 0;
+            while (written < bytesRead) {
+              const { bytesWritten } = await output.write(buffer, written, bytesRead - written, position + written);
+              if (!bytesWritten) throw Error('Short runtime write');
+              written += bytesWritten;
+            }
+            position += bytesRead;
+          }
+          if (!same(entry.stat, await input.stat()) || (await output.stat()).size !== entry.stat.size) throw Error('Runtime copy changed');
+          tick();
+        } catch (error) { failure ||= error; }
+        finally {
+          const closed = await Promise.allSettled([input?.close(), output?.close()]);
+          for (const item of closed) if (item.status === 'rejected') failure ||= item.reason;
+        }
+      }
+    }));
+    if (failure) throw failure;
+    for (const entry of inventory.entries.values()) if (entry.link !== undefined) await io.symlink(entry.link, path.join(staged.root, entry.relative));
+    const copied = await tree(staged.root);
+    if (copied.bytes !== inventory.bytes || copied.entries.size !== inventory.entries.size) throw Error('Incomplete runtime copy');
+    verifyRuntime(staging); verifyRuntime(sourceDataDir); tick();
+    await io.mkdir(target.base, { recursive: true, mode: 0o700 }); const parent = directory(target.base);
+    // An exclusive empty reservation prevents rename from replacing another install's directory.
+    try { await io.mkdir(target.root, { mode: 0o700 }); placeholder = directory(target.root); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      directory(target.root); await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' };
+    }
+    const current = directory(target.base), reserved = directory(target.root);
+    if (current.dev !== parent.dev || current.ino !== parent.ino || reserved.dev !== placeholder.dev || reserved.ino !== placeholder.ino || fs.readdirSync(target.root).length) throw Error('Runtime destination changed');
+    await io.rename(staged.root, target.root); published = true;
+    return { status: 'copied', entries: inventory.entries.size, bytes: inventory.bytes, elapsedMs: performance.now() - started };
+  } catch (cause) {
+    throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', cause });
+  } finally {
+    if (placeholder && !published) {
+      const current = lstatOrNull(target.root);
+      if (current?.isDirectory() && !current.isSymbolicLink() && current.dev === placeholder.dev && current.ino === placeholder.ino && !fs.readdirSync(target.root).length) await io.rmdir(target.root);
+    }
+    if (staging) {
+      const current = lstatOrNull(staging);
+      if (current?.isDirectory() && !current.isSymbolicLink() && current.dev === stagingIdentity.dev && current.ino === stagingIdentity.ino) await io.rm(staging, { recursive: true, force: true });
+    }
+  }
+}
+
 function homeUnsafe() {
   return Object.assign(uiError('error.dsh.homeUnsafe'), { code: 'dsh-home-unsafe' });
 }
@@ -526,6 +652,7 @@ module.exports = {
   installed,
   packageCopies,
   verifyRuntime,
+  inheritRuntime,
   prepareHome,
   injectDirectory,
   sandboxProfile,

@@ -275,6 +275,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 const dshTui = require('./dsh-tui.cjs');
+const preflightRefusals = new WeakSet();
 
 // Local receipt timing is an observation, never a native failure or authority
 // to cancel/replay work. Keep the original activity and its identity intact.
@@ -3423,10 +3424,16 @@ class NativeHost {
     if (this.nativeStarted) this.watchClaudeLauncher();
     return this.binaries;
   }
+  isPreflightRefusal(error) { return preflightRefusals.has(error); }
   create(record) {
     if (this.serviceBinding) throw require('./service-binding.cjs').failure('butler-qualification-required');
     this.resolvePrograms();
-    if (!this.binaries[record.provider] || !this.binaries.python) throw uiError("error.nativeRuntimeMissing");
+    const refuse = key => { const error = uiError(key); preflightRefusals.add(error); throw error; };
+    if (!this.binaries[record.provider]) {
+      if (record.provider === 'dsh') refuse(dshTui.installed(this.dataDir) ? 'error.dsh.nodeMissing' : 'error.dsh.runtimeUnqualified');
+      refuse('error.nativeRuntimeMissing');
+    }
+    if (!this.binaries.python) refuse('error.pythonMissing');
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     if (record.provider === 'claude') return new Claude(record, this);
     if (record.provider === 'dsh') return this.createDsh(record);
