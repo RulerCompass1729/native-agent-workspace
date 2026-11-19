@@ -143,6 +143,7 @@ async function build() {
       'confirmation-notifications.cjs',
       'creation-defaults.cjs',
       'daemon.cjs',
+      'discussion-guidelines.cjs',
       'dsh-egress.cjs',
       'dsh-host.cjs',
       'dsh-server.mjs',
