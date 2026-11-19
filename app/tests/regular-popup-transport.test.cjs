@@ -61,11 +61,11 @@ test('real pinned DSH composition mounts only llm/provider with privacy applied 
   finally { await host?.close(); global.fetch = old; }
 });
 
-test('tariff uses authoritative UTC peak windows, weekend/holiday off-peak and refuses unknown dates', () => {
+test('tariff uses qualified UTC windows and a conservative bound for unqualified calendars', () => {
   assert.equal(priceUsage(metered), 421);
   const off = { ...metered, providerAt: Date.parse('2026-11-18T12:00:00Z'), tier: 'offpeak' }; assert.equal(priceUsage(off), 211);
   for (const date of ['2026-01-01T02:00:00Z', '2026-11-21T02:00:00Z']) assert.equal(tariff(Date.parse(date)), 'offpeak');
-  for (const date of ['2027-01-05T02:00:00Z', '2026-11-18T04:00:00Z']) assert.equal(tariff(Date.parse(date)), 'unknown');
+  for (const date of ['2027-01-05T02:00:00Z', '2026-11-18T04:00:00Z']) assert.equal(tariff(Date.parse(date)), 'peak-bound');
   assert.equal(priceUsage({ ...metered, tier: 'offpeak' }), null);
   assert.equal(priceUsage({ ...metered, inputTokens: 16000, cachedInputTokens: 0, outputTokens: 1200, totalTokens: 17200 }), 6240);
 });
