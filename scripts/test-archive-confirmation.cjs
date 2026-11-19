@@ -6,6 +6,11 @@ const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
 const { _electron } = scratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = fs.realpathSync(process.env.NAW_TEST_APP_ROOT || root);
+const language = process.env.NAW_TEST_UI_LANGUAGE || 'zh';
+assert.ok(['zh', 'en'].includes(language), 'Archive confirmation locale is explicit');
+const catalog = require(path.join(code, 'app/ui-messages.js'))[language];
+const decisionLabels = record => record.confirmation.options.buttons.map((label, response) => response === 1
+  ? catalog['background.card.confirm'] ?? catalog['background.confirm'] : catalog['common.cancel'] ?? label);
 const { connectService } = require(path.join(code, 'app/service-connection.cjs'));
 const { roomIds } = require(path.join(code, 'app/collaboration-spaces.cjs'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
@@ -74,13 +79,27 @@ async function pendingCard(record) {
   assert.equal(record.confirmation.kind, 'message');
   await card(record).waitFor();
   assert.equal(await card(record).count(), 1, 'The operation identifies exactly one card');
-  await card(record).locator('.background-controls button').first().waitFor();
-  assert.equal(await card(record).locator('.background-controls button').count(), 2);
+  const expected = decisionLabels(record);
+  assert.equal(expected.length, 2, 'The original question still has two decisions');
+  await until(async () => {
+    if ((await card(record).locator('.background-controls button').allTextContents()).includes(expected[1])) return true;
+    const review = card(record).locator('.background-controls').getByRole('button', { name: catalog['background.batch.review'], exact: true });
+    assert.ok(await review.count() <= 1, 'Review belongs only to this original card');
+    if (await review.count()) {
+      assert.ok(await review.isVisible() && await review.isEnabled(), 'The exact review control is available');
+      // Expanding rebuilds this control synchronously; no approval is sent here.
+      await review.dispatchEvent('click');
+    }
+    return false;
+  }, 'Original card decisions are visible');
+  const shown = await card(record).locator('.background-controls button').allTextContents();
+  assert.deepEqual(shown.slice(0, 2), expected, 'Both original decision buttons remain, in order');
+  assert.deepEqual(shown.slice(2), shown.length === 2 ? [] : [catalog['background.batch.collapse']], 'Only the known collapse control may accompany them');
 }
 async function decide(record, response = 1) {
   await pendingCard(record);
   assert.deepEqual(stored(record.id).confirmation, record.confirmation, 'The click answers this exact pending question');
-  const label = response === 1 ? '确认此操作' : record.confirmation.options.buttons[response];
+  const label = decisionLabels(record)[response];
   const button = card(record).locator('.background-controls').getByRole('button', { name: label, exact: true });
   assert.equal(await button.count(), 1, 'Only this archive card\'s exact confirmation button is clicked');
   await button.click();
