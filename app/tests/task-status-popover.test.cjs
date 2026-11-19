@@ -20,3 +20,19 @@ test('full task board uses the same popover and retains original group controls'
 test('light dismissal does not steal focus from the conversation input',()=>{const f=setup();f.board.open();const input=f.doc.createElement('textarea');f.content.append(input);input.focus();f.panel.hidePopover();assert.equal(f.doc.activeElement,input);f.board.dispose();});
 
 test('zero, one and both viewport cap boundaries preserve every reachable row',()=>{for(const width of [850,1240])for(const count of [0,1,8,9,20,21,24]){const f=setup(width);f.input={rooms:[{id:'space',name:'Example',queue:Array.from({length:count},(_,i)=>({id:'queued'+i,status:'queued',text:'Synthetic '+i}))}],sessions:[],confirmationsAvailable:true,confirmations:[]};f.board.update(f.input);const cap=width===850?8:20;assert.equal(f.host.querySelectorAll('.task-status-square').length,Math.min(count,cap),`${width}/${count}: squares`);assert.equal(f.host.querySelector('.task-status-more')?.textContent,count>cap?'+'+(count-cap):undefined,`${width}/${count}: remainder`);f.board.open();assert.equal(f.host.querySelectorAll('.task-board-entry').length,count,`${width}/${count}: every row reachable`);f.board.dispose();}});
+
+for (const spec of [
+  { name: 'queued planned assignee without sentTo', status: 'queued', assignee: 'planned', expected: ['queue', 'origin'] },
+  { name: 'unassigned queued item', status: 'queued', expected: ['queue', 'origin'] },
+  { name: 'sent item with a different planned assignee', status: 'sent', assignee: 'planned', sentTo: 'actual', expected: ['session', 'actual', 'native-actual'] },
+  { name: 'missing sentTo never falls back to the planned assignee', status: 'sent', assignee: 'planned', sentTo: 'gone', expected: ['queue', 'origin'] },
+]) test('entry navigation: ' + spec.name, () => {
+  const f = setup();
+  try {
+    const sessions = ['planned', 'actual'].map(id => ({ id, name: id, nativeId: 'native-' + id, roomIds: ['origin'], state: 'idle' }));
+    for (const session of sessions) Object.defineProperty(session, 'messages', { get() { throw Error('Navigation must not read conversation bodies'); } });
+    f.board.update({ rooms: [{ id: 'origin', name: 'Origin', queue: [{ id: 'task', text: 'Synthetic navigation task', ...spec }] }], sessions, connected: true, confirmationsAvailable: true, confirmations: [] });
+    f.board.open(); f.host.querySelector('.task-board-entry').fire('click');
+    assert.deepEqual(f.calls, [spec.expected]); assert.equal(f.panel.matches(':popover-open'), false);
+  } finally { f.board.dispose(); }
+});
