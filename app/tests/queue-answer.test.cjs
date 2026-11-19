@@ -355,6 +355,43 @@ test('answers still waiting for their receipt keep their members subscribed when
   assert.deepEqual([...reported.at(-1)], ['k'], 'main is told at once');
 });
 
+test('the person presses 已处理 while an answer is on its way: its own final receipt ends the subscription, and the row keeps that status; an answer still waiting stays subscribed', async () => {
+  const f = page(), shown = require(path.join(root, 'app/shown-sessions.cjs')), c = f.context, reported = [];
+  f.room.queue.push({ ...f.room.queue[0], id: 'item-2', text: 'Ship r5', sentTo: 'h', sentNative: 'native-h', createdAt: 2 });
+  c.state.sessions.push({ ...c.state.sessions[1], id: 'k', nativeId: 'native-k', name: 'Codex K', messages: [] });
+  const full = { sessions: c.state.sessions };
+  let serverShown = null;
+  Object.assign(c, { selected: 'room', activeSessionId: () => c.selected === 'room' ? null : c.selected, members: () => c.state.sessions, render() {},
+    projectSpace: v => v, legacyProgressOffline: () => false, latestViewStorage: undefined, queuedRoomInputs: new Map() });
+  vm.runInContext(renderer.slice(renderer.indexOf('const shownPending = new Map();'), renderer.indexOf('function orderedMembers(')) + '\n' + take(renderer, 'updateState'), c);
+  c.api.shownSessions = async ids => { reported.push(ids); const v = shown.reportShown(serverShown, ids, () => full); serverShown = v.shown; return v; };
+  // As the room state does: 已处理 without an answer marks the item done, with no answer.
+  c.api.spaceAction = async (roomId, action, args) => { f.resolves.push([roomId, action, ...args]); if (args.length === 1) f.room.queue.find(i => i.id === args[0]).status = 'done'; };
+  await c.reportShown();
+  f.row(0).box.type('Answer G'); await c.queueAnswerSend(f.get("queueAnswers.get('item-1')"));
+  f.row(1).box.type('Answer H'); await c.queueAnswerSend(f.get("queueAnswers.get('item-2')"));
+  c.selected = 'k'; await c.reportShown();
+  assert.deepEqual([...c.shownSessionIds()], ['g', 'h', 'k']);
+  const handled = f.row(0).built.all().find(e => e.tagName === 'BUTTON' && e.textContent === 'Handled');
+  handled.click(); await flush();
+  assert.equal(f.room.queue[0].status, 'done');
+  assert.deepEqual([...c.shownSessionIds()], ['g', 'h', 'k'], 'handled, but its own receipt has not come: still followed');
+  full.sessions.find(s => s.id === 'g').messages.push({ id: 'tag-1', role: 'user', text: 'Answer G', status: 'submitted' });
+  c.updateState(shown.omitHidden(full, serverShown)); await flush();
+  assert.deepEqual([...c.shownSessionIds()], ['h', 'k'], 'G is released; H, still waiting for its receipt, is not');
+  assert.deepEqual([...reported.at(-1)], ['h', 'k'], 'main is told at once');
+  c.updateState(shown.omitHidden(full, serverShown));
+  assert.equal(c.state.sessions.find(s => s.id === 'g').messagesOmitted, true, 'G\'s messages no longer come');
+  const r = f.row(0);
+  assert.equal(r.line.textContent, 'To Codex G · Received by native session', 'the row keeps the status its own row reached');
+  assert.equal(r.box.readOnly, true); assert.equal(r.send.parent.hidden, true, 'nothing to send again');
+  assert.deepEqual(f.resolves.map(x => [...x]), [['space', 'queueResolve', 'item-1']], 'the person\'s 已处理 only: no answer is written');
+  full.sessions.find(s => s.id === 'h').messages.push({ id: 'tag-2', role: 'user', text: 'Answer H', status: 'submitted' });
+  c.updateState(shown.omitHidden(full, serverShown)); await flush();
+  assert.deepEqual(f.resolves.at(-1), ['space', 'queueResolve', 'item-2', 'Answer H'], 'H is still handled on its own receipt');
+  assert.equal(f.calls.length, 2, 'nothing resent');
+});
+
 test('the item keeps the native session NAW sent it to; a requeue drops it, and the field is checked', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-native-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

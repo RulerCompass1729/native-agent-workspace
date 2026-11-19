@@ -508,6 +508,8 @@ function resumeSearchSendNew() {
 const QUEUE_ANSWER_REVISION = Symbol('queue-answer');
 const QUEUE_ANSWER_LIMIT = 6000;
 const QUEUE_ANSWER_DELIVERED = new Set(['delivery.submitted', 'delivery.midturnRead', 'delivery.midturnStored']);
+// Still on its way, as updateSearchSendReceipt reads the composer's send.
+const QUEUE_ANSWER_PENDING = new Set(['delivery.awaiting', 'delivery.queued', 'delivery.queuedMidturn']);
 const queueAnswers = new Map();
 function queueAnswerItem(entry) {
   return (spaceRecord(entry.roomId)?.queue || []).find(item => item.id === entry.itemId) || null;
@@ -567,7 +569,7 @@ function renderQueueAnswer(entry) {
   foot.hidden = Boolean(follow); line.hidden = !follow;
   ui.display.unbind(note); note.textContent = ''; note.hidden = true;
   if (follow) {
-    const key = follow.unconfirmed ? 'delivery.unconfirmed' : sendFollowStatusKey(follow);
+    const key = follow.final || (follow.unconfirmed ? 'delivery.unconfirmed' : sendFollowStatusKey(follow));
     ui.display.text(line, 'delivery.row', () => ({ recipient: follow.name, status: uiText(key) }));
     line.classList.toggle('warn', key === 'delivery.unconfirmed');
     if (key === 'delivery.unconfirmed') { note.hidden = false; ui.display.text(note, 'send.unconfirmed', () => ({ name: follow.name })); }
@@ -627,7 +629,7 @@ function followQueueAnswers() {
 }
 // Sessions whose receipt an answer still follows keep their messages, whatever the page shows (shownSessionIds).
 function queueAnswerShownIds() {
-  return [...queueAnswers.values()].filter(entry => entry.follow).map(entry => entry.follow.id);
+  return [...queueAnswers.values()].filter(entry => entry.follow && !entry.follow.final).map(entry => entry.follow.id);
 }
 function followQueueAnswer(entry) {
   const item = queueAnswerItem(entry), follow = entry.follow;
@@ -636,6 +638,7 @@ function followQueueAnswer(entry) {
     if (follow) reportShown();
     return;
   }
+  if (follow?.final) return;
   if (follow?.mark && !follow.tag) { const row = sendFollowRow(follow); if (row) follow.mark.tag = follow.tag = row.id; }
   const row = follow?.tag && state.sessions.find(x => x.id === follow.id)?.messages?.find(m => m.id === follow.tag);
   // Its own row decides an unconfirmed call too; only a row that says not sent lets the same words go again.
@@ -643,6 +646,12 @@ function followQueueAnswer(entry) {
     entry.follow = null; reportShown();
     entry.note = { key: 'delivery.row', params: () => ({ recipient: follow.name, status: uiText('delivery.notSent') }) };
   } else if (follow?.unconfirmed && row && row.status !== 'awaiting-native') follow.unconfirmed = false;
+  // Handled without this answer while it was on its way (the person's 已处理, which never reopens): once its own row
+  // is final, the row keeps that status and the subscription ends.
+  if (entry.follow && item.status !== 'waiting' && !QUEUE_ANSWER_PENDING.has(sendFollowStatusKey(follow))) {
+    follow.final = sendFollowStatusKey(follow);
+    reportShown();
+  }
   if (entry.follow && !follow.unconfirmed && !entry.resolving && item.status === 'waiting' && QUEUE_ANSWER_DELIVERED.has(sendFollowStatusKey(follow))) queueAnswerResolve(entry);
   renderQueueAnswer(entry);
 }
