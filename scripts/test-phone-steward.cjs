@@ -20,6 +20,7 @@ const butlerRows = [{ id: 'd', role: 'user', name: 'NAW 派活', text: 'Syntheti
   { id: 'r', role: 'assistant', name: '', text: 'Synthetic reply', time: now - 2000 }, { id: 'h', role: 'user', name: '', text: 'Synthetic own message', time: now - 1000 }];
 let passed = 0;
 const check = (label, fn) => { fn(); passed++; console.log('PASS ' + label); };
+let readWhenBusy = {};
 async function open(context, { steward, busy = false, hash }) {
   const list = structuredClone(steward && steward.state !== 'shared' ? sessions.slice(1) : sessions);
   if (busy) list[0].state = 'working';
@@ -33,7 +34,8 @@ async function open(context, { steward, busy = false, hash }) {
     if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? butlerRows : [], earlierMessagesOmitted: 0 })), rooms: [],
       confirmations: [], reminders: null, syncedAt: now, capabilities: { queue: false, records: false, sensitiveDecisions: false, nativeTerminal: false, push: false }, ...(steward ? { steward } : {}) });
     if (p.startsWith('/mobile/read/')) { const id = decodeURIComponent(p.split('/').pop());
-      return json({ id, contextId: 'x'.repeat(43), canSend: list.find(s => s.id === id)?.state === 'idle', question: null, messages: [], earlierMessagesOmitted: 0 }); }
+      const idle = list.find(s => s.id === id)?.state === 'idle';
+      return json({ id, contextId: 'x'.repeat(43), canSend: idle, ...(idle ? {} : readWhenBusy), question: null, messages: [], earlierMessagesOmitted: 0 }); }
     return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"MOBILE_DENIED"}' });
   });
   await page.goto('http://naw.test/mobile/' + hash);
@@ -63,11 +65,26 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
     check('a NAW dispatch is not labelled as you; the butler\'s replies carry its name', () => assert.deepEqual(authors,
       [[false, 'NAW 派活', 'N'], [false, 'Synthetic butler · 19', 'C'], [true, '你', null]]));
     await page.close();
+    // A busy butler takes a queued message, as a busy Claude session does; only a named refusal disables the button (2026-11-19).
+    const compose = () => page.evaluate(() => ({ button: document.getElementById('send-message').textContent, note: document.getElementById('compose-note').textContent, disabled: document.getElementById('send-message').disabled }));
+    readWhenBusy = { canSend: true, sendMode: 'queueMidturn' };
     page = await open(context, { steward: { state: 'shared', sessionId: butler }, busy: true, hash: '#zh/chat/' + butler });
     await page.fill('#message', 'Synthetic question');
-    const busy = await page.evaluate(() => ({ note: document.getElementById('compose-note').textContent, disabled: document.getElementById('send-message').disabled }));
-    check('a busy session says why sending waits and keeps the draft', () => assert.deepEqual(busy, { note: '对方空闲后才能从手机发送；草稿会保留。', disabled: true }));
+    const queued = await compose();
+    check('a busy butler queues the message instead of waiting for idle', () => assert.deepEqual(queued,
+      { button: '工具结束时送进本轮\u00a0↑', note: 'Claude 在本轮下一个工具结束时读到；本轮先结束就作为下一条发送。不中断当前工作。', disabled: false }));
     await page.close();
+    for (const [reason, note] of [['storage', /保存不了记录/], ['noQueue', /不支持回复中排队/], [undefined, /收不了消息/]]) {
+      readWhenBusy = { canSend: false, sendMode: null, sendBlocked: reason };
+      page = await open(context, { steward: { state: 'shared', sessionId: butler }, busy: true, hash: '#zh/chat/' + butler });
+      await page.fill('#message', 'Synthetic question');
+      const refused = await compose();
+      check('a refusal says why in plain words, never "wait until idle": ' + reason, () => {
+        assert.match(refused.note, note); assert.doesNotMatch(refused.note, /空闲/); assert.equal(refused.disabled, true);
+      });
+      await page.close();
+    }
+    readWhenBusy = {};
     for (const [state, [line, help]] of Object.entries(reasons)) {
       page = await open(context, { steward: { state }, hash: '#zh/home' });
       const tag = await page.$eval('.butler-entry', n => n.tagName), shown = await page.$eval('.butler-entry p', n => n.textContent);

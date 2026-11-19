@@ -55,7 +55,8 @@ function sendBlocked(s, r, question) {
   if (r.pendingQueue || s.state === 'idle' && s.pendingTag) return 'queueBusy';
   if (s.state === 'working' && s.provider === 'codex' && r.pendingSteer) return 'steerBusy';
   if (s.state === 'working') return 'noQueue';
-  return null;
+  // Starting, stopping, an error: the phone says so instead of telling the person to wait for idle.
+  return 'notReady';
 }
 function checked(w, ticket, action) {
   const { root, key } = location(w), s = w.get(ticket?.sessionId);
@@ -284,7 +285,7 @@ function read(w, ticket) {
   }).reverse();
   const q = question(w, s), mode = currentTarget(s, r) && !w.storageWarning ? sendMode(s, r) : null;
   return { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name, state: s.state, proof: proof(s, r, mode),
-    canSend: Boolean(mode), sendMode: mode, sendBlocked: mode || !currentTarget(s, r) || w.storageWarning ? null : sendBlocked(s, r, q),
+    canSend: Boolean(mode), sendMode: mode, sendBlocked: mode ? null : !currentTarget(s, r) ? 'ended' : w.storageWarning ? 'storage' : sendBlocked(s, r, q),
     question: q && Buffer.byteLength(JSON.stringify(q)) <= TEXT_BYTES ? q : null, questionOmitted: Boolean(q && Buffer.byteLength(JSON.stringify(q)) > TEXT_BYTES),
     messages, earlierMessagesOmitted: Math.max(0, rows.length - messages.length) };
 }

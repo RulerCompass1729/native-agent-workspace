@@ -61,6 +61,11 @@ test('the phone read says how a send would go, as the Mac composer decides it', 
     [() => { a.r.nativeInputRequired = true; }, () => { a.r.nativeInputRequired = false; }, 'interrupt'],
     [() => { a.r.transportDisconnected = true; }, () => { a.r.transportDisconnected = false; }, 'disconnected'],
     [() => { a.r.chatAvailable = false; }, () => { a.r.chatAvailable = true; }, 'disconnected'],
+    // Not busy reasons: the phone names them instead of asking the person to wait for idle (2026-11-19).
+    [() => { f.w.storageWarning = 'Synthetic save failure'; }, () => { f.w.storageWarning = null; }, 'storage'],
+    [() => { a.s.state = 'starting'; }, () => { a.s.state = 'working'; }, 'notReady'],
+    [() => { a.s.state = 'error'; }, () => { a.s.state = 'working'; }, 'notReady'],
+    [() => { a.s.state = 'ended'; }, () => { a.s.state = 'working'; }, 'ended'],
   ]) {
     change(); assert.deepEqual(pick(f.read(a)), { canSend: false, sendMode: null, sendBlocked: reason }, reason); undo();
   }

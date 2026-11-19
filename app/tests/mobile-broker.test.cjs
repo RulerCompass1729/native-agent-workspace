@@ -227,6 +227,7 @@ test('the phone gets only fixed words for how a send would go or why it cannot',
     [true, 'steer', null, [true, 'steer', null]],
     [false, null, 'steer', [false, null, null]],
     [false, null, 'PRIVATE_REASON', [false, null, null]],
+    ...['storage', 'notReady', 'ended'].map(reason => [false, null, reason, [false, null, reason]]),
   ]) {
     Object.assign(f.record, { canSend, sendMode, sendBlocked });
     const row = await f.broker.read(auth, f.record.id);
