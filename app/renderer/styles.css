@@ -895,6 +895,13 @@ header h1, header p { overflow-wrap: anywhere; }
 .background-risk { padding:1px 7px; border:1px solid currentColor; border-radius:4px; background:var(--dsw-alias-bg-layer-2,#fff); color:var(--dsw-alias-state-danger-label,#a03525); font-weight:600; }
 .background-risk::before { content:"⚠ "; }
 .background-note { margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }
+.background-batch-list { margin:6px 0 0; padding:0; list-style:none; display:grid; gap:2px; }
+.background-batch-item { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; padding:3px 0; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.background-batch-item:first-child { border-top:0; }
+.background-batch-target { flex:1 1 12em; min-width:0; }
+.background-batch-state { color:var(--muted); font-size:12px; font-weight:600; }
+.background-batch-item[data-state="void"] .background-batch-state, .background-batch-why { color:var(--dsw-alias-state-danger-label,#a03525); }
+.background-batch-why { flex-basis:100%; font-size:12px; }
 .background-note.is-warning, .background-error { color:var(--dsw-alias-state-danger-label,#a03525); }
 .background-error { margin:4px 0 0; overflow-wrap:anywhere; }
 .background-details { margin-top:6px; }

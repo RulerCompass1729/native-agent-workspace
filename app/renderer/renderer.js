@@ -2767,13 +2767,89 @@ function scheduleBackgroundExpiryClock() {
     scheduleBackgroundExpiryClock();
   }, 1000);
 }
+// Batches the person answered with one click (kept until their cards are gone) and batches opened one by one; memory only.
+const confirmationBatchStarted = new Map(), confirmationBatchOpen = new Set();
+function confirmationBatchRole(op) {
+  const batch = globalThis.nativeWorkspaceConfirmationBatch, cards = state?.backgroundConfirmations || [];
+  if (!batch || !op) return null;
+  const present = new Set(cards.map(card => card.key));
+  for (const [key, started] of confirmationBatchStarted) if (!started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
+  const role = batch.find(batch.plan(cards, [...confirmationBatchStarted.values()]), [op.sessionId, op.nativeId, op.id].join(':'));
+  return role && { ...role, open: !role.batch.started && confirmationBatchOpen.has(role.batch.key) };
+}
+function confirmationBatchTitle(op) {
+  const role = confirmationBatchRole(op);
+  return role && !role.open && role.anchor ? uiText('background.batch.title', { action: backgroundActionText(role.batch.cards[0].summary), count: role.batch.cards.length }) : '';
+}
+// The waiting list shows a merged batch once, on the card that draws it.
+function confirmationCardHidden(card) {
+  const role = confirmationBatchRole(card?.message?.backgroundOperation);
+  return Boolean(role && !role.open && !role.anchor);
+}
+function confirmationBatchKey(role) {
+  if (!role) return null;
+  const { itemState } = globalThis.nativeWorkspaceConfirmationBatch;
+  return [role.batch.key, role.anchor, role.open, role.batch.started, role.batch.cards.map(c => [c.key, itemState(c), c.actionable, c.expiresAt, c.message?.backgroundOperation?.resultNotice?.key || null, c.summary])];
+}
+// One answer per card, sent in the cards' order; main carries them out one at a time, each with its own checks.
+async function answerConfirmationBatch(batch, cancel) {
+  confirmationBatchStarted.set(batch.key, { key: batch.key, keys: batch.cards.map(card => card.key) });
+  render();
+  const answers = batch.cards.map(card => {
+    const options = card.message.backgroundOperation.confirmation.options, cancelId = options.cancelId ?? 0;
+    const response = cancel ? cancelId : options.buttons.findIndex((_label, index) => index !== cancelId);
+    return api.backgroundDecision(card.sessionId, card.nativeId, card.operationId, response);
+  });
+  const failed = (await Promise.allSettled(answers)).find(result => result.status === 'rejected');
+  if (failed) toastError(failed.reason);
+}
+function renderConfirmationBatch(box, role) {
+  const { itemState } = globalThis.nativeWorkspaceConfirmationBatch, cards = role.batch.cards, count = cards.length;
+  const states = cards.map(itemState), tally = name => states.filter(s => s === name).length;
+  const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('strong', undefined, 'background-sentence');
+  ui.display.computed(sentence, 'text', () => uiText('background.batch.title', { action: backgroundActionText(cards[0].summary), count }));
+  if (!role.batch.started) {
+    ui.display.text(state, 'background.card.waiting');
+    const soonest = Math.min(...cards.map(c => c.expiresAt).filter(Number.isSafeInteger));
+    if (Number.isSafeInteger(soonest)) { state.dataset.expiresAt = String(soonest); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  } else if (tally('queued') + tally('running') + tally('waiting')) {
+    ui.display.text(state, 'background.batch.progress', { index: Math.min(count, tally('done') + tally('void') + tally('cancelled') + 1), count });
+  } else if (tally('cancelled') === count) ui.display.text(state, 'background.batch.cancelled', { count });
+  else ui.display.text(state, 'background.batch.result', { done: tally('done'), void: tally('void') + tally('cancelled') });
+  line.append(state, sentence); box.append(line);
+  const list = node('ul', undefined, 'background-batch-list');
+  cards.forEach((card, index) => {
+    const item = node('li', undefined, 'background-batch-item'), target = node('span', undefined, 'background-batch-target');
+    ui.display.computed(target, 'text', () => card.summary ? backgroundSummaryText(card.summary) : card.title);
+    item.append(target);
+    if (role.batch.started) {
+      item.dataset.state = states[index];
+      item.append(uiNode('span', 'background.batch.item.' + states[index], undefined, 'background-batch-state'));
+      const notice = card.message?.backgroundOperation?.resultNotice;
+      if (states[index] === 'void' && notice) { const why = node('span', undefined, 'background-batch-why'); ui.display.text(why, notice.key, notice.params); item.append(why); }
+    }
+    list.append(item);
+  });
+  box.append(list);
+  if (role.batch.started || cards.some(card => card.actionable !== true)) return;
+  const buttons = node('div', undefined, 'background-buttons');
+  const cancel = node('button', '', 'small'), review = node('button', '', 'small'), all = node('button', '', 'small primary');
+  ui.display.text(cancel, 'background.batch.cancelAll'); ui.display.attribute(cancel, 'aria-label', 'background.batch.cancelAllName', { count });
+  ui.display.text(review, 'background.batch.review'); ui.display.text(all, 'background.batch.confirmAll', { count });
+  for (const button of [cancel, review, all]) button.disabled = disconnected;
+  cancel.addEventListener('click', () => answerConfirmationBatch(role.batch, true));
+  all.addEventListener('click', () => answerConfirmationBatch(role.batch, false));
+  review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); render(); });
+  buttons.append(cancel, review, all); box.append(buttons);
+}
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
   const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
   entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition));
   entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
-  const key = JSON.stringify([op, disconnected]);
+  const batchRole = confirmationBatchRole(op);
+  const key = JSON.stringify(batchRole ? [op, disconnected, confirmationBatchKey(batchRole)] : [op, disconnected]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
   if (entry.backgroundControls) { for (const el of entry.backgroundControls.querySelectorAll('*')) ui.display.unbind(el); ui.display.unbind(entry.backgroundControls); entry.backgroundControls.remove(); }
@@ -2781,10 +2857,13 @@ function renderBackgroundControls(entry, message) {
   if (!op || !summary && !card && !op.resultNotice) return;
   const box = node('div', undefined, `background-operation${card ? ' background-controls' : ''}`);
   entry.backgroundControls = box; entry.actions.before(box);
+  if (batchRole?.anchor && !batchRole.open) { box.classList.add('background-batch'); renderConfirmationBatch(box, batchRole); return; }
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
-  const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '');
+  const answered = card && !op.replacedBy && !op.disposition && op.answer;
+  const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : answered ? (op.answer === 'queued' ? 'background.card.queued' : 'background.card.answerRunning')
+    : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '');
   if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
-  if (card && !op.replacedBy && !op.disposition && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  if (card && !answered && !op.replacedBy && !op.disposition && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
   if (summary) ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
   else if (card) sentence.textContent = question.options.message || '';
   line.append(state, sentence);
@@ -2810,7 +2889,12 @@ function renderBackgroundControls(entry, message) {
     const details = node('details', undefined, 'background-details'), label = uiNode('summary', 'background.card.details');
     details.append(label, node('pre', raw)); box.append(details);
   }
-  if (!card || op.replacedBy || op.disposition) return;
+  const mergedAway = batchRole && !batchRole.open;
+  if (mergedAway) {
+    const merged = node('p', undefined, 'background-note');
+    ui.display.text(merged, 'background.batch.merged', { count: batchRole.batch.cards.length }); box.append(merged);
+  }
+  if (!card || op.replacedBy || op.disposition || answered || mergedAway) return;
   const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options, summary);
   question.options.buttons.forEach((label, response) => {
     const cancel = response === (question.options.cancelId ?? 0);
@@ -2819,11 +2903,16 @@ function renderBackgroundControls(entry, message) {
     button.addEventListener('click', async () => {
       button.disabled = true;
       try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
-      catch (error) { toast(error); }
+      catch (error) { toastError(error); }
       finally { button.disabled = disconnected; }
     });
     buttons.append(button);
   });
+  if (batchRole?.open && batchRole.anchor) {
+    const collapse = node('button', '', 'small'); ui.display.text(collapse, 'background.batch.collapse'); collapse.disabled = disconnected;
+    collapse.addEventListener('click', () => { confirmationBatchOpen.delete(batchRole.batch.key); render(); });
+    buttons.append(collapse);
+  }
   box.append(buttons);
 }
 function renderOperatorControls(entry, message, context = {}) {
@@ -4113,8 +4202,8 @@ function getActivityStream() {
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
     waitingChanged: count => taskBoard.setWaitingCount(count),
-    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, question: renderWaitingQuestion,
-    cardTitle: message => message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : '',
+    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, cardHidden: confirmationCardHidden, question: renderWaitingQuestion,
+    cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: async target => {
       const loading = ensureMessages([target.sessionId]); if (loading) await loading;

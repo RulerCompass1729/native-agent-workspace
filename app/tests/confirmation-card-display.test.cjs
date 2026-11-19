@@ -114,7 +114,7 @@ test('the approved short confirmation label also covers the exact shared-history
 test('a card keeps its frame when the reading list redraws an unchanged record', () => {
   // The reading list rewrites each row's class name on every pass; the card class must come back even when the
   // record has not changed (the first hidden-window pictures showed bare cards).
-  const sandbox = vm.createContext({ disconnected: false });
+  const sandbox = vm.createContext({ disconnected: false, confirmationBatchRole: () => null });
   vm.runInContext(fn(renderer, 'renderBackgroundControls'), sandbox);
   const classes = new Set(), item = { classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) } };
   const confirmation = { kind: 'message', options: { buttons: ['取消', '确认此操作'] } };

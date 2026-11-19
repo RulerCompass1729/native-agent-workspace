@@ -44,7 +44,7 @@
     }
     function drawWaiting() {
       const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations,
-        butlerId: state()?.steward?.sessionId, roomOf, nameOf });
+        butlerId: state()?.steward?.sessionId, roomOf, nameOf }).filter(item => !(item.card && host.cardHidden?.(item.card)));
       host.waitingChanged?.(waitingCount(items));
       const questionState = items.filter(i => i.kind === 'question').map(i => {
         const s = sessions().find(s => s.id === i.sessionId);
