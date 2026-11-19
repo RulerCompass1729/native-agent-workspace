@@ -184,6 +184,10 @@ let recordReminders = null;
 try { recordReminders = window.nativeWorkspaceRecordReminders.bind({ button: $('records-button'), badge: $('records-badge'), dialog: $('records-dialog'), document, api, confirmation: showBackgroundConfirmation, summaryText: summary => backgroundSummaryText(summary, true), text: (key, params) => uiText(key, params), display: ui.display });
   recordReminders.refresh(); }
 catch (error) { console.error(error); }
+let discoveriesView = null;
+if (window.nativeWorkspaceRegularPopup && $('discoveries-button') && api.discoveries) {
+  discoveriesView = window.nativeWorkspaceRegularPopup.bind({ host: $('discoveries-root'), button: $('discoveries-button'), badge: $('discoveries-badge'), document, api, text: uiText, subscribe: fn => ui.language.subscribe(fn) });
+}
 // 「大管家的记录」, opened from the butler's own menu.
 let stewardSteps = null;
 try { stewardSteps = window.nativeWorkspaceStewardRecord.bind({ dialog: $('steward-record-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
@@ -5656,6 +5660,7 @@ function writeTerminal(entry, event) {
 const disposers = [
   () => recordReminders?.dispose(),
   () => taskBoard.dispose(),
+  () => discoveriesView?.dispose(),
   () => mobileSetup.dispose(),
   () => butlerEntry.dispose(),
   disposeButlerReview,

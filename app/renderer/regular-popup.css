@@ -1,0 +1,19 @@
+#discoveries-root{display:contents}
+.discoveries-popup{position:fixed;inset:auto 20px 20px auto;margin:0;width:min(388px,calc(100vw - 32px));max-height:calc(100vh - 120px);padding:0;border:1px solid var(--border);border-radius:12px;background:var(--raised);color:var(--ink);box-shadow:0 12px 36px #0002;overflow:hidden}
+.discoveries-popup:popover-open{display:flex;flex-direction:column}.discoveries-popup::backdrop{pointer-events:none;background:transparent}
+.discoveries-popup>header,.discoveries-dialog>header{display:flex;gap:12px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border)}
+.discoveries-popup h2,.discoveries-dialog h2{margin:0;font-size:17px}.discoveries-popup>header button,.discoveries-dialog>header button{margin-left:auto}
+.discoveries-source{font-size:12px;color:var(--muted);margin:5px 0 0}
+.discoveries-items{overflow:auto;min-height:0}.discoveries-popup article,.discoveries-history article{padding:15px 18px;border-bottom:1px solid var(--border);font-size:13px}
+.discoveries-popup article h3,.discoveries-history article h3{margin:0 0 8px;font-size:15px;overflow-wrap:anywhere}
+.discoveries-why{font-size:13px;line-height:1.65;margin:8px 0;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.discoveries-popup a,.discoveries-history a{font-size:12px;color:var(--ink);text-decoration:underline;overflow-wrap:anywhere}
+.discoveries-popup article footer,.discoveries-history article footer{display:flex;gap:8px;margin-top:12px}.discoveries-popup button,.discoveries-dialog button{font-size:12px}
+.discoveries-popup>footer{display:flex;justify-content:space-between;gap:10px;padding:10px 18px;background:var(--panel);font-size:12px;color:var(--muted)}
+.discoveries-dialog{width:min(720px,calc(100vw - 40px));max-height:calc(100vh - 40px);padding:0;color:var(--ink);background:var(--surface);border:1px solid var(--border);border-radius:12px}
+.discoveries-dialog>p,.discoveries-dialog>h3{margin:16px 22px}.discoveries-dialog form{padding:0 22px 18px;display:grid;gap:12px}
+.discoveries-dialog label:not(:has(input[type=checkbox])){display:grid;gap:6px;font-size:13px}.discoveries-dialog input:not([type=checkbox]),.discoveries-dialog textarea{width:100%;font-size:13px;padding:9px;border:1px solid var(--border);background:var(--raised);color:var(--ink);border-radius:6px}
+.discoveries-dialog textarea{min-height:66px;resize:vertical}.discoveries-privacy{padding:12px;line-height:1.65;background:var(--panel);border:1px solid var(--border);border-radius:7px;font-size:13px;margin:0}
+.discoveries-dialog label:has(input[type=checkbox]){display:flex;align-items:center;gap:8px;font-size:13px}.discoveries-dialog input[type=checkbox]{width:auto;margin:0}
+.discoveries-notice{font-size:13px;color:var(--muted)}.discoveries-dialog [data-ignored=true]{opacity:.65}.discoveries-dialog [data-read=true] h3{color:var(--muted)}
+.discoveries-popup button:focus-visible,.discoveries-dialog :is(button,input,textarea,a):focus-visible{outline:2px solid var(--ink);outline-offset:2px}
