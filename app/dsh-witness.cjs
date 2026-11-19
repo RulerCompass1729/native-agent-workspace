@@ -4,22 +4,23 @@
 // the profile's `(with message ...)`; NAW reads that log, so a refusal by any
 // process in the session's tree (a tool child, a DNS lookup, a socket bind)
 // leaves a record, not only what passes the egress proxy.
-// The log does not keep every report. For programs that are not Apple's own,
-// Node.js among them, the reports of about a second go missing roughly once a
-// minute, with no trace in the log and no sign to the reader (measured on
-// 2026-11-17). So a canary process runs beside the session for as long as it
+// The observed log channel omits some reports, also absent from historical
+// queries. Node.js canary gaps measured on 2026-11-18 reached 2267 ms, roughly
+// once a minute, while every operation still returned EPERM. So a canary
+// process runs beside the session for as long as it
 // lasts, under the same profile and with the same Node.js, and makes one
 // refused connection every BEAT_MS: a beat. The witness arms on the first
-// beat's report. After that, a beat whose report does not arrive within
-// BEAT_REPORT_MS means a refusal by the session could have gone unrecorded as
-// well, so the witness is lost and the session stops.
+// beat's report. After that, only a newer, timely beat renews a bounded
+// freshness lease. Short report gaps are recorded; loss of progress ends
+// the lease and stops the session. Kernel refusals remain unchanged.
 const { spawn: spawnProcess } = require('node:child_process');
 
 const LOG = '/usr/bin/log';
 const ARM_TIMEOUT_MS = 10000;
 const BEAT_MS = 250;
-// A beat's report arrived within 8 ms in 631 measured beats.
-const BEAT_REPORT_MS = 1000;
+// Approved offline candidate: ordinary log gaps measured up to 2267ms.
+// This is a freshness bound, not a promise that every refusal was logged.
+const BEAT_REPORT_MS = 3000;
 // Each beat connects to the next loopback port in 1..BEAT_PORTS. A new port
 // each time keeps the kernel from folding beats into one duplicate report,
 // and each report names its beat.
@@ -55,7 +56,7 @@ function parseDenial(message) {
 // time or either of them ends first. After arming, every report that is not
 // a beat's goes to `onDenial`, and `onLost(reason)` is called once when the
 // witness can no longer vouch for the record: 'witness-lost' when the log
-// reader ends, 'witness-silent' when a beat's report is missing or the canary
+// reader ends, 'witness-silent' when fresh reports stop, or the canary
 // ends or stops taking beats. close() ends the log reader and the canary with
 // SIGTERM, never SIGKILL. `spawn` and the times are replaced only in tests.
 function startWitness({
@@ -63,6 +64,7 @@ function startWitness({
   runCanary,
   onDenial,
   onLost = () => {},
+  onGap = () => {},
   spawn = spawnProcess,
   armTimeoutMs = ARM_TIMEOUT_MS,
   beatMs = BEAT_MS,
@@ -74,15 +76,18 @@ function startWitness({
     const reader = spawn(LOG, ['stream', '--style', 'ndjson', '--predicate', predicate], { stdio: ['ignore', 'pipe', 'ignore'] });
     // { child, exited }, from the stream's header on.
     let canary = null;
-    // Beats whose report has not arrived: port -> when it was sent.
+    // Beats whose report has not arrived: port -> sequence and send times.
     const waiting = new Map();
     let port = 0;
     let beats = 0;
+    let sequence = 0;
+    let confirmed = null;
     // arming: no beat report yet. armed: resolved. closed: stopped, refused or lost.
     let phase = 'arming';
     let pending = '';
     let beatTimer = null;
     let armDeadline = null;
+    let freshnessDeadline = null;
     const witness = {
       get armed() {
         return phase === 'armed';
@@ -96,6 +101,7 @@ function startWitness({
         phase = 'closed';
         clearTimeout(armDeadline);
         clearInterval(beatTimer);
+        clearTimeout(freshnessDeadline);
         reader.kill('SIGTERM');
         if (canary !== null && !canary.exited) {
           canary.child.stdin.end();
@@ -121,27 +127,51 @@ function startWitness({
       }
       lose(reason);
     };
+    let wallFloor = -Infinity, beatWall = -Infinity;
+    const trustedClock = () => {
+      // A slower clock still moves forward; its lifetime offset is not a step.
+      const before = performance.now(), wall = Date.now(), at = performance.now();
+      if (!Number.isFinite(wall) || !Number.isFinite(at) || at < before || wall + 1 + beatMs < wallFloor) {
+        broken('the wall clock moved backwards', 'witness-silent');
+        return null;
+      }
+      wallFloor = Math.max(wallFloor, wall);
+      return { wall, at };
+    };
     armDeadline = setTimeout(() => fail(Error('DSH witness: no canary report')), armTimeoutMs);
-    // Runs after the poll phase that follows a beat, so a report already in
-    // the reader's pipe is read before its beat is judged missing, even when
-    // this process was busy.
+    // Timers use monotonic send time. Neither a new send nor a replay renews
+    // the lease; a report must advance the confirmed sequence before expiry.
     const judge = () => {
       if (phase === 'closed') return;
-      const now = performance.now();
-      for (const [beatPort, sentAt] of waiting) {
-        if (now - sentAt <= beatReportMs) continue;
-        if (phase === 'armed') {
-          lose('witness-silent');
-          return;
+      const clock = trustedClock();
+      if (!clock) return;
+      const now = clock.at;
+      if (phase === 'armed') {
+        if (now - confirmed.at >= beatReportMs) lose('witness-silent');
+        else {
+          clearTimeout(freshnessDeadline);
+          freshnessDeadline = setTimeout(judge, Math.max(1, beatReportMs - (now - confirmed.at)));
         }
+        return;
+      }
+      for (const [beatPort, sent] of waiting) {
+        if (now - sent.at <= beatReportMs) continue;
         // Before arming a missing report only delays arming.
         waiting.delete(beatPort);
       }
     };
     const beat = () => {
       if (phase === 'closed') return;
+      const clock = trustedClock();
+      if (!clock) return;
+      // Reused ports need advancing timestamps, including under a frozen clock.
+      if (clock.wall <= beatWall) {
+        broken('the wall clock stopped advancing', 'witness-silent');
+        return;
+      }
+      beatWall = clock.wall;
       port = (port % BEAT_PORTS) + 1;
-      waiting.set(port, performance.now());
+      waiting.set(port, { seq: ++sequence, ...clock });
       canary.child.stdin.write(`${port}\n`);
       setImmediate(judge);
     };
@@ -165,7 +195,7 @@ function startWitness({
         broken('the canary ended', 'witness-silent');
       });
       beat();
-      beatTimer = setInterval(beat, beatMs);
+      if (phase !== 'closed') beatTimer = setInterval(beat, beatMs);
     };
     // The port of a beat, if this is the running canary's report of one.
     const beatOf = denial => {
@@ -176,24 +206,37 @@ function startWitness({
       const beatPort = Number(match[1]);
       return beatPort >= 1 && beatPort <= BEAT_PORTS ? beatPort : null;
     };
-    const handle = denial => {
+    const handle = (denial, stamp) => {
       if (phase === 'closed') return;
+      const clock = trustedClock();
+      if (!clock) return;
+      if (phase === 'armed' && clock.at - confirmed.at >= beatReportMs) {
+        lose('witness-silent');
+        return;
+      }
       const beatPort = beatOf(denial);
       if (beatPort !== null) {
-        const sentAt = waiting.get(beatPort);
+        const sent = waiting.get(beatPort);
         // A late or repeated report of a beat changes nothing.
-        if (sentAt === undefined) return;
+        if (!sent || !Number.isFinite(stamp) || stamp < sent.wall) return;
         waiting.delete(beatPort);
+        if (confirmed && sent.seq <= confirmed.seq) return;
+        if (performance.now() - sent.at >= beatReportMs) return;
+        const missed = [...waiting.values()].filter(item => item.seq < sent.seq);
+        for (const [key, item] of waiting) if (item.seq < sent.seq) waiting.delete(key);
+        if (phase === 'armed' && missed.length) {
+          try { onGap({ at: Date.now(), from: missed[0].seq, to: missed.at(-1).seq,
+            missing: missed.length, elapsedMs: Math.round(performance.now() - missed[0].at) }); } catch {}
+        }
+        confirmed = sent;
         beats++;
         if (phase === 'arming') {
           // Earlier beats were before the session; only later ones count.
-          for (const [earlier, earlierAt] of waiting) {
-            if (earlierAt <= sentAt) waiting.delete(earlier);
-          }
           phase = 'armed';
           clearTimeout(armDeadline);
           resolve(witness);
         }
+        judge();
         return;
       }
       try {
@@ -215,7 +258,9 @@ function startWitness({
         return;
       }
       const denial = parseDenial(event.eventMessage);
-      if (denial) handle(denial);
+      const stamp = Date.parse(String(event.timestamp || '').replace(' ', 'T')
+        .replace(/(\.\d{3})\d*/, '$1').replace(/([+-]\d\d)(\d\d)$/, '$1:$2'));
+      if (denial) handle(denial, stamp);
     };
     reader.stdout.setEncoding('utf8');
     reader.stdout.on('data', chunk => {

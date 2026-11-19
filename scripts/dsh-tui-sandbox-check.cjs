@@ -3,7 +3,7 @@
 // Real-kernel check of the DSH TUI sandbox and of what a session does with a
 // refused connection. No DSH runtime, no model, no key and no network beyond
 // loopback: the "TUI" is a stand-in program in a synthetic session home.
-//   node scripts/dsh-tui-sandbox-check.cjs [--dsh-tui <absolute path to dsh-tui.cjs>]
+//   node scripts/dsh-tui-sandbox-check.cjs [--hold-only] [--dsh-tui <absolute path to dsh-tui.cjs>]
 // `--dsh-tui` runs the same checks against another commit's module (the red
 // run); the default is this checkout's.
 // 1. Rules. Each fixture is its own sandboxed process under the session
@@ -21,8 +21,8 @@
 //      a tunnel through the proxy) runs without a refusal while the witness's
 //      canary beats beside it.
 //    - Each forbidden path stops the session by itself with a sandbox record.
-//    - An idle session stops by itself when the log drops a beat's report,
-//      and the check's own reader shows the drop there (hold).
+//    - An idle session survives five minutes of ordinary report gaps; then
+//      withholding its reader's output loses the lease and stops it (hold).
 //    - After a stop nothing passes, through the proxy or directly, and no
 //      canary is left.
 // The log drops reports: for programs that are not Apple's, Node.js among
@@ -49,11 +49,7 @@ const HEARTBEAT_MS = 250;
 // A beat's report reached a reader within 8 ms in 631 measured beats.
 const HEARTBEAT_LATE_MS = 500;
 const ATTEMPTS = 3;
-// The drops came about every 60 s: two periods and a margin.
-const HOLD_SECONDS = 130;
-// One missing beat leaves about two beat intervals between reports.
-const HOLE_MS = 450;
-const HOLE_WINDOW_MS = 4000;
+const HOLD_SECONDS = 300;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [];
 
@@ -64,9 +60,11 @@ function check(name, ok, detail = '') {
 }
 
 function parseArguments(argv) {
-  if (argv.length === 0) return { module: path.join(__dirname, '../app/dsh-tui.cjs') };
-  if (argv.length === 2 && argv[0] === '--dsh-tui' && path.isAbsolute(argv[1])) return { module: argv[1] };
-  throw Error('usage: dsh-tui-sandbox-check.cjs [--dsh-tui <absolute path to dsh-tui.cjs>]');
+  const holdOnly = argv.includes('--hold-only');
+  argv = argv.filter(arg => arg !== '--hold-only');
+  if (argv.length === 0) return { module: path.join(__dirname, '../app/dsh-tui.cjs'), holdOnly };
+  if (argv.length === 2 && argv[0] === '--dsh-tui' && path.isAbsolute(argv[1])) return { module: argv[1], holdOnly };
+  throw Error('usage: dsh-tui-sandbox-check.cjs [--hold-only] [--dsh-tui <absolute path to dsh-tui.cjs>]');
 }
 
 async function waitFor(condition, seconds) {
@@ -94,6 +92,7 @@ function startReader(text) {
   const reports = [];
   const predicate = `senderImagePath ENDSWITH "/Sandbox" AND eventMessage CONTAINS "${text}"`;
   const reader = spawn('/usr/bin/log', ['stream', '--style', 'ndjson', '--predicate', predicate], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const exited = new Promise(resolve => { reader.once('exit', resolve); reader.once('error', resolve); });
   let pending = '';
   reader.stdout.setEncoding('utf8');
   reader.stdout.on('data', chunk => {
@@ -123,7 +122,7 @@ function startReader(text) {
   return {
     reports,
     forPid: pid => reports.filter(report => report.pid === pid).map(report => report.text),
-    close: () => reader.kill('SIGTERM'),
+    close: async () => { reader.kill('SIGTERM'); await exited; },
   };
 }
 
@@ -392,7 +391,7 @@ async function checkRules(dshTui, work) {
     check('rules: the check\'s heartbeat ran throughout', heartbeat.alive);
   } finally {
     heartbeat.close();
-    reader.close();
+    await reader.close();
   }
 }
 
@@ -559,24 +558,6 @@ function canaryProcesses() {
   });
 }
 
-// The longest time without one of the session canary's reports in the log,
-// in the HOLE_WINDOW_MS up to `until`, which closes the last interval.
-function largestHole(reader, nonce, until) {
-  if (!nonce || !Number.isFinite(until)) return 0;
-  const stamps = reader.reports
-    .filter(report => report.full.includes(nonce) && report.text.startsWith('network-outbound '))
-    .map(report => report.at)
-    .filter(at => at >= until - HOLE_WINDOW_MS && at <= until)
-    .sort((a, b) => a - b);
-  if (stamps.length === 0) return 0;
-  stamps.push(until);
-  let largest = 0;
-  for (let index = 1; index < stamps.length; index++) {
-    largest = Math.max(largest, stamps[index] - stamps[index - 1]);
-  }
-  return largest;
-}
-
 // One session in `mode`. Returns its outcomes, and `rerun` when the app's
 // witness stopped it at a missing beat before it could show anything else.
 async function runSession(dshTui, setup, mode) {
@@ -595,11 +576,20 @@ async function runSession(dshTui, setup, mode) {
       launched.profile = argv[2];
     }
   }
+  let witnessReader, ownReader;
   const runtime = new dshTui.DshTui({ id: `sandbox-check-${mode}`, cwd }, { dataDir: setup.dataDir }, {
     Terminal: StandInTerminal,
     key: async () => FAKE_KEY,
     testOnly: { route: () => ['127.0.0.1', setup.upstream.port] },
+    witness: { startWitness: options => {
+      if (mode === 'hold') ownReader = startReader(options.nonce);
+      return setup.witness.startWitness({ ...options, spawn: (...args) => {
+      witnessReader = spawn(...args);
+      return witnessReader;
+    } }); } },
   });
+  const gaps = [];
+  runtime.on('dshWitnessGap', gap => { gaps.push(gap); console.log(`GAP ${JSON.stringify(gap)}`); });
   const states = [];
   let endedAt = null;
   runtime.on('state', state => {
@@ -610,8 +600,6 @@ async function runSession(dshTui, setup, mode) {
   runtime.on('activity', (text, uiMessage) => activities.push(uiMessage?.key));
   let stopCalled = false;
   const outside = {};
-  // The hold check's own reader starts before the session's nonce exists.
-  const ownReader = mode === 'hold' ? startReader('naw-dsh-') : null;
   try {
     await launchSession(dshTui, runtime, setup.where);
     const witness = runtime.witness;
@@ -648,17 +636,27 @@ async function runSession(dshTui, setup, mode) {
     }
     if (mode === 'hold') {
       const nonce = /\(with message "(naw-dsh-[0-9a-f]+)"\)/.exec(launched.profile || '')?.[1];
-      const stopped = await waitFor(() => endedAt !== null, HOLD_SECONDS);
+      const started = Date.now();
+      while (Date.now() - started < HOLD_SECONDS * 1000 && endedAt === null) {
+        await wait(Math.min(30000, HOLD_SECONDS * 1000 - (Date.now() - started)));
+        console.log(`HOLD ${JSON.stringify({ elapsedMs: Date.now() - started, beats: witness?.beats, alive: runtime.terminal?.alive, violations: records().length })}`);
+      }
+      const elapsed = Date.now() - started;
+      const healthy = endedAt === null && runtime.terminal?.alive === true && records().length === 0;
+      note('hold: an idle session survives five minutes without a false stop', healthy && elapsed >= HOLD_SECONDS * 1000, `${elapsed} ms; ${JSON.stringify(records())}`);
+      const stamps = (ownReader?.reports || []).filter(report => report.full.includes(nonce)).map(report => report.at).sort((a, b) => a - b);
+      const intervals = stamps.slice(1).map((at, index) => at - stamps[index]).sort((a, b) => a - b);
+      const percentile = p => intervals[Math.min(intervals.length - 1, Math.ceil(intervals.length * p) - 1)];
+      console.log(`DISTRIBUTION ${JSON.stringify({ reports: stamps.length, p50: percentile(.5), p99: percentile(.99), max: intervals.at(-1), gaps })}`);
+      const pausedAt = Date.now();
+      if (healthy) witnessReader?.stdout.pause();
+      const stopped = await waitFor(() => endedAt !== null, 10);
       const first = records()[0];
-      // Reports from just before the stop may still be on their way.
-      await wait(1000);
       const lost = stopped && states.at(-1) === 'ended' && first?.source === 'witness' && first?.target === 'witness-silent';
-      const after = first && endedAt ? `${endedAt - first.at} ms to stop` : 'no stop';
-      note('hold: an idle session stops by itself at a missing beat', lost, `${states.join('>')}; ${JSON.stringify(first || null)}; ${after}`);
+      const detectionMs = first ? first.at - pausedAt : null;
+      note('hold: loss of report progress stops the session within the lease', healthy && lost && detectionMs >= 0 && detectionMs <= 3000, `${states.join('>')}; detection=${detectionMs} ms; exit=${endedAt - pausedAt} ms; ${JSON.stringify(first || null)}`);
       note('hold: the session reported the lost witness', activities.includes('notice.activity.dshWitnessLost'), activities.join(','));
       note('hold: the canary beat before the stop', witness?.beats >= 8, `beats=${witness?.beats}`);
-      const hole = largestHole(ownReader, nonce, first?.at);
-      note('hold: the check\'s own reader shows the log dropped the canary\'s reports there', hole >= HOLE_MS, `largest gap ${hole} ms in the ${HOLE_WINDOW_MS} ms before the stop`);
       return { outcomes, rerun: false };
     }
     const stopped = await waitFor(() => endedAt !== null, 12);
@@ -687,7 +685,7 @@ async function runSession(dshTui, setup, mode) {
     elsewhere.server.close();
     outside.udp?.socket.close();
     outside.v6?.server.close();
-    ownReader?.close();
+    await ownReader?.close();
   }
 }
 
@@ -704,15 +702,16 @@ async function checkMode(dshTui, setup, mode) {
   }
 }
 
-async function checkSessions(dshTui, work) {
+async function checkSessions(dshTui, work, options) {
   const dataDir = path.join(work, 'data');
   fs.mkdirSync(dataDir);
   const standIn = path.join(work, 'stand-in.cjs');
   fs.writeFileSync(standIn, STAND_IN);
   const upstream = await echoServer();
-  const setup = { work, dataDir, where: dshTui.paths(dataDir), standIn, upstream };
+  const witnessFile = path.join(path.dirname(options.module), 'dsh-witness.cjs');
+  const setup = { work, dataDir, where: dshTui.paths(dataDir), standIn, upstream, witness: fs.existsSync(witnessFile) ? require(witnessFile) : null };
   try {
-    for (const mode of ['normal', 'child', 'dns', 'udp', 'ipv6', 'inbound', 'hold']) await checkMode(dshTui, setup, mode);
+    for (const mode of options.holdOnly ? ['hold'] : ['normal', 'child', 'dns', 'udp', 'ipv6', 'inbound', 'hold']) await checkMode(dshTui, setup, mode);
   } finally {
     upstream.server.close();
   }
@@ -722,13 +721,14 @@ async function checkSessions(dshTui, work) {
 }
 
 async function main() {
-  const { module } = parseArguments(process.argv.slice(2));
+  const options = parseArguments(process.argv.slice(2));
+  const { module } = options;
   const dshTui = require(module);
   console.log(`module: ${path.relative(process.cwd(), module) || module}`);
   const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-dsh-sandbox-')));
   try {
-    await checkRules(dshTui, work);
-    await checkSessions(dshTui, work);
+    if (!options.holdOnly) await checkRules(dshTui, work);
+    await checkSessions(dshTui, work, options);
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }

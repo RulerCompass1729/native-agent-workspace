@@ -13,7 +13,7 @@ class Reader extends EventEmitter {
   constructor() { super(); this.stdout = new PassThrough(); }
   kill() { return true; }
   report(program, port) {
-    this.stdout.write(JSON.stringify({ eventMessage:
+    this.stdout.write(JSON.stringify({ timestamp: new Date().toISOString(), eventMessage:
       `Sandbox: ${program} deny(1) network-outbound remote:*:${port}\nnaw-dsh-review-r3` }) + '\n');
   }
 }

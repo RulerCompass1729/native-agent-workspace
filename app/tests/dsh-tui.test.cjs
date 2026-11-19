@@ -257,7 +257,7 @@ class FakeReader extends EventEmitter {
   }
   // One unified-log event, as `log stream --style ndjson` prints it.
   report(message) {
-    this.stdout.write(JSON.stringify({ senderImagePath: '/S/Sandbox', eventMessage: `${message}\n${NONCE}` }) + '\n');
+    this.stdout.write(JSON.stringify({ timestamp: new Date().toISOString(), senderImagePath: '/S/Sandbox', eventMessage: `${message}\n${NONCE}` }) + '\n');
   }
 }
 
@@ -824,6 +824,19 @@ test('a session stops when its witness is lost and does not start without one', 
   assert.equal(failing.guards.proxyClosed, 1);
 });
 
+test('a witness report gap is forwarded without stopping the session', async t => {
+  const { runtime, where, guards, terminals } = launched(t);
+  const gaps = [];
+  runtime.on('dshWitnessGap', gap => gaps.push(gap));
+  await runtime.launch(where, '/synthetic/node');
+  const gap = { at: 100, from: 2, to: 9, missing: 8, elapsedMs: 2000 };
+  guards.witness.onGap(gap);
+  assert.deepEqual(gaps, [gap]);
+  assert.equal(terminals[0].stops, 0);
+  assert.deepEqual(runtime.violations, []);
+  await runtime.stop();
+});
+
 // The real witness over a fake log and canary.
 function beatingWitness(reader, canary) {
   return {
@@ -831,9 +844,9 @@ function beatingWitness(reader, canary) {
   };
 }
 
-// r4 end to end: while every beat is reported the session runs; the first
-// beat report the log drops stops it.
-test('a session stops when a beat report of its witness goes missing', async t => {
+// End to end: while fresh beat reports arrive the session runs; losing
+// report progress past the lease stops it.
+test('a session stops when fresh witness reports cease', async t => {
   const reader = new FakeReader();
   const canary = new FakeCanary(901);
   const answers = answerBeats(reader, canary);
@@ -979,10 +992,17 @@ test('a DSH session is terminal-only, keeps DSH approvals and its route, and is 
   for (const extra of [{ skipPermissions: true }, { settings: {} }]) {
     await assert.rejects(workspace.create('dsh', directory, 'owner', 'X', 'terminal', extra), error => error.uiMessage?.key === 'error.workspace.invalidSettings');
   }
+  runtimes[0].emit('dshWitnessGap', { at: 1, from: 2, to: 9, missing: 8, elapsedMs: 2000, ignored: 'not stored' });
+  runtimes[0].emit('dshWitnessGap', { at: 2, from: 9, to: 2, missing: 8, elapsedMs: 2000 });
+  assert.deepEqual(record.dshWitnessGaps, [{ at: 1, from: 2, to: 9, missing: 8, elapsedMs: 2000 }]);
+  for (let index = 2; index <= 201; index++) runtimes[0].emit('dshWitnessGap', { at: index, from: index, to: index, missing: 1, elapsedMs: 250 });
+  assert.equal(record.dshWitnessGaps.length, 200);
+  assert.equal(record.dshWitnessGaps[0].at, 2);
   workspace.persist();
   workspace.close();
   workspace = new Workspace(host, directory);
   assert.equal(workspace.get(id).state, 'ended');
+  assert.deepEqual(workspace.get(id).dshWitnessGaps, record.dshWitnessGaps);
 });
 
 // --- installer ---------------------------------------------------------------------
