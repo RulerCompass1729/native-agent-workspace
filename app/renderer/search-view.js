@@ -250,7 +250,8 @@ function searchSendTarget(row, text = '.') {
   const action = soloAction(s, { mode: 'chat' }), changing = Boolean(sessionComposers.get(s.id)?.changing);
   const blocked = action.kind !== 'send' || sessionSendDisabled(s, action, text, changing);
   const hintKey = inputRecoveries.get(s.id)?.text.value ? 'composer.unconfirmedHint' : changing || pendingMode?.id === s.id ? 'composer.changingHint' : action.hintKey;
-  return { s, action, blocked, hintKey, method: sessionInputMethod(s).method };
+  const pick = sessionInputMethod(s);
+  return { s, action, blocked, hintKey, method: pick.method, turnId: pick.turnId || '' };
 }
 function openSearchSend(text, first = '') {
   if (!state || $('send-dialog').open) return;
@@ -286,7 +287,7 @@ function renderSearchSend() {
     if (open.prefer === row.id && !target.blocked && !open.selected && !open.chosen) { open.selected = row.id; open.chosen = true; }
     if (target.blocked && open.selected === row.id && !open.busy) {
       open.selected = '';
-      if (!$('send-note').textContent) ui.display.text($('send-note'), 'send.lost', () => ({ name: target.s ? participantLabel(target.s, state.sessions) : row.name }));
+      if (!$('send-note').textContent || open.changed) ui.display.text($('send-note'), 'send.lost', () => ({ name: target.s ? participantLabel(target.s, state.sessions) : row.name }));
     }
     radio.disabled = target.blocked; radio.checked = open.selected === row.id;
     label.classList.toggle('blocked', target.blocked);
@@ -309,7 +310,7 @@ function renderSearchSend() {
 }
 function searchSendChoose(event) {
   if (!searchSend || event.target?.name !== 'send-target') return;
-  searchSend.selected = event.target.value; searchSend.chosen = true;
+  searchSend.selected = event.target.value; searchSend.chosen = true; searchSend.changed = false;
   ui.display.unbind($('send-note')); $('send-note').textContent = '';
   renderSearchSend();
 }
@@ -333,6 +334,9 @@ async function confirmSearchSend() {
   if (open.selected === 'new') return startSearchSendNew(open, text);
   const row = open.rows.find(row => row.id === open.selected);
   if (!row) return;
+  // What the button shows at this click: the recipient and the way it reaches them.
+  const shown = searchSendTarget(row), seen = shown.s && { nativeId: shown.s.nativeId, method: shown.method, turnId: shown.turnId };
+  if (!seen) return;
   open.busy = true; renderSearchSend(); // set before any wait: a second click in the same task finds it locked
   let follow;
   try {
@@ -347,6 +351,13 @@ async function confirmSearchSend() {
       return;
     }
     const s = target.s, pick = sessionInputMethod(s);
+    // The click confirms the way it showed, not what the session turned into while messages loaded: a changed way
+    // (queue, steer, send) or turn sends nothing and asks again; it is never switched by itself.
+    if (seen.nativeId !== s.nativeId || seen.method !== pick.method || seen.turnId !== (pick.turnId || '')) {
+      open.busy = false; open.changed = true; renderSearchSend();
+      ui.display.text($('send-note'), 'send.changed', () => ({ name: participantLabel(s, state.sessions), action: searchSendLabel(soloAction(s, { mode: 'chat' }).labelKey) }));
+      return;
+    }
     follow = searchSendFollow = { id: s.id, name: participantLabel(s, state.sessions), phase: 'dialog' };
     reportShown();
     const call = deliverSessionInput(s, pick, text, SEARCH_SEND_REVISION);

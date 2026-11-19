@@ -6,7 +6,7 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const pending = [], inputs = [], runtimes = new Map();
-const sends = [], interruptions = [], queued = [];
+const sends = [], interruptions = [], queued = [], steered = [];
 const heldClaims = new Set(), claims = [];
 const claim = Workspace.prototype.claim;
 Workspace.prototype.claim = function (id, ...args) {
@@ -92,6 +92,13 @@ process.on('message', q => {
     r.queue = async text => { queued.push({ id: q.target, text }); throw Error('Synthetic queue does not deliver'); };
     r.emit('capability');
   }
+  // A Codex session that can take added instructions during a turn (start one with native-activity and a turnId).
+  if (q.method === 'steer-capable') {
+    const r = runtimes.get(q.target); r.steerAvailable = Boolean(q.value);
+    r.steer = async (text, tag, turnId, valid) => { if (!valid()) throw Error('Synthetic steer revoked'); steered.push({ id: q.target, text, turnId }); };
+    r.finishTurn = () => {};
+    r.emit('capability');
+  }
   if (q.method === 'recovering-terminal') {
     const r = runtimes.get(q.target); r.record.recovering = Boolean(q.value);
     if (q.value) { r.savedTerminal = r.terminal; r.terminal = null; r.hasHistory = false; r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; }
@@ -114,5 +121,5 @@ process.on('message', q => {
   }
   if (q.method === 'fail') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('Synthetic snapshot failure')); }
   if (q.method === 'first-message-required') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。')); }
-  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), waitingSends: waitingSends.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, revoked, dispatchErrors, interruptions, queued });
+  process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), waitingSends: waitingSends.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, revoked, dispatchErrors, interruptions, queued, steered });
 });

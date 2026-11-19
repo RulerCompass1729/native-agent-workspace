@@ -182,6 +182,50 @@ async function run() {
   assert.equal(await isOpen('send-dialog'), false, 'An uncertain queued message is not offered again');
   checks.push('A working Claude session gets the queue (button 等本轮结束后发送, Enter on focused Send); the notice only shows recorded row statuses ' + JSON.stringify(texts));
 
+  // 5b. C1: a click sends only the way its button showed. When the way changes while the click loads that
+  // session's messages (the held reply below), nothing is sent and the note asks again; the next click sends once,
+  // the new way. Unchanged ways send at the first click (groups 4, 5). queue → steer cannot happen to one session
+  // (queue is Claude-only, steer Codex-only), so queue → send here and send → steer in 6b.
+  const note = () => page.locator('#send-note').innerText();
+  await app.evaluate(({ ipcMain }) => {
+    const key = 'workspace:shownSessions', original = ipcMain._invokeHandlers.get(key); if (!original) throw Error(key);
+    globalThis.searchSendHold = { on: false, held: [] };
+    ipcMain._invokeHandlers.set(key, async (event, ...args) => {
+      if (globalThis.searchSendHold.on) await new Promise(resolve => globalThis.searchSendHold.held.push(resolve));
+      return original(event, ...args);
+    });
+  });
+  const hold = () => app.evaluate(() => { globalThis.searchSendHold.on = true; });
+  const heldCalls = () => app.evaluate(() => globalThis.searchSendHold.held.length);
+  const release = () => app.evaluate(() => { globalThis.searchSendHold.on = false; globalThis.searchSendHold.held.splice(0).forEach(resolve => resolve()); });
+  // The click waits only for a session whose messages this window does not hold (off screen): a fresh Claude
+  // session, then 学习记录 opened again.
+  const ledger = await create('账单助手', 'claude');
+  await openSearch('复习计划'); await page.locator('#search-input').press('Enter');
+  await until(async () => (await snapshot()).viewState.selected === study && !(await isOpen('search-dialog')), 'Back to 学习记录');
+  await fixture('queue-capable', ledger, true); await fixture('set-state', ledger, 'working');
+  await until(async () => { const x = await session(ledger); return x.queueAvailable && x.state === 'working' && x.messagesOmitted; }, 'Off-screen working Claude session');
+  const afterQueue = '账单助手 账单对完再记一笔'; sentences.push(afterQueue);
+  await openSend(afterQueue);
+  assert.deepEqual(await checkedIds(), [ledger]);
+  await until(async () => (await page.locator('#send-confirm').innerText()) === '等本轮结束后发送', 'Shown as queue');
+  await hold(); await page.locator('#send-confirm').click();
+  await until(async () => (await heldCalls()) > 0, 'The click waits for the messages');
+  await fixture('set-state', ledger, 'idle');
+  await until(async () => (await page.locator('#send-confirm').innerText()) === '发送', 'The turn ends during the wait');
+  await release();
+  await until(async () => { const x = await stats(); return (await note()) || x.sends.length > 1 || x.queued.length > 1; }, 'C1 queue → send click settles');
+  s = await stats();
+  assert.deepEqual(s.sends.slice(1), [], 'C1 queue → send: nothing sent at that click'); assert.equal(s.queued.length, 1, 'C1: not queued either');
+  assert.equal(await note(), '「账单助手」的发送方式变了，现在是「发送」。确认无误请再点一次。');
+  assert.equal(await isOpen('send-dialog'), true); assert.deepEqual(await checkedIds(), [ledger], 'Same recipient, not swapped');
+  await page.locator('#send-confirm').click();
+  await until(async () => (await page.locator('#toast-text').innerText()) === '账单助手：原生已接收', 'Reconfirmed send notice');
+  s = await stats();
+  assert.deepEqual(s.sends.at(-1), { id: ledger, text: afterQueue }); assert.equal(s.sends.length, 2, 'C1 reconfirmed: one send'); assert.equal(s.queued.length, 1);
+  await fixture('complete', ledger, { text: '好的' }); await until(async () => (await session(ledger)).state === 'idle', 'Ledger idle');
+  checks.push('C1 queue → send: the turn ended while the click loaded messages; nothing sent or queued, the note names the new way, the recipient stays; the next click sends once');
+
   // 6. Two sessions with the same name: nothing preselected, rows told apart by short id (G11).
   const twin = await create('学习记录');
   const both = '学习记录 明天复盘'; sentences.push(both);
@@ -193,6 +237,34 @@ async function run() {
   assert.notEqual(lines[0], lines[1]);
   await closeAll();
   checks.push('Two same-named sessions: none preselected, rows distinguished by short id ' + JSON.stringify(lines));
+
+  // 6b. C1 send → steer: the Codex session (off screen now: the twin is open) starts a turn during the click's wait.
+  const steer = '学习记录 错题按章节排一下'; sentences.push(steer); // both same-named rows listed, one chosen by hand
+  await fixture('steer-capable', study, true);
+  await until(async () => (await session(study)).messagesOmitted, '学习记录 off screen');
+  await openSend(steer); await radio(study).check();
+  assert.equal(await page.locator('#send-confirm').innerText(), '发送');
+  await hold(); await page.locator('#send-confirm').click();
+  await until(async () => (await heldCalls()) > 0, 'The click waits for the messages');
+  await fixture('native-activity', study, { turnId: 'turn-1', label: '正在处理' });
+  await until(async () => (await page.locator('#send-confirm').innerText()) === '追加指令', 'The turn starts during the wait');
+  await release();
+  await until(async () => { const x = await stats(); return (await note()) || x.sends.length > 2 || x.steered.length; }, 'C1 send → steer click settles');
+  s = await stats();
+  assert.deepEqual(s.steered, [], 'C1 send → steer: nothing steered at that click'); assert.equal(s.sends.length, 2, 'C1: not sent either');
+  assert.match(await note(), /^「学习记录[^」]*」的发送方式变了，现在是「追加指令」。确认无误请再点一次。$/);
+  assert.deepEqual(await checkedIds(), [study]);
+  await page.locator('#send-confirm').click();
+  await until(async () => !(await isOpen('send-dialog')), 'Reconfirmed steer closes the dialog');
+  await until(async () => /^学习记录[^：]*：原生已接收$/.test(await page.locator('#toast-text').innerText()), 'Steer notice follows its row');
+  const steerNotice = await page.locator('#toast-text').innerText();
+  s = await stats();
+  assert.deepEqual(s.steered, [{ id: study, text: steer, turnId: 'turn-1' }], 'C1 reconfirmed: one steer into that turn'); assert.equal(s.sends.length, 2);
+  const steerRow = (await client.call('initial')).sessions.find(x => x.id === study).messages.find(m => m.text === steer);
+  assert.equal(steerRow?.inputMode, 'steer'); assert.equal(steerRow.turnId, 'turn-1');
+  await fixture('native-activity', study, null); await until(async () => (await session(study)).state === 'idle', 'Study idle');
+  await closeAll();
+  checks.push('C1 send → steer: a turn started while the click loaded messages; nothing sent or steered, the note names 追加指令; the next click steers once into that turn (' + steerNotice + ')');
 
   // 7. 850×600: the dialog and its buttons fit without horizontal scrolling.
   await resize(850, 600);
@@ -219,6 +291,18 @@ async function run() {
   await page.keyboard.press('Escape'); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
   await delay(600);
   assert.equal(await isOpen('send-dialog'), false, 'Cancelled create drops the sentence');
+  // C2: the 取消 button (a plain close(), no cancel event) ends the handoff too; a later unrelated session never gets it.
+  const buttoned = '新开一个会话列下周采购'; sentences.push(buttoned);
+  await openSend(buttoned);
+  await radio('new').check(); await page.locator('#send-confirm').click(); await page.locator('#create-dialog').waitFor();
+  await page.locator('#cancel-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+  await delay(600);
+  assert.equal(await isOpen('send-dialog'), false, 'C2 button cancel drops the sentence');
+  await create('无关会话');
+  await delay(600);
+  assert.equal(await isOpen('send-dialog'), false, 'C2 an unrelated new session does not reopen it');
+  assert.equal(await page.locator('#send-text').inputValue(), '', 'C2 the sentence is gone');
+  assert.equal((await stats()).sends.length, before, 'C2 nothing sent');
   const kept = '新开一个会话整理会议纪要'; sentences.push(kept);
   await openSend(kept);
   await radio('new').check(); await page.locator('#send-confirm').click(); await page.locator('#create-dialog').waitFor();
@@ -234,7 +318,7 @@ async function run() {
   await until(async () => (await page.locator('#toast-text').innerText()) === '纪要助手：原生已接收', 'New session notice');
   s = await stats();
   assert.deepEqual(s.sends.at(-1), { id: fresh.id, text: kept }); assert.equal(s.sends.length, before + 1);
-  checks.push('新开一个: 下一步 opens the unchanged create dialog; Escape there drops the sentence; after creating, the same dialog returns with the new session preselected and sends only on 发送');
+  checks.push('新开一个: 下一步 opens the unchanged create dialog; Escape and the 取消 button there drop the sentence, and a later unrelated session does not get it (C2); after creating, the same dialog returns with the new session preselected and sends only on 发送');
 
   // 9. Restart: no sentence in views.json or any draft; the native work is exactly what was confirmed.
   await app.close(); app = null;
@@ -244,10 +328,10 @@ async function run() {
   const after = await snapshot();
   for (const record of after.sessions) for (const sentence of sentences) assert.ok(!(record.liveDraft || '').includes(sentence), 'No draft holds a sentence');
   s = await stats();
-  assert.deepEqual(s.sends, [{ id: study, text: named }, { id: fresh.id, text: kept }]);
-  assert.deepEqual(s.queued, [{ id: budget, text: queued }]);
+  assert.deepEqual(s.sends, [{ id: study, text: named }, { id: ledger, text: afterQueue }, { id: fresh.id, text: kept }]);
+  assert.deepEqual(s.queued, [{ id: budget, text: queued }]); assert.deepEqual(s.steered, [{ id: study, text: steer, turnId: 'turn-1' }]);
   assert.deepEqual(s.inputs, []); assert.deepEqual(s.interruptions, []);
-  checks.push('After restart: no sentence in views.json or drafts; native work is exactly the 2 confirmed sends and 1 queue, with no terminal input or interrupt');
+  checks.push('After restart: no sentence in views.json or drafts; native work is exactly the 3 confirmed sends, 1 queue and 1 steer, with no terminal input or interrupt');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, errors, modelTasks: 0, profile, scriptSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex') }, null, 2));
 }
