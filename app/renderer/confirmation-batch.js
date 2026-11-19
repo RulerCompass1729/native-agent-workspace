@@ -13,9 +13,9 @@
     const list = Array.isArray(cards) ? cards : [], byKey = new Map(list.map(card => [card.key, card])), used = new Set(), out = [];
     for (const batch of started) {
       const members = batch.keys.map(key => byKey.get(key)).filter(Boolean);
-      if (members.length < 2) continue;
+      if (!members.length) continue;
       for (const card of members) used.add(card.key);
-      out.push({ key: batch.key, cards: members, started: true });
+      out.push({ key: batch.key, cards: members, started: true, submitting: Boolean(batch.submitting) });
     }
     const groups = new Map();
     for (const card of list) {
@@ -40,12 +40,13 @@
   }
   function itemState(card) {
     const op = card.message?.backgroundOperation || {};
+    if (op.state === 'unconfirmed') return 'unconfirmed';
     if (op.answer === 'queued') return 'queued';
     if (op.answer === 'running' || op.state === 'running' || op.state === 'awaiting-native') return 'running';
     if (op.state === 'confirmation-required' && !op.disposition) return 'waiting';
     if (op.state === 'complete' || op.state === 'received') return 'done';
     if (op.state === 'cancelled' && !op.disposition) return 'cancelled';
-    return 'void';
+    return op.disposition || op.replacedBy || card.replacedBy || ['not-executed', 'expired'].includes(op.state) ? 'void' : 'unconfirmed';
   }
   root.nativeWorkspaceConfirmationBatch = { METHODS, batchable, plan, find, itemState };
 })(globalThis);

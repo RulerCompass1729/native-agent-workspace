@@ -2769,11 +2769,28 @@ function scheduleBackgroundExpiryClock() {
 }
 // Batches the person answered with one click (kept until their cards are gone) and batches opened one by one; memory only.
 const confirmationBatchStarted = new Map(), confirmationBatchOpen = new Set();
+// Release only failed submissions that a later authoritative read still shows as unanswered and actionable.
+function reconcileConfirmationBatch(started, cards) {
+  const retryable = new Set(cards.filter(card => {
+    const op = card.message?.backgroundOperation;
+    return card.actionable === true && card.state === 'confirmation-required' && op?.state === 'confirmation-required' &&
+      !card.replacedBy && !op.replacedBy && !op.answer && !op.disposition;
+  }).map(card => card.key));
+  const release = new Set((started.failedKeys || []).filter(key => retryable.has(key)));
+  started.keys = started.keys.filter(key => !release.has(key));
+  started.failedKeys = (started.failedKeys || []).filter(key => !release.has(key));
+  if (!started.keys.length && confirmationBatchStarted.get(started.key) === started) confirmationBatchStarted.delete(started.key);
+}
 function confirmationBatchRole(op) {
   const batch = globalThis.nativeWorkspaceConfirmationBatch, cards = state?.backgroundConfirmations || [];
   if (!batch || !op) return null;
   const present = new Set(cards.map(card => card.key));
-  for (const [key, started] of confirmationBatchStarted) if (!started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
+  for (const [key, started] of confirmationBatchStarted) {
+    if (!started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
+    else if (started.failedKeys?.length && cards !== started.observed && state.backgroundConfirmationsAvailable !== false) {
+      reconcileConfirmationBatch(started, cards); started.observed = cards;
+    }
+  }
   const role = batch.find(batch.plan(cards, [...confirmationBatchStarted.values()]), [op.sessionId, op.nativeId, op.id].join(':'));
   return role && { ...role, open: !role.batch.started && confirmationBatchOpen.has(role.batch.key) };
 }
@@ -2789,19 +2806,34 @@ function confirmationCardHidden(card) {
 function confirmationBatchKey(role) {
   if (!role) return null;
   const { itemState } = globalThis.nativeWorkspaceConfirmationBatch;
-  return [role.batch.key, role.anchor, role.open, role.batch.started, role.batch.cards.map(c => [c.key, itemState(c), c.actionable, c.expiresAt, c.message?.backgroundOperation?.resultNotice?.key || null, c.summary])];
+  return [role.batch.key, role.anchor, role.open, role.batch.started, role.batch.submitting, role.batch.cards.map(c => [c.key, itemState(c), c.actionable, c.expiresAt, c.message?.backgroundOperation?.resultNotice, c.message?.backgroundOperation?.error, c.summary])];
 }
 // One answer per card, sent in the cards' order; main carries them out one at a time, each with its own checks.
 async function answerConfirmationBatch(batch, cancel) {
-  confirmationBatchStarted.set(batch.key, { key: batch.key, keys: batch.cards.map(card => card.key) });
+  const key = JSON.stringify(batch.cards.map(card => card.key));
+  if (confirmationBatchStarted.has(key)) return;
+  const started = { key, keys: batch.cards.map(card => card.key), submitting: true };
+  confirmationBatchStarted.set(key, started);
   render();
-  const answers = batch.cards.map(card => {
+  const answers = batch.cards.map(card => Promise.resolve().then(() => {
     const options = card.message.backgroundOperation.confirmation.options, cancelId = options.cancelId ?? 0;
     const response = cancel ? cancelId : options.buttons.findIndex((_label, index) => index !== cancelId);
     return api.backgroundDecision(card.sessionId, card.nativeId, card.operationId, response);
-  });
-  const failed = (await Promise.allSettled(answers)).find(result => result.status === 'rejected');
-  if (failed) toastError(failed.reason);
+  }));
+  const results = await Promise.allSettled(answers);
+  started.submitting = false;
+  started.failedKeys = batch.cards.filter((_card, index) => results[index].status === 'rejected').map(card => card.key);
+  started.observed = state?.backgroundConfirmations;
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) {
+    toastError(failed.reason);
+    try {
+      const fresh = await api.initial();
+      if (fresh.backgroundConfirmationsAvailable !== false && Array.isArray(fresh.backgroundConfirmations))
+        reconcileConfirmationBatch(started, fresh.backgroundConfirmations);
+    } catch { /* Keep uncertain submissions locked until an authoritative read arrives. */ }
+  }
+  render();
 }
 function renderConfirmationBatch(box, role) {
   const { itemState } = globalThis.nativeWorkspaceConfirmationBatch, cards = role.batch.cards, count = cards.length;
@@ -2812,10 +2844,12 @@ function renderConfirmationBatch(box, role) {
     ui.display.text(state, 'background.card.waiting');
     const soonest = Math.min(...cards.map(c => c.expiresAt).filter(Number.isSafeInteger));
     if (Number.isSafeInteger(soonest)) { state.dataset.expiresAt = String(soonest); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  } else if (tally('waiting') && !tally('queued') && !tally('running')) {
+    ui.display.text(state, role.batch.submitting ? 'background.batch.submitting' : 'background.batch.enqueueUnconfirmed');
   } else if (tally('queued') + tally('running') + tally('waiting')) {
-    ui.display.text(state, 'background.batch.progress', { index: Math.min(count, tally('done') + tally('void') + tally('cancelled') + 1), count });
+    ui.display.text(state, 'background.batch.progress', { index: Math.min(count, tally('done') + tally('void') + tally('cancelled') + tally('unconfirmed') + 1), count });
   } else if (tally('cancelled') === count) ui.display.text(state, 'background.batch.cancelled', { count });
-  else ui.display.text(state, 'background.batch.result', { done: tally('done'), void: tally('void') + tally('cancelled') });
+  else ui.display.text(state, tally('unconfirmed') ? 'background.batch.resultUnconfirmed' : 'background.batch.result', { done: tally('done'), void: tally('void') + tally('cancelled'), unconfirmed: tally('unconfirmed') });
   line.append(state, sentence); box.append(line);
   const list = node('ul', undefined, 'background-batch-list');
   cards.forEach((card, index) => {
@@ -2825,8 +2859,12 @@ function renderConfirmationBatch(box, role) {
     if (role.batch.started) {
       item.dataset.state = states[index];
       item.append(uiNode('span', 'background.batch.item.' + states[index], undefined, 'background-batch-state'));
-      const notice = card.message?.backgroundOperation?.resultNotice;
-      if (states[index] === 'void' && notice) { const why = node('span', undefined, 'background-batch-why'); ui.display.text(why, notice.key, notice.params); item.append(why); }
+      const op = card.message?.backgroundOperation, notice = op?.resultNotice;
+      if (notice || op?.error) {
+        const why = node('span', undefined, 'background-batch-why');
+        if (notice) ui.display.text(why, notice.key, notice.params); else why.textContent = op.error;
+        item.append(why);
+      }
     }
     list.append(item);
   });

@@ -165,6 +165,7 @@ class BackgroundControl {
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
     // The person's answers by actor and operation, and the last one of each actor (see decide).
     this.decisions = new Map(); this.decisionTails = new Map();
+    this.decisionsClosed = new Promise(resolve => { this.closeDecisions = resolve; });
     // Opened windows by view key with their agent, when each was last used, what a retired one hands to the next, calls under way.
     this.opened = new Map(); this.used = new Map(); this.kept = new Map(); this.busy = 0; this.retireAfter = retireAfter; this.retireHold = retireHold;
     // Queued deliveries whose operation has answered but whose native receipt is still awaited (they hold no slot).
@@ -971,6 +972,7 @@ class BackgroundControl {
   // that time (expiry included), exactly as if it had been clicked then. The wait is held in memory only: if background
   // control closes first, the card is still waiting for the person and nothing was carried out.
   async decide(sessionId, nativeId, id, response, authorize) {
+    if (this.closed) throw Error('Background control is closing');
     if (authorize !== undefined && typeof authorize !== 'function') throw Error('Invalid confirmation authority');
     authorize?.();
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
@@ -992,8 +994,12 @@ class BackgroundControl {
     return entry.result;
   }
   async afterCurrent(key, ahead, entry, run) {
-    await ahead;
-    while (this.inflight.has(key)) await this.inflight.get(key).then(() => {}, () => {});
+    await Promise.race([ahead, this.decisionsClosed]);
+    if (this.closed) throw Error('Background control is closing');
+    while (this.inflight.has(key)) {
+      await Promise.race([this.inflight.get(key).then(() => {}, () => {}), this.decisionsClosed]);
+      if (this.closed) throw Error('Background control is closing');
+    }
     // No await between the check above and the synchronous reservation in carryOut.
     entry.waiting = false;
     return run();
@@ -1183,7 +1189,10 @@ class BackgroundControl {
     });
   }
   async close() {
-    this.closed = true; clearTimeout(this.expiryTimer); this.expiryTimer = null; clearInterval(this.sweeper);
+    this.closed = true; this.closeDecisions();
+    for (const [slot, entry] of this.decisions) if (entry.waiting) this.decisions.delete(slot);
+    this.decisionTails.clear();
+    clearTimeout(this.expiryTimer); this.expiryTimer = null; clearInterval(this.sweeper);
     this.readCopies.clear(); this.readBytes = 0;
     // Close our connections first so a queued native wait cannot hold GUI quit.
     // The native session and any input already accepted by it remain untouched.
