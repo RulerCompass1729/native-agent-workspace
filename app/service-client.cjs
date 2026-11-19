@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { readLayout, writeLayout } = require('./service-layout.cjs');
+const { readLayout, writeLayout, DSH_INHERIT_ATTEMPTS } = require('./service-layout.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = require('./service-lock.cjs');
@@ -132,20 +132,34 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       return;
     }
     for (const key of layout.entries) states.set(key, await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace));
-    const dsh = require('./dsh-tui.cjs');
+    const dsh = require('./dsh-tui.cjs'), version = process.env.NAW_APP_VERSION, retryVersion = version || 'development';
+    const prior = layout.dshInheritance;
+    let failures = prior?.version === retryVersion ? prior.failures.filter(row => layout.entries.includes(row.source) && (layout.entries.includes(row.target) || layout.pending === row.target)) : [];
+    const retryable = row => row && row.attempts < DSH_INHERIT_ATTEMPTS && ['deadline', 'filesystem'].includes(row.reason);
+    const saveDsh = (required = false) => {
+      if (failures.length) layout.dshInheritance = { version: retryVersion, failures };
+      else delete layout.dshInheritance;
+      try { writeLayout(dataDir, layout); }
+      catch (error) { if (required) throw error; console.warn('DSH runtime retry state unavailable'); }
+    };
+    if (prior && (prior.version !== retryVersion || prior.failures.length !== failures.length)) saveDsh();
     const inheritDsh = async (target, sources) => {
       for (const source of sources) {
+        const previous = failures.find(row => row.source === source && row.target === target);
+        if (previous && !retryable(previous)) continue;
         try {
           const result = await dsh.inheritRuntime(path.join(dataDir, source), path.join(dataDir, target), { cleanStaging: true });
+          if (previous) { failures = failures.filter(row => row !== previous); saveDsh(); }
           if (result.status !== 'absent') return;
         } catch (error) {
           const reason = ['deadline', 'filesystem', 'unqualified'].includes(error?.reason) ? error.reason : 'unavailable';
+          failures = failures.filter(row => row !== previous);
+          failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
           console.warn('DSH runtime inheritance skipped:', reason);
           if (reason !== 'unqualified') return;
         }
       }
     };
-    const version = process.env.NAW_APP_VERSION;
     if (layout.pending || (version && states.get(layout.active).runtimeVersion !== version)) {
       // Reuse a confirmed all-ended slot before adding another service. Its
       // own history stays in its store; no session is replayed or migrated.
@@ -176,8 +190,9 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     // orphan drafts and unreadable stores all retain their service and records.
     for (const key of [...layout.entries]) {
       if (key === layout.active || !emptyService(states.get(key)) || !emptyStore(path.join(dataDir, key))) continue;
-      // Keep a potential donor reachable after a transient inheritance failure.
-      if (runtimeMissing && fs.existsSync(dsh.paths(path.join(dataDir, key)).root)) continue;
+      // Preserve unattempted sources and the one remaining transient retry.
+      const failure = failures.find(row => row.source === key && row.target === layout.active);
+      if (runtimeMissing && fs.existsSync(dsh.paths(path.join(dataDir, key)).root) && (!failure || retryable(failure))) continue;
       const client = await connectService(path.join(dataDir, key), 'retire-empty');
       try {
         const current = await client.call('initial');
@@ -186,7 +201,8 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         await client.call('shutdown');
         await waitForShutdown(client, path.join(dataDir, key), identity);
       } finally { client.close(); }
-      layout.entries = layout.entries.filter(entry => entry !== key); writeLayout(dataDir, layout);
+      layout.entries = layout.entries.filter(entry => entry !== key);
+      failures = failures.filter(row => row.source !== key && row.target !== key); saveDsh(true);
     }
   } finally { releaseLock(lockFile, lock); }
 }
