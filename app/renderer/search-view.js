@@ -403,11 +403,9 @@ async function confirmSearchSend() {
   }
 }
 // This send's own queue row, found as followQueuedInput finds the composer's (queuedRowFor). The same words
-// queued from the composer at the same moment leave that row to the composer until a receipt names it.
+// queued from the composer at the same moment are known only by this call's receipt.
 function searchSendQueuedRow(follow) {
-  const s = state.sessions.find(x => x.id === follow.id), mark = follow.mark, composer = queuedInputs.get(follow.id);
-  const row = queuedRowFor(s, mark);
-  return row && !mark.tag && composer && queuedRowFor(s, composer) === row ? undefined : row;
+  return queuedRowFor(state.sessions.find(x => x.id === follow.id), follow.mark);
 }
 // Proof that nothing was sent: this send's own row says so, or the service refused before recording anything.
 function searchSendNotSent(follow, error) {

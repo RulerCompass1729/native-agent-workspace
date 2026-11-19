@@ -126,6 +126,77 @@ test('a dialog\'s queued row does not clear an unrelated composer draft (B1, the
   assert.equal(composerMark.tag, 'own-row'); assert.equal(input.value, '');
 });
 
+// Review F r2: the same words queued from the composer and the dialog at once. updateState follows the composer first.
+const arrive = f => {
+  for (const [id, mark] of f.context.queuedInputs) f.context.followQueuedInput(id, mark);
+  f.context.followSearchSend();
+};
+const waitingRefusal = () => refusal('Waiting input refused', { uiMessage: { version: 1, key: 'error.workspace.nativeWaitingInputUnavailable' } });
+for (const schedule of ['submitted-first', 'awaiting-then-submitted']) {
+  test(`the same words queued from the composer first: its row is not the dialog's receipt (B1 r2, ${schedule})`, async () => {
+    const f = page(), s = f.queueing(f.a), words = 'same sentence';
+    const input = { value: words };
+    f.context.sessionComposers.set('a', { ui: { input, setValue: v => { input.value = v; return true; } } }); f.context.draftRevisions.set('a', 7);
+    let composerDone, dialogRefuse, n = 0;
+    f.context.api.queue = (id, value) => {
+      f.calls.push({ method: 'queue', id, text: value });
+      return ++n === 1 ? new Promise(r => { composerDone = r; }) : new Promise((_, r) => { dialogRefuse = r; });
+    };
+    const composer = f.context.deliverSessionInput(s, { method: 'queue' }, words, 7);
+    f.context.openSearchSend(words, 'a');
+    const sending = f.context.confirmSearchSend();
+    s.messages.push({ id: 'composer-row', text: words, inputMode: 'queue', status: schedule === 'submitted-first' ? 'submitted' : 'awaiting-native' });
+    arrive(f);
+    if (schedule === 'awaiting-then-submitted') { s.messages[0].status = 'submitted'; arrive(f); }
+    assert.equal(f.$('send-dialog').open, true, 'the dialog does not take the composer row');
+    assert.equal(f.$('toast-text').textContent, '', 'no notice');
+    assert.equal(input.value, words, 'neither entry takes the row by its words; the composer keeps them until its call answers');
+    dialogRefuse(waitingRefusal()); await sending;
+    assert.equal(f.$('send-dialog').open, true);
+    assert.equal(f.$('send-text').value, words, 'its words stay');
+    assert.equal(f.$('send-note').textContent, 'Waiting input refused', 'with its own error');
+    assert.ok(!f.$('send-confirm').disabled);
+    composerDone('composer-row'); await composer;
+    assert.equal(f.calls.length, 2);
+  });
+}
+
+test('the same words queued from the dialog first: its row clears no composer and its receipt names it (B1 r2)', async () => {
+  const f = page(), s = f.queueing(f.a), words = 'same sentence';
+  const input = { value: words };
+  f.context.sessionComposers.set('a', { ui: { input, setValue: v => { input.value = v; return true; } } }); f.context.draftRevisions.set('a', 7);
+  let dialogDone, composerRefuse, n = 0;
+  f.context.api.queue = (id, value) => {
+    f.calls.push({ method: 'queue', id, text: value });
+    return ++n === 1 ? new Promise(r => { dialogDone = r; }) : new Promise((_, r) => { composerRefuse = r; });
+  };
+  f.context.openSearchSend(words, 'a');
+  const sending = f.context.confirmSearchSend();
+  const composer = f.context.deliverSessionInput(s, { method: 'queue' }, words, 7);
+  s.messages.push({ id: 'dialog-row', text: words, inputMode: 'queue', status: 'awaiting-native' });
+  arrive(f);
+  assert.equal(input.value, words, 'the composer is not cleared by the dialog row');
+  assert.equal(f.$('toast-text').textContent, '');
+  composerRefuse(waitingRefusal()); await composer.catch(() => {});
+  assert.equal(f.context.queuedInputs.has('a'), false);
+  arrive(f);
+  assert.equal(input.value, words, 'the refused composer keeps its words');
+  s.messages[0].status = 'submitted'; dialogDone('dialog-row'); await sending;
+  assert.equal(f.$('send-dialog').open, false);
+  assert.equal(f.$('toast-text').textContent, 'Actor A: Received by native session', 'the dialog\'s own receipt');
+});
+
+test('a queue with no other open call of the same words still finds its own row by them (B1 r2)', async () => {
+  const f = page(), s = f.queueing(f.a);
+  s.messages.push({ id: 'earlier', text: 'same sentence', inputMode: 'queue', status: 'submitted' });
+  f.context.openSearchSend('same sentence', 'a');
+  f.context.confirmSearchSend();
+  s.messages.push({ id: 'own', text: 'same sentence', inputMode: 'queue', status: 'awaiting-native' });
+  arrive(f);
+  assert.equal(f.$('send-dialog').open, false, 'closed on its own recorded row');
+  assert.equal(f.get('searchSendFollow').mark.tag, 'own');
+});
+
 for (const locale of ['en', 'zh']) {
   test(`an unconfirmed queue stays unconfirmed past any wait and its late row decides; one request (B2, ${locale})`, async () => {
     const f = page(locale), s = f.queueing(f.a);

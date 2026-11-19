@@ -461,11 +461,18 @@ function sessionInputMethod(s) {
 // it never replaces or borrows the composer's.
 async function deliverSessionInput(s, pick, text, revision, marks = queuedInputs) {
   const { id, nativeId } = s;
-  const mark = pick.method === 'queue' && { text, revision, before: new Set(s.messages.map(m => m.id)) };
-  if (mark) marks.set(id, mark);
+  const mark = pick.method === 'queue' && { id, text, revision, before: new Set(s.messages.map(m => m.id)) };
+  if (mark) {
+    for (const other of openQueueMarks) if (other.id === id && other.text.trim() === text.trim()) other.overlap = mark.overlap = true;
+    openQueueMarks.add(mark); marks.set(id, mark);
+  }
   try { return mark ? await api.queue(id, text, nativeId) : pick.method === 'steer' ? await api.steer(id, text, nativeId, pick.turnId) : await api.send(id, text, nativeId); }
-  finally { if (mark && !mark.tag && marks.get(id) === mark) marks.delete(id); }
+  finally { if (mark) { openQueueMarks.delete(mark); if (!mark.tag && marks.get(id) === mark) marks.delete(id); } }
 }
+// Queue calls still open, from any entry. Two open at once to one session with the same words cannot tell their
+// rows apart by the words (the service takes one at a time, refusing the other before recording it): neither takes
+// a row by them.
+const openQueueMarks = new Set();
 async function submitSession(binding) {
   const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
   // Until its messages are here (a member that just joined, a session opened before its state; reportShown) nothing
@@ -1170,8 +1177,8 @@ function followQueuedInput(id, mark) {
   queuedInputs.delete(id);
 }
 // The row a queue mark's own call recorded: new since the call began and holding its words (the service stores
-// them trimmed). Another entry's queued words are not this row.
-const queuedRowFor = (s, mark) => s?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id) && m.text === mark.text.trim());
+// them trimmed). Another entry's queued words are not this row; an overlapped mark waits for its call's outcome.
+const queuedRowFor = (s, mark) => s?.messages.find(m => mark.tag ? m.id === mark.tag : !mark.overlap && m.inputMode === 'queue' && !mark.before.has(m.id) && m.text === mark.text.trim());
 function writeRoomDraft(id, view) {
   if (id === spaceId) { $('shared-input').value = view.sharedDraft || ''; roomMention = view.roomMention && { ...view.roomMention }; roomDraftRevision = view.draftRevision || 0; }
   attempt(persistView);
