@@ -183,7 +183,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns, recov
       Object.assign(own, { text: interrupted ? own.text : item.text || '',
         status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
     }
-    if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; submitted(own.id); }
+    if (own && own.rotationDisposition?.outcome !== 'failed' && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; submitted(own.id); }
     const m = own || (item.type === 'userMessage'
       ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
       : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });

@@ -6406,6 +6406,8 @@ function queueMemberName(id) {
 }
 // Why NAW stopped on an item. Unmapped reasons are internal slugs, so no line is drawn for them.
 const QUEUE_REASONS = {
+  'rotation-control-unresolved': 'queue.reason.rotationUnresolved',
+  'waiting-provider': 'queue.reason.waitingProvider',
   'no-reply': 'queue.reason.noReply',
   'person-intervened': 'queue.reason.personIntervened',
   'record-missing': 'queue.reason.recordMissing',
@@ -6535,6 +6537,18 @@ function queueWholeText(item, start) {
   });
   return whole;
 }
+function queueRotationRow(session) {
+  const episode = session.rotationEpisode;
+  const row = node('div', undefined, 'queue-row');
+  row.dataset.rotationSession = session.id;
+  row.append(node('div', queueMemberName(session.id), 'queue-text'),
+    uiNode('div', QUEUE_REASONS[episode.state === 'waiting-provider' ? 'waiting-provider' : 'rotation-control-unresolved'], undefined, 'queue-outcome'),
+    uiButton('queue.releaseRotation', async () => {
+      await api.spaceAction(queueSpace, 'releaseRotation', [session.id, session.nativeId, episode.epoch, episode.tag, 'discard-unresolved-handoff']);
+      updateState(await api.initial()); renderQueue();
+    }, 'small', { name: queueMemberName(session.id) }));
+  return row;
+}
 function renderQueue() {
   if (!queueSpace) return;
   const room = spaceRecord(queueSpace);
@@ -6604,12 +6618,14 @@ function renderQueue() {
     if (queueOrderFresh && handoffView.failed !== true) queueOrder = placed;
   }
   const list = $('queue-list');
-  const signature = JSON.stringify(handoff ? [items, shown.back, shown.hidden, memberSignature, needUpdate, handoff, disconnected, placed] : [items, shown.back, shown.hidden, memberSignature, needUpdate]);
+  const unresolved = state.sessions.filter(s => memberIds.has(s.id) && s.rotationEpisode?.nativeId === s.nativeId &&
+    ['invalid', 'waiting-provider'].includes(s.rotationEpisode.state));
+  const signature = JSON.stringify([items, shown.back, shown.hidden, memberSignature, needUpdate, handoff, disconnected, placed, unresolved.map(s => [s.id, s.nativeId, s.rotationEpisode])]);
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   renderQueueHandoff(handoff ? handoff.block : null);
   const answering = queueAnswerFocus();
-  const rows = [];
+  const rows = unresolved.map(queueRotationRow);
   for (const item of items) {
     const row = queueRow(item, memberIds);
     if (handoff) {

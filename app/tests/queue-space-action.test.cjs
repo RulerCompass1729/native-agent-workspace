@@ -471,3 +471,15 @@ test('a live or failed rotation control cannot be claimed as a queued task', asy
     assert.equal(f.room.queueFind('shared', id).status, 'queued');
   }
 });
+
+test('only the current person or designated butler can explicitly release an episode in its space',async()=>{
+ const releases=[],session={id:'member',nativeId:'native',roomIds:['shared']};
+ const extra={isCurrentHumanContext:c=>c.current===true,queueDispatcher:{releaseRotation:async(...args)=>{releases.push(args);return {state:'released'};}},stewardCaller:async c=>c.butler?{id:'butler-id'}:null};
+ const {handler}=spaceAction(extra),client={call:async()=>({sessions:[session]})},args=['member','native','epoch','tag','discard-handoff'];
+ await assert.rejects(handler({background:true,client},'shared','releaseRotation',args));
+ await assert.rejects(handler({current:false,view:{owner:'window'},client},'shared','releaseRotation',args));
+ await handler({current:true,view:{owner:'window'},client},'shared','releaseRotation',args);
+ await handler({background:true,butler:true,client},'shared','releaseRotation',args);
+ assert.deepEqual(JSON.parse(JSON.stringify(releases)),[['member','native','epoch','tag',{kind:'person',id:'window'},'discard-handoff'],['member','native','epoch','tag',{kind:'steward',id:'butler-id'},'discard-handoff']]);
+ session.roomIds=['other'];await assert.rejects(handler({current:true,view:{owner:'window'},client},'shared','releaseRotation',args));assert.equal(releases.length,2);
+});

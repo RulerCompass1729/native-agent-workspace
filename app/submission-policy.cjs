@@ -17,7 +17,7 @@ function rotationEpoch(session) {
   return episode && episode.nativeId === session.nativeId ? episode.epoch : null;
 }
 function rotationBlocked(session) {
-  return rotationEpoch(session) !== null && !['not-sent', 'complete'].includes(session.rotationEpisode.state);
+  return rotationEpoch(session) !== null && !['not-sent', 'complete', 'released'].includes(session.rotationEpisode.state);
 }
 function queuePurposeValid(session, input, itemId, nativeId, claim) {
   if (rotationBlocked(session) || !input || input.role !== 'user' || nativeId && nativeId !== session.nativeId) return false;

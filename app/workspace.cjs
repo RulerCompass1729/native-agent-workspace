@@ -1071,7 +1071,7 @@ class Workspace extends EventEmitter {
       // Only this runtime's own input can certify its shared delivery.
       if (!input) return;
       if (input && ['human', 'human-mobile'].includes(input.origin)) this.operatorHuman(s.id);
-      for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; }
+      for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m && m.rotationDisposition?.outcome !== 'failed') m.status = 'submitted'; }
       this.deliveryStatus(tag, 'submitted'); this.changed();
     });
     on('interrupted', ({ tag }) => {
@@ -1462,7 +1462,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id), episode = s.rotationEpisode;
     if (!episode || s.nativeId !== nativeId || episode.nativeId !== nativeId || episode.epoch !== epoch)
       throw uiError('error.workspace.handoffExpired');
-    if (!['not-sent', 'complete'].includes(episode.state)) episode.state = 'invalid';
+    if (!['not-sent', 'complete', 'released'].includes(episode.state)) episode.state = 'invalid';
     this.changed(); this.persist();
     if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
     return { epoch, state: episode.state };
@@ -1473,9 +1473,23 @@ class Workspace extends EventEmitter {
         !['open', 'complete'].includes(episode.state) || episode.responseTag !== tag ||
         s.state !== 'idle' || s.pendingTag || input?.status !== 'submitted')
       throw uiError('error.workspace.handoffExpired');
-    episode.state = 'complete'; this.changed(); this.persist();
-    if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+    const next = { ...s, rotationEpisode: { ...episode, state: 'complete' } };
+    if (!this.persist({ id, next }) || this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+    s.rotationEpisode = next.rotationEpisode; this.changed();
     return { epoch, state: 'complete' };
+  }
+  releaseRotation(id, nativeId, epoch, tag, actor, reason) {
+    const s = this.get(id), episode = s.rotationEpisode;
+    if (s.nativeId !== nativeId || episode?.nativeId !== nativeId || episode.epoch !== epoch || episode.tag !== tag ||
+        !['invalid', 'waiting-provider'].includes(episode.state) ||
+        !actor || !['person', 'steward'].includes(actor.kind) || typeof actor.id !== 'string' || !actor.id || actor.id.length > 200 || /[\p{Cc}]/u.test(actor.id) ||
+        typeof reason !== 'string' || !reason.trim() || reason.length > 500 || /[\p{Cc}]/u.test(reason)) throw uiError('error.workspace.handoffExpired');
+    const disposition = { actor: { kind: actor.kind, id: actor.id }, at: Date.now(), reason, action: 'release', outcome: 'failed' };
+    const next = { ...s, rotationEpisode: { ...episode, state: 'released', disposition }, messages: s.messages.map(m => m.id === tag
+      ? { ...m, status: 'failed', rotationDisposition: { ...disposition, epoch } } : m) };
+    if (!next.messages.some(m => m.id === tag) || !this.persist({ id, next }) || this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+    s.rotationEpisode = next.rotationEpisode; s.messages = next.messages; this.changed();
+    return { epoch, tag, state: 'released' };
   }
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null, dispatch = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id], backgroundOperation.current() || route?.agentControl);

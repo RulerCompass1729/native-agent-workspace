@@ -1338,7 +1338,7 @@ function register(name, handler) {
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(args[1]);
+      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim', 'releaseRotation'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1803,6 +1803,17 @@ async function boot() {
       try { return action === 'archive' ? await archiveRoomConfirmed(c, roomId) : await roomState.restoreRoom(c.client, sessionLabels.labels, roomId); }
       finally { await broadcastRoom(); }
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
+    else if (action === 'releaseRotation') {
+      const steward = c.background ? await stewardCaller(c) : null;
+      if (c.background ? !steward : !isCurrentHumanContext(c)) throw uiError('error.queue.personOnly');
+      if (args.length !== 5) throw uiError('error.invalidSpaceAction');
+      const snapshot = roomState.apply(await c.client.call('initial'));
+      const member = snapshot.sessions.find(s => s.id === args[0]);
+      if (!member || member.archived || !(member.roomIds || [member.roomId || 'shared']).includes(roomId)) throw uiError('error.workspace.handoffExpired');
+      const actor = steward ? { kind: 'steward', id: steward.id } : { kind: 'person', id: c.view.owner };
+      const result = await queueDispatcher.releaseRotation(...args.slice(0, 4), actor, args[4]);
+      await broadcastRoom(); return result;
+    }
     else if (['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(action)) {
       // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name;
       // a session takes back what it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」);

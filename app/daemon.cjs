@@ -150,6 +150,7 @@ async function main() {
         return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
       }
       case 'completeRotation': return workspace.completeRotation(args[0], args[1], args[2], args[3]);
+      case 'releaseRotation': return workspace.releaseRotation(...args);
       case 'invalidateRotation': return workspace.invalidateRotation(args[0], args[1], args[2]);
       case 'dispatch': {
         // A NAW queue item (queue-dispatch.cjs): sent under the person's automatic-message

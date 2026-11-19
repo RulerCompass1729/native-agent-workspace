@@ -3288,6 +3288,11 @@ class QueueDispatcher {
   }
 
   async advanceRotations(snapshot, now) {
+    for (const [id, record] of Object.entries(this.rotations)) {
+      const session = snapshot.sessions.find(s => s.id === id), episode = session?.rotationEpisode;
+      if (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
+          episode.epoch === record.episodeEpoch && episode.tag === record.tag) { delete this.rotations[id]; this.save(); }
+    }
     for (const [oldId, record] of Object.entries(this.rotations)) {
       if (this.closed) return;
       if (!this.faultedRotations.has(oldId) && trustRecoveryPending(record)) {
@@ -3317,6 +3322,16 @@ class QueueDispatcher {
         }
       }
     }
+  }
+
+  async releaseRotation(id, nativeId, epoch, tag, actor, reason) {
+    const entry = this.client.route(id);
+    const result = await withTimeout(entry.client.call('releaseRotation', id, nativeId, epoch, tag, actor, reason), CALL_TIMEOUT_MS, 'release-timeout');
+    if (result?.epoch !== epoch || result.tag !== tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
+    const record = this.rotations[id];
+    if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag) { delete this.rotations[id]; this.save(); }
+    this.schedule();
+    return result;
   }
 
   async completeEpisode(oldId, record) {
