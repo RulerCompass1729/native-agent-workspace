@@ -200,6 +200,8 @@ function appMobileWorkspace() {
     },
     confirmation: (...args) => backgroundControl.mobileBinding(...args), decide: (...args) => backgroundControl.decide(...args),
     broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
+    // The same designation the Mac sidebar shows; before it is read, the phone says unavailable, not none.
+    steward: () => { if (!stewardRole) throw Error('Butler designation not read yet'); return stewardRole.current() || null; },
   });
 }
 // The listener stays open only while a pairing link or paired device is unexpired. When the phone logs out, or the link

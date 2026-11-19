@@ -125,3 +125,21 @@ test('port: ambiguous legacy and full card identities fail closed before request
  f.adapter.confirmation=()=>{calls++;throw Error('Authority requested');};
  assert.throws(()=>f.adapter.confirmationBinding(f.client,f.scopes,{id:'a:native-a:req',version:'same',decision:'approve'}));assert.equal(calls,0);
 });
+test('the phone names the Mac butler only when this pairing already reads it; otherwise only why not', async t => {
+  const f = fixture(t), steward = async (grant = f.grant) => (await f.adapter.read(f.client, grant, f.scopes)).steward;
+  assert.equal(await steward(), undefined, 'without a designation source the phone shows no butler card');
+  f.adapter.steward = () => ({ sessionId: 'a', nativeId: 'native-a' });
+  assert.deepEqual(await steward(), { state: 'shared', sessionId: 'a' });
+  f.adapter.steward = () => ({ sessionId: 'b', nativeId: 'native-b' });
+  const view = await f.adapter.read(f.client, f.grant, f.scopes), raw = JSON.stringify(view);
+  assert.deepEqual(view.steward, { state: 'notSelected' });
+  for (const identity of ['"b"', 'native-b', 'Synthetic B']) assert.equal(raw.includes(identity), false, 'an unshared butler is never named');
+  assert.deepEqual(await steward({ allRooms: true, records: false }), { state: 'unavailable' }, 'all-session pairing: not "not chosen"');
+  f.adapter.steward = () => ({ sessionId: 'a', nativeId: 'native-a' }); f.source.sessions[0].nativeId = 'successor';
+  assert.deepEqual(await steward(), { state: 'unavailable' }, 'chosen but not current is unavailable');
+  f.source.sessions[0].nativeId = 'native-a';
+  f.adapter.steward = () => null;
+  assert.deepEqual(await steward(), { state: 'none' });
+  f.adapter.steward = () => { throw Error('Synthetic unreadable designation'); };
+  assert.deepEqual(await steward(), { state: 'unavailable' }, 'an unreadable designation is never reported as none');
+});
