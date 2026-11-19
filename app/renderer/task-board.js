@@ -18,7 +18,7 @@
         const memberKey = q.sentTo || q.assignee || '', k = kind(q);
         return { key: JSON.stringify([room.id, q.id]), id: q.id, spaceId: room.id, spaceName: room.name || '', kind: k,
           memberKey, memberName: members.get(memberKey) || '', text: typeof q.text === 'string' ? q.text : '',
-          reason: typeof q.reason === 'string' ? q.reason : '', waiting: Array.isArray(q.wait) && q.wait.length > 0,
+          reason: typeof q.reason === 'string' ? q.reason : '', waiting: q.waiting === true,
           current: !['done', 'cancelled'].includes(k) || typeof q.finishedAt === 'number' && Number.isFinite(q.finishedAt) && q.finishedAt >= start && q.finishedAt < end };
       });
       const current = all.filter(q => q.current), counts = Object.fromEntries(KINDS.map(k => [k, current.filter(q => q.kind === k).length]));

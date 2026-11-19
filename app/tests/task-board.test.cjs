@@ -34,6 +34,30 @@ test('projection never reads conversation bodies or queue replies', () => {
   for (const [o, k] of [[r, 'messages'], [s, 'messages'], [q, 'reply']]) Object.defineProperty(o, k, { get() { throw Error('Conversation access forbidden'); } });
   assert.equal(board.project([r], [s], now)[0].transit, 1);
 });
+test('the real renderer intake only passes task-board fields and a waiting flag', () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
+  const start = source.indexOf('function updateTaskBoard() {'), end = source.indexOf('\nconst spaceCall', start);
+  assert.ok(start >= 0 && end > start);
+  const wait = [null]; Object.defineProperty(wait, 0, { get() { throw Error('Wait body access forbidden'); } });
+  const q = task('sent', 'safe', { sentTo: 'actual', assignee: 'requested', reason: '', finishedAt: now, wait, unused: 'NOT_FOR_TASK_BOARD' });
+  const r = room([q]), s = { id: 'actual', name: 'Actual' };
+  for (const [o, k] of [[r, 'messages'], [s, 'messages'], [q, 'reply']]) Object.defineProperty(o, k, { enumerable: true, get() { throw Error('Conversation access forbidden'); } });
+  let input;
+  const context = vm.createContext({ state: { sessions: [s] }, disconnected: false, spaceId: r.id,
+    allSpaces: () => [r, { id: 'missing', unavailable: true }], spaceName: value => value.name,
+    taskBoard: { update(value) { input = value; } } });
+  vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
+  const projected = input.rooms[0].queue[0];
+  assert.notEqual(input.rooms[0].queue, r.queue); assert.notEqual(projected, q);
+  assert.deepEqual(Object.keys(projected).sort(), ['assignee', 'finishedAt', 'id', 'reason', 'sentTo', 'status', 'text', 'waiting']);
+  assert.equal(projected.waiting, true); assert.equal(Object.hasOwn(projected, 'reply'), false); assert.equal(Object.hasOwn(projected, 'wait'), false);
+  const [p, missing] = board.project(input.rooms, input.sessions, now);
+  assert.equal(p.current[0].waiting, true); assert.equal(p.current[0].memberName, 'Actual'); assert.equal(missing.available, false);
+  q.wait = [];
+  vm.runInContext('updateTaskBoard();', context);
+  assert.equal(input.rooms[0].queue[0].waiting, false); assert.equal(board.project(input.rooms, input.sessions, now)[0].current[0].waiting, false);
+});
 test('unknown/unavailable queues are not presented as empty and healthy', () => {
   const [p] = board.project([{ id: 'missing', name: 'Missing', unavailable: true }], [], now);
   assert.equal(p.available, false);

@@ -33,7 +33,7 @@ function fixture() {
   ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
   const context = vm.createContext({ spaceName: room => room?.name, $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
     document: { querySelector(selector) { assert.equal(selector, 'dialog:modal:not(#setup-dialog)'); return [...elements.values()].find(e => e !== $('setup-dialog') && e.open && e.modal) || null; } },
-    ui, uiText, activityStream: undefined,
+    ui, uiText, activityStream: undefined, taskBoardRefreshes: 0, updateTaskBoard() { context.taskBoardRefreshes++; },
     toast: text => messages.push(text), mobileSetup: { open() {}, close() {} }, toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
   vm.runInContext(source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope =')), context);
@@ -45,6 +45,11 @@ function fixture() {
   return { $, context, calls, messages, openNotes, save };
 }
 const preflight = () => ({ paths: {}, configured: {} });
+test('language display refresh also refreshes the task board exactly once', () => {
+  const f = fixture();
+  f.context.renderInterfaceLanguage();
+  assert.equal(f.context.taskBoardRefreshes, 1);
+});
 test('the actual notes button passes selected space rather than treating its click event as a space ID', () => {
   const f = fixture(); f.$('room-notes').onclick({ type: 'click' });
   assert.equal(f.$('notes-dialog').open, true); assert.equal(f.$('room-notes-text').value, 'Saved original');

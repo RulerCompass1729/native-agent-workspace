@@ -217,7 +217,9 @@ const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), 
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
 function updateTaskBoard() {
   if (!state) return;
-  taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable, queue: r.queue })),
+  taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
+    queue: Array.isArray(r.queue) ? r.queue.filter(q => q && typeof q.id === 'string').map(q => ({ id: q.id, status: q.status, text: q.text,
+      reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
     sessions: state.sessions.map(s => ({ id: s.id, name: s.name })), connected: !disconnected, activeSpace: spaceId });
 }
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);

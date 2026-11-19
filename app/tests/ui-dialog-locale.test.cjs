@@ -416,7 +416,8 @@ test('PF03: an open activity stream changes heading and existing records without
  doc.createElement=tag=>{const e=create(tag);e.scrollTop=0;e.getBoundingClientRect=()=>({top:0,bottom:20});e.contains=n=>e===n||e.children.some(child=>child.contains?.(n));Object.defineProperties(e,{firstChild:{get:()=>e.childNodes[0]},lastChild:{get:()=>e.childNodes.at(-1)}});return e;};
  f.$('header').before=child=>f.root.insertBefore(child,f.$('header'));
  f.$('ui-language').options=[];f.$('setup-button').append(Object.assign(doc.createElement('span'),{className:'rail-label'}));
- Object.assign(f.context,{changingLanguage:false,languageFailed:false,languageWarning:null});
+ let taskBoardRefreshes=0;
+ Object.assign(f.context,{changingLanguage:false,languageFailed:false,languageWarning:null,updateTaskBoard(){taskBoardRefreshes++;}});
  const raw='RAW Git body 中文 <native>{key}';f.rooms[0].messages[0].text=raw;
  const key='notice.activity.preparingGit',event={id:'localized-record',time:Date.UTC(2026,10,15,12),text:locale.format('zh',key),uiMessage:{version:1,key,params:{}}};f.rooms[0].events.push(event);
  f.context.nativeWorkspaceTaskStream=require('../task-stream.js');
@@ -427,7 +428,9 @@ test('PF03: an open activity stream changes heading and existing records without
  stream.open('shared');const panel=f.root.querySelector('.activity-stream'),row=f.root.querySelectorAll('.stream-row').find(e=>e.dataset.recordId===event.id),details=row.querySelector('.stream-detail'),link=row.querySelector('.stream-record-link'),before=JSON.stringify(f.state);
  details.open=true;link.focus();assert.equal(row.querySelector('.stream-preview').textContent,event.text);
  for(const language of ['en','zh']){
+  const beforeRefreshes=taskBoardRefreshes;
   f.switch(language);f.context.renderInterfaceLanguage();
+  assert.equal(taskBoardRefreshes,beforeRefreshes+1,'language refresh updates the task board');
   assert.equal(panel.hidden,false);assert.deepEqual({heading:panel.querySelector('.stream-heading').firstChild.textContent,record:row.querySelector('.stream-preview').textContent},{heading:locale.format(language,'room.records'),record:locale.format(language,key)});
   assert.equal(f.root.querySelectorAll('.stream-row').find(e=>e.dataset.recordId===event.id),row);assert.equal(details.open,true);assert.equal(doc.activeElement,link);
   assert.equal(JSON.stringify(f.state),before);assert.ok(panel.textContent.includes(raw));assert.deepEqual(f.calls,[]);
