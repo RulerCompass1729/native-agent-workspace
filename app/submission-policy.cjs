@@ -12,6 +12,24 @@ function submissionState(snapshot) {
     sharingNoticeUiMessage: s.legacyShare === true && !s.legacySharedReply ? uiNotice('notice.policy.sharingLocal').uiMessage : canShare(snapshot, s) ? null : uiError('error.policy.legacyNotice').uiMessage,
   })) };
 }
+function rotationEpoch(session) {
+  const episode = session?.rotationEpisode;
+  return episode && episode.nativeId === session.nativeId ? episode.epoch : null;
+}
+function rotationBlocked(session) {
+  return rotationEpoch(session) !== null && !['not-sent', 'complete'].includes(session.rotationEpisode.state);
+}
+function queuePurposeValid(session, input, itemId, nativeId, claim) {
+  if (rotationBlocked(session) || !input || input.role !== 'user' || nativeId && nativeId !== session.nativeId) return false;
+  if (claim?.claimed === true) return (claim.claimEpoch ?? null) === rotationEpoch(session) &&
+    !input.dispatchPurpose?.kind?.startsWith('rotation-') && !input.dispatchItem?.startsWith('rotation:');
+  if (input.origin !== 'naw-dispatch' || input.dispatchItem !== itemId) return false;
+  const purpose = input.dispatchPurpose;
+  // Existing queue records already name their item; only the pre-epoch scope can use them.
+  if (!purpose) return rotationEpoch(session) === null;
+  return purpose.kind === 'queue' && purpose.itemId === itemId && purpose.nativeId === session.nativeId &&
+    purpose.epoch === rotationEpoch(session);
+}
 function assertSubmission(snapshot, ids) {
   if (snapshot.sessions.some(s => ids.includes(s.id) && !canSubmit(snapshot, s))) throw uiError('error.policy.legacyNotice');
 }
@@ -32,4 +50,4 @@ function assertAutomaticRun(snapshot, mode = 'strict', ids) {
 function assertNativeCreation(snapshot, id) {
   if (!capabilitiesFor(snapshot, id).includes('nativePermissionDefaults')) throw uiError("error.policy.legacyGuiResumeUnsupported");
 }
-module.exports = { submissionState, assertSubmission, assertSharing, assertAutomaticRun, assertNativeCreation, capabilitiesFor };
+module.exports = { submissionState, assertSubmission, assertSharing, assertAutomaticRun, assertNativeCreation, capabilitiesFor, rotationEpoch, rotationBlocked, queuePurposeValid };

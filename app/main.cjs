@@ -1838,7 +1838,9 @@ async function boot() {
         const record = list.find(session => session.id === member.sessionId);
         // As for an item NAW sends: its reply is what follows the input this turn began with, and a change of control since counts.
         const input = (record.messages || []).findLast(message => message?.role === 'user');
-        roomState.queueClaim(args[0], roomId, { ...member, control: record.controlRevision || 0, input: input?.id });
+        if (require('./submission-policy.cjs').rotationBlocked(record)) throw uiError('error.queue.claimBusy');
+        roomState.queueClaim(args[0], roomId, { ...member, control: record.controlRevision || 0, input: input?.id,
+          nativeId: record.nativeId, claimEpoch: require('./submission-policy.cjs').rotationEpoch(record) });
         queueDispatcher?.schedule();
       }
       else if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));

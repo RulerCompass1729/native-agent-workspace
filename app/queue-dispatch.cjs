@@ -15,10 +15,12 @@ const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
 const { codexQuotaBlock } = require('./native-usage.js');
+const { rotationBlocked, rotationEpoch, queuePurposeValid } = require('./submission-policy.cjs');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
 const { sessionPlan, endedByThisStop } = require('./backend-switch.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
+const ROTATION_CAPABILITY = 'rotationControlEpochV1';
 const ITEM_TEXT_LIMIT = 6000;
 const SEND_TEXT_LIMIT = 16000;
 // The member's own reply, kept on the item so a settled queue row can show what came back.
@@ -324,6 +326,8 @@ function validateItem(item) {
   if (item.afterDecision !== undefined && item.afterDecision !== true) {
     throw Error('Invalid queue delivery');
   }
+  if (item.claimed !== undefined && item.claimed !== true || item.claimEpoch !== undefined &&
+      (item.claimed !== true || item.claimEpoch !== null && !validTrustReceipt(item.claimEpoch))) throw Error('Invalid queue claim');
   if (item.sentNative !== undefined && !(typeof item.sentNative === 'string' && item.sentNative.length > 0 &&
       item.sentNative.length <= 2000 && !/[\u0000-\u001f]/u.test(item.sentNative))) {
     throw Error('Invalid queue delivery');
@@ -407,6 +411,7 @@ function sessionReady(session, wakePolicy) {
     return { ready: false, reason: 'paused' };
   }
   if (codexQuotaBlock(session)) return { ready: false, reason: 'usage-limit-exceeded' };
+  if (rotationBlocked(session)) return { ready: false, reason: 'rotation-control-unresolved' };
   if (session.nativeTerminalDialog) {
     return { ready: false, reason: 'native-terminal-dialog' };
   }
@@ -470,7 +475,7 @@ function startsWithDecision(text) {
 // untilHuman, the reply is what came before the person's first message: in a session
 // whose earlier decision is open, what the person writes may be its answer, and the
 // reply and READY line that follow belong to that (independent review, 11-13).
-function replyAfter(session, tag, sentAt, untilHuman = false) {
+function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
   let messages = [];
   if (Array.isArray(session.messages)) {
     messages = session.messages;
@@ -481,6 +486,9 @@ function replyAfter(session, tag, sentAt, untilHuman = false) {
       index = i;
     }
   }
+  if (expected && index < 0) return null;
+  if (expected && !queuePurposeValid(session, messages[index], expected.itemId, expected.nativeId, expected.claim))
+    return { found: false, text: '', last: '', humanAfter: false, parts: [], purposeInvalid: true };
   const parts = [];
   let humanAfter = false;
   let own = -1;
@@ -504,7 +512,7 @@ function replyAfter(session, tag, sentAt, untilHuman = false) {
       }
       humanAfter = true;
     }
-    if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
+    if (message.role === 'assistant' && (!expected || (!message.inputTag || message.inputTag === tag) && (!message.status || message.status === 'complete')) && typeof message.text === 'string' && message.text.trim()) {
       parts.push(message.text);
     }
   }
@@ -1053,11 +1061,13 @@ function planDispatch(input) {
         hold(member.id, 'sent-item-open');
         continue;
       }
-      const reply = replyAfter(member, item.tag, item.sentAt, item.afterDecision === true);
+      const reply = replyAfter(member, item.tag, item.sentAt, item.afterDecision === true, { itemId: item.id, nativeId: item.sentNative, claim: item });
       const controlChanged = Number.isSafeInteger(item.control) && (member.controlRevision || 0) !== item.control;
       let status = 'done';
       let reason = '';
-      if (!reply) {
+      if (reply?.purposeInvalid) {
+        status = 'waiting'; reason = rotationBlocked(member) ? 'rotation-control-unresolved' : 'input-purpose-unconfirmed';
+      } else if (!reply) {
         status = 'failed';
         reason = 'record-missing';
       } else if (reply.humanAfter || controlChanged) {
@@ -1851,6 +1861,7 @@ function readRotations(file, now, faults = {}) {
       reject(oldId, record); continue;
     }
     if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) { reject(oldId, record); continue; }
+    if (record.episodeEpoch !== undefined && (!validTrustReceipt(record.episodeEpoch) || !['open', 'invalid', 'complete'].includes(record.episodeState))) { reject(oldId, record); continue; }
     if (record.trustNoticeId !== undefined && !validTrustReceipt(record.trustNoticeId)) { reject(oldId, record); continue; }
     if (record.trustNotified !== undefined && typeof record.trustNotified !== 'boolean') { reject(oldId, record); continue; }
     if (record.trustWaitingAt !== undefined && !validTime(record.trustWaitingAt)) { reject(oldId, record); continue; }
@@ -2553,7 +2564,13 @@ class QueueDispatcher {
     const snapshot = this.roomState.apply(this.client.snapshot());
     const now = this.now();
     for (const session of snapshot.sessions) {
-      if (sessionReady(session, snapshot.wakePolicy).ready) {
+      // A live control needs an idle clock; this does not grant delivery readiness.
+      const ownRequest = this.rotations[session.id];
+      const timingSession = ownRequest?.phase === 'requested' && ownRequest.episodeEpoch &&
+        ['open', 'complete'].includes(session.rotationEpisode?.state) && session.rotationEpisode.nativeId === session.nativeId &&
+        session.rotationEpisode.epoch === ownRequest.episodeEpoch
+        ? { ...session, rotationEpisode: null } : session;
+      if (sessionReady(timingSession, snapshot.wakePolicy).ready) {
         if (!this.idleSince.has(session.id)) {
           this.idleSince.set(session.id, now);
         }
@@ -2973,7 +2990,15 @@ class QueueDispatcher {
       if (!handoff) throw Object.assign(Error('directory-trust-successor-held'), { notSent: true });
     }
     const entry = this.preflight(session);
-    const call = entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
+    const record = this.rotations[session.id];
+    let control;
+    if (itemId === `rotation:${session.id}`) {
+      if (!entry.state.capabilities?.includes(ROTATION_CAPABILITY) || !record?.episodeEpoch || record.oldNativeId !== session.nativeId)
+        throw Object.assign(Error('backend-update-needed'), { notSent: true });
+      control = { kind: 'rotation-request', epoch: record.episodeEpoch };
+    }
+    const call = control ? entry.client.call('dispatch', session.id, text, session.nativeId, itemId, control)
+      : entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
     const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
     this.idleSince.delete(session.id);
     if (typeof result === 'string') {
@@ -3218,6 +3243,7 @@ class QueueDispatcher {
       ...(carry.modelProvider ? { modelProvider: carry.modelProvider } : {}),
       view: carry.view,
       phase: 'requested',
+      episodeEpoch: randomUUID(), episodeState: 'open',
       requestedAt: current.now,
       tag: null,
       oldId: session.id,
@@ -3251,6 +3277,7 @@ class QueueDispatcher {
         record.phase = 'failed';
         record.failedAt = current.now;
         record.reason = rotationReasonCode(errorKey(error) || error?.message, 'handoff-request-failed');
+        await this.invalidateEpisode(session.id, record);
         this.appendLog('failed', record, { reason: record.reason });
         this.failedEvent(record.roomIds, session.id, record);
         this.notify('failed', record);
@@ -3292,6 +3319,23 @@ class QueueDispatcher {
     }
   }
 
+  async completeEpisode(oldId, record) {
+    if (!record.episodeEpoch) return;
+    const entry = this.client.route(oldId);
+    const result = await withTimeout(entry.client.call('completeRotation', oldId, record.oldNativeId, record.episodeEpoch, record.tag), CALL_TIMEOUT_MS, 'complete-control-timeout');
+    if (result?.epoch !== record.episodeEpoch || result.state !== 'complete') throw Error('handoff-purpose-unconfirmed');
+    record.episodeState = 'complete'; this.save();
+  }
+
+  async invalidateEpisode(oldId, record) {
+    if (!record.episodeEpoch || record.episodeState === 'complete') return;
+    record.episodeState = 'invalid'; this.save();
+    try {
+      const entry = this.client.route(oldId);
+      await withTimeout(entry.client.call('invalidateRotation', oldId, record.oldNativeId, record.episodeEpoch), CALL_TIMEOUT_MS, 'invalidate-timeout');
+    } catch { /* The backend's unresolved request stays blocked when its receipt is unknown. */ }
+  }
+
   // Undo what a failed rotation started; the old member keeps its session and work.
   async failRotation(oldId, record, reason, now, snapshot) {
     reason = rotationReasonCode(reason);
@@ -3301,6 +3345,7 @@ class QueueDispatcher {
     record.phase = 'failed';
     record.failedAt = now;
     record.reason = reason;
+    await this.invalidateEpisode(oldId, record);
     if (trustFailure(record)) {
       record.oldId ??= oldId;
       record.trustCleanup = { v: 1, id: randomUUID(), proof: record.trustOwner ? { ...record.trustOwner } : null,
@@ -3572,6 +3617,7 @@ class QueueDispatcher {
       if (!reply || !reply.text.trim()) {
         throw Error('handoff-missing');
       }
+      await this.completeEpisode(oldId, record);
       record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
       record.phase = 'creating';
       record.creatingAt = now;
@@ -3868,6 +3914,7 @@ module.exports = {
   carrySettings,
   transcriptModel,
   settingsMismatch,
+  ROTATION_CAPABILITY,
   CREATE_SETTINGS_CAPABILITY,
   CREATE_PROFILE_CAPABILITY,
   CLAUDE_PERMISSION_MODES,

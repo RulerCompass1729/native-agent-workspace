@@ -18,7 +18,7 @@ const PARTICIPANT_STOP = 'participantMaintenanceStopV1';
 const { sessionPlan, sameStop } = require('../backend-switch.cjs');
 
 function member(id, extra = {}) {
-  return {
+  const value = {
     id,
     name: `Agent ${id}`,
     provider: 'claude',
@@ -41,6 +41,10 @@ function member(id, extra = {}) {
     messages: [],
     ...extra,
   };
+  // t1/t2 are this fixture's queue item 1/2 inputs; real backend rows already carry these fields.
+  value.messages = value.messages.map(m => /^t[12]$/.test(m.id) && m.role === 'user' ?
+    { origin: 'naw-dispatch', dispatchItem: m.id.slice(1), ...m } : m);
+  return value;
 }
 
 // A conversation with enough records to be due for a new session (rules.CONTENT_LIMITS).
@@ -297,7 +301,7 @@ test('a decision on an item that was refused once before it went out is still a 
   }
 });
 
-test('a reply is found by send time when a native record replaced the NAW message id', () => {
+test('a timestamp alone cannot settle an item when the original queue input is missing', () => {
   const messages = [
     { id: 'old', role: 'assistant', text: 'earlier work', time: NOW - 90000 },
     { id: 'native-user', role: 'user', text: 'NAW task', origin: 'naw-dispatch', time: NOW - 29000 },
@@ -305,7 +309,7 @@ test('a reply is found by send time when a native record replaced the NAW messag
   ];
   const rooms = [{ id: 'shared', name: 'Team', queue: [sentItem()] }];
   assert.deepEqual(plan(rooms, [member('a', { messages })]), [
-    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'finished' },
+    { kind: 'settle', roomId: 'shared', itemId: '1', status: 'failed', reason: 'record-missing', sessionId: 'a' },
   ]);
   const silent = [{ id: 'old', role: 'assistant', text: 'earlier work', time: NOW - 90000 }];
   assert.deepEqual(plan(rooms, [member('a', { messages: silent })]), [
@@ -514,7 +518,7 @@ class FakeClient extends EventEmitter {
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
-    this.capabilities = [rules.CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
+    this.capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
   }
   snapshot() {
     this.reads += 1;
@@ -540,10 +544,21 @@ class FakeClient extends EventEmitter {
     // The room's own archive reads the backend's sessions this way.
     if (method === 'initial') return this.snapshot();
     const session = this.state.sessions.find(s => s.id === args[0]);
+    if (method === 'completeRotation') {
+      if (session.nativeId !== args[1] || session.rotationEpisode?.epoch !== args[2] || session.rotationEpisode.tag !== args[3] || session.rotationEpisode.responseTag !== args[3]) throw Error('control identity changed');
+      session.rotationEpisode.state = 'complete'; return { epoch: args[2], state: 'complete' };
+    }
+    if (method === 'invalidateRotation') {
+      if (session.nativeId !== args[1] || session.rotationEpisode?.epoch !== args[2]) throw Error('control identity changed');
+      if (session.rotationEpisode.state !== 'complete') session.rotationEpisode.state = 'invalid'; return { epoch: args[2], state: 'invalid' };
+    }
     if (method === 'dispatch') {
       this.sequence += 1;
       const tag = `tag-${this.sequence}`;
-      session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted' });
+      if (args[4]) session.rotationEpisode = { nativeId: session.nativeId, epoch: args[4].epoch, state: 'open', tag };
+      session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted', dispatchItem: args[3],
+        dispatchPurpose: { kind: args[4]?.kind || (args[3]?.startsWith('rotation-handoff:') ? 'rotation-handoff' : 'queue'),
+          itemId: args[3], nativeId: session.nativeId, epoch: session.rotationEpisode?.nativeId === session.nativeId ? session.rotationEpisode.epoch : null } });
       session.state = 'working';
       this.emit('state');
       return tag;
@@ -624,7 +639,9 @@ class FakeClient extends EventEmitter {
   }
   reply(id, text) {
     const session = this.state.sessions.find(s => s.id === id);
-    session.messages.push({ id: `reply-${session.messages.length}`, role: 'assistant', text });
+    const inputTag = session.messages.findLast(m => m.role === 'user')?.id;
+    if (session.rotationEpisode?.state === 'open' && session.rotationEpisode.tag === inputTag) session.rotationEpisode.responseTag = inputTag;
+    session.messages.push({ id: `reply-${session.messages.length}`, role: 'assistant', text, inputTag });
     session.state = 'idle';
     this.emit('state');
   }
@@ -750,7 +767,7 @@ test('a claimed item is left for the person when the person stepped in or took c
 
 // Review note 4: without a stored turn input the claim's anchor is its time. Native-block sessions,
 // the only ones background control serves, stamp each message with one.
-test('a claim with no stored turn input settles on what the member says from the claim\'s time on', async t => {
+test('a claim with no stored turn input cannot settle from later text alone', async t => {
   const earlier = [{ id: 'old-ask', role: 'user', text: 'an older request', origin: 'human', time: NOW - 2000 },
     { id: 'old-answer', role: 'assistant', text: 'earlier work', time: NOW - 1000 }];
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { state: 'working', messages: earlier })]);
@@ -765,7 +782,7 @@ test('a claim with no stored turn input settles on what the member says from the
   await dispatcher.schedule();
   await dispatcher.schedule();
   const item = room.queueFind('shared', claimed);
-  assert.deepEqual([item.status, item.reason, item.reply], ['done', undefined, 'Done: the board task.'], 'the person\'s older request is not read as stepping in');
+  assert.deepEqual([item.status, item.reason, item.reply], ['failed', 'record-missing', undefined], 'a claim timestamp cannot prove an input purpose');
   assert.equal(client.sends().length, 0);
 });
 
@@ -937,6 +954,10 @@ test('the person using the old member during the handoff pauses the rotation: no
   advance(3 * 60 * 1000);
   await dispatcher.schedule();
   assert.equal(dispatcher.rotations.a, undefined);
+  assert.equal(client.sends('a').length, 1, 'an unresolved control is not silently replaced by a queue item');
+  client.state.sessions[0].nativeId = 'fresh-native-a';
+  client.state.sessions[0].messages = heavyMessages();
+  await dispatcher.schedule();
   const sends = client.sends('a');
   assert.match(sends[sends.length - 1][2], /next task/);
   assert.equal(client.calls.filter(call => call[0] === 'dispatch' && call[1] === 'a').length, 2, 'one handoff request, then the item');
@@ -1240,7 +1261,7 @@ test('messages from a space handoff or NAW\'s own text are not read as the perso
     { id: 'native-user', role: 'user', text: '<system-reminder>native note</system-reminder>\n【NAW 派活】task', time: NOW - 29000 },
     { id: 'r1', role: 'assistant', text: 'finished', time: NOW - 20000 },
   ];
-  assert.equal(plan(rooms, [member('a', { messages: replaced })])[0].status, 'done');
+  assert.equal(plan(rooms, [member('a', { messages: replaced })])[0].reason, 'record-missing');
 });
 
 test('a kept old session is not asked to hand off again for a day', () => {
@@ -2151,7 +2172,7 @@ for (const capable of [true, false]) test(`a send that reaches the old session j
   const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
     { notify: kind => notices.push(kind) });
   fakeMembership(room, client);
-  if (!capable) client.capabilities = [rules.CAPABILITY, GUARDED_STOP];
+  if (!capable) client.capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP];
   room.queueAdd('next task', 'a');
   await dispatcher.start();
   await dispatcher.schedule();
@@ -2658,6 +2679,7 @@ test('a background task\'s notification after the rotation request: its reply jo
     old.messages.push({ id: 'summary', role: 'assistant', text: '交接：分支 abc。' },
       { id: 'n1', role: 'user', text: notice, origin: 'native', ...(inputSource ? { inputSource } : {}) },
       { id: 'r1', role: 'assistant', text: 'The synthetic task finished.' });
+    old.rotationEpisode.responseTag = old.rotationEpisode.tag; // The native control turn completed.
     old.state = 'idle';
     await dispatcher.schedule(); await dispatcher.schedule(); await dispatcher.schedule();
     const successor = client.state.sessions.find(s => s.id !== 'a');

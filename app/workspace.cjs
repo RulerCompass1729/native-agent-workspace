@@ -1,3 +1,4 @@
+const { rotationEpoch, rotationBlocked } = require('./submission-policy.cjs');
 const { codexQuotaBlock } = require('./native-usage.js');
 const backgroundOperation = require('./background-operation.cjs');
 const { copySnapshotImages } = require('./native-images.cjs');
@@ -674,7 +675,7 @@ class Workspace extends EventEmitter {
   }
   capacityValid(s, r) {
     const runtime = this.runtimes.get(s.id);
-    return !this.closed && !this.storageWarning && !codexQuotaBlock(s) && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
+    return !this.closed && !this.storageWarning && !codexQuotaBlock(s) && !rotationBlocked(s) && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
       s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle && runtime.rootLease === r.lease && runtime.observationEpoch === r.epoch &&
       (s.provider !== 'claude' || runtime.rootTurn?.id === r.turnId && r.errorMessageId && runtime.rootTurn.errorMessageId === r.errorMessageId && runtime.rootTurn.failedTranscript === r.transcript && runtime.failedTurnInputMatches(r.turnId)) &&
       s.owner === r.owner && s.controlRevision === r.control && s.memberRevision === r.member &&
@@ -1093,6 +1094,8 @@ class Workspace extends EventEmitter {
     on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(s.id); });
     on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(s.id); });
     on('complete', info => {
+      const episode = s.rotationEpisode;
+      if (episode?.state === 'open' && episode.nativeId === s.nativeId && info.tag === episode.tag) episode.responseTag = info.tag;
       this.cancelCapacity(s.id); this.endUnidentifiedWait(s);
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
@@ -1455,6 +1458,25 @@ class Workspace extends EventEmitter {
     const control = s.controlRevision, keys = this.terminalKeys.get(s.id) || 0;
     return () => s.controlRevision - (this.terminalKeys.get(s.id) || 0) === control - keys;
   }
+  invalidateRotation(id, nativeId, epoch) {
+    const s = this.get(id), episode = s.rotationEpisode;
+    if (!episode || s.nativeId !== nativeId || episode.nativeId !== nativeId || episode.epoch !== epoch)
+      throw uiError('error.workspace.handoffExpired');
+    if (!['not-sent', 'complete'].includes(episode.state)) episode.state = 'invalid';
+    this.changed(); this.persist();
+    if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+    return { epoch, state: episode.state };
+  }
+  completeRotation(id, nativeId, epoch, tag) {
+    const s = this.get(id), episode = s.rotationEpisode, input = s.messages.find(m => m.id === tag);
+    if (s.nativeId !== nativeId || episode?.nativeId !== nativeId || episode.epoch !== epoch || episode.tag !== tag ||
+        !['open', 'complete'].includes(episode.state) || episode.responseTag !== tag ||
+        s.state !== 'idle' || s.pendingTag || input?.status !== 'submitted')
+      throw uiError('error.workspace.handoffExpired');
+    episode.state = 'complete'; this.changed(); this.persist();
+    if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+    return { epoch, state: 'complete' };
+  }
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null, dispatch = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id], backgroundOperation.current() || route?.agentControl);
     const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile || backgroundOperation.current()) text = originalText;
@@ -1465,13 +1487,22 @@ class Workspace extends EventEmitter {
     if (images && (!forward || route || mobile || wakeTicket || recovery || !media.validSpaceImagePacket(images, forward.roomId || 'shared') || !runtime.spaceImagesAvailable)) throw uiError('error.roomImages.deliveryUnavailable');
     const imageTag = images && randomUUID();
     const imageSubmission = images && new media.SpaceImageSubmission(media.spaceImageRoot(this.dataDir), forward.roomId || 'shared', images.version, images.refs, s.nativeId, imageTag);
+    const request = dispatch?.control;
+    if (request && (request.kind !== 'rotation-request' || typeof request.epoch !== 'string' ||
+        !/^[0-9a-f-]{36}$/.test(request.epoch) || dispatch.itemId !== `rotation:${id}`)) throw uiError('error.queue.invalid');
+    if (dispatch?.itemId?.startsWith('rotation:') && !request) throw uiError('error.queue.invalid');
+    if (dispatch && rotationBlocked(s)) throw uiError('error.nativeSendUnavailable');
+    const inputEpoch = rotationEpoch(s), nativeId = s.nativeId;
+    if (request && request.epoch === inputEpoch) throw uiError('error.workspace.handoffExpired');
+    let episode;
     if (dispatch && codexQuotaBlock(s)) throw uiError('error.nativeSendUnavailable');
     if (dispatch && terminalDialogPrompt(s, runtime)) throw uiError("error.queue.terminalDialog");
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
     if (forward && !wakeTicket && text) text = originalText;
     // A NAW queue item sent under the person's automatic-message switches: never a
     // takeover, never human input, refused while the person has a draft (queue-dispatch.cjs).
-    const dispatchAllowed = () => { try { return !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
+    const dispatchAllowed = () => { try { return s.nativeId === nativeId && (episode ? s.rotationEpisode === episode && episode.state === 'open' :
+      !rotationBlocked(s) && rotationEpoch(s) === inputEpoch) && !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
     if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
     if (mobile) mobile.human();
     else if (dispatch) {
@@ -1513,7 +1544,10 @@ class Workspace extends EventEmitter {
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     const clearedDraft = !backgroundOperation.current() && !mobile && !wakeTicket && !dispatch && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? wakeOrigin(wakeTicket.intent) : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : dispatch ? { name: 'NAW 派活', uiNameMessage: displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.') || undefined, origin: 'naw-dispatch', dispatchItem: dispatch.itemId } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
+    if (request) episode = s.rotationEpisode = { nativeId, epoch: request.epoch, state: 'open', tag, itemId: dispatch.itemId };
+    const purpose = dispatch && { kind: request ? 'rotation-request' : dispatch.itemId.startsWith('rotation-handoff:') ? 'rotation-handoff' : 'queue',
+      nativeId, itemId: dispatch.itemId, epoch: request?.epoch || inputEpoch };
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? wakeOrigin(wakeTicket.intent) : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : dispatch ? { name: 'NAW 派活', uiNameMessage: displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.') || undefined, origin: 'naw-dispatch', dispatchItem: dispatch.itemId, dispatchPurpose: purpose } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native', ...backgroundOperation.message() });
     if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });
@@ -1532,6 +1566,7 @@ class Workspace extends EventEmitter {
     else if (clearedDraft) { this.pendingDrafts.set(id, { tag, text: draft, revision: draftRevision }); this.drafts.set(id, ''); }
     this.changed();
     try {
+      if (episode) { this.persist(); if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved'); }
       if (mobile) mobile.reserve(tag);
       if (wakeTicket) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.automaticRecordUnsaved"); }
       if (recovery) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.continuationRecordUnsaved"); }
@@ -1562,6 +1597,9 @@ class Workspace extends EventEmitter {
         // Confirmed backend exit may retire the runtime before its rejected
         // ACK settles. Retain only this unchanged, still-owned draft.
         this.drafts.set(id, draft);
+      }
+      if (episode && s.rotationEpisode === episode && episode.state === 'open' && error.notSent === true) {
+        episode.state = 'not-sent'; this.persist();
       }
       this.changed(); throw error;
     } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }

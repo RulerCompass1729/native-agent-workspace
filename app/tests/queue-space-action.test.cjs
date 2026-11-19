@@ -40,6 +40,7 @@ function spaceAction(extra = {}) {
     },
   };
   const context = vm.createContext({
+    require: require('node:module').createRequire(path.join(__dirname, '../main.cjs')),
     register(name, fn) {
       handler = fn;
     },
@@ -83,6 +84,7 @@ function registered(extra) {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const handlers = new Map(), ipc = new Map();
   const context = vm.createContext({
+    require: require('node:module').createRequire(path.join(__dirname, '../main.cjs')),
     applicationHandlers: handlers, backgroundOperation, uiError,
     ipcMain: { handle: (name, handler) => ipc.set(name, handler) },
     validRoomId: () => true, broadcastRoom: async () => {},
@@ -457,4 +459,15 @@ test('through the real background controller, a claim needs no confirmation and 
   assert.equal(taken.confirmation, undefined);
   assert.deepEqual(f.room.queueItems().map(item => [item.status, item.tag ?? null]), [['sent', 'turn-input'], ['queued', null]]);
   await controller.close();
+});
+
+test('a live or failed rotation control cannot be claimed as a queued task', async t => {
+  for (const state of ['open', 'invalid']) {
+    const f = fixture(t); f.record.state = 'working';
+    f.record.rotationEpisode = { nativeId: f.sender.nativeId, epoch: '00000000-0000-4000-8000-000000000001', state };
+    f.record.messages = [{ id: 'control-tag', role: 'user', origin: 'naw-dispatch', dispatchItem: 'rotation:' + f.sender.id }];
+    const id = f.room.queueAdd('Synthetic queued task', f.sender.id);
+    await assert.rejects(f.invoke('spaceAction', ['shared', 'queueClaim', [id]]), error => error.uiMessage?.key === 'error.queue.claimBusy');
+    assert.equal(f.room.queueFind('shared', id).status, 'queued');
+  }
 });

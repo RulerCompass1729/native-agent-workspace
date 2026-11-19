@@ -736,7 +736,8 @@ class RoomState {
       }
     }
     const tag = typeof member.input === 'string' && member.input.length > 0 && member.input.length <= 100 && !/[\u0000-\u001f]/u.test(member.input) ? member.input : `claimed:${item.id}`;
-    const next = { ...item, status: 'sent', sentTo: member.sessionId, sentAt: now, tag, control: member.control };
+    const next = { ...item, status: 'sent', sentTo: member.sessionId, sentAt: now, tag, control: member.control,
+      claimed: true, claimEpoch: member.claimEpoch ?? null, ...(member.nativeId ? { sentNative: member.nativeId } : {}) };
     const params = { text: queueRules.shortText(item.text), name: member.name, sessionId: member.sessionId };
     const event = { kind: 'queue', sessionId: member.sessionId, ...uiNotice('notice.queue.claimed', params) };
     this.queueReplace(id, itemId, next, event);
@@ -770,7 +771,7 @@ class RoomState {
     }
     // The refusal that put it back is over once it is sent; attempts keeps the count (queueRequeue).
     const next = { ...item, status: 'sent', sentTo: sessionId, sentAt: now, tag: null };
-    delete next.reason;
+    delete next.reason; delete next.claimed; delete next.claimEpoch;
     // The native session that gets it, so an answer from the queue row goes only there (search-view.js queueAnswerTarget).
     if (nativeId) {
       next.sentNative = nativeId;
@@ -809,7 +810,7 @@ class RoomState {
     delete next.sentAt;
     delete next.tag;
     delete next.control;
-    delete next.afterDecision;
+    delete next.afterDecision; delete next.claimed; delete next.claimEpoch;
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
