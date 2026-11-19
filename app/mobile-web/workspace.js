@@ -56,7 +56,9 @@
     function dialog(title, content) { el('dialog-title').textContent = title; el('dialog-body').replaceChildren(typeof content === 'string' ? node('p', content) : content); el('dialog-close').textContent = t('close'); if (!el('dialog').open) el('dialog').showModal(); }
     el('dialog-close').addEventListener('click', () => el('dialog').close());
     el('skip').addEventListener('click', event => { event.preventDefault(); el('content').focus(); });
-    async function run(fn) { try { await client.ready; await fn(); } catch { disconnected = true; paint(); toast('offline'); } }
+    // Action readiness must not depend on a route read finishing.
+    let started;
+    async function run(fn) { try { await started; await fn(); } catch { disconnected = true; paint(); toast('offline'); } }
     async function api(url, value, csrf) {
       const response = await global.fetch(url, { method: value === undefined ? 'GET' : 'POST', cache: 'no-store', credentials: 'same-origin',
         headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', 'X-NAW-CSRF': csrf || '' }) }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
@@ -336,28 +338,38 @@
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
       } catch { disconnected = true; toast('offline'); } finally { if (ticket === epoch) { busy = false; paint(); } }
     }
+    let navigation = 0;
     async function navigate() {
+      const ticket = ++navigation;
       d.documentElement.dataset.loading = 'true';
-      // Opening a fresh pairing link in an already-open phone tab is also a
-      // pairing gesture. Consume it before requests or storage, just as at boot.
-      if (global.location.hash.startsWith('#pair=')) {
-        const secret = global.location.hash.slice(6);
-        global.history.replaceState(null, '', global.location.pathname + '#' + lang + '/home');
-        await client.start(secret);
-      }
-      const parts = global.location.hash.slice(1).split('/'); lang = parts[0] === 'en' ? 'en' : 'zh';
-      route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null };
-      d.documentElement.dataset.page = route.page;
-      d.documentElement.dataset.route = global.location.hash;
-      composeKey = ''; el('toast').hidden = true; paint();
-      const id = route.page === 'chat' ? route.id : route.nativeId;
-      if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
-      await refresh(); paint(); d.documentElement.dataset.loading = 'false';
+      try {
+        // Opening a fresh pairing link in an already-open phone tab is also a
+        // pairing gesture. Consume it before requests or storage, just as at boot.
+        if (global.location.hash.startsWith('#pair=')) {
+          const secret = global.location.hash.slice(6);
+          global.history.replaceState(null, '', global.location.pathname + '#' + lang + '/home');
+          await client.start(secret);
+        }
+        if (ticket !== navigation) return;
+        const parts = global.location.hash.slice(1).split('/'); lang = parts[0] === 'en' ? 'en' : 'zh';
+        route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null };
+        d.documentElement.dataset.page = route.page;
+        d.documentElement.dataset.route = global.location.hash;
+        composeKey = ''; el('toast').hidden = true; paint();
+        const id = route.page === 'chat' ? route.id : route.nativeId;
+        if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
+        if (ticket !== navigation) return;
+        await refresh();
+        if (ticket === navigation) paint();
+      } catch {
+        if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
+      } finally { if (ticket === navigation) d.documentElement.dataset.loading = 'false'; }
     }
-    let navigation = Promise.resolve();
-    const scheduleNavigate = () => (navigation = navigation.then(navigate, navigate));
-    global.addEventListener('hashchange', () => run(scheduleNavigate));
-    client.ready = (async () => {try{await client.start(pairSecret);}finally{pairSecret=undefined;}await scheduleNavigate(); })(); paint();
+    const scheduleNavigate = () => navigate();
+    // Navigation must not wait for an earlier route's network requests.
+    global.addEventListener('hashchange', scheduleNavigate);
+    started = (async () => { try { await client.start(pairSecret); } finally { pairSecret = undefined; } })();
+    client.ready = (async () => { await started; await scheduleNavigate(); })(); paint();
     return { client, actions, refresh, navigate };
   }
   const exported = { createWorkspaceActions, ACTION_KEY, mount };
