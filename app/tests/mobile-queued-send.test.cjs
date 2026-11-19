@@ -66,7 +66,7 @@ test('the phone read says how a send would go, as the Mac composer decides it', 
   }
   assert.deepEqual(pick(f.read(a)), { canSend: true, sendMode: 'queue', sendBlocked: null });
   b.s.state = 'working'; b.r.steerAvailable = true; b.r.turnId = 'synthetic-turn';
-  assert.deepEqual(pick(f.read(b)), { canSend: false, sendMode: null, sendBlocked: 'steer' });
+  assert.deepEqual(pick(f.read(b)), { canSend: true, sendMode: 'steer', sendBlocked: null });
 });
 
 test('a phone message to a working Claude session waits in its native queue and the phone hears back once it stands there', async t => {
@@ -146,9 +146,9 @@ test('a phone message reaches only the session its grant names', async t => {
   assert.equal(b.s.messages.length, before); assert.equal(b.r.pendingQueue ?? null, null);
 });
 
-test('a working Codex session takes nothing from the phone: no steer, queue or send', async t => {
+test('a working Codex session that cannot steer takes nothing from the phone: no steer, queue or send', async t => {
   const f = await fixture(t, ['codex']), [b] = f.sessions;
-  b.s.state = 'working'; b.r.steerAvailable = true; b.r.turnId = 'synthetic-turn'; b.r.queueAvailable = true;
+  b.s.state = 'working'; b.r.steerAvailable = false; b.r.turnId = 'synthetic-turn'; b.r.queueAvailable = true;
   const control = b.s.controlRevision;
   await assert.rejects(f.w.mobileSend(f.ticket('send', b), f.spec(b, 'Phone words for Codex')));
   assert.equal(f.calls.length, 0); assert.equal(b.s.controlRevision, control); assert.equal(f.w.mobileRequests.length, 0);

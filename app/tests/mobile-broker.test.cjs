@@ -223,13 +223,23 @@ test('the phone gets only fixed words for how a send would go or why it cannot',
     [true, 'queueMidturn', null, [true, 'queueMidturn', null]],
     [true, 'queue', 'steer', [true, 'queue', null]],
     [true, 'PRIVATE_MODE', null, [true, null, null]],
-    [false, 'queue', 'steer', [false, null, 'steer']],
+    [false, 'queue', 'steerBusy', [false, null, 'steerBusy']],
+    [true, 'steer', null, [true, 'steer', null]],
+    [false, null, 'steer', [false, null, null]],
     [false, null, 'PRIVATE_REASON', [false, null, null]],
   ]) {
     Object.assign(f.record, { canSend, sendMode, sendBlocked });
     const row = await f.broker.read(auth, f.record.id);
     assert.deepEqual(pick(row), expected); assert.ok(!JSON.stringify(row).includes('PRIVATE_'));
   }
+});
+test('the turn a phone steer is for stays in the broker: the phone never sees it, the send carries it', async t => {
+  const f = fixture(t), { auth } = await f.pair();
+  Object.assign(f.record, { state: 'working', canSend: true, sendMode: 'steer', sendBlocked: null, proof: { ...f.record.proof, turnId: 'PRIVATE_TURN_ID' } });
+  const row = await f.broker.read(auth, f.record.id); assert.ok(!JSON.stringify(row).includes('PRIVATE_TURN_ID'));
+  const result = await f.broker.send(auth, { contextId: row.contextId, requestId: randomUUID(), text: 'Phone instruction' });
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_TURN_ID'));
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].proof.turnId, 'PRIVATE_TURN_ID');
 });
 test('a read-only device is told it is read-only, whatever the session could take', async t => {
   const f = fixture(t), { auth } = await f.pair(['read']); Object.assign(f.record, { canSend: true, sendMode: 'queue', sendBlocked: null });

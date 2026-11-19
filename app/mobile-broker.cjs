@@ -20,7 +20,7 @@ const fingerprint = value => digest(JSON.stringify(stable(value)));
 // past leading whitespace, control characters and invisible characters that trim() keeps (U+0085, U+200B and other
 // default-ignorables). The same rule is in mobile-web/client.js and mobile-session.cjs.
 // Only these fixed words cross to the phone: how a send would go now, or why it cannot (mobile-session.cjs sendMode).
-const SEND_MODES = ['send', 'queue', 'queueMidturn'], SEND_BLOCKS = ['steer', 'noQueue', 'queueBusy', 'question', 'answerPending', 'approval', 'interrupt', 'disconnected'];
+const SEND_MODES = ['send', 'queue', 'queueMidturn', 'steer'], SEND_BLOCKS = ['steerBusy', 'noQueue', 'queueBusy', 'question', 'answerPending', 'approval', 'interrupt', 'disconnected'];
 const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||

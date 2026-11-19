@@ -35,11 +35,13 @@ function currentTarget(s, runtime) {
   return readableTarget(s) && !['ended','closed'].includes(s.state) && !s.backendUnavailable && !s.backendExitConfirmed && !s.stopped && !runtime?.stopped && !runtime?.backendExitConfirmed;
 }
 // How a phone message would go now, decided as the Mac composer decides (renderer.js composer choice): an idle
-// session takes it at once; a working Claude session takes one queued message (Workspace.queue). Nothing else does.
+// session takes it at once; a working Claude session takes one queued message (Workspace.queue); a working Codex
+// session takes one added instruction into its current turn (Workspace.steer). Nothing else does.
 function sendMode(s, r) {
   if (!r || r.transportDisconnected || r.chatAvailable === false || r.nativeInputRequired || r.nativeAbortRequest || r.pendingQueue || s.approval) return null;
   if (s.state === 'idle') return s.pendingTag ? null : 'send';
   if (s.state === 'working' && s.provider === 'claude' && r.queueAvailable) return r.midturnAvailable === true ? 'queueMidturn' : 'queue';
+  if (s.state === 'working' && s.provider === 'codex' && r.steerAvailable && !r.pendingSteer && typeof r.turnId === 'string' && r.turnId) return 'steer';
   return null;
 }
 // Why the phone cannot send now, so the phone can say it instead of only greying the button.
@@ -51,7 +53,8 @@ function sendBlocked(s, r, question) {
   if (s.approval?.pending === true) return 'answerPending';
   if (s.approval || s.state === 'approval') return 'approval';
   if (r.pendingQueue || s.state === 'idle' && s.pendingTag) return 'queueBusy';
-  if (s.state === 'working') return s.provider === 'codex' ? 'steer' : 'noQueue';
+  if (s.state === 'working' && s.provider === 'codex' && r.pendingSteer) return 'steerBusy';
+  if (s.state === 'working') return 'noQueue';
   return null;
 }
 function checked(w, ticket, action) {
@@ -61,21 +64,24 @@ function checked(w, ticket, action) {
   verifyTicket(root, ticket, target, action);
   return s;
 }
-const PROOF = ['nativeId', 'controlRevision', 'connectionRevision'], QUEUED = ['queue', 'queueMidturn'];
+const PROOF = ['nativeId', 'controlRevision', 'connectionRevision'], QUEUED = ['queue', 'queueMidturn'], TURNED = [...QUEUED, 'steer'];
 const turnOf = r => typeof r?.turnId === 'string' && r.turnId ? r.turnId : null;
-// What the phone was shown: a queued send also names its mode and the turn it was read in. An idle send keeps the
-// original three keys, so receipts stored before keep their digest.
+// What the phone was shown: a queued send or a steer also names its mode and the turn it was read in (a steer always
+// has one). An idle send keeps the original three keys, so receipts stored before keep their digest. The proof stays
+// in the broker (mobile-broker.cjs #contexts) and never reaches the phone.
 function proof(s, r = null, mode = sendMode(s, r)) {
   const base = { nativeId: s.nativeId, controlRevision: number(s.controlRevision), connectionRevision: number(s.connectionRevision) };
-  if (!QUEUED.includes(mode)) return base;
+  if (!TURNED.includes(mode)) return base;
   const turnId = turnOf(r);
   return { ...base, sendMode: mode, ...(turnId ? { turnId } : {}) };
 }
-const proofShape = v => exact(v, PROOF) || QUEUED.includes(v?.sendMode) &&
-  (exact(v, [...PROOF, 'sendMode']) || exact(v, [...PROOF, 'sendMode', 'turnId']) && typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 512);
+const turnShape = v => typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 512;
+const proofShape = v => exact(v, PROOF) || TURNED.includes(v?.sendMode) &&
+  (v.sendMode !== 'steer' && exact(v, [...PROOF, 'sendMode']) || exact(v, [...PROOF, 'sendMode', 'turnId']) && turnShape(v));
 function sameProof(s, value) { const current = proof(s, null, null); return proofShape(value) && PROOF.every(k => value[k] === current[k]); }
-// A send goes only the way the phone showed it, and a queued one only into the turn it was read in (Claude 7, F1:
-// NAW's own dispatch starts a turn without a control change). An unsendable state is left to the send's own refusal.
+// A send goes only the way the phone showed it, and a queued one or a steer only into the turn it was read in
+// (Claude 7, F1: NAW's own dispatch starts a turn without a control change). An unsendable state is left to the
+// send's own refusal.
 function asShown(s, r, value) { const now = proof(s, r); return (now.sendMode || 'send') === (value.sendMode || 'send') && (now.turnId || null) === (value.turnId || null); }
 const CHANGED = '手机读到后会话的状态已经变了，没有发送。';
 function request(spec, action) {
@@ -155,6 +161,12 @@ function sent(w, d, s, error) {
 async function executeSend(w, d) {
   const s = w.get(d.ticket.sessionId), r = w.runtimes.get(s.id), mode = sendMode(s, r);
   if (!asShown(s, r, d.spec.proof)) return sent(w, d, s, Object.assign(Error(CHANGED), { notSent: true }));
+  // Only into the turn the phone read: Workspace.steer and native turn/steer both refuse any other turn, and nothing
+  // falls back to a new turn. The turn/steer receipt is the end.
+  if (mode === 'steer') {
+    try { await w.steer(s.id, d.spec.text, null, d.spec.proof.turnId, null, d); } catch (e) { return sent(w, d, s, e); }
+    return sent(w, d, s);
+  }
   if (!QUEUED.includes(mode)) {
     try { await w.send(s.id, d.spec.text, null, null, null, null, null, null, d); } catch (e) { return sent(w, d, s, e); }
     return sent(w, d, s);
@@ -188,7 +200,8 @@ function prepare(w, ticket, spec, action, connection) {
   if (records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance).length >= MAX_REQUESTS) throw denied();
   ticket = JSON.parse(JSON.stringify(ticket)); spec = JSON.parse(JSON.stringify(spec));
   const s = w.get(ticket.sessionId), r = w.runtime(s.id);
-  if (action === 'send' && !sendMode(s, r)) throw denied();
+  // A steer read whose turn has gone is answered not-sent below, as 9afe5cdf did; other unsendable states are refused.
+  if (action === 'send' && !sendMode(s, r) && spec.proof.sendMode !== 'steer') throw denied();
   const d = delegate(w, ticket, spec, action);
   d.ticket = ticket; d.spec = spec; d.action = action; d.connection = connection; d.until = clock() + PREPARE_MS; d.used = false;
   if (action === 'answer') {

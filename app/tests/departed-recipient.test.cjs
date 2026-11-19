@@ -68,8 +68,9 @@ test('a member who left one space and joined another is still refused for the sp
   assert.deepEqual(f.sends, []); assert.equal(w.roomFor(gone).messages.length, 0);
 });
 
-// Queue proves a non-send as not-sent; steer never relabels its input after the call starts, so it stays unconfirmed.
-for (const [name, status] of [['queue', 'not-sent'], ['steer', 'unconfirmed']]) test(`${name}: a member who leaves after its input is accepted, before the native write, gets nothing`, async t => {
+// Queue and steer both prove a non-send as not-sent: the Codex adapter's refusal before turn/steer carries notSent and
+// Workspace.steer keeps it, as queue does (review C-a1, 2026-11-19; it was unconfirmed before).
+for (const [name, status] of [['queue', 'not-sent'], ['steer', 'not-sent']]) test(`${name}: a member who leaves after its input is accepted, before the native write, gets nothing`, async t => {
   const f = await fixture(t), w = f.workspace, space = spaceFor(w, 'named'), p = paths[name], id = p.id(f);
   w.join(id, true, space);
   const runtime = w.runtime(id); p.prepare(w.get(id), runtime);

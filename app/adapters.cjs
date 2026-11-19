@@ -2741,7 +2741,8 @@ class Codex extends EventEmitter {
   }
   get steerAvailable() { return codexQualification.allows('steer', this.host.rpc?.nativeVersion) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
-    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw uiError("error.nativeTurnChangedSteerNotSent");
+    // Before turn/steer: a proven non-send, as Claude.queue() marks its own refusal.
+    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw Object.assign(uiError("error.nativeTurnChangedSteerNotSent"), { notSent: true });
     this.ownInputs.add(tag);
     const operation = this.steering = { tag, turnId: expectedTurnId, inputSeen: false };
     const previous = this.pending, lifecycle = this.lifecycleRevision;

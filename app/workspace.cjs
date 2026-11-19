@@ -1656,27 +1656,34 @@ class Workspace extends EventEmitter {
       throw error;
     } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }
   }
-  async steer(id, text, owner, expectedTurnId, shared = null) {
+  async steer(id, text, owner, expectedTurnId, shared = null, mobile = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id]);
-    const originalText = text; text = cleanText(text); if (backgroundOperation.current()) text = originalText;
+    const originalText = text; text = cleanText(text); if (mobile || backgroundOperation.current()) text = originalText;
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
+    // A phone delegate (mobile-session.cjs) is the person's input without the Mac's control, as in queue().
+    const mobileSession = mobile && require('./mobile-session.cjs');
+    if (mobile && (!mobileSession.valid(mobile) || shared)) throw uiError("error.workspace.mobileDelegationUnconfirmed");
     const s = this.get(id), runtime = this.runtime(id);
     // Public space input does not take over the private composer or terminal.
-    const controller = shared ? s.owner : owner;
+    const controller = shared || mobile ? s.owner : owner;
     const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
     const roomId = shared?.roomId || 'shared', room = this.roomFor(roomId);
     if (shared && !spaces.isMember(s, roomId)) throw uiError("error.workspace.recipientLeftSpace");
     if (s.owner !== controller || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw uiError("error.workspace.nativeTurnOrControlChanged");
-    if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
-    if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
+    // mobile.human() makes the control change the Mac's private steer makes (and the queue's peer change).
+    if (mobile) { mobile.human(); wake.messageInput(this, s, { control: 1, peer: 1 }); }
+    else {
+      if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
+      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
+    }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
-    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && sameControl() &&
+    const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
+    const valid = () => backgroundValid() && (!mobile || mobileSession.valid(mobile)) && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && sameControl() &&
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
-    const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
+    const tag = mobile?.row?.tag || randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    const message = { id: tag, role: 'user', text, origin: mobile ? 'human-mobile' : 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
     let accepted = false;
     try {
       runtime.pendingSteer = tag;
@@ -1688,18 +1695,22 @@ class Workspace extends EventEmitter {
       }
       s.messages.push(message); this.versions.dispatches++; this.changed();
       if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
-      await runtime.steer(text, tag, expectedTurnId, valid, Boolean(shared));
+      if (mobile) mobile.reserve(tag);
+      // The adapter calls the guard last, right before turn/steer: a refusal before that is a proven non-send.
+      const guard = mobile ? () => { const ok = valid(); if (ok) mobile.started = true; return ok; } : valid;
+      await runtime.steer(text, tag, expectedTurnId, guard, Boolean(shared));
       accepted = true;
       message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
-      if (!backgroundOperation.current() && !shared && sameControl() && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      if (!backgroundOperation.current() && !shared && !mobile && sameControl() && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
-      // Do not relabel ongoing output as cancelled or retry this input.
-      if (message.status !== 'submitted') message.status = 'unconfirmed';
+      // Do not relabel ongoing output as cancelled or retry this input. Only a proven non-send is not-sent, as in queue().
+      const status = error.notSent === true || mobile && !mobile.started ? 'not-sent' : 'unconfirmed';
+      if (message.status !== 'submitted') message.status = status;
       if (shared) {
-        this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认', uiActivity('notice.sharing.receiptUnconfirmed')[1]); this.deliveryStatus(tag, 'unconfirmed');
+        this.forwards.delete(tag); this.sharedReplies.close(tag, status === 'not-sent' ? '没有发出' : '接收结果未确认', uiActivity(status === 'not-sent' ? 'notice.sharing.notSent' : 'notice.sharing.receiptUnconfirmed')[1]); this.deliveryStatus(tag, status);
         const source = room.messages.find(row => row.id === tag);
-        if (source?.status === 'awaiting-native') source.status = 'unconfirmed';
+        if (source?.status === 'awaiting-native') source.status = status;
       }
       throw error;
     } finally {

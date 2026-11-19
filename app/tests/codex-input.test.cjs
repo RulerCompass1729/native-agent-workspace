@@ -105,3 +105,16 @@ test('stale, denied, unverified-version and permission-blocked steer never reach
   await assert.rejects(f.runtime.steer('text', 'd', 'current', () => true));
   assert.equal(f.calls.length, 0);
 });
+
+test('a steer refused before native RPC is proven not sent; a native refusal after it is not', async () => {
+  const f = fixture(); f.runtime.host.rpc.nativeVersion = '0.163.0'; f.runtime.turnId = 'current';
+  const refused = [];
+  for (const [turn, guard] of [['old', () => true], ['current', () => false]]) await f.runtime.steer('text', 'a', turn, guard).catch(error => refused.push(error));
+  f.runtime.nativeRequests.set(1, {});
+  await f.runtime.steer('text', 'b', 'current', () => true).catch(error => refused.push(error));
+  f.runtime.nativeRequests.clear();
+  assert.equal(refused.length, 3); assert.deepEqual(refused.map(error => error.notSent), [true, true, true]); assert.equal(f.calls.length, 0);
+  f.runtime.host.rpc.call = async () => { throw Error('Native turn mismatch'); };
+  const late = await f.runtime.steer('text', 'c', 'current', () => true).catch(error => error);
+  assert.ok(late instanceof Error); assert.notEqual(late.notSent, true);
+});
