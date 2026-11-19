@@ -83,9 +83,12 @@ async function pendingCard(record) {
 async function decide(record, response = 1) {
   await pendingCard(record);
   assert.deepEqual(stored(record.id).confirmation, record.confirmation, 'The click answers this exact pending question');
-  const label = response === 1 ? (language === 'zh' ? '确认此操作' : 'Confirm this action') : record.confirmation.options.buttons[response];
+  // The card shows a shorter label than the stored option (aa416afd); older app roots show the stored one.
+  const catalog = require(path.join(code, 'app/ui-messages.js'))[language];
+  const label = response === 1 ? catalog['background.card.confirm'] ?? catalog['background.confirm'] : record.confirmation.options.buttons[response];
   const button = card(record).locator('.background-controls').getByRole('button', { name: label, exact: true });
-  assert.equal(await button.count(), 1, 'Only this archive card\'s exact confirmation button is clicked');
+  const shown = await card(record).locator('.background-controls button').allTextContents();
+  assert.equal(await button.count(), 1, `Only this archive card's exact confirmation button is clicked: ${label} in ${JSON.stringify(shown)}`);
   await button.click();
   await until(() => {
     const row = stored(record.id);
