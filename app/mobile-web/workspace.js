@@ -195,11 +195,14 @@
     function chat() {
       const s = view.sessions.find(s => s.id === route.id); if (!s) { heading('chat'); el('content').append(node('p', t('noScope'))); return; }
       tabs([[t('chat'), 'chat/' + encodeURIComponent(s.id), true]]); const terminal = button(t('terminal'), () => dialog(t('terminal'), t('terminalOnly'))); el('content').querySelector('.tabs').append(terminal);
-      const controls = node('div', undefined, 'control-strip');
-      controls.append(
-        button(t('interrupt'), () => dialog(t('interrupt'), t('mac')), 'danger'),
-        button(t('takeover'), () => dialog(t('takeover'), t('mac'))),
-      ); el('content').append(controls);
+      // Both only say "use the Mac"; the phone holds read/send for the butler, so its page leaves them out.
+      if (butlerSession()?.id !== s.id) {
+        const controls = node('div', undefined, 'control-strip');
+        controls.append(
+          button(t('interrupt'), () => dialog(t('interrupt'), t('mac')), 'danger'),
+          button(t('takeover'), () => dialog(t('takeover'), t('mac'))),
+        ); el('content').append(controls);
+      }
       const rows = node('div', undefined, 'thread'); thread(s.messages, rows, s); el('content').append(rows);
       if (s.earlierMessagesOmitted) el('content').append(node('p', t('omit'), 'small-note'));
       if (client.state.row?.question && client.state.selected === s.id) el('content').append(link(t('question') + ' ›', 'confirm/native/' + encodeURIComponent(s.id), 'link-row'));
@@ -421,6 +424,8 @@
         // A new grant must not keep the previous conversation visible while reading.
         if (!paired) await reading;
         if (ticket === navigation) paint();
+        // A chat opens at its newest message, as on the Mac; later refreshes keep the reader's place.
+        if (ticket === navigation && route.page === 'chat') global.scrollTo?.(0, d.documentElement.scrollHeight);
       } catch {
         if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
       } finally { if (ticket === navigation) d.documentElement.dataset.loading = 'false'; }

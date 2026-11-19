@@ -21,7 +21,7 @@ const butlerRows = [{ id: 'd', role: 'user', name: 'NAW 派活', text: 'Syntheti
 let passed = 0;
 const check = (label, fn) => { fn(); passed++; console.log('PASS ' + label); };
 let readWhenBusy = {};
-async function open(context, { steward, busy = false, hash }) {
+async function open(context, { steward, busy = false, hash, rows = butlerRows }) {
   const list = structuredClone(steward && steward.state !== 'shared' ? sessions.slice(1) : sessions);
   if (busy) list[0].state = 'working';
   const page = await context.newPage();
@@ -31,7 +31,7 @@ async function open(context, { steward, busy = false, hash }) {
     if (/^\/mobile\/[a-z]+\.(js|css|webmanifest)$/.test(p)) return route.fulfill({ status: 200, contentType: p.endsWith('.css') ? 'text/css' : 'text/javascript', body: fs.readFileSync(path.join(web, path.basename(p))) });
     if (p === '/mobile/session') return json({ deviceId: '10000000-0000-4000-8000-000000000001', csrf: 'c'.repeat(43), workspace: true,
       sessions: list.map(s => ({ id: s.id, name: s.name, state: s.state, available: true, actions: ['read', 'send', 'answer'] })) });
-    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? butlerRows : [], earlierMessagesOmitted: 0 })), rooms: [],
+    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? rows : [], earlierMessagesOmitted: 0 })), rooms: [],
       confirmations: [], reminders: null, syncedAt: now, capabilities: { queue: false, records: false, sensitiveDecisions: false, nativeTerminal: false, push: false }, ...(steward ? { steward } : {}) });
     if (p.startsWith('/mobile/read/')) { const id = decodeURIComponent(p.split('/').pop());
       const idle = list.find(s => s.id === id)?.state === 'idle';
@@ -64,6 +64,17 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
     const authors = await page.$$eval('.thread .message', nodes => nodes.map(n => [n.classList.contains('human'), n.querySelector('.author span').textContent, n.querySelector('.avatar')?.textContent || null]));
     check('a NAW dispatch is not labelled as you; the butler\'s replies carry its name', () => assert.deepEqual(authors,
       [[false, 'NAW 派活', 'N'], [false, 'Synthetic butler · 19', 'C'], [true, '你', null]]));
+    await page.close();
+    // A long butler chat opens at its newest message, and its page has no 中断/接管 strip; a member's chat keeps it (2026-11-19).
+    const long = Array.from({ length: 60 }, (_, i) => ({ id: 'l' + i, role: i % 2 ? 'assistant' : 'user', name: '', text: 'Synthetic line ' + i, time: now - (60 - i) * 1000 }));
+    page = await open(context, { steward: { state: 'shared', sessionId: butler }, hash: '#zh/chat/' + butler, rows: long });
+    const opened = await page.evaluate(() => { const last = [...document.querySelectorAll('.thread .message')].at(-1).getBoundingClientRect(), compose = document.getElementById('compose').getBoundingClientRect();
+      return { scrolled: window.scrollY > 0, lastAboveCompose: last.bottom <= compose.top && last.bottom > 0, controls: document.querySelectorAll('.control-strip').length }; });
+    check('a long butler chat opens at its newest message, above the input, with no 中断/接管', () => assert.deepEqual(opened, { scrolled: true, lastAboveCompose: true, controls: 0 }));
+    await page.close();
+    page = await open(context, { steward: { state: 'shared', sessionId: butler }, hash: '#zh/chat/' + sessions[1].id });
+    const member = await page.$$eval('.control-strip button', nodes => nodes.map(n => n.textContent));
+    check('a member chat keeps its 中断/接管 strip', () => assert.deepEqual(member, ['中断', '接管']));
     await page.close();
     // A busy butler takes a queued message, as a busy Claude session does; only a named refusal disables the button (2026-11-19).
     const compose = () => page.evaluate(() => ({ button: document.getElementById('send-message').textContent, note: document.getElementById('compose-note').textContent, disabled: document.getElementById('send-message').disabled }));
