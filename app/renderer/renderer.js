@@ -216,7 +216,7 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
-const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
+const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
 function updateTaskBoard() {
@@ -227,7 +227,7 @@ function updateTaskBoard() {
     sessions: state.sessions.map(s => {
       let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
       const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected);
-      return { id: s.id, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
+      return { id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
         transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
         approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
         claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),

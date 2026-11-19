@@ -1,24 +1,28 @@
-/* The global status shares the existing header row; the modal keeps its own viewport. */
-.task-board{flex:none;min-width:0;--task-board-error:#b03938}
+/* The global status shares the existing header row. */
+.task-board{--task-status-square-size:8px;flex:none;min-width:0;--task-board-error:#b03938}
 body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-status-button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;border:0;background:transparent;padding:4px 6px;min-height:28px}
 .task-status-button>span{flex:none}
-.task-status-track{display:flex;overflow:hidden;width:42px;height:4px;border-radius:2px}
-.task-status-track i{display:block;height:100%;flex:none}
-.task-status-track .sent{background:#5c8fc1}.task-status-track .waiting{background:#b17a2b}
+.task-status-track{display:flex;align-items:center;gap:3px;width:auto;height:14px;flex:none}
+.task-status-square{display:block;width:var(--task-status-square-size);height:var(--task-status-square-size);border-radius:1px;flex:none;background:var(--muted)}
+.task-status-square.sent{background:#5c8fc1}.task-status-square.waiting{background:var(--approval-ink)}
+.task-status-square.confirmation{background:repeating-linear-gradient(135deg,var(--approval-ink) 0 1px,transparent 1px 3px);outline:1px solid var(--approval-ink);outline-offset:1px}
+.task-status-square.unknown{background:transparent;outline:1px dashed var(--muted);outline-offset:1px}
+.task-status-more{font-size:11px;color:var(--muted)}.task-status-queued{color:var(--muted)}
+.task-status-chevron::before{content:none!important}.task-status-chevron{color:var(--muted)}.task-status-button[aria-expanded=true] .task-status-chevron{transform:rotate(180deg)}
 .task-status-waiting.needs-person{font-weight:700;color:var(--approval-ink);background:var(--panel);border-radius:4px;padding:2px 4px}
 .task-status-card-time,.task-status-warning{color:var(--approval-ink);font-weight:650}
 .task-status-done{color:var(--muted)}
 .task-status-button>span:not(.task-status-track)+span::before{content:'·';padding-right:6px;color:var(--muted)}
-#header.compact-room{grid-template-columns:minmax(0,1fr) auto auto auto}
+#header.compact-room{grid-template-columns:minmax(128px,1fr) auto auto auto}
 .compact-room #task-board{grid-column:3;grid-row:1}
 .compact-room #header-actions{grid-column:4}
 #header:not(.compact-room) #task-board{margin-left:auto}
 .compact-session .header-identity{order:0}.compact-session #session-toolbar{order:1}.compact-session #task-board{order:2}.compact-session #header-actions{order:3}
 .task-board-card-link{border:0;background:transparent;text-align:left;padding:0;text-decoration:underline;color:var(--ink)}
-@media(max-width:1050px){.task-status-button{font-size:11px;gap:5px;padding:3px 4px}.task-status-track{width:24px}.task-status-button>span:not(.task-status-track)+span::before{padding-right:4px}}
+@media(max-width:1050px){.task-status-button{font-size:11px;gap:5px;padding:3px 4px}.task-status-button>span:not(.task-status-track)+span::before{padding-right:4px}}
 .task-board-panel{position:fixed;inset:auto;margin:0;padding:0;max-width:none;max-height:none;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--ink);box-shadow:0 16px 48px #1c24212b;overscroll-behavior:contain}
-.task-board-panel[open]{display:flex}
+.task-board-panel:popover-open{display:flex}
 .task-board-panel::backdrop{background:transparent;overflow:hidden;overscroll-behavior:contain}
 .task-board-panel[hidden]{display:none}
 .task-board-heading{display:flex;align-items:center;gap:12px;padding:12px 16px 10px}
@@ -41,7 +45,20 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-group summary small{margin-left:auto;color:var(--muted);font-size:13px;font-weight:400}
 .task-board-group ul{list-style:none;margin:0;padding:0}
 .task-board-empty{font-size:13px;color:var(--muted);padding:12px;margin:0}
-.task-board-task{display:grid;grid-template-columns:minmax(0,1fr) 90px 112px;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--border);font-size:13px;line-height:1.5}
+.task-board-task{display:block;border-top:1px solid var(--border);font-size:13px;line-height:1.5}
+.task-board-entry{display:grid;grid-template-columns:minmax(0,1fr) 90px 112px;align-items:center;gap:10px;padding:10px 12px;border:0;border-radius:0;width:100%;text-align:left;background:transparent;color:var(--ink);font-size:13px;line-height:1.5}
+.task-board-entry:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}.task-board-entry:disabled{opacity:1;cursor:default}
+.task-board-entry.task-board-card-link{text-decoration:none}
+.task-board-current-list{list-style:none;padding:0;margin:0;flex:1;min-height:0;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable}
+.task-board-panel[data-mode=current] .task-board-entry{grid-template-columns:minmax(0,1fr) auto 10px}
+.task-board-entry>div{min-width:0}.task-board-entry-chevron{display:none;color:var(--muted)}
+.task-board-panel[data-mode=current] .task-board-entry-chevron{display:block}
+.task-board-panel[data-mode=current] .task-board-task-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-board-panel[data-mode=current] .task-board-owner{display:none}
+.task-board-panel[data-mode=current] .task-board-heading{padding:10px 12px}.task-board-panel[data-mode=current] .task-board-heading h2{font-size:14px}
+.task-board-panel[data-mode=current] .task-board-heading>span{font-size:12px}
+.task-board-full{margin-left:auto}.task-board-current{border:0;background:transparent;font-size:12px;text-decoration:underline;padding:2px}
+@media(max-width:1000px){.task-board-panel[data-mode=current] .task-board-entry{padding:8px 10px;font-size:12px}.task-board-panel[data-mode=current] .task-board-task small,.task-board-panel[data-mode=current] .task-board-status{font-size:11px}}
 .task-board-task-title{white-space:pre-wrap;overflow-wrap:anywhere}
 .task-board-task small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
 .task-board-status{font-size:13px;border-radius:4px;padding:2px 6px;justify-self:start;white-space:nowrap;color:var(--ink);background:var(--panel)}
@@ -55,3 +72,5 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-footer>span{flex:1;min-width:0;color:var(--muted)}
 .task-board-footer button{font-size:13px;text-decoration:underline;border:0;background:transparent;padding:5px}
 .task-board button:focus-visible,.task-board select:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+
+@media(max-width:1000px){.compact-room .header-identity{flex-wrap:wrap;row-gap:0}.compact-room h1{flex:none;max-width:100%}.task-status-button{display:grid;grid-template-columns:repeat(7,max-content);grid-template-rows:calc(var(--task-status-square-size) + 3px) auto;row-gap:2px;column-gap:4px;padding-block:2px}.task-status-button>span{grid-row:2}.task-status-button>.task-status-track{grid-row:1;grid-column:1/4;justify-self:start;height:calc(var(--task-status-square-size) + 2px)}.task-status-more{line-height:10px}.task-status-button>.task-status-warning{grid-row:1;grid-column:4/-1;justify-self:end}}
