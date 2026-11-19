@@ -194,10 +194,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .nav-empty { margin: 0 8px; font-size: 11px; color: var(--muted); }
 .sidebar-tools { flex: none; border-top: 1px solid var(--border); padding-top: 8px; }
 #archive-button, #setup-button { display: block; width: 100%; border: 0; font-size: 12px; text-align: left; padding: 8px 4px; }
-.archive-item { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; padding: 13px 0; border-bottom: 1px solid var(--border); }
-.archive-item small { grid-column: 1; color: var(--muted); line-height: 1.5; }
-.archive-item button { grid-column: 2; grid-row: 1 / 3; align-self: center; }
-.archive-session-actions { grid-column: 2; grid-row: 1 / 3; display: flex; flex-wrap: wrap; gap: 6px; align-self: center; }
+#archive-list .disclosure-item summary { gap: 6px; }
+#archive-list .disclosure-time:empty { display: none; }
+#archive-list .disclosure-body { padding-left: 16px; color: var(--muted); line-height: 1.5; }
+#archive-list .disclosure-body button { margin-top: 6px; }
 .session-chain-row { margin: 10px 0; overflow-wrap: anywhere; }
 .session-chain-row small { display: block; margin-top: 4px; color: var(--muted); }
 .session-chain-name { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }

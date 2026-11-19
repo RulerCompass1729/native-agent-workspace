@@ -165,7 +165,7 @@ async function run() {
   check('Rejected and delayed operations preserve newer human navigation, input focus and drafts; new notices remove stale Open actions');
 
   await archive(d); await page.locator('#archive-button').click();
-  const archived = id => page.locator(`[data-archived-session="${id}"]`).getByRole('button', { name: '恢复会话', exact: true });
+  const archived = id => page.locator(`[data-archived-session="${id}"]`).getByRole('button', { name: /^恢复会话 / });
   await hold('restoreSession', d, 'after'); const restoring = await fixture('stats'); await archived(d).click(); await pending('restoreSession', d, 'after');
   assert.equal((await view()).selected, 'room'); await stableCalls(restoring, 'Archive restoration before reply');
   await release('restoreSession', d); await page.getByRole('button', { name: '打开 Navigation D', exact: true }).waitFor();
@@ -199,7 +199,7 @@ async function run() {
     assert.equal(await app.evaluate(() => globalThis.navigationArchiveDialogs), 1);
   } finally { await app.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.navigationMessageBox; delete globalThis.navigationMessageBox; }); }
   await hold('restoreRoom', undefined); const roomRestoreCalls = await fixture('stats');
-  await page.locator('[data-archived-room]').getByRole('button', { name: '恢复工作区', exact: true }).click(); await pending('restoreRoom', undefined, 'before');
+  await page.locator('[data-archived-room]').getByRole('button', { name: /^恢复工作区 / }).click(); await pending('restoreRoom', undefined, 'before');
   await page.locator('#message-input').fill('Human draft while room restores'); await release('restoreRoom', undefined);
   await until(async () => !(await snapshot()).room.archived, 'Owned room restored');
   assert.equal((await view()).selected, d); assert.equal((await active()).id, 'message-input');

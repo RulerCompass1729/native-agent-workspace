@@ -94,7 +94,7 @@ async function run() {
     await shot('seventh-session-created');
     await app.close(); app = null; await launch();
     if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
-    await page.locator(`[data-archived-session="${selected}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+    await page.locator(`[data-archived-session="${selected}"]`).getByRole('button', { name: /^恢复会话 / }).click();
     await page.locator('[data-session-id="' + selected + '"]').click(); await page.locator('#chat-tab').click();
     assert.equal(await page.locator('#message-input').inputValue(), draft);
     assert.equal((await snapshot()).sessions.length, 7);
@@ -132,7 +132,7 @@ async function run() {
   await page.locator(`[data-session-id="${ids[4]}"]`).click({ button: 'right' });
   await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
-  await page.locator(`[data-archived-session="${ids[4]}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+  await page.locator(`[data-archived-session="${ids[4]}"]`).getByRole('button', { name: /^恢复会话 / }).click();
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.equal((await snapshot()).sessions.find(s => s.id === ids[4]).roomId, null);
   checks.push('Removing a later participant pauses the existing run, keeps late reply private and preserves independent draft through archive/restore');

@@ -44,7 +44,7 @@ async function run() {
   assert.equal((await stats()).calls.filter(c => c.method === 'thread/resume').length, 1);
   await page.locator(`[data-session-id="${local}"]`).click({ button: 'right' }); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await open(); await choose(1); assert.equal((await snapshot()).sessions.length, 1); assert.equal((await snapshot()).sessions[0].archived, true);
-  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${local}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${local}"]`).getByRole('button', { name: /^恢复会话 / }).click();
   assert.equal(await page.locator('#message-input').inputValue(), '后续还想安排路线，先不发送');
   checks.push('Reimport and archived selection open the existing record without another native resume; restore keeps draft');
   await open(); await page.locator('input[name="native-history-choice"][value="00000000-0000-4000-8000-000000000002"]').check();

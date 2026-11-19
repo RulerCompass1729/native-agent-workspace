@@ -74,7 +74,7 @@ async function run() {
   checks.push('Image open choice and draft survive reload; detaching another member preserves the current original reader'); await capture('detached');
   await page.locator(`.session-more[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).archived, 'Exact peer archived');
-  await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${b}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+  await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${b}"]`).getByRole('button', { name: /^恢复会话 / }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).archived, 'Exact peer restored');
   assert.equal((await snapshot()).viewState.selected, a); assert.equal(await page.locator('#message-input').inputValue(), 'OWNED_SOURCE_DRAFT');
   await page.getByRole('button', { name: '打开 Installed idle peer', exact: true }).click();

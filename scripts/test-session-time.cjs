@@ -79,10 +79,11 @@ async function run() {
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent original draft'); check('A newer recorded reply updates the estimate without changing the original draft or native identity');
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
-  const archive = page.locator('#archive-list .archive-item').filter({ has: page.getByText('[已归档] Old recorded reply', { exact: true }) }); await archive.waitFor();
+  const archive = page.locator('#archive-list [data-archived-session]').filter({ has: page.getByText('[已归档] Old recorded reply', { exact: true }) }); await archive.waitFor();
+  await archive.locator('summary').click(); // the times are in the line's opened part
   assert.ok((await archive.innerText()).includes('推算 ' + laterText));
   await project(a, { lastActivityAt: reported, messages }); await until(async () => (await archive.innerText()).includes('最后活动 ' + reportedText) && !(await archive.innerText()).includes('推算'), 'Open archive updates on time-only metadata change'); await capture('02-archive-metadata-arrived');
-  await archive.getByRole('button', { name: '恢复会话', exact: true }).click(); await row(a).waitFor();
+  await archive.getByRole('button', { name: /^恢复会话 / }).click(); await row(a).waitFor();
   await until(async () => (await status(a).innerText()).includes(reportedText) && !(await status(a).innerText()).includes('推算'), 'Reported metadata replaces estimate in restored sidebar');
   check('Open archive reacts to time-only updates; restoring uses authoritative metadata without rewriting old message times');
   await app.close(); app = null; await launch();

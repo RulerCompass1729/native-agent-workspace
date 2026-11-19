@@ -317,7 +317,7 @@ async function run() {
   await more.click();await page.getByRole('menuitem',{name:'归档工作区',exact:true}).click();await page.locator('#welcome').waitFor();
   assert.equal(await page.locator('#header #room-tabs').count(),0);assert.equal(await page.locator('#header .collaboration-toolbar').count(),0);
   await sidebar(true);if(await page.locator('#archive-group-body').isHidden())await page.locator('#archive-button').click();
-  await page.getByRole('button',{name:'恢复工作区',exact:true}).click();await page.locator('#room-nav').click();assert.equal(await more.isVisible(),true);
+  await page.getByRole('button',{ name: /^恢复工作区 / }).click();await page.locator('#room-nav').click();assert.equal(await more.isVisible(),true);
   assert.equal((await geometry('restored-root')).toolsInHeader,true);assert.deepEqual(identity(await snapshot()),original);
   assert.ok((await snapshot()).sessions.every(s=>fs.realpathSync(s.cwd).startsWith(ownedRoot+path.sep)));assert.deepEqual(errors,[]);
   measurements.push({label:'native-actions-before-archive',before:beforeCalls,after:afterCalls,sourceBefore,sourceAfter:hashes()});assert.deepEqual(hashes(),sourceBefore);

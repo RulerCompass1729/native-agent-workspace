@@ -218,10 +218,10 @@ async function run() {
     assert.ok((await snapshot()).rooms.find(r => r.id === a).messages.some(m => m.text === 'Original A answer only'));
     // T-145: in the grouped view a space's ⋯ is on its group heading.
     await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${b}"] .space-group-more`) : roomRow(b).locator('.session-more')).click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
-    await page.locator('#archive-button').click(); await page.locator(`[data-archived-room="${b}"]`).getByRole('button', { name: '恢复工作区', exact: true }).click(); await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${b}"]`) : roomRow(b)).waitFor(); // T-145: grouped shows the restored space as its group
+    await page.locator('#archive-button').click(); await page.locator(`[data-archived-room="${b}"]`).getByRole('button', { name: /^恢复工作区 / }).click(); await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${b}"]`) : roomRow(b)).waitFor(); // T-145: grouped shows the restored space as its group
     await page.locator('#sessions-flat').click();
     await page.locator(`[data-session-row="${ids[6]}"] .session-more`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
-    await page.locator(`[data-archived-session="${ids[6]}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+    await page.locator(`[data-archived-session="${ids[6]}"]`).getByRole('button', { name: /^恢复会话 / }).click();
     // A view file written by an older version can still carry a sidebar filter; it loads and hides nothing (T-132).
     await open(b); await page.locator('#sessions-grouped').click(); await app.close(); app = null;
     const views = JSON.parse(fs.readFileSync(path.join(profile, 'views.json'), 'utf8')); assert.ok(views.length); for (const view of views) view.sidebarSpaceFilter = b; fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify(views), { mode: 0o600 }); await launch();

@@ -33,12 +33,13 @@ function fixture() {
   let language = 'zh'; const root = new Element(), elements = new Map(), calls = [], layoutWrites = [];
   const document = { activeElement: null, querySelector: () => ({ value: 'claude' }) };
   const node = (tag, text) => { const el = new Element(tag, text); el.focus = () => { document.activeElement = el; }; return el; };
+  document.createElement = tag => node(tag);
   const $ = id => { if (!elements.has(id)) { const element = node('div'); element.id = id; elements.set(id, element); root.append(element); } return elements.get(id); };
   const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);
   const room = { id: 'shared', name: 'RAW SPACE 中文', archived: false }, people = [{ id: 'session-original-a', name: 'RAW NAME 中文', provider: 'codex', state: 'working', nativeId: 'original-native', owner: 'original-owner', liveDraft: 'UNSENT 中文', runtimeVersion: '0.1.0-alpha.1', roomIds: ['shared'], fleet: [], createdAt: 1793331000000, lastActivityAt: 1793331100000, messages: [] }];
   const state = { sessions: people, room, rooms: [room], sidebar: { archiveCollapsed: false }, appVersion: '0.1.0-alpha.2', capabilities: ['nativePermissionDefaults', 'createSkipPermissions', 'claudeHistory', 'gitWorktreeV1'], preflight: { python: true, claude: true } };
   const context = vm.createContext({ spaceName: room => spaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name, $, state, document, uiText, ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), language: { getSnapshot: () => ({ active: language }) } }, node,
-    button: (text, onclick) => Object.assign(node('button', text), { onclick }), window: { nativeWorkspaceCollaboration: require('../renderer/collaboration-overview.js'), nativeWorkspaceSpaces: spaces, nativeWorkspaceFleet: require('../renderer/fleet-observation.js') },
+    button: (text, onclick) => Object.assign(node('button', text), { onclick }), window: { nativeWorkspaceCollaboration: require('../renderer/collaboration-overview.js'), nativeWorkspaceSpaces: spaces, nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceDisclosure: require('../renderer/disclosure-list.js') },
     checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, disconnected: false, selected: people[0].id, spaceId: 'shared', sidebarView: 'flat', sidebarSpaceFilter: '', hoverSpace: '', renameTarget: null, sessionMenu: null, roomMenu: null,
     sessionRows: new Map(), sidebarGroups: new Map(), spaceRows: new Map(), sidebarLayout: { update: value => layoutWrites.push(value) },
     allSpaces: () => state.rooms, members: () => people, orderedMembers: () => people, spaceRecord: id => state.rooms.find(room => room.id === id), inSpace: (s, id) => spaces.isMember(s, id),
@@ -192,26 +193,58 @@ for (const [stored, zh, en] of [[spaces.DEFAULT_ROOM_NAME, '共同工作', 'Shar
   assert.equal(f.state.room.name, stored, 'Display never changes the stored name');
 });
 
+// An archive line: the disclosure list's first item (box > list > line), as [line, its summary, its body, its actions].
+const archiveLines = f => f.$('archive-list').children[0].children[0].children;
+const archiveParts = row => { const [details, actions] = row.children; return [row, details.children[0], details.children[1], actions]; };
 test('archived rows repaint without reopening a process or replacing focused restore controls', () => {
   const f = fixture(); f.people[0].archived = true; f.people[0].state = 'recoverable'; f.$('archive-group-body').hidden = false;
-  f.run('renderArchives()'); const row = f.$('archive-list').children[0], restore = row.children.at(-1).querySelector('button'); f.document.activeElement = restore;
-  f.refresh('en'); assert.equal(f.$('archive-list').children[0], row); assert.equal(f.document.activeElement, restore); assert.equal(restore.textContent, 'Restore session');
-  assert.equal(row.children[0].textContent, 'RAW NAME 中文'); assert.match(row.children[1].textContent, /Awaiting recovery.*Resume native history/); assert.deepEqual(f.calls, []);
+  f.run('renderArchives()'); const [row, summary, body, actions] = archiveParts(archiveLines(f)[0]), restore = actions.children[0]; f.document.activeElement = restore;
+  assert.deepEqual([restore.textContent, restore.getAttribute('aria-label')], ['恢复', '恢复会话 RAW NAME 中文']);
+  f.refresh('en'); assert.equal(archiveLines(f)[0], row); assert.equal(f.document.activeElement, restore);
+  assert.deepEqual([restore.textContent, restore.getAttribute('aria-label')], ['Restore', 'Restore session RAW NAME 中文']);
+  assert.equal(summary.children[1].textContent, 'RAW NAME 中文'); assert.match(body.children[0].textContent, /Awaiting recovery.*Resume native history/); assert.deepEqual(f.calls, []);
 });
-test('archive rows offer the same chain list beside restore without adding a menu or restoring on inspection', () => {
+// 「这串会话」 moved into the opened line (progressive disclosure, the person 11-19), restore stays on the line.
+test('archive rows open to the same chain list without adding a menu or restoring on inspection', () => {
   const f = fixture(), opened = [];
   f.people[0].archived = true;
   f.state.rotationChains = [{ sessions: [{ id: f.people[0].id, handedAt: null }, { id: 'new', handedAt: 100 }] }];
   f.context.openSessionChain = id => opened.push(id);
   f.run('renderArchives()');
-  const actions = f.$('archive-list').children[0].children.at(-1);
-  assert.deepEqual(actions.children.map(button => button.textContent), ['这串会话', '恢复会话']);
-  actions.children[0].onclick(); assert.deepEqual(opened, [f.people[0].id]);
+  const [, , body, actions] = archiveParts(archiveLines(f)[0]);
+  assert.deepEqual([body.children.slice(1).map(button => button.textContent), actions.children.map(button => button.textContent)], [['这串会话'], ['恢复']]);
+  body.children[1].onclick(); assert.deepEqual(opened, [f.people[0].id]);
   f.refresh('en');
-  assert.deepEqual(actions.children.map(button => button.textContent), ['Conversation chain', 'Restore session']);
+  assert.deepEqual([body.children[1].textContent, actions.children[0].textContent], ['Conversation chain', 'Restore']);
   assert.deepEqual(f.calls, []);
   f.state.rotationChains = []; f.run('renderArchives()');
-  assert.equal(f.$('archive-list').children[0].children.at(-1).children.length, 1);
+  assert.equal(archiveParts(archiveLines(f)[0])[2].children.length, 1);
+});
+test('the archive lists spaces, then sessions by last activity, newest first, 15 lines at a time; a running one says so', async () => {
+  const f = fixture();
+  f.$('archive-group-body').hidden = false;
+  const at = 1793331100000;
+  f.people.length = 0;
+  for (let i = 0; i < 20; i++) f.people.push({ id: `old-${i}`, name: `合成会话 ${i}`, provider: 'claude', state: 'ended', archived: true, roomIds: [], fleet: [], createdAt: at - 9e6, lastActivityAt: at - (i * 7 % 20) * 60000, messages: [] });
+  f.people[1].state = 'working';
+  f.state.rooms.push({ id: 'gone', name: '合成旧空间', archived: true });
+  f.run('renderArchives()');
+  const box = f.$('archive-list').children[0], lines = () => archiveLines(f);
+  const names = () => lines().map(row => archiveParts(row)[1].children[1].textContent);
+  const byActivity = f.people.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt).map(s => s.name);
+  assert.equal(lines().length, 15);
+  assert.deepEqual(names(), ['合成旧空间', ...byActivity.slice(0, 14)]);
+  assert.equal(lines()[0].dataset.archivedRoom, 'gone');
+  assert.equal(archiveParts(lines()[0])[3].children[0].getAttribute('aria-label'), '恢复工作区 合成旧空间');
+  const working = lines().find(row => row.dataset.archivedSession === 'old-1');
+  assert.equal(archiveParts(working)[1].children[2].textContent, '正在工作', 'a session still running says so on its line');
+  const more = box.children[1];
+  assert.equal(more.textContent, '显示更早的 6 条 · 共 21 条');
+  // (This fixture's elements take no listeners: the press is the list's own.)
+  await f.run('archiveDisclosure.earlier()');
+  assert.equal(lines().length, 21);
+  assert.equal(more.hidden, true);
+  assert.deepEqual(names().slice(1), byActivity);
 });
 
 test('subtitle native fields remain raw while the last own membership label repaints in place', () => {

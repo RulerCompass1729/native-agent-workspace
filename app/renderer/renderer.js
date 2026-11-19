@@ -1236,15 +1236,24 @@ function sessionTime(value) {
   return date.toDateString() === now.toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()}${date.getFullYear() === now.getFullYear() ? '' : `/${date.getFullYear()}`} ${time}`;
 }
 const sessionTimeFormats = new Map();
-function sessionActivityTime(s) {
-  const reported = sessionTime(s.lastActivityAt);
-  if (reported) return reported;
+function sessionMessagesLatest(s) {
   const summary = s.messagesOmitted ? s.messageSummary || {} : null;
   let latest = summary && Number.isFinite(summary.latestAt) ? summary.latestAt : null;
   if (!summary) for (const m of Array.isArray(s.messages) ? s.messages : []) {
     if (!m?.volatile && m?.kind !== 'gap' && Number.isFinite(m?.time) && Number.isFinite(new Date(m.time).getTime())) latest = latest === null ? m.time : Math.max(latest, m.time);
   }
+  return latest;
+}
+function sessionActivityTime(s) {
+  const reported = sessionTime(s.lastActivityAt);
+  if (reported) return reported;
+  const latest = sessionMessagesLatest(s);
   return latest === null ? uiText('time.unknown') : uiText('time.estimated', { time: sessionTime(latest) });
+}
+// The same activity as a number, for ordering; none recorded orders last.
+function sessionActivityAt(s) {
+  if (sessionTime(s.lastActivityAt)) return new Date(s.lastActivityAt).getTime();
+  return sessionMessagesLatest(s) ?? -Infinity;
 }
 const sessionTimes = s => uiText('time.session', { created: sessionTime(s.createdAt) || uiText('time.unrecorded'), activity: sessionActivityTime(s) });
 // Sidebar folder facts use only recorded paths and worktree preparation; no filesystem probes.
@@ -4014,32 +4023,59 @@ function createSpaceReadiness(final = false) {
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
-  const running = records.filter(s => ['working', 'approval', 'starting', 'stopping', 'disconnected'].includes(s.state)).length;
+  const running = records.filter(s => ARCHIVE_RUNNING.includes(s.state)).length;
   ui.display.text($('archive-label'), 'archive.label', () => ({ count: count ? ` · ${count}` : '', running: running ? uiText('archive.pending', { count: running }) : '' }));
   ui.display.attribute($('archive-button'), 'title', 'archive.title', () => ({ count, running: running ? uiText('archive.runningHelp', { count: running }) : '' }));
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
-  const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
+  if (!archiveDisclosure) {
+    archiveDisclosure = window.nativeWorkspaceDisclosure.create({ document, say: (el, key, params) => ui.display.text(el, key, params), older: 'below',
+      key: item => item.room ? `room:${item.room.id}` : `session:${item.session.id}`, fill: archiveLine });
+    archiveDisclosure.box.className += ' archive-disclosure';
+  }
+  const rowsOf = () => [...archiveDisclosure.list.children];
+  const origin = document.activeElement, oldRow = origin?.closest?.('.disclosure-item'), oldIndex = oldRow ? rowsOf().indexOf(oldRow) : -1;
+  const part = origin?.matches?.('summary') ? 'summary' : '.disclosure-actions button';
   const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name]), state.rotationChains]);
-  if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
-  for (const room of archivedRooms) {
-    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', spaceName(room)), uiNode('small', 'archive.roomInfo'), uiButton('archive.restoreRoom', () => restoreArchivedRoom(room.id))); list.append(row);
+  if (list.dataset.signature === signature) return; list.dataset.signature = signature;
+  if (!count) { list.replaceChildren(uiNode('p', 'archive.empty')); archiveDisclosure.update([]); }
+  else {
+    if (archiveDisclosure.box.parentElement !== list) list.replaceChildren(archiveDisclosure.box);
+    const sessions = records.map((s, i) => ({ s, i, at: sessionActivityAt(s) })).sort((a, b) => b.at - a.at || a.i - b.i).map(x => ({ session: x.s }));
+    archiveDisclosure.update(archivedRooms.map(room => ({ room })).concat(sessions));
   }
-  for (const s of records) {
-    const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
-    const info = node('small'); ui.display.computed(info, 'text', () => `${providerName(s.provider)} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
-    const name = node('strong'); ui.display.computed(name, 'text', () => participantLabel(s, state.sessions));
-    row.append(name, info);
-    const actions = node('div', undefined, 'archive-session-actions');
-    if (sessionChainModel(s.id)) actions.append(uiButton('chain.title', () => openSessionChain(s.id)));
-    actions.append(uiButton('archive.restoreSession', () => restoreArchivedSession(s.id)));
-    row.append(actions); list.append(row);
-  }
-  if (!count) list.append(uiNode('p', 'archive.empty'));
   if (oldRow) {
-    const rows = [...list.children], same = rows.find(row => oldRow.dataset.archivedSession ? row.dataset.archivedSession === oldRow.dataset.archivedSession : row.dataset.archivedRoom === oldRow.dataset.archivedRoom);
-    focusAfterRemoval(origin, [same?.querySelector('button'), rows[oldIndex]?.querySelector('button'), rows[oldIndex - 1]?.querySelector('button'), $('archive-button')]);
+    const rows = rowsOf(), same = rows.find(row => row.dataset.key === oldRow.dataset.key);
+    focusAfterRemoval(origin, [same?.querySelector(part), rows[oldIndex]?.querySelector(part), rows[oldIndex - 1]?.querySelector(part), $('archive-button')]);
   }
+}
+const ARCHIVE_RUNNING = ['working', 'approval', 'starting', 'stopping', 'disconnected'];
+// The archive (progressive disclosure, the person 11-19): one line each, spaces first, then sessions by last activity,
+// newest first. A line holds the name and a short 「恢复」 whose accessible name says what it restores; it opens in
+// place to the rest. A session still running says so on its line.
+let archiveDisclosure = null;
+function archiveLine(item, { row, text, end, body, actions }) {
+  if (item.room) {
+    const room = item.room;
+    row.dataset.archivedRoom = room.id;
+    ui.display.computed(text, 'text', () => spaceName(room));
+    body.append(uiNode('div', 'archive.roomInfo'));
+    const restore = uiButton('archive.restore', () => restoreArchivedRoom(room.id), 'small');
+    ui.display.attribute(restore, 'aria-label', 'archive.restoreRoomNamed', () => ({ name: spaceName(room) }));
+    actions.append(restore);
+    return;
+  }
+  const s = item.session;
+  row.dataset.archivedSession = s.id;
+  ui.display.computed(text, 'text', () => participantLabel(s, state.sessions));
+  if (ARCHIVE_RUNNING.includes(s.state)) ui.display.computed(end, 'text', () => stateText(s));
+  const info = node('div');
+  ui.display.computed(info, 'text', () => `${providerName(s.provider)} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
+  body.append(info);
+  if (sessionChainModel(s.id)) body.append(uiButton('chain.title', () => openSessionChain(s.id), 'small'));
+  const restore = uiButton('archive.restore', () => restoreArchivedSession(s.id), 'small');
+  ui.display.attribute(restore, 'aria-label', 'archive.restoreSessionNamed', () => ({ name: participantLabel(s, state.sessions) }));
+  actions.append(restore);
 }
 async function restoreArchivedSession(id) {
   const origin = document.activeElement, surface = JSON.stringify([selected, roomSession, roomSurface, mode]);

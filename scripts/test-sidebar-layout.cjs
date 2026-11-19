@@ -138,14 +138,14 @@ async function run() {
  await page.locator('#solo-drop').press('ArrowLeft');await page.locator('#solo-drop').press('ArrowRight');assert.equal(await page.locator('#rename-name').inputValue(),'T68 unsaved inline name');
  await peer.evaluate(id=>workspace.archiveSession(id),ids[0]);await until(()=>page.locator('#confirm-rename').isDisabled(),'Edited archived row is retained and unavailable');assert.equal(await page.locator('#rename-name').evaluate(n=>n===window.t68Editor),true);
  await peer.evaluate(id=>workspace.restoreSession(id),ids[0]);await until(()=>page.locator('#confirm-rename').isEnabled(),'Same edited row restored');await page.locator('#cancel-rename').click();assert.equal((await snapshot()).sessions[0].name,original.name);
- const archived=ids[12];await page.locator(`[data-archived-session="${archived}"]`).getByRole('button',{name:'恢复会话',exact:true}).click();await until(async()=>!(await snapshot()).sessions.find(s=>s.id===archived).archived,'Original archive restore');assert.equal((await snapshot()).sessions.find(s=>s.id===archived).nativeId,'synthetic-native-12');
+ const archived=ids[12];await page.locator(`[data-archived-session="${archived}"]`).getByRole('button',{name:/^恢复会话 /}).click();await until(async()=>!(await snapshot()).sessions.find(s=>s.id===archived).archived,'Original archive restore');assert.equal((await snapshot()).sessions.find(s=>s.id===archived).nativeId,'synthetic-native-12');
  // Positive observation control after the identity-preservation phase: an explicit
  // claim on this owned synthetic record must traverse the same wrapped IPC.
  await page.evaluate(id=>workspace.claim(id,'chat'),ids[0]);
  await until(async()=>await app.evaluate(()=>globalThis.layoutOps.native.includes('claim')),'The same IPC observation sees a deliberate synthetic claim outside the resize phase');
  const observedNativeCalls=await app.evaluate(()=>globalThis.layoutOps.native);
  const originalRoom=(await snapshot()).room;await peer.evaluate(()=>workspace.archiveRoom());await until(()=>page.locator('[data-archived-room]').isVisible(),'Archived workspace is present in original inline archive');
- await page.locator('[data-archived-room]').getByRole('button',{name:'恢复工作区',exact:true}).click();await until(async()=>!(await snapshot()).room.archived&&await page.locator('#room-nav').isVisible()&&await page.locator('[data-archived-room]').count()===0,'Same archived workspace restored from sidebar');
+ await page.locator('[data-archived-room]').getByRole('button',{ name: /^恢复工作区 / }).click();await until(async()=>!(await snapshot()).room.archived&&await page.locator('#room-nav').isVisible()&&await page.locator('[data-archived-room]').count()===0,'Same archived workspace restored from sidebar');
  const restoredRoom=(await snapshot()).room;for(const k of ['id','name','notes','messages'])assert.deepEqual(restoredRoom[k],originalRoom[k]);assert.equal(await page.locator('#archive-button').getAttribute('aria-expanded'),'true','Restore preserves explicit archive section visibility');
  checks.push('Resizing/folding/external archive preserve the same unsent rename input node; inline session/workspace archive restore retains original identities, notes and history without replay');
 
