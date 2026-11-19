@@ -13,7 +13,8 @@ function harness(method = 'roomRename', args = ['Next'], language = 'zh') {
     constructor(options) { super(); this.options = options; notices.push(this); }
     show() {} close() { this.closed = true; this.emit('close'); }
   }
-  const control = { receipt: () => record, view: async () => ({ checkActor: async () => {}, client: { snapshot: () => snapshot } }),
+  const control = { receipt: () => record, view: async () => ({ checkActor: async () => {}, client: { snapshot: () => snapshot },
+    fingerprint: () => ({ sessions: snapshot.sessions.map(({ id, nativeId, roomIds, placementRevision, memberRevision }) => ({ id, nativeId, roomIds, placementRevision, memberRevision })), sessionArchives: context.roomState.value.sessionArchives }) }),
     mobileBinding: (_s, _n, _id, response) => { if (record.state !== 'confirmation-required') throw Error('Handled'); return { sessionId: actor.id, nativeId: actor.nativeId, operationId: record.id, expiresAt: record.at + 600000, version: 'version', presentation: 'presentation', decision: response }; },
     decide: async (...args) => { args[4]?.(); decisions.push(args.slice(0, 4)); record.state = 'complete'; } };
   const context = { require: createRequire(require.resolve('../main.cjs')), Notification, backgroundOperation: operation,
