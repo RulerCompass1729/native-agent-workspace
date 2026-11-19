@@ -11,3 +11,47 @@ for(const kind of ['new','pending','reused'])test(kind+' backend retains a quali
  assert.match(after.active,/^backends\//);assert.equal(tui.installed(root),true);assert.equal(tui.installed(selected),true,'selected backend lost DSH runtime');tui.verifyRuntime(selected);assert.equal(after.pending,undefined);assert.ok(calls.includes(selected));
  if(kind==='reused')assert.equal(calls.filter(x=>x===dest).length,1,'already running reused backend is not restarted');
 });
+
+for (const kind of ['stale-pin','unsafe-source','timeout','empty-target','unsafe-target','io-failure','unexpected-error']) test(kind+' inheritance cannot block rollover or the next startup',async t=>{
+ qualification(t);
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'naw-dsh-rollover-refusal-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const sourceRuntime=runtime(root),slot='backends/bbbbbbbbbbbbbbbbbbbb',dest=path.join(root,slot),warnings=[];
+ fs.mkdirSync(dest,{recursive:true,mode:0o700});layout.writeLayout(root,{format:1,active:'.',entries:['.'],pending:slot});
+ if(kind==='stale-pin')fs.writeFileSync(path.join(sourceRuntime.tui,'package.json'),JSON.stringify({version:'old-synthetic'}));
+ if(kind==='unsafe-source'){const file=path.join(sourceRuntime.root,'unsafe');fs.writeFileSync(file,'fixture');fs.chmodSync(file,0o664);}
+ if(kind==='empty-target')fs.mkdirSync(tui.paths(dest).root,{recursive:true,mode:0o700});
+ if(kind==='unsafe-target'){const where=runtime(dest),file=path.join(where.root,'unsafe');fs.writeFileSync(file,'fixture');fs.chmodSync(file,0o664);}
+ if(kind==='unexpected-error')t.mock.method(tui,'inheritRuntime',async()=>{throw Error('SYNTHETIC_PRIVATE_DIAGNOSTIC');});
+ if(kind==='io-failure'){const open=fs.promises.open;t.mock.method(fs.promises,'open',async function(file,...args){if(String(file).startsWith(sourceRuntime.root))throw Object.assign(Error('synthetic disk failure'),{code:'EIO'});return Reflect.apply(open,this,[file,...args]);});}
+ if(kind==='timeout'){
+  const {performance}=require('node:perf_hooks'),now=performance.now.bind(performance),open=fs.promises.open;let offset=0;
+  t.mock.method(performance,'now',()=>now()+offset);
+  t.mock.method(fs.promises,'open',async function(file,...args){if(String(file).startsWith(sourceRuntime.root))offset=31000;return Reflect.apply(open,this,[file,...args]);});
+ }
+ const source=fs.readFileSync(require.resolve('../service-client.cjs'),'utf8'),start=source.indexOf('async function ensureService(dataDir,'),end=source.indexOf('\nfunction continuationStatus',start),calls=[];let locked=false;
+ const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env:{NAW_APP_VERSION:'synthetic-new'}},uiError:key=>Error(key),...layout,readLock:()=>undefined,createLock:()=>{locked=true;return {};},releaseLock:()=>{locked=false;return true;},ownerMayBeAlive:()=>false,emptyService:()=>false,emptyStore:()=>false,
+  console:{warn:(...args)=>warnings.push(args)},require(name){assert.equal(name,'./dsh-tui.cjs');assert.equal(locked,true);return tui;},
+  ensureServiceAt:async dir=>{calls.push(dir);return {runtimeVersion:dir===root?'synthetic-old':'synthetic-new',sessions:dir===root?[{id:'retained',state:'error'}]:[],room:{messages:[]}};},connectService:async()=>({call:async()=>{},close(){}})};
+ const ensure=vm.runInNewContext(source.slice(start,end)+'\nensureService',ctx);
+ for(let attempt=0;attempt<2;attempt++){
+  await ensure(root,'/synthetic/electron');const after=layout.readLayout(root);assert.equal(after.active,slot);assert.equal(after.pending,undefined);assert.ok(calls.includes(dest));assert.equal(locked,false);
+  const {NativeHost}=require('../adapters.cjs');
+  const host=Object.assign(Object.create(NativeHost.prototype),{dataDir:dest,serviceBinding:null,binaries:{codex:process.execPath,python:process.execPath},resolvePrograms(){return this.binaries;}});
+  const codex=host.create({id:'synthetic-codex',provider:'codex',view:'chat',cwd:root,messages:[]});assert.equal(codex.chatAvailable,true);
+  if(kind!=='unsafe-target')assert.throws(()=>host.create({id:'synthetic-dsh',provider:'dsh'}),e=>e.uiMessage?.key==='error.dsh.runtimeUnqualified');
+ }
+ assert.equal(warnings.length,1);assert.ok(!JSON.stringify(warnings).includes('SYNTHETIC_PRIVATE_DIAGNOSTIC'));
+ assert.equal(warnings[0][1],kind==='timeout'?'deadline':kind==='io-failure'?'filesystem':kind==='unexpected-error'?'unavailable':'unqualified');
+ if(kind==='unsafe-target'){
+  const dsh=new tui.DshTui({id:'synthetic-dsh'}, {dataDir:dest,binaries:{dsh:process.execPath}}, {key:async()=>assert.fail('No key read')});
+  dsh.launch=async()=>assert.fail('Unsafe target must not launch');
+  await assert.rejects(dsh.start(),e=>e.uiMessage?.key==='error.dsh.runtimeUnqualified');
+ }
+});
+
+test('inheritance fallback does not hide a real service bootstrap failure',async t=>{
+ const file=require.resolve('../service-client.cjs'),source=fs.readFileSync(file,'utf8'),start=source.indexOf('async function ensureService(dataDir,'),end=source.indexOf('\nfunction continuationStatus',start);
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'naw-dsh-service-error-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const failure=Error('synthetic service bootstrap failure');
+ const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env:{}},uiError:key=>Error(key),...layout,readLock:()=>undefined,createLock:()=>({}),releaseLock:()=>true,ensureServiceAt:async()=>{throw failure;}};
+ await assert.rejects(vm.runInNewContext(source.slice(start,end)+'\nensureService',ctx)(root,'/synthetic/electron'),e=>e===failure);
+});

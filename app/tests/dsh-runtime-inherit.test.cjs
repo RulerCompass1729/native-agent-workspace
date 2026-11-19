@@ -6,6 +6,7 @@ function fixture(t){
  const source=path.join(root,'source'),target=path.join(root,'target');fs.mkdirSync(source,{mode:0o700});fs.mkdirSync(target,{mode:0o700});return {root,source,target};
 }
 const inherit=(f)=>tui.inheritRuntime(f.source,f.target);
+const refused = pattern => error => error.code === 'dsh-runtime-inheritance-refused' && pattern.test(error.cause?.message || '');
 
 test('a qualified runtime is copied and independently qualified, without private siblings',async t=>{
  const calls=qualification(t),f=fixture(t),s=runtime(f.source);
@@ -22,7 +23,8 @@ test('an absent source refuses copying without creating a runtime',async t=>{
 });
 for(const part of ['version','privacy','update'])test('a damaged '+part+' source is refused before publication',async t=>{
  qualification(t);const f=fixture(t),s=runtime(f.source);const file=part==='version'?path.join(s.tui,'package.json'):part==='privacy'?path.join(s.root,'node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js'):path.join(s.tui,'lib/types/update.js');
- write(file,'damaged');await assert.rejects(inherit(f));assert.equal(fs.existsSync(tui.paths(f.target).root),false);assert.equal(fs.readFileSync(file,'utf8'),'damaged');
+ const cause = { version: /DSH TUI runtime: .* is not /, privacy: /DSH privacy patch: unqualified upstream source/, update: /Unqualified synthetic update source/ }[part];
+ write(file,'damaged');await assert.rejects(inherit(f),refused(cause));assert.equal(fs.existsSync(tui.paths(f.target).root),false);assert.equal(fs.readFileSync(file,'utf8'),'damaged');
 });
 test('an existing qualified target is validated without replacement, even if the source is absent',async t=>{
  const count=qualification(t),f=fixture(t),d=runtime(f.target),file=path.join(d.root,'marker');write(file,'target-only');const before=fs.statSync(file);const r=await inherit(f);
@@ -30,12 +32,12 @@ test('an existing qualified target is validated without replacement, even if the
 });
 for(const kind of ['empty','invalid'])test('an existing '+kind+' target is preserved and refused',async t=>{
  qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target);fs.mkdirSync(d.root,{recursive:true,mode:0o700});if(kind==='invalid')write(path.join(d.root,'package.json'),'unchanged');const ino=fs.statSync(d.root).ino;
- await assert.rejects(inherit(f));assert.equal(fs.statSync(d.root).ino,ino);assert.deepEqual(fs.readdirSync(d.root),kind==='invalid'?['package.json']:[]);
+ await assert.rejects(inherit(f),refused(/DSH TUI runtime: .* is not /));assert.equal(fs.statSync(d.root).ino,ino);assert.deepEqual(fs.readdirSync(d.root),kind==='invalid'?['package.json']:[]);
 });
 test('a failed copy leaves the source intact and can be retried',async t=>{
  qualification(t);const f=fixture(t),s=runtime(f.source),original=fsp.open;let calls=0;
  const mock=t.mock.method(fsp,'open',async function(file,...args){if(String(file).startsWith(s.root)&&++calls===3)throw Object.assign(Error('synthetic copy interruption'),{code:'EIO'});return Reflect.apply(original,this,[file,...args]);});
- await assert.rejects(inherit(f));assert.equal(fs.existsSync(tui.paths(f.target).root),false);tui.verifyRuntime(f.source);assert.ok(!fs.readdirSync(f.target).some(x=>x.startsWith('.dsh-tui-inherit-')));
+ await assert.rejects(inherit(f),refused(/synthetic copy interruption/));assert.equal(fs.existsSync(tui.paths(f.target).root),false);tui.verifyRuntime(f.source);assert.ok(!fs.readdirSync(f.target).some(x=>x.startsWith('.dsh-tui-inherit-')));
  mock.mock.restore();assert.equal((await inherit(f)).status,'copied');tui.verifyRuntime(f.target);
 });
 for(const kind of ['outside-link','relative-outside-link','linked-root','linked-base','hard-link','foreign-owner','foreign-source-owner'])test(kind+' is refused without changing outside content',async t=>{
@@ -47,7 +49,66 @@ for(const kind of ['outside-link','relative-outside-link','linked-root','linked-
  if(kind==='hard-link')fs.linkSync(outside,path.join(s.root,'outside'));
  if(kind==='foreign-owner')t.mock.method(process,'getuid',()=>fs.statSync(f.source).uid+1);
  if(kind==='foreign-source-owner'){const original=fs.lstatSync;t.mock.method(fs,'lstatSync',function(file,...args){const stat=Reflect.apply(original,this,[file,...args]);return file===f.source?Object.assign(Object.create(Object.getPrototypeOf(stat)),stat,{uid:stat.uid+1}):stat;});}
- await assert.rejects(inherit(f));assert.equal(fs.readFileSync(outside,'utf8'),'SYNTHETIC_OUTSIDE');assert.equal(fs.existsSync(tui.paths(f.target).root),false);
+ const cause = kind==='outside-link' ? /Unsafe runtime link/ : kind==='relative-outside-link' ? /Runtime link escapes/ : kind==='hard-link' ? /Unsafe runtime entry/ : /Unsafe runtime directory/;
+ await assert.rejects(inherit(f),refused(cause));assert.equal(fs.readFileSync(outside,'utf8'),'SYNTHETIC_OUTSIDE');assert.equal(fs.existsSync(tui.paths(f.target).root),false);
+});
+
+for (const existing of [false, true]) test('owned interrupted staging is pruned under the startup lock, existing target='+existing, async t => {
+ qualification(t); const f=fixture(t); runtime(f.source); if(existing)runtime(f.target);
+ const old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(old,'dsh-tui/runtime/partial'),'interrupted');
+ const other=path.join(f.target,'unrelated-stage');write(path.join(other,'keep'),'unrelated');
+ const prefixOnly=path.join(f.target,'.dsh-tui-inherit-not-a-generated-suffix');write(path.join(prefixOnly,'keep'),'unrelated');
+ const {createLock,releaseLock}=require('../service-lock.cjs'),file=path.join(f.root,'services.lock'),lock=createLock(file,'startup',f.root);
+ try { await tui.inheritRuntime(f.source,f.target,{cleanStaging:true}); }
+ finally { assert.equal(releaseLock(file,lock),true); }
+ assert.equal(fs.existsSync(old),false);assert.equal(fs.readFileSync(path.join(other,'keep'),'utf8'),'unrelated');assert.equal(fs.readFileSync(path.join(prefixOnly,'keep'),'utf8'),'unrelated');
+ tui.verifyRuntime(f.source);tui.verifyRuntime(f.target);
+});
+
+test('staging cleanup leaves linked, foreign-owned and unexpected trees untouched',async t=>{
+ qualification(t);const f=fixture(t);runtime(f.source);const outside=path.join(f.root,'outside');write(path.join(outside,'keep'),'outside');
+ const linked=path.join(f.target,'.dsh-tui-inherit-ABC123');fs.symlinkSync(outside,linked);
+ const nested=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));fs.symlinkSync(outside,path.join(nested,'dsh-tui'));
+ const foreign=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(foreign,'dsh-tui/runtime/partial'),'foreign');
+ const unknown=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(unknown,'home/history'),'unrelated');
+ const ordinaryFile=path.join(f.target,'.dsh-tui-inherit-FILE00');write(ordinaryFile,'not a staging directory');
+ const original=fs.lstatSync;t.mock.method(fs,'lstatSync',function(file,...args){const s=Reflect.apply(original,this,[file,...args]);return file===foreign?Object.assign(Object.create(Object.getPrototypeOf(s)),s,{uid:s.uid+1}):s;});
+ await tui.inheritRuntime(f.source,f.target,{cleanStaging:true});
+ for(const file of [linked,nested,foreign,unknown,ordinaryFile])assert.equal(fs.existsSync(file),true);
+ assert.equal(fs.readFileSync(path.join(outside,'keep'),'utf8'),'outside');tui.verifyRuntime(f.target);
+});
+
+test('ordinary runtime validation never sweeps staging outside the service startup lock',async t=>{
+ qualification(t);const f=fixture(t);runtime(f.target);const old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(old,'dsh-tui/runtime/partial'),'still owned');
+ await inherit(f);assert.equal(fs.existsSync(old),true);
+});
+
+test('a copier killed after opening its staged output is cleaned on the next locked attempt',async t=>{
+ qualification(t);const f=fixture(t);runtime(f.source);
+ const script=`
+ const fs=require('node:fs'),path=require('node:path');
+ const [moduleFile,helper,source,target]=process.argv.slice(1);
+ require(helper).qualification({mock:{method(object,key,value){object[key]=value;}}});
+ const tui=require(moduleFile),open=fs.promises.open;let sent=false;
+ fs.promises.open=async function(file,...args){
+   const handle=await Reflect.apply(open,this,[file,...args]);
+   if(String(file).startsWith(target+path.sep)&&String(file).includes('.dsh-tui-inherit-')){
+     if(!sent){sent=true;setInterval(()=>{},1000);process.send('copying');}
+     await new Promise(()=>{});
+   }
+   return handle;
+ };
+ tui.inheritRuntime(source,target).catch(()=>process.send('failed'));
+ `;
+ const child=require('node:child_process').spawn(process.execPath,['-e',script,require.resolve('../dsh-tui.cjs'),require.resolve('./helpers/dsh-runtime.cjs'),f.source,f.target],{stdio:['ignore','ignore','pipe','ipc']});
+ const exited=new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
+ t.after(async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await exited;});
+ let timer;try{await Promise.race([new Promise((resolve,reject)=>{child.once('message',value=>value==='copying'?resolve():reject(Error('Copy failed before interruption')));child.once('error',reject);}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Copier did not reach output')),5000);})]);}finally{clearTimeout(timer);}
+ child.kill('SIGKILL');assert.equal((await exited).signal,'SIGKILL');
+ const abandoned=fs.readdirSync(f.target).filter(name=>name.startsWith('.dsh-tui-inherit-'));assert.equal(abandoned.length,1);
+ const {createLock,releaseLock}=require('../service-lock.cjs'),file=path.join(f.root,'services.lock'),lock=createLock(file,'startup',f.root);
+ try{await tui.inheritRuntime(f.source,f.target,{cleanStaging:true});}finally{releaseLock(file,lock);}
+ assert.equal(fs.existsSync(path.join(f.target,abandoned[0])),false);tui.verifyRuntime(f.source);tui.verifyRuntime(f.target);
 });
 test('a target appearing at publication is never overwritten',async t=>{
  qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target),original=fsp.mkdir;let race=true,ino;

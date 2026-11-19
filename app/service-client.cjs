@@ -145,7 +145,12 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         // leave a pending slot, but never an unrecorded detached service.
         if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
       }
-      await require('./dsh-tui.cjs').inheritRuntime(path.join(dataDir, layout.active), path.join(dataDir, key));
+      try {
+        await require('./dsh-tui.cjs').inheritRuntime(path.join(dataDir, layout.active), path.join(dataDir, key), { cleanStaging: true });
+      } catch (error) {
+        const reason = ['deadline', 'filesystem', 'unqualified'].includes(error?.reason) ? error.reason : 'unavailable';
+        console.warn('DSH runtime inheritance skipped:', reason);
+      }
       const next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
       for (const old of layout.entries) {
