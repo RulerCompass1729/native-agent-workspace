@@ -212,7 +212,7 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
-const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id) });
+const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
 function updateTaskBoard() {
@@ -220,7 +220,18 @@ function updateTaskBoard() {
   taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
     queue: Array.isArray(r.queue) ? r.queue.filter(q => q && typeof q.id === 'string').map(q => ({ id: q.id, status: q.status, text: q.text,
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
-    sessions: state.sessions.map(s => ({ id: s.id, name: s.name })), connected: !disconnected, activeSpace: spaceId });
+    sessions: state.sessions.map(s => {
+      let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
+      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected);
+      return { id: s.id, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
+        transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
+        approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
+        claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),
+        nativeApproval: s.nativeApproval ? { requests: s.nativeApproval.requests?.map(a => ({ pending: a.pending })) } : null, nativeInputRequired: s.nativeInputRequired,
+        background: s.background, backgroundStale: s.backgroundStale, runningChildren: fleet.running, unknownChildren: fleet.unknown, workUnconfirmed: fleet.work.unconfirmed };
+    }), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
+      state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition })),
+    confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId });
 }
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
 const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
@@ -4989,6 +5000,7 @@ function newlyStaleStatus(sessions) {
 }
 const nativeActivityClock = setInterval(() => {
   if (!state) return;
+  taskBoard.tick();
   renderNativeActivity(current());
   if (selected === 'room') { roomOverview?.refresh(); refreshRoomMemberTabs(); }
   if (selected === 'panorama') panorama?.refresh();
