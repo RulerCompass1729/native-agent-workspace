@@ -18,11 +18,11 @@ let app;
 (async () => {
   app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 30000 });
   await app.firstWindow();
-  const pid = app.process().pid, helper = path.join(__dirname, 'fixtures/install-windows.js');
+  const pid = app.process().pid;
   let windows = [], expected;
   for (let n = 0; n < 20; n++) {
     expected = await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return { bounds: w.getBounds(), focused: w.isFocused(), opacity: w.getOpacity(), visible: w.isVisible() }; });
-    windows = gate.projectWindows(JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', helper, String(pid)], { encoding: 'utf8', timeout: 3000 })));
+    windows = gate.windowFrames(gate.processInfo(pid));
     if (windows.length) break;
     if (n === 0) await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -30,7 +30,7 @@ let app;
   assert.ok(windows.length > 0, 'Own isolated GUI must be observable; empty metadata is not PASS');
   assert.equal(gate.geometry([{ bounds: expected.bounds }], windows), true);
   assert.equal(expected.focused, false); assert.equal(expected.opacity, 0);
-  assert.ok(windows.every(w => Object.keys(w).sort().join() === 'bounds,id,onScreen'));
+  assert.ok(windows.every(w => Object.keys(w).sort().join() === 'bounds,cgBounds,frameBasis,id,onScreen,pid'));
   console.log(JSON.stringify({ pass: 1, fail: 0, pid, windows, expected, target: 'owned isolated GUI only', screenshots: 0, modelCalls: 0 }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   try { if (app) await app.close(); } finally { try { await scratch.release(); } finally { release(); } }

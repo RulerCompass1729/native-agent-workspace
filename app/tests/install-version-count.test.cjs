@@ -18,6 +18,11 @@ function fixture(t){
     if(name==='node:child_process')return{execFileSync(bin,args){
       if(bin==='/usr/bin/plutil')return JSON.stringify(info);
       if(bin==='/usr/bin/osascript')return JSON.stringify([{id:1,onScreen:true,bounds:box}]);
+      if(bin==='/usr/bin/python3'){
+        if(observation.frameFailure)throw Error('synthetic native frame unavailable');
+        if(observation.guiReplaced)observation.guiStarted='replacement GUI lifetime';
+        return JSON.stringify({pid:observation.wrongFramePid?123457:123456,windows:[{pid:123456,id:1,onScreen:true,bounds:box,frame:box,frameBasis:'native-window-frame-v1'}]});
+      }
       if(bin==='/bin/ps'){
         const pid=Number(args[args.indexOf('-p')+1]),field=args.at(-1);assert.ok([123456,observation.pid].includes(pid));
         if(field==='lstart=')return pid===123456?observation.guiStarted:observation.started;
@@ -57,4 +62,12 @@ test('final helper failure is not replaced by the cached initial receipt',async 
 for(const file of ['workspace.cjs','dsh-tui.cjs'])test('cached version still rechecks '+file+' during stable',async t=>{
   const f=await beforePost(t);let changed=false;f.observation.onSleep=()=>{if(changed)return;changed=true;fs.appendFileSync(path.join(f.runtime,file),'\n// changed');};
   await assert.rejects(f.main('post'),/did not stabilize/);assert.equal(f.observation.queries,1);assert.equal(f.observation.workers,0);
+});
+
+for(const reason of ['missing symbol','nonzero native return'])test('pre refuses '+reason+' without falling back to CG',async t=>{
+  const f=fixture(t);f.observation.frameFailure=reason;await assert.rejects(f.main('pre'),/frame 口径待核实/);assert.equal(f.observation.queries,0);
+});
+
+for(const change of ['wrongFramePid','guiReplaced'])test('pre binds native frame to the verified GUI '+change,async t=>{
+  const f=fixture(t);f.observation[change]=true;await assert.rejects(f.main('pre'),/frame 口径待核实/);assert.equal(f.observation.queries,0);
 });

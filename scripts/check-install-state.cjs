@@ -75,13 +75,19 @@ function projectViews(values) {
   if (!result.length || new Set(result.map(v => v.owner)).size !== result.length) throw refusal('Active views unavailable');
   return result;
 }
-function projectWindows(values) {
-  if (!Array.isArray(values) || values.length > 1000) throw refusal('Window metadata unavailable');
-  return values.map(w => {
-    if (!Number.isSafeInteger(w.id) || w.id <= 0 || typeof w.onScreen !== 'boolean') throw refusal('Invalid native window metadata');
-    return { id: w.id, onScreen: w.onScreen, bounds: bounds(w.bounds) };
-  }).sort((a, b) => a.id - b.id);
+function projectWindows(values, pid) {
+  try {
+    if (!Number.isSafeInteger(pid) || pid < 2 || !Array.isArray(values) || values.length > 1000) throw Error();
+    const seen = new Set();
+    return values.map(w => {
+      if (w.pid !== pid || !Number.isSafeInteger(w.id) || w.id <= 0 || w.id > 0xffffffff || seen.has(w.id) ||
+          typeof w.onScreen !== 'boolean' || w.frameBasis !== 'native-window-frame-v1') throw Error();
+      seen.add(w.id);
+      return { pid, id: w.id, onScreen: w.onScreen, bounds: bounds(w.frame), cgBounds: bounds(w.bounds), frameBasis: w.frameBasis };
+    }).sort((a, b) => a.id - b.id);
+  } catch { throw refusal('frame 口径待核实'); }
 }
+
 const near = (a, b) => ['x', 'y', 'width', 'height'].every(k => Math.abs(a[k] - b[k]) <= 1);
 function geometry(views, windows) {
   // Identical bounds can belong to several views; require a one-to-one match.
@@ -204,13 +210,24 @@ function backendState(profile, target, version = {}, fresh = false) {
   version.receipt = receipt;
   return { key, pid: owner.pid, started: owner.started, version: receipt.runtimeVersion, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
 }
+function windowFrames(gui, helper = path.join(__dirname, 'install-window-frames.py')) {
+  try {
+    const value = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-B', helper, String(gui.pid)], {
+      encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: { LC_ALL: 'C', TZ: 'UTC' },
+    }));
+    if (!value || Object.keys(value).sort().join(',') !== 'pid,windows' || value.pid !== gui.pid) throw Error();
+    const result = projectWindows(value.windows, gui.pid), after = processInfo(gui.pid);
+    if (!result.length || after.started !== gui.started || after.executable !== gui.executable) throw Error();
+    return result;
+  } catch { throw refusal('frame 口径待核实'); }
+}
 function collector(options, helper, target) {
   const version = {};
   return (fresh = false) => {
     const gui = processInfo(options.pid);
     if (gui.executable !== target.executable) throw refusal('GUI executable mismatch');
     const views = projectViews(json(path.join(options.profile, 'views.json')));
-    const windows = projectWindows(JSON.parse(invoke('/usr/bin/osascript', ['-l', 'JavaScript', helper, String(options.pid)], 3000)));
+    const windows = windowFrames(gui, helper);
     if (!windows.length) throw refusal('No GUI window metadata; unlock or verify the explicit PID, do not request permissions');
     const backend = backendState(options.profile, target, version, fresh);
     return { profile: options.profile, gui, views, windows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
@@ -252,16 +269,20 @@ function compare(before, after, expected) {
 async function post(before, collect, expected, gate, options) {
   const after = await stable(collect, options);
   const rows = compare(before, after, expected);
-  if (!rows.every(row => row[3])) return { ok: false, rows };
+  if (!rows.every(row => row[3])) return { ok: false, rows, windows: after.windows };
   try { await gate(); rows.push(['r6 sandbox workers', '5 pass; ips +0', 'pass', true]); }
   catch { rows.push(['r6 sandbox workers', '5 pass; ips +0', 'failed (see gate output)', false]); }
   // A late restored window must not be hidden by the worker-check interval.
   const final = collect(true), finalRows = compare(before, final, expected);
-  return { ok: rows.every(row => row[3]) && finalRows.every(row => row[3]), rows: [...finalRows, rows.at(-1)] };
+  return { ok: rows.every(row => row[3]) && finalRows.every(row => row[3]), rows: [...finalRows, rows.at(-1)], windows: final.windows };
 }
-function print(rows) {
+function print(rows, windows = []) {
   console.log('| Check | Before / expected | After | Result |\n|---|---|---|---|');
   for (const [name, expected, actual, ok] of rows) console.log(`| ${name} | ${expected} | ${actual} | ${ok ? 'PASS' : 'FAIL'} |`);
+  if (windows.length) {
+    console.log('\n| GUI PID / window ID | Native frame used by gate | CG list (observation only) |\n|---|---|---|');
+    for (const w of windows) console.log(`| ${w.pid} / ${w.id} | ${JSON.stringify(w.bounds)} | ${JSON.stringify(w.cgBounds)} |`);
+  }
 }
 async function main(argv = process.argv.slice(2)) {
   const [mode, ...args] = argv, options = {};
@@ -274,14 +295,14 @@ async function main(argv = process.argv.slice(2)) {
   options.pid = Number(options.pid); options.profile = safePath(options.profile);
   const target = bundleMetadata(options.bundle);
   const snapshot = snapshotPath(options.snapshot, options.profile, target.bundle);
-  const helper = path.join(__dirname, 'fixtures/install-windows.js');
+  const helper = path.join(__dirname, 'install-window-frames.py');
   {
     const collect = collector(options, helper, target), expected = { version: options.version, revision: options.revision };
     if (mode === 'pre') {
       const state = collect(); state.dsh = preDsh(options.profile, state.backend, target.app);
       if (!geometry(state.views, state.windows)) throw refusal('Pre-install views/native geometry mismatch');
       fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), ...state }, null, 2), { flag: 'wx', mode: 0o600 });
-      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]]);
+      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
       return preDshReady(state.dsh) ? 0 : 1;
     }
     if (!/^0\.1\.0-alpha\.\d+$/.test(expected.version || '') || !/^[a-f0-9]{40}$/.test(expected.revision || '')) throw refusal('Post requires explicit release version and full revision');
@@ -296,8 +317,8 @@ async function main(argv = process.argv.slice(2)) {
       if (fresh || dshKey !== value.backend.key || dsh?.status !== 'qualified') { dsh = dshState(value.backend.directory, target.app); dshKey = value.backend.key; }
       value.dsh = dsh; return value;
     }, expected, () => workers.run(options.bundle));
-    print(result.rows); return result.ok ? 0 : 1;
+    print(result.rows, result.windows); return result.ok ? 0 : 1;
   }
 }
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(error => { console.error('FAIL: ' + (error.installStateReason || 'Metadata unavailable; verify input files and OS metadata access without changing permissions') + '. No settings or permissions were changed.'); process.exitCode = 1; });
-module.exports = { runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
+module.exports = { windowFrames, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };

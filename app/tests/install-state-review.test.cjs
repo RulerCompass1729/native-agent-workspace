@@ -17,7 +17,7 @@ test('H-I1: native collection projection never materializes target or unrelated 
   vm.runInContext(fs.readFileSync(path.join(code, 'fixtures/install-windows.js'), 'utf8'), context);
   const result = JSON.parse(context.run(['777']));
   assert.equal(reads, 0); assert.equal(foreignBounds, 0); assert.equal(ownerReads, 1);
-  assert.deepEqual(result, [{ id: 1, onScreen: true, bounds: { x: 20, y: 30, width: 640, height: 480 } }]);
+  assert.deepEqual(result, [{ pid: 777, id: 1, onScreen: true, bounds: { x: 20, y: 30, width: 640, height: 480 } }]);
 });
 test('H-I2: saved view and native window moving together is not position retention', async () => {
   const result = await run((_b, a) => { a.views[0].bounds.x += 200; a.views[0].bounds.y += 100; a.windows[0].bounds = { ...a.views[0].bounds }; });
