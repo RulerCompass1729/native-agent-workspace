@@ -3,7 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), { randomUUID } = req
 const DAILY_MICROS = 10000, RESERVE_MICROS = 7000, MAX_BYTES = 1024 * 1024;
 const SOURCE = 'https://github.com/trending';
 const AUTHORIZATION = 'public-discoveries-2026-11-18';
-const STATES = ['fetching', 'generating', 'ready', 'source-failed', 'unconfirmed', 'budget', 'daily-limit', 'cancelled'];
+const STATES = ['fetching', 'generating', 'ready', 'source-failed', 'unconfirmed', 'budget', 'daily-limit', 'cancelled', 'pricing-paused'];
 const copy = value => structuredClone(value);
 const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const known = (o, keys) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every(k => keys.includes(k));
@@ -133,7 +133,10 @@ class RegularPopup {
       if (!current()) throw Error('cancelled'); return { budgetDay: dispatchStamp.budgetDay };
     };
     try { result = await this.select(copy(payload), { signal: this.abort.signal, authorize }); }
-    catch { return dispatchDenied ? this.status() : finish(current() ? 'unconfirmed' : 'cancelled'); }
+    catch (error) {
+      if (!dispatched && require('./regular-popup-dsh.cjs').isPricingFailure(error)) return finish(current() ? 'pricing-paused' : 'cancelled', { chargedMicros: 0, attempted: false });
+      return dispatchDenied ? this.status() : finish(current() ? 'unconfirmed' : 'cancelled');
+    }
     if (!current()) return finish('cancelled');
     const observed = result?.usage && require('./regular-popup-dsh.cjs').validUsage(result.usage) ? { usage: copy(result.usage) } : {};
     if (!known(result, ['picks', 'costMicros', 'usage']) || !Number.isSafeInteger(result.costMicros) || result.costMicros < 0 || result.costMicros > RESERVE_MICROS || result.usage !== undefined && require('./regular-popup-dsh.cjs').priceUsage(result.usage) !== result.costMicros) return finish('unconfirmed', observed);

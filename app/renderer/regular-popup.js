@@ -55,7 +55,8 @@
       historyStatus.hidden = !latestRun;
       const total = latestRun ? value.runs.filter(r => r.budgetDay === latestRun.budgetDay).reduce((n, r) => n + r.chargedMicros, 0) : 0;
       const uncertain = latestRun && value.runs.some(r => r.budgetDay === latestRun.budgetDay && r.attempted && r.costKnown !== true && r.state !== 'ready');
-      set(historyStatus, latestRun ? latestRun.budgetDay + ' · ' + (latestRun.state === 'ready' ? '' : f(runKey(latestRun)) + ' · ') + f(uncertain ? 'reserved' : 'spent', { cost: (total / 1000000).toFixed(6) }) : '');
+      const upper = latestRun && value.runs.some(r => r.budgetDay === latestRun.budgetDay && r.usage?.tier === 'peak-bound');
+      set(historyStatus, latestRun ? latestRun.budgetDay + ' · ' + (latestRun.state === 'ready' ? '' : f(runKey(latestRun)) + ' · ') + f(uncertain ? 'reserved' : upper ? 'spentUpper' : 'spent', { cost: (total / 1000000).toFixed(6) }) : '');
       enabled.disabled = !value.allowed; enabled.setAttribute('aria-describedby', 'discoveries-status'); status.id = 'discoveries-status';
       if (!dirty) { source.value = value.source; concern.value = value.config.concern; time.value = value.config.time; enabled.checked = value.config.enabled && value.allowed; }
       const all = value.runs.flatMap(run => run.items.map(item => ({ run, item }))), latest = value.runs.find(r => r.state === 'ready' && r.items.some(i => !i.read && !i.ignored));

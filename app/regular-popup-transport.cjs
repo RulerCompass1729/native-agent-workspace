@@ -13,7 +13,7 @@ function sandboxProfile({ home, code, modules, execPath, port }) {
 }
 async function runWorker(input, { directory, signal, authorize }, deps = {}) {
   validateInput(input); if (signal?.aborted) throw Error('cancelled');
-  if (new Date().getUTCFullYear() !== 2026) throw Error('pricing-unqualified');
+  require('./regular-popup-dsh.cjs').assertPricingQualified();
   let key, home, proxy, child, identity;
   try {
     key = await (deps.readKey || require('./dsh-tui.cjs').readKey)();
