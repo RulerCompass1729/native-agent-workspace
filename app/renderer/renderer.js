@@ -4074,6 +4074,7 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
+    waitingChanged: count => taskBoard.setWaitingCount(count),
     selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, question: renderWaitingQuestion,
     cardTitle: message => message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : '',
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),

@@ -51,14 +51,14 @@ const clean = scratch.cleanup(async () => {
   check(await page.locator('#header #task-board').count()===1,'Global task status is inside the existing header');
   await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page);await page.locator('#room-nav').click();
   await page.evaluate(now=>{window.taskStatusClock=now;Date.now=()=>window.taskStatusClock;},base);
-  const normalQueue=queue.map(q=>({...q}));
+  const normalQueue=queue.map(q=>({...q})),actor=(await client.call('initial')).sessions.find(s=>s.id===ids[0]);assert.ok(actor.nativeId);
   async function scene(kind){
-    await app.evaluate((_,data)=>{const t=globalThis.taskStatusTest;t.background.failed= data.kind==='unknown';t.cards=data.kind==='waiting'?[{id:'synthetic-confirmation',key:'synthetic-actor:native:input',sessionId:'synthetic-actor',nativeId:'native',operationId:'input',state:'confirmation-required',actionable:true,expiresAt:data.now+100000}]:[];globalThis.taskBoardFixture.update({queue:data.queue},undefined,'shared');},{kind,now:base,queue:kind==='waiting'?normalQueue.concat(item('waiting',200),item('waiting',201)):normalQueue});
+    await app.evaluate((_,data)=>{const t=globalThis.taskStatusTest;t.background.failed= data.kind==='unknown';t.cards=data.kind==='waiting'?[{id:'synthetic-confirmation',key:data.actor.id+':'+data.actor.nativeId+':input',sessionId:data.actor.id,nativeId:data.actor.nativeId,operationId:'input',state:'confirmation-required',actionable:true,expiresAt:data.now+100000,message:{id:'synthetic-confirmation',backgroundOperation:{id:'input',sessionId:data.actor.id,nativeId:data.actor.nativeId,state:'confirmation-required',expiresAt:data.now+100000,confirmation:{kind:'message',options:{message:'Synthetic confirmation',buttons:['Cancel','Confirm'],cancelId:0}}}}}]:[];globalThis.taskBoardFixture.update({queue:data.queue},undefined,'shared');},{kind,actor:{id:actor.id,nativeId:actor.nativeId},now:base,queue:kind==='waiting'?normalQueue.concat(item('waiting',200),item('waiting',201)):normalQueue});
     await page.evaluate(now=>window.taskStatusClock=now,base);
     await fixture('state',ids[2],kind==='unknown'?'disconnected':'working');
     await fixture('state',ids[4],kind==='waiting'?'approval':'idle');
     await client.call('draft',ids[0],'Synthetic metadata-only push'); await settled();
-    await until(async()=>{const x=await page.locator('.task-status-button').innerText();return kind==='waiting'?x.includes(en?'4 need you':'4 等你'):kind==='unknown'?x.includes(en?'unverified':'未确认'):x.includes(en?'0 need you':'0 等你');},'Scene projection '+kind);
+    await until(async()=>{const x=await page.locator('.task-status-button').innerText();return kind==='waiting'?x.includes('1:40'):kind==='unknown'?x.includes(en?'unverified':'未确认'):x.includes(en?'0 need you':'0 等你');},'Scene projection '+kind);
   }
   for(const kind of ['normal','waiting','unknown']){
     await scene(kind);
@@ -70,11 +70,28 @@ const clean = scratch.cleanup(async () => {
       check(g.dark===(theme==='dark')&&g.overflow<=0,`${kind} ${width} ${theme}: correct theme, no document overflow`);
       check(kind==='unknown'?!g.text.includes(en?'0 need you':'0 等你'):g.text.includes(en?'8 working':'8 在做'),`${kind} ${width} ${theme}: six queue tasks plus two independent conversations, no healthy-zero on unknown`);
       check(g.text.includes(en?'Queue done today 186':'今天队列完成 186'),`${kind} ${width} ${theme}: completion is queue-only and excludes cancellation/history`);
+      if(kind==='waiting'){
+        const banner=await page.locator('.stream-waiting-count').innerText(),bar=await page.locator('.task-status-waiting').innerText();
+        const bannerNumber=banner.match(en?/(\d+) waiting for you/:/(\d+) 件等你(?!确认)/),barNumber=bar.match(/\d+/);assert.ok(bannerNumber&&barNumber);
+        check(Number(bannerNumber[1])===Number(barNumber[0])&&Number(barNumber[0])===3,`${width} ${theme}: banner and header share three non-card waiting items`);
+      }
       if(kind==='waiting')check(g.text.includes('1:40')&&g.text.includes(en?'1 card':'1张卡'),`${width} ${theme}: one unexpired confirmation deadline is visible`);
       if(kind==='waiting'){const contrast=await page.locator('.task-status-waiting').evaluate(e=>{const lum=s=>s.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);const c=getComputedStyle(e);let p=e,b;while(p){b=getComputedStyle(p).backgroundColor;if(!b.endsWith(', 0)')&&b!=='rgba(0, 0, 0, 0)')break;p=p.parentElement;}const a=lum(c.color),z=lum(b);return(Math.max(a,z)+.05)/(Math.min(a,z)+.05);});check(contrast>=4.5,`${width} ${theme}: needs-you contrast is at least 4.5 (${contrast.toFixed(2)})`);}
       if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-${kind}-${theme}-${width}.png`)});
     }
   }
+  await scene('normal');
+  await app.evaluate(()=>globalThis.taskBoardFixture.update({queue:[]},undefined,'shared'));await client.call('draft',ids[0],'Synthetic native-only work');
+  await until(async()=>(await page.locator('.task-status-doing').innerText()).includes(en?'4 working':'4 在做'),'Space members without queued tasks still count');
+  check(true,'Native space work without queue items remains visible beside independent work');
+  await fixture('state',ids[0],'approval');await until(async()=>(await page.locator('.task-status-waiting').innerText()).includes(en?'1 need you':'1 等你'),'Native member needs a person');
+  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'1 waiting for you':'1 件等你'),'A native member question with no queue has the same banner/header count');
+  await fixture('state',ids[0],'disconnected');await until(async()=>(await page.locator('.task-status-waiting').innerText()).includes(en?'unverified':'未核实'),'Disconnected member is unknown');
+  check(!(await page.locator('.task-status-waiting').innerText()).includes(en?'0 need you':'0 等你'),'A disconnected space member without a queue is never healthy zero');
+  await fixture('state',ids[0],'working');
+  await app.evaluate((_,queue)=>globalThis.taskBoardFixture.update({queue},undefined,'shared'),[item('queued',0)]);await client.call('draft',ids[0],'Synthetic queued-only assignment');
+  await until(async()=>(await page.locator('.task-status-doing').innerText()).includes(en?'4 working':'4 在做'),'Queued assignment retains native work');
+  check(true,'A queued assignee does not hide unrelated native work');
   await scene('waiting');
   const trigger=page.locator('.task-board-toggle');await trigger.focus();await trigger.press('Enter');check(await page.locator('#task-board-panel').isVisible(),'Enter opens the original full task board');
   check((await page.locator('#task-board-panel').innerText()).includes(en?'Independent chats':'独立对话'),'Independent conversations have a separate read-only group');
@@ -92,12 +109,13 @@ const clean = scratch.cleanup(async () => {
   await page.keyboard.press('Escape');check(await trigger.evaluate(e=>document.activeElement===e),'Escape closes and returns to the same global trigger');
   await page.evaluate(now=>window.taskStatusClock=now+1000,base);await until(async()=>(await trigger.innerText()).includes('1:39'),'Existing UI clock updates the confirmation countdown');
   await page.evaluate(now=>window.taskStatusClock=now+100000,base);await until(()=>page.locator('.task-status-card-time').isHidden(),'Expired confirmation leaves the global waiting count');
-  check((await trigger.innerText()).includes(en?'3 need you':'3 等你'),'Expiration removes just the card, preserving queue questions and independent waiting');
+  check((await trigger.innerText()).includes(en?'3 need you':'3 等你'),'Expiration removes the separate card, preserving three non-card waiting items');
+  await app.evaluate(()=>globalThis.taskStatusTest.cards=[]);await client.call('draft',ids[0],'Synthetic post-expiry projection');await settled();
   await trigger.click();await page.locator('.task-board-footer select').selectOption(history);await page.locator('.task-board-footer button').click();check(await page.locator('#queue-dialog').isVisible(),'Original space queue opens through its existing control');check((await page.locator('#queue-title').textContent()).includes('资料整理'),'The selected original space queue is the recipient');await page.locator('#close-queue').click();
   await page.locator('#independent-nav').click();
   const labels=await page.getByRole('menuitem').allTextContents(), independent=labels.filter(label=>label.startsWith('Independent A · '));assert.equal(independent.length,1);await page.getByRole('menuitem',{name:independent[0],exact:true}).click();
   for(const [width,height]of[[1240,820],[850,600]])for(const theme of['light','dark']){await app.evaluate(({BrowserWindow,nativeTheme},v)=>{BrowserWindow.getAllWindows()[0].setContentSize(v.width,v.height);nativeTheme.themeSource=v.theme;},{width,height,theme});await page.emulateMedia({colorScheme:theme});await settled();const g=await trigger.evaluate(e=>{const r=e.getBoundingClientRect(),h=document.getElementById('header').getBoundingClientRect();const t=document.getElementById('session-toolbar').getBoundingClientRect();return{x:r.x,right:r.right,top:r.top,bottom:r.bottom,headerTop:h.top,headerBottom:h.bottom,scroll:e.scrollWidth,client:e.clientWidth,toolbarRight:t.right,toolbarTop:t.top};});check(g.x>=0&&g.right<=width+1&&g.scroll<=g.client+1&&g.top>=g.headerTop&&g.bottom<=g.headerBottom&&(Math.abs(g.top-g.toolbarTop)>28||g.x>=g.toolbarRight),`${width} ${theme}: independent conversation retains the global status at the right`);if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-independent-${theme}-${width}.png`)});}
   const hidden=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().every(w=>!w.isVisible()&&!w.isFocusable()));check(hidden,'All owned windows remain hidden and unfocusable');
-  const stats=await fixture('stats',ids[0]);check(stats.stats.sends===0&&stats.stats.inputs===0,'Zero native input/model sends');check(errors.length===0,'No renderer errors');
+  const stats=await fixture('stats',ids[0]);check(stats.stats.sends===0&&stats.stats.inputs===0,'Zero native input/model sends');if(errors.length)console.error('Renderer errors:',JSON.stringify(errors));check(errors.length===0,'No renderer errors');
   if(pictures)fs.writeFileSync(path.join(pictures,language+'-results.json'),JSON.stringify({checks,observations,before,after,stats,errors},null,2));console.log(`SUMMARY ${checks.length} pass / 0 fail / 0 skip`);
 }finally{try{await clean();await scratch.release();}finally{const owner=JSON.parse(fs.readFileSync(path.join(slot,'owner.json')));if(owner.token===token){fs.unlinkSync(path.join(slot,'owner.json'));fs.rmdirSync(slot);}}}})().catch(e=>{console.error(e);process.exitCode=1;});

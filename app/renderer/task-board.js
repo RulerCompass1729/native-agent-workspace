@@ -58,10 +58,14 @@
     for (const s of sessions.values()) {
       if (s.archived || s.state === 'ended') continue;
       if (!Array.isArray(s.roomIds)) { if (s.membershipUnknown) unknown++; continue; }
-      if (s.roomIds.length || represented.has(s.id)) continue;
+      if (represented.has(s.id)) continue;
+      const space = groups.find(p => p.source === 'space' && !p.archived && s.roomIds.includes(p.id));
+      if (s.roomIds.length && !space) { if (!historyGroups.some(p => p.archived && s.roomIds.includes(p.id))) unknown++; continue; }
       const k = !fresh(s, input.connected !== false) ? 'unknown' : needsHuman(s) ? 'waiting' : uncertainIdle(s) ? 'unknown' : observedWork(s) ? 'sent' : null;
-      if (k) conversations.push({ key: JSON.stringify(['conversation', s.id]), id: s.id, source: 'conversation', spaceId: '@independent',
-        kind: k, memberKey: s.id, memberName: s.name || '', actualRecipient: true, text: s.name || '', current: true });
+      if (!k) continue;
+      const row = { key: JSON.stringify(['conversation', s.id]), id: s.id, source: 'conversation', spaceId: space?.id || '@independent', spaceName: space?.name || '',
+        kind: k, memberKey: s.id, memberName: s.name || '', actualRecipient: true, text: s.name || '', current: true };
+      if (space) { space.all.push(row); Object.assign(space, finish(space)); } else conversations.push(row);
     }
     if (conversations.length) groups.push(finish({ id: '@independent', source: 'conversation', name: '', available: true, all: conversations }));
     const cards = new Map();
@@ -104,7 +108,7 @@
     };
     let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '', mode = 'space', scope = 'today', filter = 'all';
     const groups = new Map(), rows = new Map(), placements = new Map();
-    let needsRegroup = false, status = overview(input, now()), day = new Date(now()).toDateString();
+    let needsRegroup = false, waitingCount = null, status = overview(input, now()), day = new Date(now()).toDateString();
     const toggle = control(() => opened ? close() : open(), 'task-board-toggle task-status-button');
     const track = make('span', 'task-status-track'), busyFill = make('i'), waitFill = make('i');
     busyFill.className = 'sent'; waitFill.className = 'waiting'; track.append(busyFill, waitFill); attr(track, 'aria-hidden', 'true');
@@ -164,17 +168,18 @@
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
     function drawBar() {
+      const count = waitingCount ?? status.waiting - status.cardCount;
       set(doing, status.stale ? f('unupdated') : f('doingCount', { count: status.doing }));
-      set(waiting, status.stale ? '' : f(status.unknown ? status.waiting ? 'waitingUnknown' : 'waitingUnavailable' : 'waitingCount', { count: status.waiting }));
-      waiting.hidden = status.stale; waiting.classList.toggle('needs-person', status.waiting > 0);
+      set(waiting, status.stale ? '' : f(status.unknown ? count ? 'waitingUnknown' : 'waitingUnavailable' : 'waitingCount', { count }));
+      waiting.hidden = status.stale; waiting.classList.toggle('needs-person', count > 0);
       const uncertain = status.cards.some(c => c.kind === 'unknown');
       set(cardTime, [!status.cardsAvailable ? f('cardsUnavailable') : '', status.cardCount ? f(status.cardCount === 1 ? 'cardDeadlineOne' : 'cardDeadline', { count: status.cardCount, time: remaining(status.nextExpiry) }) : '', uncertain ? f('cardsUnverified') : ''].filter(Boolean).join(' · '));
       cardTime.hidden = !cardTime.textContent;
       set(done, status.stale ? '' : f('queueDoneToday', { count: status.done })); done.hidden = status.stale;
       set(warning, status.unknown ? f('unknownCount', { count: status.unknown }) : status.failed ? f('failedCount', { count: status.failed }) : ''); warning.hidden = !warning.textContent;
-      const active = status.doing + status.waiting;
+      const attention = count + status.cardCount, active = status.doing + attention;
       track.hidden = !active || status.stale || status.unknown > 0;
-      busyFill.style.width = (active ? status.doing / active * 100 : 0) + '%'; waitFill.style.width = (active ? status.waiting / active * 100 : 0) + '%';
+      busyFill.style.width = (active ? status.doing / active * 100 : 0) + '%'; waitFill.style.width = (active ? attention / active * 100 : 0) + '%';
       attr(toggle, 'aria-label', [doing, waiting, cardTime, done, warning].filter(e => !e.hidden).map(e => e.textContent).join(' · ') + ' · ' + f('expand'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
     }
@@ -264,7 +269,7 @@
     const visible = () => { if (!doc.hidden) update(); }, resize = () => { if (opened) positionPanel(); };
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize);
     doc.addEventListener('visibilitychange', visible);
-    return { update, open, close, tick, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); placements.clear(); } };
+    return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); placements.clear(); } };
   }
   return { BAR_HEIGHT, COLORS, kind, project, overview, bind };
 });

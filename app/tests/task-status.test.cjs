@@ -23,3 +23,8 @@ test('an actual queue recipient stays deduplicated even after becoming independe
 test('unknown background never becomes work, while a known working root stays working',()=>{for(const state of ['idle','working']){const v=input();Object.assign(v.sessions[1],{state,workUnconfirmed:true});const p=board.overview(v,now);assert.equal(p.doing,state==='working'?2:1);if(state==='idle')assert.ok(p.unknown>0);}});
 
 test('a current unanswered question remains visible even when idle background work is unknown',()=>{const v=input();Object.assign(v.sessions[1],{state:'idle',workUnconfirmed:true,claudeQuestion:{requestId:'q'}});assert.equal(board.overview(v,now).waiting,1);});
+
+for(const [name,state,extra,expected]of[
+ ['working','working',{},'doing'],['question','approval',{approval:{pending:false}},'waiting'],['disconnected','working',{transportDisconnected:true},'unknown']
+])test('space member '+name+' remains visible without a queue item',()=>{const v=input();v.sessions=[{...v.sessions[0],state,...extra}];v.rooms[0].queue=[];const p=board.overview(v,now);assert.equal(p[expected],1);assert.equal(p.groups[0].current.length,1);assert.equal(p.groups[0].current[0].spaceId,'a');assert.equal(v.rooms[0].queue.length,0);});
+test('a queued assignee does not hide unrelated native work, while a sent recipient deduplicates it',()=>{const v=input();v.sessions=[v.sessions[0]];v.rooms[0].queue=[{id:'queued',status:'queued',assignee:'m'}];assert.equal(board.overview(v,now).doing,1);v.rooms[0].queue=[{id:'sent',status:'sent',sentTo:'m'}];assert.equal(board.overview(v,now).doing,1);assert.equal(board.overview(v,now).groups[0].current.length,1);});
