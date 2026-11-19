@@ -4770,7 +4770,7 @@ function renderHeaderLayout(s, inRoom) {
   $('subtitle').onfocus = focusedMember ? $('title').onfocus : null;
   $('subtitle').onblur = focusedMember ? $('title').onblur : null;
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
-  const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
+  const values = s ? [s.provider === 'claude' ? 'Claude Code' : providerName(s.provider), sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
   const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length, focusedMember && spaceName(state.room)]);
   if (subtitle.dataset.identity !== signature) {
     ui.display.unbind(subtitle); subtitle.replaceChildren();
