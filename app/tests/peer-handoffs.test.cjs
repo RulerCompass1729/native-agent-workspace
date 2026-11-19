@@ -101,6 +101,20 @@ test('loss of the native addressing capability revokes a staged peer intent', as
   f.stage(f.sends[0], f.b.id, 'Do not send after native tool retirement.'); f.a.r.addressedSendAvailable = false; f.a.r.emit('capability');
   f.finish(f.sends[0], 'Native final after tool retirement.'); await wait(() => f.runner.run.status === 'paused'); assert.equal(f.sends.length, 1);
 });
+// R114: cross-service deliveries carry 讨论须知 too; the shared rows keep the material as written.
+for (const mode of ['replies', 'directed']) test('cross-service ' + mode + ': the first and the next delivery carry the discussion guidelines', async t => {
+  const f = await fixture(t); f.spec.mode = mode;
+  await f.runner.start('owner', f.spec);
+  assert.match(f.sends[0].text, /\[讨论须知 v\d+\]/);
+  if (mode === 'directed') assert.equal(f.stage(f.sends[0], f.b.id, 'Peer: please check 50.').status, 'staged');
+  f.finish(f.sends[0], 'Draft 50'); await wait(() => f.sends.length === 2);
+  assert.match(f.sends[1].text, /\[讨论须知 v\d+\]/);
+  const { TEXT } = require('../discussion-guidelines.cjs');
+  for (const sent of f.sends) assert.ok(sent.text.endsWith(TEXT) && sent.text.split(TEXT).length === 2);
+  const rows = mergePeerMessages([...f.a.w.room.messages, ...f.b.w.room.messages]), deliveries = rows.flatMap(m => m.deliveries || []);
+  for (const sent of f.sends) assert.equal(deliveries.find(d => d.id === sent.tag)?.text, sent.text);
+  assert.ok(rows.every(m => !String(m.text ?? '').includes('[讨论须知')));
+});
 test('bounded cross-service round binds exact native replies, preserves identity and merges receipts', async t => {
   const f = await fixture(t), ids = [f.a, f.b].map(s => identity(s.w.get(s.id)));
   await f.runner.start('owner', f.spec); assert.equal(f.sends.length, 1);
