@@ -1,17 +1,18 @@
 // Synthetic HTTP boundaries, actual phone scripts and WebKit; no native provider.
+const testScratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { webkit, devices } = require('playwright');
 const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '..');
 const results = [], errors = [], wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-send-')), identity = fs.statSync(scratch);
+const scratch = testScratch.directory(path.join(os.tmpdir(), 'naw-phone-send-'));
 const check = (name, pass) => { results.push({ name, pass: Boolean(pass) }); console.log(JSON.stringify(results.at(-1))); };
 async function until(fn) { for (let i = 0; i < 200; i++) { if (await fn()) return; await wait(10); } throw Error('Synthetic phone did not settle'); }
 let browser;
-async function scene(lang) {
+async function scene(lang, history = false) {
   const context = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' }), page = await context.newPage();
   const sessions = ['a', 'b'].map(id => ({ id, name: 'Synthetic ' + id, provider: 'claude', state: 'idle', available: true, actions: ['read', 'send'] }));
   let generation = 0, hold = false, releaseNative, releaseWorkspace;
-  const messages = [];
+  const messages = history ? Array.from({ length: 60 }, (_, i) => ({ id: 'history-' + i, role: 'assistant', text: 'Synthetic history ' + i + ' '.repeat(2) + 'Earlier conversation. '.repeat(6), time: 1000 + i })) : [];
   const posted = [], held = [];
   page.on('pageerror', e => errors.push(e.message));
   await context.route('**/*', async route => {
@@ -26,7 +27,7 @@ async function scene(lang) {
       hold = true; if (status === 'submitted') messages.push({ id: value.requestId, role: 'user', text: value.text, time: 1 });
       data = { requestId: value.requestId, sessionId: 'a', action: 'send', status };
     } else if (url.pathname === '/mobile/workspace') {
-      data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'a' ? [...messages] : [] })), rooms: [], confirmations: [], reminders: { count: 0, records: [] }, capabilities: { push: false }, syncedAt: 1 };
+      data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'a' ? [...messages] : [] })), rooms: [], confirmations: [], reminders: { count: 0, records: [] }, capabilities: { push: false }, ...(history ? { steward: { state: 'shared', sessionId: 'a' } } : {}), syncedAt: 1 };
       if (hold) { held.push(route); await new Promise(resolve => { releaseWorkspace = resolve; }); }
     }
     if (data) return route.fulfill({ json: data }).catch(() => {});
@@ -38,8 +39,8 @@ async function scene(lang) {
   await page.waitForFunction(() => document.documentElement.dataset.loading === 'false' && document.querySelector('#content a[href$="/chat/a"]'));
   await page.locator(`#content a[href="#${lang}/chat/a"]`).click();
   await page.waitForFunction(() => document.documentElement.dataset.loading === 'false' && document.querySelector('#message'));
-  return { page, posted, held, async send() { await page.locator('#message').fill('SYNTHETIC_ORIGINAL'); await page.locator('#send-message').tap(); await until(() => releaseNative); },
-    native(status) { releaseNative(status); }, replaceGrant() { generation++; },
+  return { page, posted, held, async send(text = 'SYNTHETIC_ORIGINAL') { await page.locator('#message').fill(text); await page.locator('#send-message').tap(); await until(() => releaseNative); },
+    native(status) { releaseNative(status); }, reply() { messages.push({ id: 'reply-after-long', role: 'assistant', text: 'SYNTHETIC_REPLY_AFTER_LONG', time: 2 }); }, replaceGrant() { generation++; },
     async release() { hold = false; releaseWorkspace?.(); },
     async close() { releaseNative?.('unconfirmed'); releaseWorkspace?.(); await context.close(); } };
 }
@@ -108,13 +109,34 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         check('changed authorization never resends', s.posted.length === 1);
       } finally { await s.close(); }
     }
+    for (const earlier of [false, true]) {
+      const s = await scene('zh', true), label = earlier ? 'reading earlier' : 'at bottom';
+      const frames = () => s.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const geometry = () => s.page.evaluate(() => {
+        const tail = document.querySelector('.thread .message:last-child .bubble').getBoundingClientRect();
+        return { bottom: tail.bottom, height: tail.height, composeTop: document.querySelector('#compose').getBoundingClientRect().top,
+          headerBottom: document.querySelector('#top').getBoundingClientRect().bottom, gap: document.documentElement.scrollHeight - innerHeight - scrollY };
+      });
+      try {
+        await frames();
+        if (earlier) await s.page.evaluate(() => scrollTo(0, 400));
+        const before = await geometry();
+        check(label + ' fixture starts at intended reading position', earlier ? before.gap > 80 : before.gap <= 2);
+        await s.send('合成消息'.repeat(80)); s.native('submitted'); await until(() => s.held.length); await frames();
+        const echoed = await geometry(); console.log(JSON.stringify({ scenario: label, phase: 'confirmed', ...echoed }));
+        check(label + ' long confirmed message ends above compose', echoed.height > 190 && echoed.bottom <= echoed.composeTop + 1 && echoed.bottom >= echoed.headerBottom);
+        await s.release(); await s.page.locator('.thread time[datetime="1970-01-01T00:00:00.001Z"]').waitFor();
+        s.reply(); await s.page.evaluate(() => globalThis.nawPhone.refresh());
+        await until(async () => await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_REPLY_AFTER_LONG' }).count() === 1); await frames();
+        const reply = await geometry(); console.log(JSON.stringify({ scenario: label, phase: 'reply', ...reply }));
+        check(label + ' later reply ends above compose', reply.bottom <= reply.composeTop + 1 && reply.bottom >= reply.headerBottom);
+        check(label + ' long send is never repeated', s.posted.length === 1);
+      } finally { await s.close(); }
+    }
     check('no browser errors', errors.length === 0);
     const failed = results.filter(r => !r.pass); console.log(JSON.stringify({ pass: results.length - failed.length, fail: failed.length, skipped: 0 }));
     if (failed.length) process.exitCode = 1;
   } finally {
     await browser?.close();
-    const stat = fs.lstatSync(scratch);
-    if (stat.uid !== process.getuid() || stat.dev !== identity.dev || stat.ino !== identity.ino || stat.isSymbolicLink()) throw Error('Synthetic scratch identity changed');
-    fs.rmSync(scratch, { recursive: true });
   }
-})().catch(error => { console.error(error.stack); process.exitCode = 1; });
+})().finally(testScratch.cleanup(async () => { await browser?.close(); })).catch(error => { console.error(error.stack); process.exitCode = 1; });

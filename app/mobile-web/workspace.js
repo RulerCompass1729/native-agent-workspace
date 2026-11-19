@@ -367,7 +367,7 @@
           id: 'mobile-receipt:' + mine.requestId, role: 'user', text: mine.text, time: Date.now(), status: 'submitted',
         }] } : s) };
         paint();
-        if (follow) el('content').querySelector('.thread')?.lastElementChild?.scrollIntoView({ block: 'center' });
+        if (follow) global.scrollTo?.(0, d.documentElement.scrollHeight);
       }
       if (route?.page === 'chat' && route.id === sessionId) toast(key); else toast(name + ' · ' + t(key)); await refresh(); }); });
     function paint() {
