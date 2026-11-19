@@ -144,8 +144,9 @@ test('NAW starts a new Claude session with the fallback program and records it; 
   const i = install(t, ['2.1.322', '2.1.999'], '2.1.999');
   // The per-start socket folder and the persistent data folder are different places, as in the real service.
   const data = path.join(i.dir, 'data'), sockets = path.join(i.dir, 'sockets'); fs.mkdirSync(data); fs.mkdirSync(sockets);
-  const host = { binaries: { claude: i.launcher }, privateDir: sockets, dataDir: data, hookTargets: new Map(), hookSocket: path.join(sockets, 'hook.sock'), submitSocket: path.join(sockets, 'submit.sock') };
-  const start = async record => { const r = new Claude(record, host); await new Promise(resolve => r.terminal.once('closed', resolve)); r.submission.close(); return fs.readFileSync(i.ran, 'utf8').trim().split('\n'); };
+  let versionChecks = 0;
+  const host = { binaries: { claude: i.launcher }, privateDir: sockets, dataDir: data, hookTargets: new Map(), hookSocket: path.join(sockets, 'hook.sock'), submitSocket: path.join(sockets, 'submit.sock'), checkClaudeVersion() { versionChecks++; } };
+  const start = async record => { const before = versionChecks, r = new Claude(record, host); assert.equal(versionChecks, before + 1, 'Each new, resumed or forked session checks without a watcher event'); await new Promise(resolve => r.terminal.once('closed', resolve)); r.submission.close(); return fs.readFileSync(i.ran, 'utf8').trim().split('\n'); };
   const fresh = { id: randomUUID(), nativeId: randomUUID(), name: 'New', cwd: i.dir };
   let argv = await start(fresh);
   assert.equal(argv[0], '2.1.322'); assert.ok(argv.includes('--session-id'));

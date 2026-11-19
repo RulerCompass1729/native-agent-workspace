@@ -160,15 +160,36 @@ test('updater launcher changes trigger a check without opening a conversation or
   const host = { binaries: { claude: i.launcher }, checkClaudeVersion: () => { checks++; } };
   NativeHost.prototype.watchClaudeLauncher.call(host);
   t.after(() => host.claudeLauncherWatch?.close());
+  const watch = host.claudeLauncherWatch, sentinel = path.join(i.root, 'watch-ready');
+  let ready = false;
+  const observed = (_event, name) => { if (!name || String(name) === path.basename(sentinel)) ready = true; };
+  watch.on('change', observed);
+  const readyDeadline = Date.now() + 3000;
+  for (let n = 0; !ready && Date.now() < readyDeadline; n++) {
+    fs.writeFileSync(sentinel, String(n));
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  watch.off('change', observed);
+  assert.ok(ready, 'The same watcher must observe a sentinel before testing later updates');
+  const beforeChange = checks;
   fs.unlinkSync(i.launcher); fs.symlinkSync(path.join(i.root, 'versions/2.1.327'), i.launcher);
   const deadline = Date.now() + 3000;
-  while (!checks && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+  while (checks === beforeChange && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
   assert.ok(checks > 0);
-  const watch = host.claudeLauncherWatch;
+  assert.ok(checks > beforeChange, 'The launcher change itself must trigger a check');
   assert.equal(typeof watch.close, 'function');
   host.closed = true; watch.close();
   const before = checks;
   fs.unlinkSync(i.launcher); fs.symlinkSync(path.join(i.root, 'versions/2.1.328'), i.launcher);
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(checks, before);
+});
+
+test('host startup checks directly after installing its advisory launcher watcher', async t => {
+  const i = installation(t), { NativeHost } = require('../adapters.cjs'), calls = [];
+  const socket = path.join(i.root, 'synthetic-hook'); fs.writeFileSync(socket, '');
+  const host = { hookSocket: socket, hooks: { once() {}, listen(_file, ready) { ready(); } },
+    submissions: { async start() {} }, watchClaudeLauncher() { calls.push('watch'); }, checkClaudeVersion() { calls.push('check'); } };
+  await NativeHost.prototype.start.call(host);
+  assert.equal(host.nativeStarted, true); assert.deepEqual(calls, ['watch', 'check']);
 });
