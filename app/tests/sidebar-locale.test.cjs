@@ -220,7 +220,7 @@ test('archive rows open to the same chain list without adding a menu or restorin
   f.state.rotationChains = []; f.run('renderArchives()');
   assert.equal(archiveParts(archiveLines(f)[0])[2].children.length, 1);
 });
-test('the archive lists spaces, then sessions by last activity, newest first, 15 lines at a time; a running one says so', async () => {
+test('the archive lists recent activity first, 15 lines at a time; unknown activity goes last and a running session says so', async () => {
   const f = fixture();
   f.$('archive-group-body').hidden = false;
   const at = 1793331100000;
@@ -233,9 +233,7 @@ test('the archive lists spaces, then sessions by last activity, newest first, 15
   const names = () => lines().map(row => archiveParts(row)[1].children[1].textContent);
   const byActivity = f.people.slice().sort((a, b) => b.lastActivityAt - a.lastActivityAt).map(s => s.name);
   assert.equal(lines().length, 15);
-  assert.deepEqual(names(), ['合成旧空间', ...byActivity.slice(0, 14)]);
-  assert.equal(lines()[0].dataset.archivedRoom, 'gone');
-  assert.equal(archiveParts(lines()[0])[3].children[0].getAttribute('aria-label'), '恢复工作区 合成旧空间');
+  assert.deepEqual(names(), byActivity.slice(0, 15));
   const working = lines().find(row => row.dataset.archivedSession === 'old-1');
   assert.equal(archiveParts(working)[1].children[2].textContent, '正在工作', 'a session still running says so on its line');
   const more = box.children[1];
@@ -244,7 +242,32 @@ test('the archive lists spaces, then sessions by last activity, newest first, 15
   await f.run('archiveDisclosure.earlier()');
   assert.equal(lines().length, 21);
   assert.equal(more.hidden, true);
-  assert.deepEqual(names().slice(1), byActivity);
+  assert.deepEqual(names(), [...byActivity, '合成旧空间']);
+  assert.equal(lines().at(-1).dataset.archivedRoom, 'gone');
+  assert.equal(archiveParts(lines().at(-1))[3].children[0].getAttribute('aria-label'), '恢复工作区 合成旧空间');
+});
+
+test('archived spaces and sessions share one activity order and update when only a record time changes', () => {
+  const f = fixture();
+  f.$('archive-group-body').hidden = false;
+  const at = 1793331100000;
+  f.people.length = 0;
+  f.people.push(
+    { id: 'session-new', name: 'Recent session', state: 'ended', archived: true, lastActivityAt: at + 3000, messages: [] },
+    { id: 'session-old', name: 'Older session', state: 'ended', archived: true, messages: [{ time: at + 1000 }] },
+  );
+  const room = { id: 'room-old', name: 'Older space', archived: true, messages: [{ time: at }], events: [{ time: at + 2000 }] };
+  f.state.rooms.push(room,
+    { id: 'room-new', name: 'Recent space', archived: true, messages: [{ time: at + 4000 }], events: [] },
+    { id: 'room-unknown', name: 'Unknown activity', archived: true, messages: [{ time: 1e20 }], events: [] },
+  );
+  const keys = () => archiveLines(f).map(row => row.dataset.key);
+  f.run('renderArchives()');
+  assert.deepEqual(keys(), ['room:room-new', 'session:session-new', 'room:room-old', 'session:session-old', 'room:room-unknown']);
+  room.events[0].time = at + 5000;
+  f.run('renderArchives()');
+  assert.deepEqual(keys(), ['room:room-old', 'room:room-new', 'session:session-new', 'session:session-old', 'room:room-unknown']);
+  assert.deepEqual(f.calls, [], 'sorting the archive restores nothing and calls no product API');
 });
 
 test('subtitle native fields remain raw while the last own membership label repaints in place', () => {

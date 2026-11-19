@@ -4021,6 +4021,15 @@ function createSpaceReadiness(final = false) {
   if (!problem) try { createSpaceChoice(); } catch (error) { problem = error; }
   if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) ui.showError($('create-readiness'), problem); }
 }
+function archiveRoomActivityAt(room) {
+  let latest = -Infinity;
+  for (const records of [room.messages, room.events]) {
+    for (const record of Array.isArray(records) ? records : []) {
+      if (Number.isFinite(record.time) && Math.abs(record.time) <= 8640000000000000) latest = Math.max(latest, record.time);
+    }
+  }
+  return latest;
+}
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
   const running = records.filter(s => ARCHIVE_RUNNING.includes(s.state)).length;
@@ -4036,13 +4045,13 @@ function renderArchives() {
   const rowsOf = () => [...archiveDisclosure.list.children];
   const origin = document.activeElement, oldRow = origin?.closest?.('.disclosure-item'), oldIndex = oldRow ? rowsOf().indexOf(oldRow) : -1;
   const part = origin?.matches?.('summary') ? 'summary' : '.disclosure-actions button';
-  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name]), state.rotationChains]);
+  const items = archivedRooms.map(room => ({ room, at: archiveRoomActivityAt(room) })).concat(records.map(session => ({ session, at: sessionActivityAt(session) })));
+  const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name, spaceName(r)]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name]), state.rotationChains, items.map(item => item.at)]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature;
   if (!count) { list.replaceChildren(uiNode('p', 'archive.empty')); archiveDisclosure.update([]); }
   else {
     if (archiveDisclosure.box.parentElement !== list) list.replaceChildren(archiveDisclosure.box);
-    const sessions = records.map((s, i) => ({ s, i, at: sessionActivityAt(s) })).sort((a, b) => b.at - a.at || a.i - b.i).map(x => ({ session: x.s }));
-    archiveDisclosure.update(archivedRooms.map(room => ({ room })).concat(sessions));
+    archiveDisclosure.update(items.map((item, i) => ({ item, i })).sort((a, b) => b.item.at - a.item.at || a.i - b.i).map(x => x.item));
   }
   if (oldRow) {
     const rows = rowsOf(), same = rows.find(row => row.dataset.key === oldRow.dataset.key);
@@ -4050,9 +4059,7 @@ function renderArchives() {
   }
 }
 const ARCHIVE_RUNNING = ['working', 'approval', 'starting', 'stopping', 'disconnected'];
-// The archive (progressive disclosure, the person 11-19): one line each, spaces first, then sessions by last activity,
-// newest first. A line holds the name and a short 「恢复」 whose accessible name says what it restores; it opens in
-// place to the rest. A session still running says so on its line.
+// Spaces and sessions share one activity order. A session still running says so on its line.
 let archiveDisclosure = null;
 function archiveLine(item, { row, text, end, body, actions }) {
   if (item.room) {
