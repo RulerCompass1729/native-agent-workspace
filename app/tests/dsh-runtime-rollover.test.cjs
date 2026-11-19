@@ -41,7 +41,7 @@ for (const kind of ['stale-pin','unsafe-source','timeout','empty-target','unsafe
   if(kind!=='unsafe-target')assert.throws(()=>host.create({id:'synthetic-dsh',provider:'dsh'}),e=>e.uiMessage?.key==='error.dsh.runtimeUnqualified');
  }
  assert.equal(warnings.length,['timeout','io-failure'].includes(kind)?2:1);assert.ok(!JSON.stringify(warnings).includes('SYNTHETIC_PRIVATE_DIAGNOSTIC'));
- assert.equal(warnings[0][1],kind==='timeout'?'deadline':kind==='io-failure'?'filesystem':kind==='unexpected-error'?'unavailable':'unqualified');
+ assert.equal(warnings[0][1],kind==='timeout'?'deadline':kind==='io-failure'?'filesystem':kind==='unexpected-error'?'unavailable':kind.endsWith('-target')?'target':'unqualified');
  if(kind==='unsafe-target'){
   const dsh=new tui.DshTui({id:'synthetic-dsh'}, {dataDir:dest,binaries:{dsh:process.execPath}}, {key:async()=>assert.fail('No key read')});
   dsh.launch=async()=>assert.fail('Unsafe target must not launch');

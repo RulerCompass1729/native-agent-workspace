@@ -152,9 +152,12 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           if (previous) { failures = failures.filter(row => row !== previous); saveDsh(); }
           if (result.status !== 'absent') return;
         } catch (error) {
-          const reason = ['deadline', 'filesystem', 'unqualified'].includes(error?.reason) ? error.reason : 'unavailable';
-          failures = failures.filter(row => row !== previous);
-          failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
+          const reason = ['deadline', 'filesystem', 'unqualified', 'target'].includes(error?.reason) ? error.reason : 'unavailable';
+          // A target refusal is retried after repair without charging the source.
+          if (reason !== 'target') {
+            failures = failures.filter(row => row !== previous);
+            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
+          }
           console.warn('DSH runtime inheritance skipped:', reason);
           if (reason !== 'unqualified') return;
         }

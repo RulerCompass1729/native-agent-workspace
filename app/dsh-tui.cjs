@@ -180,7 +180,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     }
     tick(); return { entries, bytes };
   }
-  let staging, stagingIdentity, placeholder, published = false;
+  let staging, stagingIdentity, placeholder, published = false, checkingTarget = true;
   try {
     if (cleanStaging) {
       // The service startup lock excludes a live copier; unknown trees remain untouched.
@@ -207,6 +207,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     }
     deadlineStarted = performance.now();
     if (rootState(targetDataDir, target)) { await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' }; }
+    checkingTarget = false;
     if (!rootState(sourceDataDir, source)) return { status: 'absent' };
     if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
     const inventory = await tree(source.root); verifyRuntime(sourceDataDir); tick();
@@ -261,7 +262,8 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     await io.rename(staged.root, target.root); published = true;
     return { status: 'copied', entries: inventory.entries.size, bytes: inventory.bytes, elapsedMs: performance.now() - started };
   } catch (cause) {
-    const reason = cause.message === 'Runtime inheritance deadline' ? 'deadline' : cause.code ? 'filesystem' : 'unqualified';
+    // Refused before the source was read: the source's qualification is unknown.
+    const reason = cause.message === 'Runtime inheritance deadline' ? 'deadline' : checkingTarget ? 'target' : cause.code ? 'filesystem' : 'unqualified';
     throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', reason, cause });
   } finally {
     if (placeholder && !published) {

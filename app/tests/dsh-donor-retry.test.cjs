@@ -1,9 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm'),crypto=require('node:crypto');
 const tui=require('../dsh-tui.cjs'),{qualification,runtime}=require('./helpers/dsh-runtime.cjs'),layout=require('../service-layout.cjs');
-function fixture(t,{fault=null,empty=true,pending=false}={}){
- qualification(t);const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'naw-donor-budget-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+function fixture(t,{fault=null,empty=true,pending=false,targetFault=null}={}){
+ qualification(t);const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'naw-donor-budget-')));let restore=()=>{};t.after(()=>{restore();fs.rmSync(root,{recursive:true,force:true});});
  const donor=runtime(root),key='backends/ffffffffffffffffffff',target=path.join(root,key);fs.mkdirSync(target,{recursive:true,mode:0o700});
  if(fault==='unqualified')fs.writeFileSync(path.join(donor.tui,'package.json'),JSON.stringify({version:'old-synthetic'}));
+ if(targetFault==='unsafe-parent'){const base=tui.paths(target).base;fs.mkdirSync(base,{mode:0o700});fs.chmodSync(base,0o770);restore=()=>fs.chmodSync(base,0o700);}
+ if(targetFault==='unreadable'){fs.chmodSync(target,0o300);restore=()=>fs.chmodSync(target,0o700);}
  layout.writeLayout(root,pending?{format:1,active:'.',entries:['.'],pending:key}:{format:1,active:key,entries:['.',key]});
  const {performance}=require('node:perf_hooks'),now=performance.now.bind(performance),open=fs.promises.open;let offset=0,broken=true,locked=false,inheritCalls=0,boots=0;
  t.mock.method(performance,'now',()=>now()+offset);
@@ -18,7 +20,7 @@ function fixture(t,{fault=null,empty=true,pending=false}={}){
   emptyService:s=>s.sessions.length===0,emptyStore:()=>true,lockIdentity:()=>null,waitForShutdown:async()=>{},console:{warn:(...args)=>warnings.push(args)},require:()=>wrapped,
   ensureServiceAt:async dir=>{boots++;return state(dir);},connectService:async dir=>({call:async method=>{if(method==='initial')return state(dir);if(method==='shutdown')retired.push(dir);},close(){}})};
  const source=fs.readFileSync(require.resolve('../service-client.cjs'),'utf8'),start=source.indexOf('async function ensureService(dataDir,'),end=source.indexOf('\nfunction continuationStatus',start);
- return {root,key,target,env,retired,warnings,ctx,repair(){broken=false;},calls:()=>inheritCalls,
+ return {root,key,target,env,retired,warnings,ctx,repair(){broken=false;restore();},calls:()=>inheritCalls,
   async start(endedServiceKey=null){offset=0;boots=0;await vm.runInNewContext(source.slice(start,end)+'\nensureService',ctx)(root,'/synthetic/electron',endedServiceKey);assert.equal(locked,false);return {layout:layout.readLayout(root),boots,inheritCalls};}};
 }
 for(const pending of [false,true])test('unqualified empty donor retires immediately and is not retried, pending='+pending,async t=>{
@@ -42,6 +44,17 @@ for(const fault of ['deadline','filesystem'])test('one '+fault+' still recovers 
 for(const fault of ['unqualified','deadline'])test('retained history is preserved while '+fault+' retries are bounded and reset by version',async t=>{
  const f=fixture(t,{fault,empty:false});for(let n=0;n<4;n++)await f.start();assert.equal(f.calls(),fault==='deadline'?2:1);assert.deepEqual(f.retired,[]);assert.ok(layout.readLayout(f.root).entries.includes('.'));
  f.env.NAW_APP_VERSION='synthetic-v2';await f.start();assert.equal(f.calls(),fault==='deadline'?3:2);assert.equal(layout.readLayout(f.root).dshInheritance.version,'synthetic-v2');
+});
+for(const targetFault of ['unsafe-parent','unreadable'])for(const pending of [false,true])for(const empty of [true,false])test('a refused '+targetFault+' target never retires or charges its qualified donor, pending='+pending+', empty='+empty,async t=>{
+ const f=fixture(t,{targetFault,pending,empty});
+ for(let n=1;n<=3;n++){
+  const r=await f.start();assert.equal(r.inheritCalls,n);assert.equal(tui.installed(f.target),false);
+  assert.ok(r.layout.entries.includes('.'),'the donor stays reachable');assert.equal(r.layout.dshInheritance,undefined,'nothing is recorded against the donor');
+  assert.deepEqual(f.warnings.at(-1),['DSH runtime inheritance skipped:','target']);
+ }
+ tui.verifyRuntime(f.root);assert.deepEqual(f.retired,[]);
+ f.repair();const r=await f.start();assert.equal(r.inheritCalls,4);assert.equal(tui.installed(f.target),true);tui.verifyRuntime(f.target);
+ assert.equal(r.layout.dshInheritance,undefined);assert.deepEqual(r.layout.entries,empty?[f.key]:['.',f.key]);assert.deepEqual(f.retired,empty?[f.root]:[]);
 });
 test('a different target has its own budget and can recover from the same retained source',async t=>{
  const f=fixture(t,{fault:'deadline',empty:false});await f.start();await f.start();f.repair();
