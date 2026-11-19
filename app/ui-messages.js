@@ -3,6 +3,11 @@
   const messages = {
   "zh": {
     "taskBoard.title": "任务板",
+    "taskBoard.currentTasks": "\u5f53\u524d\u4efb\u52a1",
+    "taskBoard.fullView": "\u5b8c\u6574\u4efb\u52a1\u677f",
+    "taskBoard.backCurrent": "\u8fd4\u56de\u5f53\u524d\u4efb\u52a1",
+    "taskBoard.queuedCount": "{count} \u6392\u961f",
+    "taskBoard.nativeWork": "\u5bf9\u8bdd\u8fd0\u884c\u4e2d",
     "taskBoard.doingCount": "{count} \u5728\u505a",
     "taskBoard.waitingCount": "{count} \u7b49\u4f60",
     "taskBoard.waitingUnknown": "\u81f3\u5c11{count} \u7b49\u4f60",
@@ -3511,6 +3516,11 @@
   },
   "en": {
     "taskBoard.title": "Task board",
+    "taskBoard.currentTasks": "Current tasks",
+    "taskBoard.fullView": "Full task board",
+    "taskBoard.backCurrent": "Back to current tasks",
+    "taskBoard.queuedCount": "{count} queued",
+    "taskBoard.nativeWork": "Conversation running",
     "taskBoard.doingCount": "{count} working",
     "taskBoard.waitingCount": "{count} need you",
     "taskBoard.waitingUnknown": "At least {count} need you",

@@ -44,8 +44,8 @@ class Element extends Events {
   focus() { if (this.doc.activeElement === this) return; const before = this.doc.activeElement; this.doc.activeElement = this; before?.fire('focusout', { relatedTarget: this }); this.fire('focusin', { relatedTarget: before }); }
   showModal() { this.invoker = this.doc.activeElement; this.open = true; this.doc.modal = this; }
   close() { if (!this.open) return; this.open = false; this.doc.modal = null; this.invoker?.focus(); this.fire('close'); }
-  showPopover() { this.popoverOpen = true; }
-  hidePopover() { this.popoverOpen = false; }
+  showPopover() { this.popoverOpen = true; this.doc.popover = this; this.fire('toggle', { newState: 'open' }); }
+  hidePopover() { if (!this.popoverOpen) return; this.popoverOpen = false; this.doc.popover = null; this.fire('toggle', { newState: 'closed' }); }
 }
 function fixture() {
   const doc = new Events(), win = new Events(), timers = new Map(); let tick = 0, next = 0;
@@ -54,6 +54,6 @@ function fixture() {
   win.ResizeObserver = class { observe() {} disconnect() { this.disconnected = true; } };
   doc.defaultView = win; doc.createElement = tag => new Element(tag, doc); doc.body = doc.createElement('body'); doc.activeElement = doc.body; doc.querySelector = selector => doc.body.querySelector(selector);
   const main = doc.createElement('main'), host = doc.createElement('section'), content = doc.createElement('article'); host.id = 'task-board'; doc.body.append(main); main.append(host, content);
-  return { doc, win, host, content, timers, tick(ms) { tick += ms; for (const [id, timer] of [...timers]) if (timers.has(id) && timer.at <= tick) { timers.delete(id); timer.fn(); } }, key(key) { const e = doc.fire('keydown', { key }); if (key === 'Escape' && !e.defaultPrevented) doc.modal?.close(); } };
+  return { doc, win, host, content, timers, tick(ms) { tick += ms; for (const [id, timer] of [...timers]) if (timers.has(id) && timer.at <= tick) { timers.delete(id); timer.fn(); } }, key(key) { const e = doc.fire('keydown', { key }); if (key === 'Escape' && !e.defaultPrevented) { if (doc.modal) doc.modal.close(); else doc.popover?.hidePopover(); } } };
 }
 module.exports = { fixture };

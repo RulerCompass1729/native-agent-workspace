@@ -94,7 +94,7 @@
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
       nextExpiry: cardRows.reduce((value, c) => c.expiresAt !== null && (value === null || c.expiresAt < value) ? c.expiresAt : value, null), stale: input.connected === false };
   }
-  function bind({ host, document: doc, text, onQueue, onConfirmation, now = () => Date.now() }) {
+  function bind({ host, document: doc, text, onQueue, onConfirmation, onSession, now = () => Date.now() }) {
     const win = doc.defaultView;
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
     const set = (e, value) => { if (e.textContent !== value) e.textContent = value; };
@@ -108,16 +108,17 @@
     };
     let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '', mode = 'space', scope = 'today', filter = 'all';
     const groups = new Map(), rows = new Map(), placements = new Map();
-    let needsRegroup = false, waitingCount = null, status = overview(input, now()), day = new Date(now()).toDateString();
-    const toggle = control(() => opened ? close() : open(), 'task-board-toggle task-status-button');
-    const track = make('span', 'task-status-track'), busyFill = make('i'), waitFill = make('i');
-    busyFill.className = 'sent'; waitFill.className = 'waiting'; track.append(busyFill, waitFill); attr(track, 'aria-hidden', 'true');
+    let full = false, needsRegroup = false, waitingCount = null, status = overview(input, now()), day = new Date(now()).toDateString();
+    const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
+    const track = make('span', 'task-status-track'); attr(track, 'aria-hidden', 'true');
     const doing = make('span', 'task-status-doing'), waiting = make('span', 'task-status-waiting'), cardTime = make('span', 'task-status-card-time'), done = make('span', 'task-status-done'), warning = make('span', 'task-status-warning');
-    toggle.append(track, doing, waiting, cardTime, done, warning);
-    const panel = make('dialog', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; attr(panel, 'closedby', 'any');
+    const queued = make('span', 'task-status-queued'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
+    toggle.append(track, doing, waiting, cardTime, queued, done, warning, chevron);
+    const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; attr(panel, 'popover', 'auto'); attr(toggle, 'popovertarget', panel.id);
     attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'aria-controls', panel.id);
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
-    h2.id = 'task-board-title'; h2.tabIndex = -1; attr(h2, 'autofocus', ''); heading.append(h2, caption, dismiss);
+    h2.id = 'task-board-title'; h2.tabIndex = -1;
+    const back = control(() => changeView(false), 'task-board-current'); heading.append(back, h2, caption, dismiss);
     const summary = make('div', 'task-board-summary'), controls = make('div', 'task-board-controls'), scopeControls = make('div', 'task-board-options'), groupControls = make('div', 'task-board-options');
     const scopeButtons = new Map(), groupButtons = new Map();
     for (const value of ['today', 'all']) { const b = control(() => { scope = value; reset(); drawPanel(); }); scopeButtons.set(value, b); scopeControls.append(b); }
@@ -127,14 +128,17 @@
     const regroup = control(() => { if (needsRegroup) { groupButtons.get(mode).focus({ preventScroll: true }); reset(); drawPanel(); } }, 'task-board-regroup'); regroup.hidden = true;
     regroup.onblur = () => { if (!needsRegroup) regroup.hidden = true; };
     controls.append(scopeControls, groupControls, select, regroup);
+    const currentList = make('ul', 'task-board-current-list');
     const list = make('div', 'task-board-list'), footer = make('div', 'task-board-footer'), hint = make('span'), queueSpace = make('select');
-    const queue = control(() => { if (data.some(p => p.source === 'space' && p.id === queueSpace.value)) { const id = queueSpace.value; close(); onQueue(id); } });
-    footer.append(hint, queueSpace, queue); panel.append(heading, summary, controls, list, footer);
+    const queue = control(() => { if (data.some(p => p.source === 'space' && p.id === queueSpace.value)) { const id = queueSpace.value; close(); onQueue(id); } }, 'task-board-queue');
+    const fullButton = control(() => changeView(true), 'task-board-full');
+    footer.append(hint, queueSpace, queue, fullButton); panel.append(heading, summary, controls, currentList, list, footer);
     host.classList.add('task-board'); host.append(toggle, panel);
     function translate() {
       attr(host, 'aria-label', f('title'));
       attr(toggle, 'aria-label', f(opened ? 'collapse' : 'expand')); attr(toggle, 'aria-expanded', String(opened));
-      set(h2, f('full')); set(caption, f(scope === 'today' ? 'range' : 'historyRange')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
+      set(h2, f(full ? 'full' : 'currentTasks')); set(caption, full ? f(scope === 'today' ? 'range' : 'historyRange') : f('items', { count: currentItems().length }));
+      set(fullButton, f('fullView')); set(back, f('backCurrent')); back.hidden = !full; set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(scopeControls, 'role', 'group'); attr(scopeControls, 'aria-label', f('scope')); attr(groupControls, 'role', 'group'); attr(groupControls, 'aria-label', f('group'));
       for (const [value, b] of scopeButtons) { set(b, f(value)); attr(b, 'aria-pressed', String(scope === value)); }
       for (const [value, b] of groupButtons) { set(b, f('by.' + value)); attr(b, 'aria-pressed', String(mode === value)); }
@@ -143,26 +147,30 @@
       set(regroup, f(needsRegroup ? 'regroup' : 'groupCurrent')); attr(regroup, 'aria-description', f('regroupHint')); regroup.title = f('regroupHint');
     }
     function positionPanel() {
-      const rect = toggle.getBoundingClientRect(), top = Math.min(rect.bottom + 8, Math.max(12, win.innerHeight - 160));
-      const width = Math.max(1, Math.min(860, win.innerWidth - 24));
-      Object.assign(panel.style, { left: Math.max(12, Math.min(rect.right - width, win.innerWidth - width - 12)) + 'px', top: top + 'px', width: width + 'px', height: Math.max(1, Math.min(560, win.innerHeight - top - 14)) + 'px' });
+      const rect = toggle.getBoundingClientRect(), top = Math.min(rect.bottom + 6, Math.max(12, win.innerHeight - 160));
+      const width = Math.max(1, Math.min(full ? 860 : win.innerWidth <= 1000 ? 530 : 600, win.innerWidth - 24));
+      Object.assign(panel.style, { left: Math.max(12, Math.min(rect.right - width, win.innerWidth - width - 12)) + 'px', top: top + 'px', width: width + 'px', maxHeight: Math.max(1, Math.min(560, win.innerHeight - top - 14)) + 'px' });
     }
-
-    function reset() { for (const g of groups.values()) g.element.remove(); groups.clear(); rows.clear(); placements.clear(); needsRegroup = false; list.scrollTop = 0; }
+    function currentItems() {
+      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
+      return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
+    }
+    function reset() { for (const g of groups.values()) g.element.remove(); groups.clear(); rows.clear(); placements.clear(); currentList.replaceChildren(); needsRegroup = false; list.scrollTop = 0; }
+    function changeView(value) { full = value; reset(); drawPanel(); positionPanel(); h2.focus({ preventScroll: true }); }
     function open(id) {
       if (disposed) return;
-      if (!opened) { reset(); scope = 'today'; mode = 'space'; filter = 'all'; select.value = 'all'; }
-      opened = true; panel.hidden = false; translate(); drawPanel(); positionPanel(); panel.showModal();
-
+      if (!opened) { reset(); full = Boolean(id); scope = 'today'; mode = 'space'; filter = 'all'; select.value = 'all'; }
+      opened = true; panel.hidden = false; translate(); drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
       if (id) { queueSpace.value = id; const g = groups.get(id); if (g) { g.element.open = true; g.element.scrollIntoView({ block: 'nearest' }); } }
     }
-    function closed() {
+    function closed(restore = false) {
       if (!opened) return;
-      opened = false; panel.hidden = true;
-      translate(); drawBar(); if (toggle.isConnected && !doc.querySelector('dialog:modal')) toggle.focus({ preventScroll: true });
+      const inside = panel.contains(doc.activeElement);
+      opened = false; panel.hidden = true; translate(); drawBar();
+      if ((restore || inside || doc.activeElement === doc.body) && toggle.isConnected && !doc.querySelector('dialog:modal')) toggle.focus({ preventScroll: true });
     }
-    function close() { if (opened) { panel.close(); closed(); } }
-    panel.addEventListener('close', closed);
+    function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
+    panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
     function remaining(expiresAt) {
       const seconds = Math.max(0, Math.ceil((expiresAt - now()) / 1000));
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -177,20 +185,53 @@
       cardTime.hidden = !cardTime.textContent;
       set(done, status.stale ? '' : f('queueDoneToday', { count: status.done })); done.hidden = status.stale;
       set(warning, status.unknown ? f('unknownCount', { count: status.unknown }) : status.failed ? f('failedCount', { count: status.failed }) : ''); warning.hidden = !warning.textContent;
-      const attention = count + status.cardCount, active = status.doing + attention;
-      track.hidden = !active || status.stale || status.unknown > 0;
-      busyFill.style.width = (active ? status.doing / active * 100 : 0) + '%'; waitFill.style.width = (active ? attention / active * 100 : 0) + '%';
-      attr(toggle, 'aria-label', [doing, waiting, cardTime, done, warning].filter(e => !e.hidden).map(e => e.textContent).join(' · ') + ' · ' + f('expand'));
+      const items = currentItems(), cap = win.innerWidth <= 1000 ? 8 : 20;
+      track.hidden = !items.length || status.stale;
+      const cells = items.slice(0, cap).map(item => { let cell = [...track.children].find(c => c.dataset.itemKey === item.key); if (!cell) cell = make('i'); cell.className = 'task-status-square ' + (item.source === 'confirmation' ? 'confirmation' : item.kind); cell.dataset.itemKey = item.key; return cell; });
+      if (items.length > cap) { let more = track.querySelector('.task-status-more'); if (!more) more = make('span', 'task-status-more'); set(more, status.unknown ? '…' : '+' + (items.length - cap)); cells.push(more); }
+      move(track, cells);
+      const queuedCount = items.filter(q => q.kind === 'queued').length; set(queued, f('queuedCount', { count: queuedCount })); queued.hidden = !queuedCount || status.stale;
+      attr(toggle, 'aria-label', [doing, waiting, cardTime, queued, done, warning].filter(e => !e.hidden).map(e => e.textContent).join(' · ') + ' · ' + f('expand'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
+    }
+    function activate(key) {
+      const item = data.flatMap(p => p.all).find(q => q.key === key);
+      if (!item) return;
+      if (item.source === 'confirmation') {
+        if (!item.target || item.expiresAt !== null && item.expiresAt <= now()) { update(); return; }
+        close(false); onConfirmation?.(item.target); return;
+      }
+      const session = input.sessions?.find(s => s.id === item.memberKey && !s.archived);
+      close(false);
+      if (session && onSession) onSession(session.id, session.nativeId);
+      else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
     }
     function row(item) {
       let view = rows.get(item.key);
-      if (!view) { const element = make('li', 'task-board-task'), body = make('div'), title = make('span', 'task-board-task-title'), note = make('small'), status = make('span', 'task-board-status'), member = make('span', 'task-board-owner'); body.append(title, note); element.append(body, status, member); element.dataset.taskKey = item.key; view = { element, title, note, status, member }; rows.set(item.key, view); }
-      set(view.title, item.source === 'confirmation' ? f('confirmation') : item.text); set(view.status, f(item.source === 'conversation' && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
-      set(view.member, item.memberName || f(item.memberKey ? 'memberMissing' : 'unassigned'));
-      if (item.source === 'confirmation' && item.target && !view.link) { view.link = control(() => { close(); if (onConfirmation) onConfirmation(item.target); }, 'task-board-card-link'); view.title.parentElement.insertBefore(view.link, view.title); view.link.append(view.title); }
-      set(view.note, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardDeadlineOne', { count: 1, time: remaining(item.expiresAt) }) : item.reason || item.waiting ? f('reasonInQueue') : mode !== 'space' ? item.spaceName : ''); view.note.hidden = !view.note.textContent;
+      if (!view) {
+        const element = make('li', 'task-board-task'), link = control(() => activate(item.key), 'task-board-entry'), body = make('div'), title = make('span', 'task-board-task-title'), note = make('small'), status = make('span', 'task-board-status'), member = make('span', 'task-board-owner');
+        body.append(title, note); link.append(body, status, member); element.append(link); element.dataset.taskKey = item.key; view = { element, link, title, note, status, member }; rows.set(item.key, view);
+      }
+      const actor = input.sessions?.find(s => s.id === item.memberKey), actorName = item.memberName || actor?.name || f(item.memberKey ? 'memberMissing' : 'unassigned');
+      const origin = (item.source === 'confirmation' ? input.rooms?.find(p => actor?.roomIds?.includes(p.id))?.name : item.spaceName || data.find(p => p.id === item.spaceId)?.name) || f(item.source === 'confirmation' ? 'confirmations' : 'independent');
+      view.link.dataset.itemId = item.id; view.link.dataset.sessionId = item.memberKey || ''; view.link.dataset.spaceId = item.spaceId; view.link.dataset.kind = item.kind; view.link.dataset.source = item.source;
+      view.link.disabled = item.source === 'confirmation' ? !item.target : !actor && !data.some(p => p.source === 'space' && p.id === item.spaceId);
+      view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
+      set(view.title, item.source === 'confirmation' ? f('confirmation') : item.source === 'conversation' ? f(item.kind === 'sent' ? 'nativeWork' : 'status.' + item.kind) : item.text);
+      set(view.status, !full && item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('confirmation') + ' · ' + remaining(item.expiresAt) : f(item.source === 'conversation' && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
+      set(view.member, actorName);
+      set(view.note, !full ? origin + ' · ' + actorName : item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardDeadlineOne', { count: 1, time: remaining(item.expiresAt) }) : item.reason || item.waiting ? f('reasonInQueue') : mode !== 'space' ? origin : ''); view.note.hidden = !view.note.textContent;
       return view.element;
+    }
+    function drawCurrent() {
+      const scroll = currentList.scrollTop, focused = doc.activeElement;
+      const first = [...currentList.children].find(e => e.getBoundingClientRect().bottom > currentList.getBoundingClientRect().top), offset = first ? first.getBoundingClientRect().top - currentList.getBoundingClientRect().top : 0;
+      const items = currentItems(), keys = new Set(items.map(q => q.key));
+      for (const [key, view] of rows) if (!keys.has(key)) { view.element.remove(); rows.delete(key); }
+      move(currentList, items.map(row));
+      if (!items.length) currentList.append(make('li', 'task-board-empty')); if (!items.length) set(currentList.firstElementChild, f(status.unknown || status.stale ? 'unavailable' : 'noRecords'));
+      if (first?.isConnected && currentList.contains(first)) currentList.scrollTop += first.getBoundingClientRect().top - currentList.getBoundingClientRect().top - offset; else currentList.scrollTop = scroll;
+      if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
     }
     function group(key, name, index) {
       let g = groups.get(key);
@@ -205,6 +246,8 @@
     }
     function drawPanel() {
       if (!opened) return;
+      panel.dataset.mode = full ? 'full' : 'current'; currentList.hidden = full; list.hidden = !full; summary.hidden = controls.hidden = queueSpace.hidden = queue.hidden = !full; fullButton.hidden = full;
+      if (!full) { translate(); drawCurrent(); return; }
       const focused = doc.activeElement, scroll = list.scrollTop, first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
       const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : null;
       translate();
@@ -263,10 +306,10 @@
       if (new Date(now()).toDateString() !== day || status.nextExpiry !== null && status.nextExpiry <= now()) { update(); return; }
       if (status.nextExpiry !== null) {
         drawBar();
-        for (const c of status.cards) { const view = rows.get(c.key); if (view && c.expiresAt !== null) set(view.note, f('cardDeadlineOne', { count: 1, time: remaining(c.expiresAt) })); }
+        for (const c of status.cards) { const view = rows.get(c.key); if (view && c.expiresAt !== null) row(c); }
       }
     }
-    const visible = () => { if (!doc.hidden) update(); }, resize = () => { if (opened) positionPanel(); };
+    const visible = () => { if (!doc.hidden) update(); }, resize = () => { drawBar(); if (opened) positionPanel(); };
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize);
     doc.addEventListener('visibilitychange', visible);
     return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); placements.clear(); } };
