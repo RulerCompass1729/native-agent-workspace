@@ -81,13 +81,13 @@ const ordinary = (list, language) => list.filter(option => option.value.title !=
   option.value.message !== locale.format(language, 'records.delete.question', { count: 'RAW 中文 backend names'.length }) &&
   option.value.title !== locale.format(language, 'discoveries.title'));
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 25);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 24);
   // Daily discoveries (regular popup): one notice carrying only a count, never candidate text.
   for (const [list, title, body] of [[en, 'Daily discoveries', '3 new discoveries today. Read when you have time.'], [zh, '每日发现', '今天有3项新发现，有空再看。']]) {
     const found = list.filter(option => option.value.title === title); assert.equal(found.length, 1);
     assert.deepEqual([found[0].type, found[0].value], ['notification', { title, body }]); list.splice(list.indexOf(found[0]), 1);
   }
-  assert.equal(en.length, 24);
+  assert.equal(en.length, 23);
   // Records kept whole (the bell): the folder an export goes to, and the last confirmation before exported blocks are
   // deleted, whose safe answer, Cancel, is the default; the folder is shown as it is.
   for (const [list, language] of [[en, 'en'], [zh, 'zh']]) {
@@ -98,22 +98,20 @@ test('all existing OS option groups use the chosen language while raw names, pic
     assert.deepEqual([list[remove].type, value.buttons, value.defaultId, value.cancelId], ['showMessageBox', [locale.format(language, 'records.delete.cancel'), locale.format(language, 'records.delete.confirm')], 0, 0]);
     assert.ok(value.detail.includes('/synthetic/RAW 中文 export')); list.splice(remove, 1);
   }
-  assert.equal(en.length, 22);
+  assert.equal(en.length, 21);
   // The last surface is the folder dialog for the project where merges are checked (B6, the queue panel): a title, and folders only.
-  assert.deepEqual([en[21].type, en[21].value], ['showOpenDialog', { title: 'Choose the project folder: the top folder of the project the integrator merges into', properties: ['openDirectory'] }]);
-  assert.deepEqual([zh[21].type, zh[21].value], ['showOpenDialog', { title: '选择项目文件夹：集成者把活合进去的那个项目最上层的文件夹', properties: ['openDirectory'] }]);
+  assert.deepEqual([en[20].type, en[20].value], ['showOpenDialog', { title: 'Choose the project folder: the top folder of the project the integrator merges into', properties: ['openDirectory'] }]);
+  assert.deepEqual([zh[20].type, zh[20].value], ['showOpenDialog', { title: '选择项目文件夹：集成者把活合进去的那个项目最上层的文件夹', properties: ['openDirectory'] }]);
   en.pop(); zh.pop();
   // Before it comes the integration handoff notice (B6): a count and a reason, never task text.
-  assert.deepEqual(en[20].value, { title: 'NAW · Integration handoff needs you', body: 'The merge lock is held by RAW 中文 owner. Deliveries waiting: 2' });
-  assert.deepEqual(zh[20].value, { title: 'NAW · 集成交接要你处理', body: '合并锁被 RAW 中文 owner 占着，2 件交付在等' });
-  assert.equal(en[20].type, 'notification'); en.pop(); zh.pop();
+  assert.deepEqual(en[19].value, { title: 'NAW · Integration handoff needs you', body: 'The merge lock is held by RAW 中文 owner. Deliveries waiting: 2' });
+  assert.deepEqual(zh[19].value, { title: 'NAW · 集成交接要你处理', body: '合并锁被 RAW 中文 owner 占着，2 件交付在等' });
+  assert.equal(en[19].type, 'notification'); en.pop(); zh.pop();
   const quit = en.findIndex(option => option.value.title === 'NAW · Quitting');
   assert.ok(quit >= 0); assert.equal(en[quit].value.body, 'Closing the butler; waiting up to 5 seconds.');
   assert.equal(zh[quit].value.body, '正在关闭大管家，最多等待 5 秒。');
   en.splice(quit, 1); zh.splice(quit, 1);
-  assert.deepEqual(en[2].value, { title: 'NAW · Needs your decision', body: 'RAW 中文 agent requests Read a local file; waiting for your confirmation' });
-  assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 agent 请求读取本机文件，等你确认' });
-  en.splice(2, 1); zh.splice(2, 1); // Keep the existing eighteen option-group checks below.
+  // The background confirmation notice is built in confirmation-notifications.cjs; its zh/en text is checked there.
   // The eighteenth surface is the notice for a backend NAW migrated by itself (automatic migration).
   assert.deepEqual(en[17].value, { title: 'NAW · Backend migration', body: 'Moved “RAW 中文 session” to the new backend; the conversations continue, and typed-into terminals were saved first.' });
   assert.deepEqual(zh[17].value, { title: 'NAW · 迁移旧后台', body: '已把「RAW 中文 session」挪到新后台，对话原样继续；终端里打过字的先存下了画面。' });
@@ -130,8 +128,8 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.equal(zh[1].value.title, 'NAW · 自动继续已达上限'); assert.equal(zh[1].value.body, '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。');
   assert.deepEqual(decision, { title: 'NAW · Needs your decision', body: 'RAW 中文 member · RAW 中文 space: RAW 中文 question' });
   assert.deepEqual(zh[2].value, { title: 'NAW · 需要你决定', body: 'RAW 中文 member · RAW 中文 space：RAW 中文 question' });
-  assert.deepEqual(ordinary(osOptions('en', true, 'os.queueFailed'), 'en')[3].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
-  assert.deepEqual(ordinary(osOptions('zh', true, 'os.queueFailed'), 'zh')[3].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
+  assert.deepEqual(ordinary(osOptions('en', true, 'os.queueFailed'), 'en')[2].value, { title: 'NAW · Task not delivered', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space; not resent automatically' });
+  assert.deepEqual(ordinary(osOptions('zh', true, 'os.queueFailed'), 'zh')[2].value, { title: 'NAW · 派活没有完成', body: 'RAW 中文 task → RAW 中文 member · RAW 中文 space；不会自动重发' });
   assert.equal(space.message, 'Clear shared records for “RAW 中文 {space}”?'); assert.deepEqual(space.buttons, ['Cancel', 'Clear shared records']);
   assert.equal(files.title, 'Local files for “RAW 中文 {space}”'); assert.deepEqual(files.filters, [{ name: 'Text files', extensions: ['txt', 'md'] }]);
   assert.equal(program.buttonLabel, 'Use this program'); assert.equal(shared.message, 'Clear shared workspace records?');
@@ -139,7 +137,7 @@ test('all existing OS option groups use the chosen language while raw names, pic
   assert.deepEqual(update.buttons, ['Keep current connection', 'Checked; update connection']); assert.ok(update.detail.includes('background or child tasks'));
   assert.deepEqual(forget.buttons, ['Cancel', 'Remove record']); assert.ok(forget.detail.includes('drafts'));
   assert.equal(stop.message, 'Disconnect this Codex session?'); assert.deepEqual(stop.buttons, ['Keep session', 'Disconnect']);
-  const claude = ordinary(osOptions('en', false), 'en')[12].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
+  const claude = ordinary(osOptions('en', false), 'en')[11].value; assert.equal(claude.message, 'End this native session?'); assert.deepEqual(claude.buttons, ['Keep session', 'End session']); assert.notEqual(stop.detail, claude.detail);
   assert.equal(material.defaultPath, '/synthetic/RAW 中文 {name}'); assert.equal(save.defaultPath, 'RAW 中文-copy.txt'); assert.equal(folder.title, 'Choose a working directory for this session');
   const nativeFacts = row => { const { title, body, message, detail, buttons, buttonLabel, filters, ...other } = row.value; return { ...other, ...(filters ? { filterExtensions: filters.map(filter => filter.extensions) } : {}) }; };
   assert.deepEqual(en.map(nativeFacts), zh.map(nativeFacts));

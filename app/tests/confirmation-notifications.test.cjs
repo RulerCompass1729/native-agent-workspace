@@ -60,12 +60,45 @@ for (const kind of ['close', 'click', 'restart', 'expired', 'native-replaced', '
 for (const [event, legacy] of [[{ actionIndex: -1 }, undefined], [{ actionIndex: 2 }, undefined], [{ actionIndex: '0' }, undefined], [{ actionIndex: 0 }, 1], [{}, NaN]]) test('invalid action cannot select another card button: ' + JSON.stringify([event, legacy]), async t => {
   const h = harness(); t.after(() => h.dispose()); await h.notify(); h.notices[0].emit('action', event, legacy); await flush(); assert.equal(h.decisions.length, 0);
 });
+const renameLine = { zh: '会话「Worker」·Codex·Lab→「Next」；只改名称', en: 'Rename “Worker” · Codex · Lab → “Next”; name only' };
 for (const language of ['zh', 'en']) test('bounded complete projection and explicit fallback in ' + language, async t => {
   const h = harness('rename', ['target', 'Next'], language); t.after(() => h.dispose()); await h.notify();
   const shown = h.notices[0].options; assert.match(shown.title, /Lead.*Claude/); assert.match(shown.body, /Worker.*Codex.*Lab.*Next/);
+  assert.equal(shown.body.split('\n')[0], renameLine[language]);
   assert.ok([...shown.body].length <= 120); assert.equal(shown.actions.length, 2);
   h.record.command.arguments[1] = 'long '.repeat(100);
   assert.equal(shortPresentation(h.record, { state: h.snapshot }, (key, params) => locale.format(language, key, params), Date.now()), null);
+});
+// Names and button counts pass in either language; only the fixed wording shows a fallback.
+const actionLines = {
+  zh: [
+    ['roomRename', ['Next'], '空间「Lab」→「Next」；只改名称'],
+    ['spaceCreate', ['New'], '新建空空间「New」'],
+    ['join', ['target', false], '移动「Worker」·Codex：Lab→独立会话；保留原生会话'],
+    ['archiveSession', ['target'], '归档「Worker」·Codex，从Lab移出；保留原生会话'],
+    ['restoreSession', ['target'], '恢复「Worker」·Codex到Lab；保留原生会话'],
+  ],
+  en: [
+    ['roomRename', ['Next'], 'Space “Lab” → “Next”; name only'],
+    ['spaceCreate', ['New'], 'Create empty space “New”'],
+    ['join', ['target', false], 'Move “Worker” · Codex: Lab → Standalone; keep native session'],
+    ['archiveSession', ['target'], 'Archive “Worker” · Codex from Lab; keep native session'],
+    ['restoreSession', ['target'], 'Restore “Worker” · Codex to Lab; keep native session'],
+  ],
+};
+for (const language of ['zh', 'en']) test('short-card action lines use the ' + language + ' wording', () => {
+  for (const [method, args, line] of actionLines[language]) {
+    const h = harness(method, args, language);
+    const target = h.snapshot.sessions[1];
+    let archives = {};
+    if (method === 'restoreSession') {
+      target.archived = true;
+      target.roomIds = [];
+      archives = { target: { restorable: true, nativeId: target.nativeId, rooms: [{ id: 'shared' }] } };
+    }
+    const shown = shortPresentation(h.record, { state: h.snapshot, archives }, (key, params) => locale.format(language, key, params), Date.now());
+    assert.equal(shown?.body.split('\n')[0], line, method);
+  }
 });
 for (const [method, args] of [['spaceCreate', ['New']], ['spaceAction', ['shared', 'rename', ['New']]], ['spaceAction', ['shared', 'join', ['target', false]]], ['archiveSession', ['target']]]) test('allowlisted exact shape ' + JSON.stringify([method, args]), async t => {
   const h = harness(method, args); t.after(() => h.dispose()); await h.notify(); assert.equal(h.notices[0].options.actions.length, 2);

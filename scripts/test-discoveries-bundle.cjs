@@ -67,7 +67,9 @@ function target(input) {
 async function run(input) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('This check requires Apple Silicon macOS');
   const t = target(input); verifySignature(t.bundle); await verifyPackageFuses(t.bundle); const initialSeal = seal(t);
-  const before = reports(t.reportNames), root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-discoveries-bundle-'))), identity = fs.lstatSync(root);
+  // Loaded here so requiring the report helpers never installs its exit hooks.
+  const testScratch = require('./fixtures/test-scratch.cjs');
+  const before = reports(t.reportNames), root = fs.realpathSync(testScratch.directory(path.join(os.tmpdir(), 'naw-discoveries-bundle-'))), identity = fs.lstatSync(root);
   let runWorker, RegularPopup, create, probeSource, wireSource;
   try {
     ({ runWorker } = require(path.join(t.app, 'app/regular-popup-transport.cjs')));
@@ -153,6 +155,10 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === '--help') console.log('Usage: node scripts/test-discoveries-bundle.cjs /absolute/path/to/trusted-NAW.app\nRead-only bundle check; private synthetic fixtures only.');
   else if (args.length !== 1 || !path.isAbsolute(args[0])) { console.error('Expected one absolute NAW bundle path'); process.exitCode = 1; }
-  else run(args[0]).then(value => console.log('PASS ' + JSON.stringify(value)), error => { console.error('BLOCKED ' + error.message); process.exitCode = 1; });
+  else {
+    const testScratch = require('./fixtures/test-scratch.cjs');
+    run(args[0]).then(value => console.log('PASS ' + JSON.stringify(value)), error => { console.error('BLOCKED ' + error.message); process.exitCode = 1; })
+      .finally(testScratch.cleanup(async () => {}));
+  }
 }
 module.exports = { run, target, reportNames, reports };

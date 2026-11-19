@@ -1,6 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
-const { EventEmitter } = require('node:events');
+const { EventEmitter } = require('node:events'), { createRequire } = require('node:module');
 const { RoomState } = require('../room-state.cjs');
 const rules = require('../queue-dispatch.cjs'), locale = require('../ui-locale.js');
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
@@ -73,6 +73,7 @@ function harness(language = 'zh') {
   const sandbox = { Notification, butlerIngress: null, showQuestionNotification: require('../butler-question-notification.cjs').showQuestionNotification, queueRules: rules, untouchedDefault: require('../collaboration-spaces.cjs').untouchedDefault,
     queueOutcomeSeen: new Set(), queueOutcomeNotifications: new Map(), pendingReveal: null,
     windows: new Map([[1,c]]), quitting: false, backgroundTest: true, focusOrOpen: () => activations++,
+    require: createRequire(require.resolve('../main.cjs')), backgroundNotifications: null, backgroundControl: null, notificationScreen: null, primary: true,
     roomState: { metadata: () => ({ id: 'shared', name: '共同工作' }) }, backgroundOperation: require('../background-operation.cjs'),
     displayText: (key, params) => locale.format(language, key, params), register: (key, fn) => callbacks.set(key, fn) };
   vm.createContext(sandbox);
@@ -123,21 +124,23 @@ test('record navigation validates before changing views, including archived and 
   }
   current={events:[{id:'event'}],messages:[]};calls.length=0;await c.showRoomRecord('shared','event');assert.deepEqual(calls,['shared','event']);
 });
-for (const language of ['zh', 'en']) test(`background confirmation uses B1 one-shot notification and exact session target: ${language}`, () => {
-  const h = harness(language), record = { id: 'operation', actor: { id: 'agent', nativeId: 'native-agent', name: 'Agent' }, command: { method: 'openLocalFile', arguments: [], paths: ['/synthetic/PRIVATE'] } };
-  h.sandbox.notifyBackgroundConfirmation(record); h.sandbox.notifyBackgroundConfirmation(record);
+for (const language of ['zh', 'en']) test(`background confirmation uses B1 one-shot notification and exact session target: ${language}`, async () => {
+  const h = harness(language), record = { id: 'operation', at: Date.now(), state: 'confirmation-required', actor: { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider: 'claude' }, command: { method: 'openLocalFile', arguments: [], paths: ['/synthetic/PRIVATE'] } };
+  await h.sandbox.notifyBackgroundConfirmation(record); await h.sandbox.notifyBackgroundConfirmation(record);
   assert.equal(h.notices.length, 1); assert.ok(!JSON.stringify(h.notices[0].options).includes('PRIVATE'));
-  assert.equal(h.notices[0].options.body, language === 'zh' ? 'Agent 请求读取本机文件，等你确认' : 'Agent requests Read a local file; waiting for your confirmation');
+  // A long or private request only opens the full card (confirmation-notifications.cjs).
+  assert.equal(h.notices[0].options.title, locale.format(language, 'os.decisionTitle'));
+  assert.ok(h.notices[0].options.body.startsWith(locale.format(language, 'notification.openFull') + '\n'));
   h.c.uiReady = false; h.notices[0].emit('click'); assert.equal(h.sent.length, 0);
   h.ready(); assert.equal(h.sent.length, 1);
   assert.equal(JSON.stringify(h.sent[0][1]), JSON.stringify({ sessionId: 'agent', nativeId: 'native-agent', messageId: 'background:native-agent:operation' }));
 });
-test('background notification renders format characters visibly in the actor name', () => {
-  const h = harness(), record = { id: 'operation', actor: { id: 'agent', nativeId: 'native', name: 'Agent\u202e\u200b\u2028' }, command: { method: 'input', arguments: ['target', 'not a notification payload'] } };
-  h.sandbox.notifyBackgroundConfirmation(record);
-  const body = h.notices[0].options.body;
-  assert.equal(/[\p{Cf}\p{Zl}\p{Zp}]/u.test(body), false); assert.match(body, /Agent\\u202e\\u200b\\u2028/);
-  assert.equal(body.includes('not a notification payload'), false);
+test('background notification never carries format characters of the actor name or the input payload', async () => {
+  const h = harness(), record = { id: 'operation', at: Date.now(), state: 'confirmation-required', actor: { id: 'agent', nativeId: 'native', name: 'Agent\u202e\u200b\u2028', provider: 'claude' }, command: { method: 'input', arguments: ['target', 'not a notification payload'] } };
+  await h.sandbox.notifyBackgroundConfirmation(record);
+  assert.equal(h.notices.length, 1); const text = h.notices[0].options.title + '\n' + h.notices[0].options.body;
+  assert.equal(/[\p{Cf}\p{Zl}\p{Zp}]/u.test(text), false);
+  assert.equal(text.includes('not a notification payload'), false);
 });
 test('session confirmation navigation rejects stale identities or handled requests before changing views', async () => {
   const source = fs.readFileSync(require.resolve('../renderer/search-view.js'), 'utf8'), calls = [];
