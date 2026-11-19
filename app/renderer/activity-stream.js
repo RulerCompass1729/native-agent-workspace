@@ -8,7 +8,7 @@
       reviews ? text('reviewCount', { count: reviews }) : ''].filter(Boolean).join(' · ');
   }
   function bind(host) {
-    const doc = host.document, model = root.nativeWorkspaceTaskStream;
+    const doc = host.document, model = root.nativeWorkspaceTaskStream, disclosure = root.nativeWorkspaceDisclosure, PAGE = disclosure.PAGE;
     const el = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
     const t = (key, params) => host.text('stream.' + key, params);
     const button = (cls, label, act) => { const n = el('button', cls, label); n.type = 'button'; n.onclick = () => host.attempt(act); return n; };
@@ -16,21 +16,28 @@
     const roomOf = id => host.rooms().find(r => !r.archived && host.isMember(sessions().find(s => s.id === id), r.id))?.id || '';
     const roomName = id => { const room = host.rooms().find(r => r.id === id); return room ? host.roomName(room) : ''; };
     const nameOf = id => sessions().find(s => s.id === id)?.name || '';
-    let openRoom = '', waitingOpen = false, waitingKey = '', filter = 'all', scope = '', limit = 120, signature = '';
+    let openRoom = '', waitingOpen = false, waitingKey = '', filter = 'all', scope = '', limit = PAGE, signature = '';
     const cache = new Map(), waitingRows = new Map(); let waitingNodes;
     const strip = el('section', 'stream-waiting'); strip.id = 'stream-waiting'; strip.hidden = true;
     const panel = el('aside', 'activity-stream'); panel.id = 'activity-stream'; panel.hidden = true;
     const head = el('div', 'stream-heading'); head.append(el('strong', '', host.text('room.records')),
       button('small', t('close'), () => { openRoom = ''; render(); host.toggleChanged(); }));
     const tools = el('div', 'stream-tools'), search = el('input'); search.type = 'search'; search.placeholder = t('search'); search.setAttribute('aria-label', t('search'));
-    search.oninput = () => { limit = 120; signature = ''; drawFeed(); };
+    search.oninput = () => { limit = PAGE; signature = ''; drawFeed(); };
     const filters = el('div', 'stream-filters'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', t('filter'));
     for (const key of ['all', 'mine', 'active', 'queued', 'ended']) {
-      const b = button('small', t(key), () => { filter = key; limit = 120; signature = ''; drawFeed(); }); b.dataset.filter = key; filters.append(b);
+      const b = button('small', t(key), () => { filter = key; limit = PAGE; signature = ''; drawFeed(); }); b.dataset.filter = key; filters.append(b);
     }
     tools.append(filters, search);
     const list = el('div', 'stream-list'); list.tabIndex = 0; list.setAttribute('aria-label', host.text('room.recordContents'));
-    panel.append(head, tools, list);
+    // The next 15 earlier records; focus goes on from the first one that appears.
+    const more = disclosure.pager({ document: doc, say: (n, key, params) => { n.textContent = host.text(key, params()); }, onMore: () => {
+      const before = new Set(cache.keys());
+      limit += PAGE; signature = ''; drawFeed();
+      [...cache].find(([id]) => !before.has(id))?.[1].summary.focus();
+    } });
+    more.button.className += ' stream-more';
+    panel.append(head, tools, list, more.status);
     doc.getElementById('room-layout').append(panel);
     doc.getElementById('header').before(strip);
     const validTime = time => Number.isFinite(time) && Math.abs(time) <= 8640000000000000;
@@ -124,26 +131,27 @@
         const task = byEvent.get(row.id), target = model.originalTarget(row, task?.item);
         let entry = cache.get(row.id);
         if (!entry) {
-          const article = el('article', 'stream-row'); article.dataset.recordId = row.id;
-          const link = button('stream-record-link', '', () => entry.target ? host.original(entry.target) : details.open = !details.open);
-          const title = el('div', 'stream-row-heading'), author = el('strong'), time = el('time'); title.append(author, time);
-          const preview = el('div', 'stream-preview'); link.append(title, preview);
-          const details = el('details', 'stream-detail'), summary = el('summary', '', t('detail')), body = el('div', 'stream-body'); details.append(summary, body);
-          article.append(link, details); entry = { article, link, author, time, preview, details, summary, body }; cache.set(row.id, entry);
+          // One line (time · who · the start of the record) that opens to the whole record and the way to its original.
+          const parts = disclosure.line(doc, 'article');
+          parts.row.className += ' stream-row'; parts.row.dataset.recordId = row.id; parts.details.className = 'stream-detail';
+          const author = el('strong'), preview = el('span', 'stream-preview'); parts.text.append(author, preview);
+          const body = el('div', 'stream-body'), link = button('small stream-record-link', '', () => entry.target && host.original(entry.target));
+          parts.body.append(body, link);
+          entry = { article: parts.row, details: parts.details, summary: parts.summary, author, time: parts.time, preview, body, link }; cache.set(row.id, entry);
         }
         entry.target = target;
         const text = host.displayText(row.text, row.uiMessage) || '', label = host.label(row);
         if (entry.author.textContent !== label) entry.author.textContent = label;
         entry.time.textContent = clock(row.time); if (validTime(row.time)) entry.time.dateTime = new Date(row.time).toISOString(); else entry.time.removeAttribute('datetime');
-        entry.link.title = t(target ? 'original' : 'detail');
+        entry.link.textContent = t('original'); entry.link.hidden = !target;
         const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
         if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
-        entry.summary.textContent = t('detail'); if (entry.body.textContent !== text) entry.body.textContent = text;
+        if (entry.body.textContent !== text) entry.body.textContent = text;
         entry.article.classList.toggle('stream-speech', row.role === 'human' || row.role === 'assistant' || Boolean(row.wake || row.peerMessage));
         retained.add(row.id); nodes.push(entry.article);
       }
       if (!rows.length) nodes.push(el('p', 'quiet', t('empty')));
-      if (all.length > rows.length) nodes.push(button('small stream-more', t('more'), () => { limit += 120; drawFeed(); }));
+      nodes.push(more.button); more.show({ count: Math.min(PAGE, all.length - rows.length), total: all.length, shown: rows.length });
       // Reconcile existing entries in place: incoming events must not discard
       // an expanded record, keyboard focus or the person's reading position.
       for (let i = 0; i < nodes.length; i++) if (list.children[i] !== nodes[i]) list.insertBefore(nodes[i], list.children[i] || null);
@@ -154,13 +162,13 @@
       for (const [id] of cache) if (!retained.has(id)) cache.delete(id);
     }
     function open(roomId, memberId = '', recordId = '') {
-      openRoom = roomId; scope = memberId; filter = 'all'; search.value = ''; limit = 120; signature = '';
+      openRoom = roomId; scope = memberId; filter = 'all'; search.value = ''; limit = PAGE; signature = '';
       if (recordId) {
         const room = host.rooms().find(r => r.id === roomId), at = model.records(room).findIndex(r => r.id === recordId);
         if (at >= limit) limit = at + 1;
       }
       render(); host.toggleChanged();
-      if (recordId) { const entry = cache.get(recordId); if (entry) { entry.details.open = true; entry.article.scrollIntoView({ block: 'center' }); entry.link.focus({ preventScroll: true }); } }
+      if (recordId) { const entry = cache.get(recordId); if (entry) { entry.details.open = true; entry.article.scrollIntoView({ block: 'center' }); entry.summary.focus({ preventScroll: true }); } }
     }
     function render() {
       drawWaiting();

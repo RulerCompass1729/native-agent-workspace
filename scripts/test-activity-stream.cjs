@@ -101,11 +101,17 @@ async function main() {
     assert.ok(await page.locator('#collaboration-overview').isVisible()); record('stream keeps member overview visible');
     const times = await page.locator('.stream-row time').evaluateAll(nodes => nodes.map(n => Date.parse(n.dateTime)).filter(Number.isFinite));
     assert.deepEqual(times, [...times].sort((a, b) => b - a)); assert.ok(await page.locator('.stream-day').count() >= 2); record('descending timestamps with date separators');
-    await page.locator(`[data-record-id="control:codex:${request.actor.nativeId}:${request.id}"] .stream-record-link`).click();
+    // A record is one line; the way to its original is in the part it opens to.
+    const original = async id => {
+      const row = page.locator(`[data-record-id="${id}"]`);
+      if (!await row.locator('details').evaluate(d => d.open)) await row.locator('summary').click();
+      await row.locator('.stream-record-link').click();
+    };
+    await original(`control:codex:${request.actor.nativeId}:${request.id}`);
     await until(() => page.locator(`[data-message-id="background:${request.actor.nativeId}:${request.id}"][data-search-target]`).isVisible(), 'Exact original operation card selected'); record('audit opens its exact original confirmation card');
     await page.locator('#room-nav').click();
-    assert.match(await page.locator('[data-record-id="shared-copy-1"] .stream-row-heading').innerText(), /Claude B/); record('shared message identifies its real sender');
-    await page.locator('[data-record-id="shared-copy-1"] .stream-record-link').click();
+    assert.match(await page.locator('[data-record-id="shared-copy-1"] .disclosure-title').innerText(), /Claude B/); record('shared message identifies its real sender');
+    await original('shared-copy-1');
     await until(() => page.locator('[data-message-id="native-original-1"][data-search-target]').isVisible(), 'Exact original selected'); record('click opens exact original message');
     assert.ok(await page.locator('#stream-waiting').isVisible()); record('waiting strip stays in independent session');
     await page.locator('#stream-waiting-more').click();
@@ -121,7 +127,7 @@ async function main() {
     await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === ids[1]).name === 'Claude B · 已确认', 'Rename confirmed'); record('strip confirmation uses original handler');
     await page.locator('#room-nav').click();
     if (!await page.locator('#activity-stream').isVisible()) await page.locator('#room-record').click();
-    await page.locator('[data-record-id="without-original"] .stream-record-link').click();
+    await original('without-original');
     await until(() => page.locator('#title').innerText().then(text => text.includes('Codex A')), 'Fallback opens original session'); record('legacy record falls back to original session');
   }
   const stats = await fixture('stats'); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0);

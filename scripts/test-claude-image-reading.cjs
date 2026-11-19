@@ -117,7 +117,9 @@ async function run() {
   const shared = (await snapshot()).room.messages.find(m => m.nativeMessageId?.endsWith('tool:shared-image'));
   // The current record stream links to the original session; the retained
   // #room-messages reader is hidden and cannot trigger lazy image previews.
-  await page.locator(`#activity-stream [data-record-id="${shared.id}"] .stream-record-link`).click();
+  const sharedRow = page.locator(`#activity-stream [data-record-id="${shared.id}"]`);
+  await sharedRow.locator('summary').click();
+  await sharedRow.locator('.stream-record-link').click();
   const sharedWidget = page.locator(`#messages [data-message-id="${shared.nativeMessageId}"] .native-image`);
   await until(async () => await sharedWidget.locator('img').count() && await sharedWidget.locator('img').evaluate(el => el.complete), 'Shared record actual image');
   await copied(sharedWidget.locator('.native-image-copy'), 'nativeImageCopies'); assert.equal((await app.evaluate(() => globalThis.nativeImageCopies.at(-1))).hash, pixels[0].hash);

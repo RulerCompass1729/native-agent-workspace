@@ -421,7 +421,7 @@ test('PF03: an open activity stream changes heading and existing records without
  Object.assign(f.context,{changingLanguage:false,languageFailed:false,languageWarning:null,updateTaskBoard(){taskBoardRefreshes++;}});
  const raw='RAW Git body 中文 <native>{key}';f.rooms[0].messages[0].text=raw;
  const key='notice.activity.preparingGit',event={id:'localized-record',time:Date.UTC(2026,10,15,12),text:locale.format('zh',key),uiMessage:{version:1,key,params:{}}};f.rooms[0].events.push(event);
- f.context.nativeWorkspaceTaskStream=require('../task-stream.js');
+ f.context.nativeWorkspaceTaskStream=require('../task-stream.js');f.context.nativeWorkspaceDisclosure=require('../renderer/disclosure-list.js');
  vm.runInContext(fs.readFileSync(require.resolve('../renderer/activity-stream.js'),'utf8'),f.context);
  const stream=f.context.nativeWorkspaceActivityStream.bind({document:doc,state:()=>f.state,rooms:()=>f.rooms,roomName:r=>r.name,isMember:()=>false,inRoom:()=>true,text:f.context.uiText,displayText:f.context.ui.displayText,label:r=>r.name||'NAW',language:()=>f.context.ui.language.getSnapshot().active,connected:()=>true,attempt:fn=>fn(),toggleChanged(){}});
  f.context.activityStream=stream;

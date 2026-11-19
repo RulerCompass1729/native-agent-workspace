@@ -391,3 +391,89 @@ test('a long task is one preview line in the queue that opens in place to its wh
   await settle();
   assert.equal(short.$('queue-list').querySelector('details.queue-text-whole'), null, 'a short task is plain text');
 });
+
+// ④ The space's activity stream: 15 one-line records, each opening in place to all of it and the way to its original.
+class StreamEl extends El {
+  constructor(...args) { super(...args); this.scrollTop = 0; }
+  get firstChild() { return this.childNodes[0] || null; }
+  get lastChild() { return this.childNodes.at(-1) || null; }
+  contains(node) { for (let at = node; at; at = at.parentElement) if (at === this) return true; return false; }
+}
+function streamFixture(count, { long = '' } = {}) {
+  const l = localeUI();
+  const elements = new Map(), originals = [];
+  const document = {
+    createElement: tag => new StreamEl(tag), createTextNode: text => new Text(text), addEventListener() {},
+    get activeElement() { return focus.active; },
+    getElementById: id => { if (!elements.has(id)) { const el = new StreamEl(id === 'header' ? 'header' : 'div'); el.id = id; elements.set(id, el); } return elements.get(id); },
+  };
+  const body = new StreamEl('body');
+  for (const id of ['room-layout', 'header', 'header-actions', 'room-record']) body.append(document.getElementById(id));
+  const start = Date.parse('2026-11-12T08:00:00Z');
+  const marks = Array.from({ length: count }, (_, i) => `[R${pad(i + 1)}]`);
+  const messages = marks.map((mark, i) => ({ id: `m-${i + 1}`, role: 'assistant', sessionId: 'member-a', time: start + i * 60_000,
+    text: i === count - 1 && long ? long : `${mark} 合成记录` }));
+  const room = { id: 'room-a', name: '合成空间', messages, events: [], queue: [] };
+  const state = { room: { id: 'room-a' }, sessions: [{ id: 'member-a', name: '合成成员 A' }] };
+  const context = vm.createContext({ console, Date, Intl, JSON, Math, Map, Set, Promise });
+  context.nativeWorkspaceTaskStream = require('../task-stream.js');
+  context.nativeWorkspaceDisclosure = require('../renderer/disclosure-list.js');
+  vm.runInContext(fs.readFileSync(require.resolve('../renderer/activity-stream.js'), 'utf8'), context);
+  const stream = context.nativeWorkspaceActivityStream.bind({ document, state: () => state, rooms: () => [room], roomName: r => r.name, isMember: () => true,
+    inRoom: () => true, text: l.uiText, displayText: l.displayText, label: row => row.sessionId === 'member-a' ? '合成成员 A' : 'NAW', language: () => 'zh',
+    connected: () => true, attempt: fn => fn(), toggleChanged() {}, original: target => originals.push(target) });
+  const panel = document.getElementById('room-layout').querySelector('aside');
+  return { stream, panel, marks, originals };
+}
+
+test('the activity stream opens on its latest 15 records, one line each, and each press brings 15 earlier ones, focus on the first', async () => {
+  const total = 40;
+  const f = streamFixture(total);
+  f.stream.open('room-a');
+  const rows = () => f.panel.querySelectorAll('article.stream-row');
+  const more = f.panel.querySelector('button.disclosure-more'), status = f.panel.querySelector('p.disclosure-status');
+  assert.equal(rows().length, 15);
+  assert.equal(rows()[0].dataset.recordId, `m-${total}`, 'the newest first');
+  assert.ok(rows().every(row => row.querySelector('details').open === false), 'every record starts as one line');
+  assert.equal(more.textContent, `显示更早的 15 条 · 共 ${total} 条`);
+  assert.equal(status.getAttribute('role'), 'status');
+  assert.equal(status.textContent, `已显示 15/${total} 条`);
+  await more.click();
+  await settle();
+  assert.equal(rows().length, 30);
+  assert.equal(focus.active, rows()[15].querySelector('summary'), 'focus on the first record that appeared');
+  assert.ok(onScreen(focus.active).includes(f.marks[total - 16]));
+  assert.equal(more.textContent, `显示更早的 10 条 · 共 ${total} 条`);
+  assert.equal(status.textContent, `已显示 30/${total} 条`);
+  await more.click();
+  await settle();
+  assert.equal(rows().length, total);
+  assert.equal(more.hidden, true, 'no button once every record is shown');
+  assert.equal(status.textContent, `已显示 ${total}/${total} 条`);
+  assert.equal(f.panel.querySelectorAll('p.disclosure-status').length, 1, 'one count, kept in place, read out as it changes');
+  f.stream.open('room-a');
+  assert.equal(rows().length, 15, 'opened again: the latest fifteen');
+});
+
+test('every record in the activity stream can be reached, and a long one opens in place to all of it and its original', async () => {
+  const long = '[ALONG] ' + '合成的长记录内容，'.repeat(60) + '[AEND]';
+  const total = 50;
+  const f = streamFixture(total, { long });
+  f.stream.open('room-a');
+  const line = f.panel.querySelector('article.stream-row');
+  const details = line.querySelector('details'), link = line.querySelector('.stream-record-link');
+  assert.equal(details.open, false);
+  const closed = onScreen(line);
+  assert.ok(closed.includes('[ALONG]') && !closed.includes('[AEND]'), 'closed: the start of it on one line');
+  assert.equal(link.parentElement.className, 'disclosure-body', 'the way to the original is inside the opened part');
+  assert.ok(hiddenWithin(link, f.panel), 'and not on the closed line');
+  details.open = true;
+  assert.ok(onScreen(line.querySelector('.disclosure-body')).includes(long), 'opened: the whole record');
+  await link.click();
+  assert.deepEqual(f.originals, [{ sessionId: 'member-a', nativeId: '', messageId: '' }]);
+  details.open = false;
+  // The records and the button that brings earlier ones are in the list; the panel's close button is not part of reading.
+  const screens = await explore(f.panel.querySelector('div.stream-list'));
+  const missing = reachedAll(screens, f.marks.slice(0, -1));
+  assert.equal(missing.length, 0, missingLine(missing, total - 1, 'records'));
+});

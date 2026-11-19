@@ -36,6 +36,28 @@
     return { button, status, show };
   }
 
+  // One line and the part it opens to. A list that redraws its own rows in place (the activity stream) uses it too.
+  function line(document, tag = 'li') {
+    const row = document.createElement(tag);
+    row.className = 'disclosure-item';
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    const time = document.createElement('time');
+    time.className = 'disclosure-time';
+    const text = document.createElement('span');
+    text.className = 'disclosure-title';
+    const end = document.createElement('span');
+    end.className = 'disclosure-end';
+    const body = document.createElement('div');
+    body.className = 'disclosure-body';
+    const actions = document.createElement('span');
+    actions.className = 'disclosure-actions';
+    summary.append(time, text, end);
+    details.append(summary, body);
+    row.append(details, actions);
+    return { row, details, summary, time, text, end, body, actions };
+  }
+
   // items: in the order they are listed. `older` says where the earlier ones appear: 'below' for a newest-first
   // list, 'above' for one read from the top down. `fill(item, parts)` writes one item into its line and body.
   // `load(count)`, when the list holds only part of them, returns { items, total } with up to `count` items.
@@ -51,31 +73,15 @@
     else box.append(list, more.button, more.status);
 
     function row(item, id) {
-      const li = document.createElement('li');
-      li.className = 'disclosure-item';
-      li.dataset.key = id;
-      const details = document.createElement('details');
-      const summary = document.createElement('summary');
-      const time = document.createElement('time');
-      time.className = 'disclosure-time';
-      const text = document.createElement('span');
-      text.className = 'disclosure-title';
-      const end = document.createElement('span');
-      end.className = 'disclosure-end';
-      const body = document.createElement('div');
-      body.className = 'disclosure-body';
-      const actions = document.createElement('span');
-      actions.className = 'disclosure-actions';
-      fill(item, { row: li, time, text, end, body, actions });
-      summary.append(time, text, end);
-      details.append(summary, body);
-      details.open = opened.has(id);
-      details.addEventListener('toggle', () => {
-        if (details.open) opened.add(id);
+      const parts = line(document);
+      parts.row.dataset.key = id;
+      fill(item, parts);
+      parts.details.open = opened.has(id);
+      parts.details.addEventListener('toggle', () => {
+        if (parts.details.open) opened.add(id);
         else opened.delete(id);
       });
-      li.append(details, actions);
-      return li;
+      return parts.row;
     }
     // Keys stay the same for the same item from one draw to the next; a repeated key counts its repeats.
     function keyed(list) {
@@ -127,7 +133,7 @@
     return { box, list, update, earlier, get shown() { return shown; } };
   }
 
-  const value = Object.freeze({ PAGE, create, pager });
+  const value = Object.freeze({ PAGE, create, pager, line });
   if (typeof module === 'object' && module.exports) module.exports = value;
   else global.nativeWorkspaceDisclosure = value;
 })(globalThis);
