@@ -55,7 +55,7 @@ function sendBlocked(s, r, question) {
   if (r.pendingQueue || s.state === 'idle' && s.pendingTag) return 'queueBusy';
   if (s.state === 'working' && s.provider === 'codex' && r.pendingSteer) return 'steerBusy';
   if (s.state === 'working') return 'noQueue';
-  // Starting, stopping, an error: the phone says so instead of telling the person to wait for idle.
+  // Starting, stopping, an error, a cancelled reconnect (recoverable): the phone says so instead of telling the person to wait for idle.
   return 'notReady';
 }
 function checked(w, ticket, action) {

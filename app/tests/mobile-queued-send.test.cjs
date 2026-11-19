@@ -65,6 +65,7 @@ test('the phone read says how a send would go, as the Mac composer decides it', 
     [() => { f.w.storageWarning = 'Synthetic save failure'; }, () => { f.w.storageWarning = null; }, 'storage'],
     [() => { a.s.state = 'starting'; }, () => { a.s.state = 'working'; }, 'notReady'],
     [() => { a.s.state = 'error'; }, () => { a.s.state = 'working'; }, 'notReady'],
+    [() => { a.s.state = 'recoverable'; }, () => { a.s.state = 'working'; }, 'notReady'],
     [() => { a.s.state = 'ended'; }, () => { a.s.state = 'working'; }, 'ended'],
   ]) {
     change(); assert.deepEqual(pick(f.read(a)), { canSend: false, sendMode: null, sendBlocked: reason }, reason); undo();
