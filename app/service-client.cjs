@@ -133,6 +133,20 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     }
     for (const key of layout.entries) states.set(key, await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace));
     const dsh = require('./dsh-tui.cjs'), version = process.env.NAW_APP_VERSION, retryVersion = version || 'development';
+    const targetWarnings = ensureService.targetWarnings ||= new Map();
+    const targetWarningState = (target, error) => {
+      try {
+        const directory = path.join(dataDir, target), where = dsh.paths(directory);
+        const identity = file => {
+          try { const s = fs.lstatSync(file); return [s.dev, s.ino, s.uid, s.mode, ...(file === directory ? [] : [s.mtimeMs, s.ctimeMs])]; }
+          catch (cause) { if (cause.code === 'ENOENT') return null; throw cause; }
+        };
+        const cause = error?.cause;
+        return JSON.stringify([retryVersion, cause?.code || null,
+          crypto.createHash('sha256').update(typeof cause?.message === 'string' ? cause.message : '').digest('hex'),
+          ...[directory, where.base, where.root].map(identity)]);
+      } catch { return null; }
+    };
     const prior = layout.dshInheritance;
     let failures = prior?.version === retryVersion ? prior.failures.filter(row => layout.entries.includes(row.source) && (layout.entries.includes(row.target) || layout.pending === row.target)) : [];
     const retryable = row => row && row.attempts < DSH_INHERIT_ATTEMPTS && ['deadline', 'filesystem'].includes(row.reason);
@@ -145,10 +159,12 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     if (prior && (prior.version !== retryVersion || prior.failures.length !== failures.length)) saveDsh();
     const inheritDsh = async (target, sources) => {
       for (const source of sources) {
+        const warningKey = JSON.stringify([dataDir, source, target]);
         const previous = failures.find(row => row.source === source && row.target === target);
         if (previous && !retryable(previous)) continue;
         try {
           const result = await dsh.inheritRuntime(path.join(dataDir, source), path.join(dataDir, target), { cleanStaging: true });
+          targetWarnings.delete(warningKey);
           if (previous) { failures = failures.filter(row => row !== previous); saveDsh(); }
           if (result.status !== 'absent') return;
         } catch (error) {
@@ -158,7 +174,10 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
             failures = failures.filter(row => row !== previous);
             failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
           }
-          console.warn('DSH runtime inheritance skipped:', reason);
+          // Only diagnostics are cached; every startup still performs preflight.
+          const state = reason === 'target' ? targetWarningState(target, error) : null;
+          if (!state || targetWarnings.get(warningKey) !== state) console.warn('DSH runtime inheritance skipped:', reason);
+          if (state) targetWarnings.set(warningKey, state); else targetWarnings.delete(warningKey);
           if (reason !== 'unqualified') return;
         }
       }

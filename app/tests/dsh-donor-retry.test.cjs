@@ -20,8 +20,9 @@ function fixture(t,{fault=null,empty=true,pending=false,targetFault=null}={}){
   emptyService:s=>s.sessions.length===0,emptyStore:()=>true,lockIdentity:()=>null,waitForShutdown:async()=>{},console:{warn:(...args)=>warnings.push(args)},require:()=>wrapped,
   ensureServiceAt:async dir=>{boots++;return state(dir);},connectService:async dir=>({call:async method=>{if(method==='initial')return state(dir);if(method==='shutdown')retired.push(dir);},close(){}})};
  const source=fs.readFileSync(require.resolve('../service-client.cjs'),'utf8'),start=source.indexOf('async function ensureService(dataDir,'),end=source.indexOf('\nfunction continuationStatus',start);
+ const ensure=vm.runInNewContext(source.slice(start,end)+'\nensureService',ctx);
  return {root,key,target,env,retired,warnings,ctx,repair(){broken=false;restore();},calls:()=>inheritCalls,
-  async start(endedServiceKey=null){offset=0;boots=0;await vm.runInNewContext(source.slice(start,end)+'\nensureService',ctx)(root,'/synthetic/electron',endedServiceKey);assert.equal(locked,false);return {layout:layout.readLayout(root),boots,inheritCalls};}};
+  async start(endedServiceKey=null){offset=0;boots=0;await ensure(root,'/synthetic/electron',endedServiceKey);assert.equal(locked,false);return {layout:layout.readLayout(root),boots,inheritCalls};}};
 }
 for(const pending of [false,true])test('unqualified empty donor retires immediately and is not retried, pending='+pending,async t=>{
  const f=fixture(t,{fault:'unqualified',pending});
@@ -91,4 +92,36 @@ test('explicit ended-session continuation leaves peer retry state untouched',asy
 });
 test('retirement layout write errors still propagate',async t=>{
  const f=fixture(t),error=Error('synthetic required layout failure');f.ctx.writeLayout=()=>{throw error;};await assert.rejects(f.start(),e=>e===error);
+});
+
+
+test('repeated unsafe target warnings are deduplicated without skipping any precheck',async t=>{
+ const f=fixture(t,{targetFault:'unsafe-parent'}),original=tui.inheritRuntime;let checking=false,sourceReads=0,writes=0;
+ for(const [io,name] of [[fs,'lstatSync'],[fs,'readFileSync'],[fs.promises,'readdir'],[fs.promises,'open']]){
+  const method=io[name];t.mock.method(io,name,function(file,...args){if(checking&&(String(file)===f.root||String(file).startsWith(tui.paths(f.root).root)))sourceReads++;return Reflect.apply(method,this,[file,...args]);});
+ }
+ for(const name of ['mkdtemp','mkdir','rename','copyFile']){const method=fs.promises[name];t.mock.method(fs.promises,name,function(...args){if(checking)writes++;return Reflect.apply(method,this,args);});}
+ t.mock.method(tui,'inheritRuntime',async(...args)=>{checking=true;try{return await original(...args);}finally{checking=false;}});
+ for(let i=0;i<10;i++)await f.start();
+ assert.equal(f.calls(),10,'every startup must still inspect target permissions');assert.equal(sourceReads,0);assert.equal(writes,0);
+ assert.equal(tui.installed(f.target),false);assert.ok(layout.readLayout(f.root).entries.includes('.'));assert.deepEqual(f.retired,[]);assert.equal(layout.readLayout(f.root).dshInheritance,undefined);
+ const warnings=f.warnings.length;console.log('TARGET_WARNING_CHECK '+JSON.stringify({prechecks:f.calls(),sourceReads,writes,warnings}));
+ f.repair();await f.start();assert.equal(tui.installed(f.target),true);tui.verifyRuntime(f.target);
+ assert.equal(warnings,1,'unchanged target refusal should warn once');
+});
+test('target state or reason changes and a repair cycle permit a fresh warning',async t=>{
+ const f=fixture(t,{targetFault:'unsafe-parent',empty:false}),base=tui.paths(f.target).base,original=tui.inheritRuntime;let reason=null;
+ t.mock.method(tui,'inheritRuntime',(...args)=>reason?Promise.reject(Object.assign(Error('synthetic refusal'),{reason})):original(...args));
+ await f.start();await f.start();assert.equal(f.warnings.length,1);
+ await new Promise(resolve=>setTimeout(resolve,5));fs.chmodSync(base,0o700);fs.chmodSync(base,0o770);
+ await f.start();await f.start();assert.equal(f.warnings.length,2,'a repair between startups must not hide a later refusal');
+ fs.chmodSync(base,0o772);await f.start();await f.start();assert.equal(f.warnings.length,3,'changed unsafe permissions warn again');
+ reason='filesystem';await f.start();assert.equal(f.warnings.at(-1)[1],'filesystem');
+ reason=null;await f.start();await f.start();assert.equal(f.warnings.length,5,'a changed refusal reason resets target diagnostics');
+ f.repair();await f.start();assert.equal(tui.installed(f.target),true);tui.verifyRuntime(f.target);assert.equal(layout.readLayout(f.root).dshInheritance,undefined);
+ fs.rmSync(tui.paths(f.target).root,{recursive:true,force:true});fs.chmodSync(base,0o770);
+ await f.start();await f.start();assert.equal(f.warnings.length,6,'repair followed by refusal warns once again');
+ assert.equal(tui.installed(f.target),false);assert.deepEqual(f.retired,[]);
+ assert.deepEqual(f.warnings.map(w=>w[1]),['target','target','target','filesystem','target','target']);
+ assert.ok(f.warnings.every(w=>w.length===2&&!w.join(' ').includes(f.root)),'diagnostics contain no paths or private error details');
 });
