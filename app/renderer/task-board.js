@@ -4,7 +4,7 @@
   else root.nativeWorkspaceTaskBoard = api;
 })(typeof window === 'undefined' ? globalThis : window, function () {
   'use strict';
-  const BAR_HEIGHT = 84;
+  const BAR_HEIGHT = 36;
   const COLORS = { sent: '#5c8fc1', queued: '#858276', waiting: '#e9b05b', review: '#b39b6a', failed: '#c95751', unknown: '#8a70a4', done: '#62916b', cancelled: '#aeb5aa', empty: '#eef0eb' };
   const KINDS = ['sent', 'queued', 'waiting', 'review', 'failed', 'unknown', 'done', 'cancelled'];
   const PRIORITY = ['waiting', 'failed', 'unknown', 'review', 'sent', 'queued', 'done', 'cancelled'];
@@ -17,7 +17,7 @@
       const all = (Array.isArray(room.queue) ? room.queue : []).filter(q => q && typeof q.id === 'string').map(q => {
         const memberKey = q.sentTo || q.assignee || '', k = kind(q);
         return { key: JSON.stringify([room.id, q.id]), id: q.id, spaceId: room.id, spaceName: room.name || '', kind: k,
-          memberKey, memberName: members.get(memberKey) || '', text: typeof q.text === 'string' ? q.text : '',
+          memberKey, memberName: members.get(memberKey) || '', actualRecipient: typeof q.sentTo === 'string' && Boolean(q.sentTo), text: typeof q.text === 'string' ? q.text : '',
           reason: typeof q.reason === 'string' ? q.reason : '', waiting: q.waiting === true,
           current: !['done', 'cancelled'].includes(k) || typeof q.finishedAt === 'number' && Number.isFinite(q.finishedAt) && q.finishedAt >= start && q.finishedAt < end };
       });
@@ -27,6 +27,7 @@
     });
   }
   function bind({ host, document: doc, text, onQueue, now = Date.now }) {
+    const win = doc.defaultView;
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
     const set = (e, value) => { if (e.textContent !== value) e.textContent = value; };
     const attr = (e, name, value) => { if (e.getAttribute(name) !== value) e.setAttribute(name, value); };
@@ -38,16 +39,17 @@
       for (const node of [...parent.children]) if (!nodes.includes(node)) node.remove();
     };
     let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '', mode = 'space', scope = 'today', filter = 'all';
-    const projects = new Map(), groups = new Map(), rows = new Map(), inert = new Map(), placements = new Map();
-    let needsRegroup = false;
+    const projects = new Map(), groups = new Map(), rows = new Map(), placements = new Map();
+    let needsRegroup = false, hintIndex = 0;
+    const hover = win.nativeWorkspaceHoverCard.controller({ schedule: win.setTimeout.bind(win), cancel: win.clearTimeout.bind(win), show: showShort, hide: hideShort });
     const bar = make('div', 'task-board-bar'), identity = make('div', 'task-board-identity'), title = make('strong'), total = make('span'), segments = make('div', 'task-board-segments');
     identity.append(title, total);
     const toggle = control(() => opened ? close() : open(), 'task-board-toggle');
     bar.append(identity, segments, toggle);
-    const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel';
+    const panel = make('dialog', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; attr(panel, 'closedby', 'any');
     attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'aria-controls', panel.id);
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
-    h2.id = 'task-board-title'; h2.tabIndex = -1; heading.append(h2, caption, dismiss);
+    h2.id = 'task-board-title'; h2.tabIndex = -1; attr(h2, 'autofocus', ''); heading.append(h2, caption, dismiss);
     const summary = make('div', 'task-board-summary'), controls = make('div', 'task-board-controls'), scopeControls = make('div', 'task-board-options'), groupControls = make('div', 'task-board-options');
     const scopeButtons = new Map(), groupButtons = new Map();
     for (const value of ['today', 'all']) { const b = control(() => { scope = value; reset(); drawPanel(); }); scopeButtons.set(value, b); scopeControls.append(b); }
@@ -63,7 +65,7 @@
     host.classList.add('task-board'); host.style.setProperty('--task-board-height', BAR_HEIGHT + 'px'); host.append(bar, panel); host.parentElement.classList.add('task-board-main');
     function translate() {
       attr(host, 'aria-label', f('title'));
-      set(title, f('title')); set(toggle, f(opened ? 'collapse' : 'expand')); attr(toggle, 'aria-expanded', String(opened));
+      set(title, f('title')); set(toggle, '☷'); attr(toggle, 'aria-label', f(opened ? 'collapse' : 'expand')); attr(toggle, 'aria-expanded', String(opened));
       set(h2, f('full')); set(caption, f(scope === 'today' ? 'range' : 'historyRange')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(scopeControls, 'role', 'group'); attr(scopeControls, 'aria-label', f('scope')); attr(groupControls, 'role', 'group'); attr(groupControls, 'aria-label', f('group'));
       for (const [value, b] of scopeButtons) { set(b, f(value)); attr(b, 'aria-pressed', String(scope === value)); }
@@ -72,25 +74,57 @@
       attr(select, 'aria-label', f('filter')); attr(queueSpace, 'aria-label', f('chooseQueue')); set(queue, f('queue')); set(hint, f(input.connected === false ? 'stale' : 'readOnly'));
       set(regroup, f(needsRegroup ? 'regroup' : 'groupCurrent')); attr(regroup, 'aria-description', f('regroupHint')); regroup.title = f('regroupHint');
     }
-    function freezeBackground() {
-      for (const child of host.parentElement.children) if (child !== host && !inert.has(child)) { inert.set(child, child.inert); child.inert = true; }
+    function positionPanel() {
+      const rect = host.getBoundingClientRect(), top = Math.min(rect.bottom + 8, Math.max(12, win.innerHeight - 160));
+      const width = Math.max(1, Math.min(860, rect.width - 24, win.innerWidth - 24));
+      Object.assign(panel.style, { left: Math.max(12, Math.min(rect.left + 12, win.innerWidth - width - 12)) + 'px', top: top + 'px', width: width + 'px', height: Math.max(1, Math.min(560, win.innerHeight - top - 14)) + 'px' });
+    }
+    function positionShort(view) {
+      const anchor = view.button.getBoundingClientRect();
+      view.hint.style.maxHeight = Math.max(1, win.innerHeight - host.getBoundingClientRect().bottom - 20) + 'px';
+      const rect = view.hint.getBoundingClientRect();
+      Object.assign(view.hint.style, { left: Math.max(8, Math.min(anchor.left, win.innerWidth - rect.width - 8)) + 'px', top: Math.max(8, Math.min(host.getBoundingClientRect().bottom + 6, win.innerHeight - rect.height - 8)) + 'px' });
+    }
+    function showShort(id) {
+      const view = projects.get(id);
+      if (disposed || opened || !view || doc.querySelector('dialog:modal')) { hover.drop(); return; }
+      hideShort(); view.hint.hidden = false; view.hint.showPopover(); positionShort(view);
+    }
+    function hideShort() {
+      for (const view of projects.values()) { if (view.hint.matches(':popover-open')) view.hint.hidePopover(); view.hint.hidden = true; }
+    }
+    function waitingReason(p) {
+      const reasons = new Set(p.current.filter(q => ['waiting', 'review', 'failed', 'unknown'].includes(q.kind) || q.waiting).map(q =>
+        q.reason === 'no-reply' ? 'reasonNoReply' : q.reason === 'person-intervened' ? 'reasonIntervened' : q.kind === 'waiting' ? 'reasonDecision' : q.kind === 'failed' ? 'reasonFailed' : q.kind === 'unknown' ? 'reasonUnknown' : 'reasonDetails'));
+      return reasons.size ? f('waitReason', { reason: [...reasons].map(key => f(key)).join(f('reasonSeparator')) }) : f('noWait');
+    }
+    function drawShort(view, p) {
+      set(view.hintName, p.name); set(view.hintPrimary, !p.available ? f('unavailable') : !p.all.length ? f('empty') : !p.current.length ? f('noTransit') : f('transit', { count: p.transit }));
+      for (const [kind, label] of view.hintCounts) { label.hidden = !p.counts[kind]; set(label, f('count', { status: ['done', 'cancelled'].includes(kind) ? f('todayStatus', { status: f('status.' + kind) }) : f('status.' + kind), count: p.counts[kind] })); }
+      const working = [...new Set(p.current.filter(q => q.kind === 'sent').map(q => q.actualRecipient && q.memberName || f('memberMissing')))];
+      const available = p.available && input.connected !== false;
+      set(view.hintWho, !available ? f('unupdated') : working.length ? f('working', { members: working.join(f('reasonSeparator')) }) : f('noWorking'));
+      set(view.hintReason, available ? waitingReason(p) : f('unavailable')); set(view.hintHelp, f(input.connected === false ? 'stale' : 'shortHelp'));
+      if (hover.open === p.id && !view.hint.hidden) positionShort(view);
     }
     function reset() { for (const g of groups.values()) g.element.remove(); groups.clear(); rows.clear(); placements.clear(); needsRegroup = false; list.scrollTop = 0; }
     function open(id) {
       if (disposed) return;
       if (!opened) { reset(); scope = 'today'; mode = 'space'; filter = 'all'; select.value = 'all'; }
-      opened = true; panel.hidden = false; freezeBackground(); translate(); drawPanel();
+      hover.dismiss(); opened = true; panel.hidden = false; translate(); drawPanel(); positionPanel(); panel.showModal();
       for (const [key, p] of projects) attr(p.button, 'aria-expanded', 'true');
       if (id) { queueSpace.value = id; const g = groups.get(id); if (g) { g.element.open = true; g.element.scrollIntoView({ block: 'nearest' }); } }
-      h2.focus({ preventScroll: true });
     }
-    function close() {
+    function closed() {
       if (!opened) return;
-      opened = false; panel.hidden = true; for (const [child, before] of inert) child.inert = before; inert.clear();
-      translate(); for (const p of projects.values()) attr(p.button, 'aria-expanded', 'false'); toggle.focus({ preventScroll: true });
+      opened = false; panel.hidden = true; hover.drop();
+      translate(); for (const p of projects.values()) attr(p.button, 'aria-expanded', 'false');
     }
+    function close() { if (opened) { panel.close(); closed(); } }
+    panel.addEventListener('close', closed);
     function drawBar() {
       set(total, input.connected === false || data.some(p => !p.available) ? f('unupdated') : f('current', { count: data.reduce((n, p) => n + p.transit, 0) }));
+      attr(host, 'aria-label', f('title') + '，' + total.textContent);
       const wanted = [];
       for (const p of data) {
         let view = projects.get(p.id);
@@ -98,20 +132,30 @@
           const button = control(() => open(p.id), 'task-board-project'), line = make('div', 'task-board-project-name'), name = make('span'), flag = make('span', 'task-board-attention'), primary = make('strong'), sub = make('span', 'task-board-parts'), track = make('span', 'task-board-track');
           attr(track, 'aria-hidden', 'true'); line.append(name, flag); button.append(line, primary, sub, track); button.dataset.spaceId = p.id;
           const fills = new Map(); for (const k of KINDS) { const fill = make('i', k); fill.style.backgroundColor = COLORS[k]; track.append(fill); fills.set(k, fill); }
-          view = { button, name, flag, primary, sub, fills }; projects.set(p.id, view);
+          const hint = make('div', 'task-board-hint'), hintName = make('strong'), hintPrimary = make('p'), counts = make('div', 'task-board-hint-counts'), hintWho = make('p'), hintReason = make('p'), hintHelp = make('small');
+          hint.id = host.id + '-short-' + ++hintIndex; hint.hidden = true; attr(hint, 'popover', 'manual'); attr(hint, 'role', 'tooltip'); attr(button, 'aria-describedby', hint.id);
+          const hintCounts = new Map(); for (const kind of KINDS) { const label = make('span'); counts.append(label); hintCounts.set(kind, label); }
+          hint.append(hintName, hintPrimary, counts, hintWho, hintReason, hintHelp); host.append(hint);
+          for (const [element, how, enter, leave] of [[button, 'pointer', 'pointerenter', 'pointerleave'], [button, 'focus', 'focusin', 'focusout'], [hint, 'pointer', 'pointerenter', 'pointerleave']]) {
+            element.addEventListener(enter, e => { if (!opened && !disposed && e.pointerType !== 'touch') hover.enter(p.id, how); });
+            element.addEventListener(leave, () => hover.leave(p.id, how));
+          }
+          view = { button, name, flag, primary, sub, fills, hint, hintName, hintPrimary, hintCounts, hintWho, hintReason, hintHelp }; projects.set(p.id, view);
         }
         const c = p.counts, parts = f('parts', { sent: c.sent, queued: c.queued }) + (c.waiting + c.review ? f('waitingPart', { count: c.waiting + c.review }) : '');
         const primary = !p.available ? f('unavailable') : !p.all.length ? f('empty') : !p.current.length ? f('noTransit') : f('transit', { count: p.transit });
         const sub = p.transit ? parts : c.done + c.cancelled ? f('finished', { done: c.done, cancelled: c.cancelled }) : p.all.length ? f('historyHint') : '';
-        set(view.name, p.archived ? f('archivedName', { name: p.name }) : p.name); set(view.flag, f('attention', { count: p.attention })); view.flag.hidden = !p.attention; view.flag.classList.toggle('failed', c.failed > 0);
+        const stale = input.connected === false || !p.available;
+        set(view.name, p.archived ? f('archivedName', { name: p.name }) : p.name); set(view.flag, stale ? '?' : '!' + p.attention); view.flag.hidden = !p.attention && !stale; view.flag.classList.toggle('failed', c.failed > 0);
         set(view.primary, primary); set(view.sub, sub); attr(view.button, 'aria-controls', panel.id); attr(view.button, 'aria-expanded', String(opened));
-        attr(view.button, 'aria-label', [p.name, p.attention && view.flag.textContent, primary, sub, p.archived && f('archived')].filter(Boolean).join('，'));
+        attr(view.button, 'aria-label', [p.name, stale && f('unupdated'), p.attention && f('attention', { count: p.attention }), primary, sub, p.archived && f('archived')].filter(Boolean).join('，'));
         attr(view.button, 'aria-description', [f('range'), ...KINDS.filter(k => c[k]).map(k => f('count', { status: f('status.' + k), count: c[k] }))].join('，'));
         for (const [k, fill] of view.fills) { fill.hidden = !c[k]; fill.style.width = (p.current.length ? c[k] / p.current.length * 100 : 0) + '%'; }
         wanted.push(view.button);
+        drawShort(view, p);
       }
       move(segments, wanted);
-      for (const [id, view] of projects) if (!data.some(p => p.id === id)) { view.button.remove(); projects.delete(id); }
+      for (const [id, view] of projects) if (!data.some(p => p.id === id)) { if (hover.open === id || hover.pending === id) hover.drop(); view.hint.remove(); view.button.remove(); projects.delete(id); }
       if (!data.length && opened) close();
       host.hidden = data.length === 0;
     }
@@ -138,7 +182,7 @@
       if (!opened) return;
       const focused = doc.activeElement, scroll = list.scrollTop, first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
       const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : null;
-      translate(); freezeBackground();
+      translate();
       const tasks = data.flatMap(p => scope === 'today' ? p.current : p.all), counts = KINDS.map(k => [k, tasks.filter(q => q.kind === k).length]);
       if (!summary.children.length) { summary.append(make('strong')); for (const k of KINDS) { const label = make('span'); label.dataset.kind = k; const swatch = make('i'); swatch.style.backgroundColor = COLORS[k]; label.append(swatch, make('span')); summary.append(label); } }
       set(summary.firstElementChild, f('transit', { count: tasks.filter(q => ['sent', 'queued', 'waiting', 'review'].includes(q.kind)).length }));
@@ -188,9 +232,11 @@
       const nextSignature = JSON.stringify([data, input.connected, input.activeSpace, f('title')]);
       if (signature === nextSignature) return; signature = nextSignature; translate(); drawBar(); drawPanel();
     }
-    const key = e => { if (opened && e.key === 'Escape') { e.stopPropagation(); close(); } }, visible = () => { if (!doc.hidden) update(); };
+    const key = e => { if (!opened && e.key === 'Escape' && !doc.querySelector('dialog:modal') && (hover.open || hover.pending)) { e.preventDefault(); e.stopPropagation(); hover.dismiss(); } }, visible = () => { if (!doc.hidden) update(); else hover.drop(); };
+    const resize = () => { if (opened) positionPanel(); const view = projects.get(hover.open); if (view && !view.hint.hidden) positionShort(view); };
+    const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize);
     doc.addEventListener('keydown', key); doc.addEventListener('visibilitychange', visible);
-    return { update, open, close, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; doc.removeEventListener('keydown', key); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); host.parentElement.classList.remove('task-board-main'); } };
+    return { update, open, close, refresh: () => update(), dispose() { if (disposed) return; close(); hover.drop(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('keydown', key); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); projects.clear(); groups.clear(); rows.clear(); placements.clear(); host.parentElement.classList.remove('task-board-main'); } };
   }
   return { BAR_HEIGHT, COLORS, kind, project, bind };
 });

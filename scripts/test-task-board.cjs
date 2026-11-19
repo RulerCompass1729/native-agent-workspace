@@ -45,6 +45,9 @@ const clean = scratch.cleanup(async () => {
   app = await _electron.launch({ executablePath: req('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: process.env.NAW_TEST_UI_LANGUAGE || 'zh' }), timeout: 60000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#header').waitFor(); await settled();
   check(await page.locator('.task-board-project').count() === 4, 'The actual source app renders all four queue projects');
+  await page.locator('.task-board-project').first().hover();
+  await page.evaluate(()=>{const d=document.createElement('dialog');d.id='synthetic-other-modal';d.textContent='Synthetic modal';document.body.append(d);d.showModal();});
+  await page.keyboard.press('Escape');check(await page.locator('#synthetic-other-modal').evaluate(e=>!e.open),'A short preview never consumes another native dialog Escape');await page.locator('#synthetic-other-modal').evaluate(e=>e.remove());
   const pictures = process.env.NAW_SCREENSHOTS_DIR; if (pictures) { assert.ok(!path.resolve(pictures).startsWith(fs.realpathSync(code) + path.sep)); fs.mkdirSync(pictures, { recursive: true }); }
   const language = process.env.NAW_TEST_UI_LANGUAGE || 'zh';
   for (const [width, height] of [[1240, 820], [850, 600]]) for (const theme of ['light', 'dark']) {
@@ -93,8 +96,24 @@ const clean = scratch.cleanup(async () => {
     check((parts.text.match(/\d+/g)||[]).map(Number).reduce((a,b)=>a+b,0)===7,`${width} ${theme}: full transit breakdown sums to7`);
     const contrast=await page.locator('.task-board-attention.failed').first().evaluate(e=>{const rgb=s=>s.match(/[\d.]+/g).map(Number),lum=c=>c.slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);let p=e,b;while(p){const c=rgb(getComputedStyle(p).backgroundColor);if(c.length===3||c[3]===1){b=c;break;}p=p.parentElement;}const a=lum(rgb(getComputedStyle(e).color)),z=lum(b);return(Math.max(a,z)+.05)/(Math.min(a,z)+.05);});
     check(contrast>=4.5,`${width} ${theme}: warning text contrast is at least4.5 (${contrast.toFixed(2)})`);
-    check(parts.width<=parts.available+1 || parts.height>14,`${width} ${theme}: all transit components fit without clipping`);
+    check(parts.height===0,`${width} ${theme}: detailed counts are no longer a permanent row`);
     if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-${theme}-${width}-attention.png`)});
+    const trigger=page.locator('.task-board-project').first(),hint=page.locator('.task-board-hint').first(),panel=page.locator('.task-board-panel');
+    await trigger.hover();await until(()=>hint.isVisible(),'Short hover preview');
+    check((await hint.textContent()).includes(language==='zh'?'未收到':'No reply'),`${width} ${theme}: short metadata explains the review reason`);
+    const hb=await hint.boundingBox();await page.mouse.move(hb.x+20,hb.y+30);await wait(180);check(await hint.isVisible(),`${width} ${theme}: short preview stays hoverable`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-${theme}-${width}-hover.png`)});
+    await page.keyboard.press('Escape');check(!(await hint.isVisible()),`${width} ${theme}: Escape dismisses short information`);
+    await page.mouse.move(10,80);await trigger.focus();await page.keyboard.press('Tab');await page.keyboard.press('Shift+Tab');await until(()=>hint.isVisible(),'Keyboard short preview');
+    check(await trigger.evaluate(e=>document.activeElement===e&&document.getElementById(e.getAttribute('aria-describedby')).getAttribute('role')==='tooltip'),`${width} ${theme}: focused trigger describes the short information`);
+    await page.keyboard.press('Escape');const beforeDialog=await page.locator('#header').boundingBox();await trigger.press('Enter');
+    check(await panel.evaluate(e=>e.matches(':modal')&&!e.hasAttribute('aria-modal')&&!e.hasAttribute('role')),`${width} ${theme}: full board uses native dialog semantics`);
+    check(JSON.stringify(await page.locator('#header').boundingBox())===JSON.stringify(beforeDialog),`${width} ${theme}: full popup never pushes the conversation`);
+    const bounds=await panel.boundingBox();check(bounds.x>=0&&bounds.y>=0&&bounds.x+bounds.width<=width&&bounds.y+bounds.height<=height,`${width} ${theme}: full popup fits the window`);
+    check(await panel.locator('.task-board-task').first().evaluate(e=>parseFloat(getComputedStyle(e).fontSize)>=13),`${width} ${theme}: popup text stays at least13px`);
+    for(let i=0;i<18;i++)await page.keyboard.press('Tab');check(await panel.evaluate(e=>e.contains(document.activeElement)),`${width} ${theme}: Tab stays inside the dialog`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-${theme}-${width}-click.png`)});
+    await page.keyboard.press('Escape');check(!(await panel.isVisible())&&await trigger.evaluate(e=>document.activeElement===e),`${width} ${theme}: Escape returns focus to the original space`);
   }
   const nextWindow = app.waitForEvent('window'); await page.evaluate(id => workspace.newWindow(id), ids[0]); const solo = await nextWindow;
   await solo.locator('.task-board-project').last().waitFor(); check(await solo.locator('.task-board-project').count() === 4, 'The same progress bar is present in a standalone session window');
