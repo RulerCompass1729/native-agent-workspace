@@ -14,8 +14,26 @@ const unavailable = () => Object.assign(Error('Butler source unavailable'), { co
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
 const recoveryFailureReasons = Object.freeze({ capacity: 'capacity-retry-exhausted', routing: 'routing-retry-exhausted',
   forbidden: 'forbidden-retry-exhausted', connection: 'connection-retry-exhausted' });
+const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
+const exactFields = (value, keys) => value && !Array.isArray(value) &&
+  Object.keys(value).sort().join(',') === keys;
+function quotaSource(memberId, quota) {
+  return { eventId: `codex-quota:${hash([memberId, quota.nativeId, quota.turnId])}`,
+    sourceRef: `codex-quota:${memberId}`, kind: 'blocked', payload: { memberId, reason: 'codex-usage-limit-exceeded' } };
+}
+function noReplyContext(item, session) {
+  const quota = session?.id === item.sentTo && !session.archived && session.nativeId === item.sentNative ? codexQuotaBlock(session) : null;
+  return { version: 1, itemId: item.id, memberId: item.sentTo,
+    quota: quota && sourceId(quota.nativeId) && sourceId(quota.turnId) ? { nativeId: quota.nativeId, turnId: quota.turnId } : null };
+}
 
 function queueOutcomeSource(outcome) {
+  if (outcome?.status === 'waiting' && outcome.reason === 'no-reply') {
+    const { roomId, itemId, eventId, memberId, quota } = outcome;
+    return validateEvent(quota ? quotaSource(memberId, quota) : {
+      eventId: `butler-source:${hash([roomId, eventId])}`, sourceRef: `queue-outcome:${roomId}:${eventId}`,
+      kind: 'failure', payload: { memberId, itemId, reason: 'no-reply-unconfirmed' } });
+  }
   if (!outcome || !(outcome.status === 'failed' || outcome.status === 'waiting' && !outcome.reason)) return null;
   const { roomId, itemId, eventId } = outcome;
   const sourceRef = `queue-outcome:${roomId}:${eventId}`;
@@ -49,6 +67,14 @@ function storedQueueSource(roomId, event) {
       typeof source?.sourceRef === 'string' && source.sourceRef.startsWith('queue-ready:')) return storedReadySource(roomId, event);
   const parent = [roomId, event.id], sourceRef = `queue-outcome:${roomId}:${event.id}`;
   try {
+    if (Object.hasOwn(event, 'butlerNoReplySource')) {
+      const context = event.butlerNoReplySource, quota = context?.quota;
+      if (!exactFields(context, 'itemId,memberId,quota,version') || context.version !== 1 ||
+          !sourceId(context.memberId) || !sourceId(context.itemId) || event.kind !== 'queue' ||
+          event.sessionId !== context.memberId || event.itemId !== context.itemId ||
+          quota !== null && (!exactFields(quota, 'nativeId,turnId') || !sourceId(quota.nativeId) || !sourceId(quota.turnId))) throw unavailable();
+      return queueOutcomeSource({ roomId, eventId: event.id, status: 'waiting', reason: 'no-reply', ...context });
+    }
     const value = validateEvent(event.butlerSource);
     if (value.eventId !== `butler-source:${hash(parent)}` || value.sourceRef !== sourceRef ||
         value.payload.spaceId !== roomId || !value.payload.itemId || !['decision', 'failure', 'blocked'].includes(value.kind) ||
@@ -123,7 +149,7 @@ class ButlerIngress {
     const scope = `queue-outcome:${roomId}:${eventId}`;
     try {
       const event = this.roomState.metadata(roomId).events.find(value => value.id === eventId);
-      return event && (Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource'))
+      return event && (Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource') || Object.hasOwn(event, 'butlerNoReplySource'))
         ? this.record(storedQueueSource(roomId, event)) : { status: 'ignored' };
     } catch { this.errors.set(scope, 'source-unavailable'); throw unavailable(); }
   }
@@ -190,9 +216,7 @@ class ButlerIngress {
     for (const s of Array.isArray(sessions) ? sessions : []) {
       const quota = codexQuotaBlock(s);
       if (quota && typeof s.id === 'string' && s.id && !s.archived) {
-        const identity = hash([s.id, quota.nativeId, quota.turnId]);
-        this.record({ eventId: `codex-quota:${identity}`, sourceRef: `codex-quota:${s.id}`, kind: 'blocked',
-          payload: { memberId: s.id, reason: 'codex-usage-limit-exceeded' } });
+        this.record(quotaSource(s.id, quota));
       }
       const r = s?.capacityRecovery, reason = Object.hasOwn(recoveryFailureReasons, r?.reason) ? recoveryFailureReasons[r.reason] : null;
       if (!reason || !(s?.provider === 'claude' && r.reason !== 'routing' || s?.provider === 'codex' && ['capacity', 'routing'].includes(r.reason)) ||
@@ -282,7 +306,7 @@ class ButlerIngress {
 }
 
 function bindQueueOutcomes(roomState, ingress, notify) {
-  // The existing callback carries typed READY/done facts, separate from B1 decision/failure delivery.
+  // READY/done/no-reply facts share intake; B1 owns person-facing questions.
   // No controller or model is notified while the host remains dormant.
   roomState.onButlerReady = (roomId, eventId) => ingress?.captureOutcome(roomId, eventId);
   roomState.onQueueOutcome = outcome => {
@@ -291,4 +315,4 @@ function bindQueueOutcomes(roomState, ingress, notify) {
     finally { notify(outcome, receipt); }
   };
 }
-module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes };
+module.exports = { ButlerIngress, queueOutcomeSource, storedQueueSource, bindQueueOutcomes, noReplyContext };

@@ -145,7 +145,9 @@ test('ordinary done and reasoned waiting outcomes are not promoted to READY or a
   assert.equal(notified, 0); assert.deepEqual(f.room.butlerSources(), []);
   assert.deepEqual(f.ledger.snapshot().events, []); assert.deepEqual(f.ledger.snapshot().reports, []);
   assert.equal(queueOutcomeSource({ status: 'done', roomId: 'shared', eventId: 'finished', itemId: 'task' }), null);
-  assert.equal(queueOutcomeSource({ status: 'waiting', reason: 'no-reply' }), null);
+  const noReply = queueOutcomeSource({ status: 'waiting', reason: 'no-reply', roomId: 'shared', eventId: 'empty-turn', itemId: 'task', memberId: 'agent-a' });
+  assert.equal(noReply.kind, 'failure');
+  assert.deepEqual(noReply.payload, { memberId: 'agent-a', itemId: 'task', reason: 'no-reply-unconfirmed' });
 });
 
 test('queue vacancy observations survive restart and create work only on a new empty episode', t => {

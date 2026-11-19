@@ -63,7 +63,7 @@ test('trimming a settled queue item does not remove its durable B1 source', t =>
 
 test('ordinary completion and nondecision waiting outcomes create no READY or B4 source', t => {
   const f = fixture(t);
-  for (const [status, reason] of [['done', ''], ['cancelled', ''], ['waiting', 'person-intervened'], ['waiting', 'no-reply']]) {
+  for (const [status, reason] of [['done', ''], ['cancelled', ''], ['waiting', 'person-intervened']]) {
     f.room.queueSettle('shared', f.sent(), status, reason, 'Member A', 'READY is merely text here');
   }
   assert.deepEqual(f.room.butlerSources(), []);

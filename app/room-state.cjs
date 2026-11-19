@@ -10,7 +10,7 @@ const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placemen
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const queueRules = require('./queue-dispatch.cjs');
 const { archiveIdle, currentFleet } = require('./renderer/fleet-observation.js');
-const { queueOutcomeSource, storedQueueSource } = require('./butler-ingress.cjs');
+const { queueOutcomeSource, storedQueueSource, noReplyContext } = require('./butler-ingress.cjs');
 const { queueReadySource, queueDoneSource } = require('./butler-ready.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
@@ -618,7 +618,7 @@ class RoomState {
     if (this.warning || this.spacesWarning) throw Object.assign(Error(this.warning || this.spacesWarning), {
       uiMessage: this.warning ? this.warningUiMessage : this.spacesWarningUiMessage });
     return structuredClone([{ id: DEFAULT_ROOM_ID, events: this.value.events }, ...this.spaces.rooms].flatMap(room => room.events
-      .filter(event => Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource'))
+      .filter(event => Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource') || Object.hasOwn(event, 'butlerNoReplySource'))
       .map(event => storedQueueSource(room.id, event))));
   }
   queueItems(id) {
@@ -814,7 +814,7 @@ class RoomState {
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
-  queueSettle(id, itemId, status, reason, name, reply = '', question, ready, reportTitle) {
+  queueSettle(id, itemId, status, reason, name, reply = '', question, ready, reportTitle, session) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'sent') {
       throw uiError("error.queue.notSent");
@@ -829,7 +829,7 @@ class RoomState {
     if (ready) {
       next.ready = ready;
     }
-    // Only outcomes that need the person are written to the space record.
+    // No-reply notifies the butler without creating a question for the person.
     let event;
     const text = queueRules.shortText(item.text);
     if (status === 'waiting') {
@@ -841,7 +841,12 @@ class RoomState {
       event = { kind: 'queue', sessionId: item.sentTo, ...uiNotice('notice.queue.failed', params) };
     }
     const needsPerson = status === 'failed' || status === 'waiting' && !reason;
+    const noReply = status === 'waiting' && reason === 'no-reply';
     const decisionQuestion = question ?? queueRules.shortText(item.text);
+    if (event && noReply) {
+      event.id = randomUUID();
+      event.butlerNoReplySource = noReplyContext(item, session);
+    }
     if (event && needsPerson) {
       // The event and its B4 source must share this exact persisted identity.
       // update() retains an explicitly supplied ID when it constructs the row.
@@ -851,6 +856,9 @@ class RoomState {
       if (source) event.butlerSource = source;
     }
     const eventId = this.queueReplace(id, itemId, next, event, reportTitle, name);
+    if (eventId && noReply) {
+      try { this.onButlerReady?.(id, eventId); } catch { /* Recovery reads the persisted outcome. */ }
+    }
     if (eventId && needsPerson) {
       try {
         this.onQueueOutcome?.({ roomId: id, itemId, eventId, status, reason, memberId: item.sentTo,

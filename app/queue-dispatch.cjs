@@ -2897,7 +2897,14 @@ class QueueDispatcher {
     if (session) {
       name = this.name(session);
     }
-    const report = action.reportTitle === undefined ? [] : [action.reportTitle];
+    const noReply = action.status === 'waiting' && action.reason === 'no-reply';
+    let current;
+    if (noReply) {
+      try { current = this.client.snapshot().sessions.find(s => s.id === action.sessionId); }
+      catch { /* An unreadable current cause stays unconfirmed. */ }
+    }
+    const report = noReply ? [action.reportTitle, current] :
+      action.reportTitle === undefined ? [] : [action.reportTitle];
     this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready, ...report);
     this.broadcast().catch(() => {});
   }
