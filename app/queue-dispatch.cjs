@@ -323,6 +323,10 @@ function validateItem(item) {
   if (item.afterDecision !== undefined && item.afterDecision !== true) {
     throw Error('Invalid queue delivery');
   }
+  if (item.sentNative !== undefined && !(typeof item.sentNative === 'string' && item.sentNative.length > 0 &&
+      item.sentNative.length <= 2000 && !/[\u0000-\u001f]/u.test(item.sentNative))) {
+    throw Error('Invalid queue delivery');
+  }
   // The person's answer from the queue row, once native received it (room-state.cjs queueResolve).
   if (item.answer !== undefined && !(item.answer && typeof item.answer === 'object' && !Array.isArray(item.answer) &&
       Object.keys(item.answer).length === 2 && validText(item.answer.text, ITEM_TEXT_LIMIT) && validTime(item.answer.deliveredAt))) {
@@ -3006,7 +3010,7 @@ class QueueDispatcher {
     }
     const name = this.name(session);
     // Record before sending: a crash after this point is never resent silently.
-    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true);
+    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null);
     try {
       const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);

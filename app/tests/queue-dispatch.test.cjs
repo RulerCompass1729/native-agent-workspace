@@ -4220,6 +4220,16 @@ test('cannot carry collaboration mode is visible by code and keeps the original 
   assert.equal(f.room.queueFind('shared', id).sentTo, 'a');
 });
 
+test('a dispatched item keeps the native session it went to, for the answer from its queue row', async t => {
+  const f = dispatcherSetup(t, [member('a')]);
+  const id = f.room.queueAdd('answer me later', 'a'); await f.dispatcher.start();
+  if (f.room.queueFind('shared', id).status !== 'sent') { f.dispatcher.dirty = true; await f.dispatcher.schedule(); }
+  const sent = f.room.queueFind('shared', id), dispatched = f.client.calls.find(call => call[0] === 'dispatch');
+  assert.equal(sent.status, 'sent');
+  assert.ok(dispatched?.[3], 'dispatched to a native session');
+  assert.equal(sent.sentNative, dispatched[3], 'the same native session the dispatch named');
+});
+
 test('an unconfirmed handoff failure exposes a fixed code, never the native error body', async t => {
   const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
   f.room.queueAdd('original task', 'a');

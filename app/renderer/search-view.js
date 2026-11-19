@@ -519,11 +519,14 @@ function queueAnswerQuote(item) {
   if (head.length > 40) head = head.slice(0, 39) + '…';
   return uiText('queue.answer.quote', { head }) + '\n';
 }
-// Only the session the item went to, still running with the same native session and still in this space; otherwise
-// the text goes only through the send dialog, never by itself to a successor.
+// Only the session the item went to, still running with the native session NAW sent it to and still in this space;
+// otherwise the text goes only through the send dialog, never by itself to a successor.
 function queueAnswerTarget(entry, text = '.') {
   const s = state.sessions.find(x => x.id === entry.sentTo);
-  if (!s || s.archived || entry.nativeId && s.nativeId !== entry.nativeId) return { gone: 'queue.answer.ended' };
+  if (!s || s.archived) return { gone: 'queue.answer.ended' };
+  // An item sent before NAW kept sentNative cannot show which native session asked.
+  if (!entry.nativeId) return { gone: 'queue.answer.unverified' };
+  if (s.nativeId !== entry.nativeId) return { gone: 'queue.answer.ended' };
   if (!inSpace(s, entry.roomId)) return { gone: 'queue.answer.left' };
   if (!disconnected && ['none', 'resume'].includes(soloAction(s, { mode: 'chat' }).kind)) return { gone: 'queue.answer.ended' };
   return searchSendTarget({ id: s.id, nativeId: s.nativeId }, text);
@@ -532,8 +535,7 @@ function queueAnswerNode(item, open) {
   let entry = queueAnswers.get(item.id);
   if (!open && !entry?.follow) return item.answer ? queueAnswerDelivered(item) : null;
   if (!entry) {
-    const s = state.sessions.find(x => x.id === item.sentTo);
-    entry = { roomId: queueSpace, itemId: item.id, sentTo: item.sentTo, nativeId: s?.nativeId || '', text: queueAnswerQuote(item), follow: null, note: null };
+    entry = { roomId: queueSpace, itemId: item.id, sentTo: item.sentTo, nativeId: item.sentNative || '', text: queueAnswerQuote(item), follow: null, note: null };
     queueAnswers.set(item.id, entry);
   }
   const block = node('div', undefined, 'queue-answer'), box = node('textarea');
@@ -611,7 +613,7 @@ async function queueAnswerSend(entry) {
     try { sendFollowTag(follow, await call); }
     catch (error) {
       const failed = sendFollowFailure(follow, error);
-      if (failed.notSent) { entry.follow = null; entry.note = { error }; }
+      if (failed.notSent) { entry.follow = null; entry.note = { error }; reportShown(); }
       else if (!failed.row) follow.unconfirmed = true;
     }
   } finally {
@@ -623,14 +625,22 @@ async function queueAnswerSend(entry) {
 function followQueueAnswers() {
   for (const entry of [...queueAnswers.values()]) followQueueAnswer(entry);
 }
+// Sessions whose receipt an answer still follows keep their messages, whatever the page shows (shownSessionIds).
+function queueAnswerShownIds() {
+  return [...queueAnswers.values()].filter(entry => entry.follow).map(entry => entry.follow.id);
+}
 function followQueueAnswer(entry) {
   const item = queueAnswerItem(entry), follow = entry.follow;
-  if (!item || item.status !== 'waiting' && (!follow || item.answer)) { queueAnswers.delete(entry.itemId); return; }
+  if (!item || item.status !== 'waiting' && (!follow || item.answer)) {
+    queueAnswers.delete(entry.itemId);
+    if (follow) reportShown();
+    return;
+  }
   if (follow?.mark && !follow.tag) { const row = sendFollowRow(follow); if (row) follow.mark.tag = follow.tag = row.id; }
   const row = follow?.tag && state.sessions.find(x => x.id === follow.id)?.messages?.find(m => m.id === follow.tag);
   // Its own row decides an unconfirmed call too; only a row that says not sent lets the same words go again.
   if (row?.status === 'not-sent') {
-    entry.follow = null;
+    entry.follow = null; reportShown();
     entry.note = { key: 'delivery.row', params: () => ({ recipient: follow.name, status: uiText('delivery.notSent') }) };
   } else if (follow?.unconfirmed && row && row.status !== 'awaiting-native') follow.unconfirmed = false;
   if (entry.follow && !follow.unconfirmed && !entry.resolving && item.status === 'waiting' && QUEUE_ANSWER_DELIVERED.has(sendFollowStatusKey(follow))) queueAnswerResolve(entry);

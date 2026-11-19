@@ -52,7 +52,7 @@ function page(locale = 'en') {
   };
   const session = (id, name) => ({ id, nativeId: 'native-' + id, name, provider: 'codex', state: 'idle', owner: 'self', messages: [], liveDraft: '', spaces: ['space'] });
   const reply = 'Needs your decision: two commits change the same column cache (commit 1 and r4). A: merge both; B: merge only commit 1.';
-  const room = { id: 'space', queue: [{ id: 'item-1', text: 'Merge r4', status: 'waiting', sentTo: 'g', reply, createdAt: 1 }] };
+  const room = { id: 'space', queue: [{ id: 'item-1', text: 'Merge r4', status: 'waiting', sentTo: 'g', sentNative: 'native-g', reply, createdAt: 1 }] };
   context = vm.createContext({
     console, Date, setTimeout: () => 0, clearTimeout() {}, structuredClone, globalThis: null,
     state: { sessions: [session('g', 'Codex G'), session('h', 'Codex H')] },
@@ -90,13 +90,13 @@ function page(locale = 'en') {
   ].join('\n'), context);
   vm.runInContext(take(reading, 'readingDeliveryStatusKey') + '\n' + search, context);
   // The queue row itself, as renderQueue builds it, attached to the page.
-  const row = () => {
+  const row = (index = 0) => {
     const parts = vm.runInContext(`(${take(renderer, 'queueRow')})`, Object.assign(context, {
       uiNode: (tag, key, params, cls) => { const e = context.node(tag, undefined, cls); context.ui.display.text(e, key, params); return e; },
       uiButton: (key, action, cls) => { const e = context.node('button', undefined, cls); context.ui.display.text(e, key); e.addEventListener('click', () => context.attempt(action)); return e; },
       queueOutcomeNode: item => item.reply ? context.node('div', item.reply, 'queue-outcome') : null, queueReasonKey: () => '',
     }));
-    const built = parts(room.queue[0], new Set(['g', 'h']));
+    const built = parts(room.queue[index], new Set(['g', 'h']));
     context.documentRoot.replaceChildren(built);
     const answer = built.find('queue-answer');
     const [box, foot, line, note] = answer?.children || [];
@@ -287,4 +287,89 @@ test('the room state keeps an answer only on a waiting item, from the person, in
   for (const bad of [{ text: 'a' }, { text: 'a', deliveredAt: 1, extra: 1 }, { text: '', deliveredAt: 1 }, 'Pick A.', [1, 2]]) {
     assert.throws(() => queueRules.validateQueue([{ ...item, answer: bad }]), /answer/, JSON.stringify(bad));
   }
+});
+
+// F's review Q2: the native session is the one NAW sent the item to, never the one the row first sees.
+test('a native session changed before the row is first shown, or an item without the one it went to, gets only 「把这句话发给…」', async () => {
+  for (const [change, why] of [[(f) => { f.g.nativeId = 'replacement-native-before-open'; }, 'Codex G’s session has ended, so this can’t be sent'],
+    [(f) => { delete f.room.queue[0].sentNative; }, 'Can’t tell whether this is the session Codex G asked from, so this can’t be sent']]) {
+    const f = page(), sent = [];
+    f.context.api.send = async (id, text, native) => { sent.push({ id, text, native }); return 'tag-1'; };
+    change(f);
+    const r = f.row(); r.box.type('Answer for the original question');
+    assert.equal(r.why.textContent, why);
+    assert.equal(r.send.textContent, 'Send this to…');
+    r.send.click(); await flush();
+    await f.context.queueAnswerSend(f.get("queueAnswers.get('item-1')"));
+    f.g.messages.push({ id: 'tag-1', role: 'user', text: 'Answer for the original question', status: 'submitted' }); f.context.followQueueAnswers(); await flush();
+    assert.deepEqual(sent, [], 'nothing goes to the replacement or to an unproven session');
+    assert.deepEqual(f.resolves, [], 'and the old question stays open');
+    assert.equal(f.$('send-dialog').open, true, 'the person picks the recipient');
+  }
+});
+
+test('after a reload the row sends to the same native session it went to, and is handled on that receipt', async () => {
+  // A fresh page is what a reload gives: no box state, only the item and the sessions.
+  const f = page(), sent = [];
+  f.context.api.send = async (id, text, native) => { sent.push({ id, native }); return 'tag-1'; };
+  assert.equal(f.get('queueAnswers.size'), 0);
+  const r = f.row(); r.box.type('Pick A.');
+  assert.equal(r.send.textContent, 'Send to Codex G');
+  r.send.click(); await flush();
+  assert.deepEqual(sent, [{ id: 'g', native: 'native-g' }]);
+  f.deliver('submitted'); await flush();
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.']]);
+});
+
+// F's review Q1: the receipt comes through the member's messages, which main sends only for subscribed sessions.
+test('answers still waiting for their receipt keep their members subscribed when another session is shown; each late receipt handles its row once', async () => {
+  const f = page(), shown = require(path.join(root, 'app/shown-sessions.cjs')), c = f.context, reported = [];
+  f.room.queue.push({ ...f.room.queue[0], id: 'item-2', text: 'Ship r5', sentTo: 'h', sentNative: 'native-h', createdAt: 2 });
+  c.state.sessions.push({ ...c.state.sessions[1], id: 'k', nativeId: 'native-k', name: 'Codex K', messages: [] });
+  const full = { sessions: c.state.sessions };
+  let serverShown = null;
+  Object.assign(c, { selected: 'room', activeSessionId: () => c.selected === 'room' ? null : c.selected, members: () => c.state.sessions, render() {},
+    projectSpace: v => v, legacyProgressOffline: () => false, latestViewStorage: undefined, queuedRoomInputs: new Map() });
+  vm.runInContext(renderer.slice(renderer.indexOf('const shownPending = new Map();'), renderer.indexOf('function orderedMembers(')) + '\n' + take(renderer, 'updateState'), c);
+  c.api.shownSessions = async ids => { reported.push(ids); const v = shown.reportShown(serverShown, ids, () => full); serverShown = v.shown; return v; };
+  await c.reportShown();
+  const held = new Map();
+  c.api.send = (id, text) => { f.calls.push({ id, text }); return new Promise(resolve => held.set(id, resolve)); };
+  f.row(0).box.type('Answer G'); const first = c.queueAnswerSend(f.get("queueAnswers.get('item-1')"));
+  f.row(1).box.type('Answer H'); const second = c.queueAnswerSend(f.get("queueAnswers.get('item-2')"));
+  await flush();
+  // The queue closes and another session is shown.
+  c.selected = 'k'; await c.reportShown();
+  assert.deepEqual([...c.shownSessionIds()], ['g', 'h', 'k'], 'both targets stay subscribed');
+  for (const [id, tag, text] of [['g', 'tag-g', 'Answer G'], ['h', 'tag-h', 'Answer H']]) full.sessions.find(s => s.id === id).messages.push({ id: tag, role: 'user', text, status: 'submitted' });
+  c.updateState(shown.omitHidden(full, serverShown));
+  assert.equal(c.state.sessions.find(s => s.id === 'g').messagesOmitted, undefined, 'the receipt reaches the page');
+  held.get('g')('tag-g'); held.get('h')('tag-h'); await first; await second; await flush();
+  c.updateState(shown.omitHidden(full, serverShown)); await flush();
+  assert.deepEqual(f.resolves.map(r => [...r]), [['space', 'queueResolve', 'item-1', 'Answer G'], ['space', 'queueResolve', 'item-2', 'Answer H']], 'each row once, from its own receipt');
+  assert.equal(f.calls.length, 2, 'nothing resent');
+  // Handled: the follows end and so does the subscription.
+  for (const item of f.room.queue) Object.assign(item, { status: 'done', answer: { text: 'x', deliveredAt: 3 } });
+  c.followQueueAnswers(); await flush();
+  assert.deepEqual([...c.shownSessionIds()], ['k']);
+  assert.deepEqual([...reported.at(-1)], ['k'], 'main is told at once');
+});
+
+test('the item keeps the native session NAW sent it to; a requeue drops it, and the field is checked', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-native-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const room = new RoomState(dir), id = room.queueAdd('Merge r4', null, 'shared', { kind: 'person', name: 'You', sessionId: null });
+  room.queueMarkSent('shared', id, 'g', 'Codex G', 1, false, 'native-g');
+  assert.equal(room.queueFind('shared', id).sentNative, 'native-g');
+  room.queueSettle('shared', id, 'waiting', '', 'Codex G', 'Needs your decision: A or B?');
+  assert.equal(room.queueFind('shared', id).sentNative, 'native-g', 'kept while it waits');
+  const other = room.queueAdd('Ship r5', null, 'shared', { kind: 'person', name: 'You', sessionId: null });
+  room.queueMarkSent('shared', other, 'g', 'Codex G', 1, false, 'native-g');
+  room.queueRequeue('shared', other, 'busy', 5, 'Codex G');
+  assert.equal(room.queueFind('shared', other).sentNative, undefined, 'a requeued item is not bound to a session');
+  room.queueMarkSent('shared', other, 'g', 'Codex G', 2);
+  assert.equal(room.queueFind('shared', other).sentNative, undefined, 'no native session, nothing kept');
+  const base = room.queueFind('shared', id);
+  for (const bad of ['', 'x\u0001', 'x'.repeat(2001), 7]) assert.throws(() => queueRules.validateQueue([{ ...base, sentNative: bad }]));
+  assert.doesNotThrow(() => queueRules.validateQueue([base]));
 });
