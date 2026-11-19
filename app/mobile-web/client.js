@@ -15,8 +15,8 @@
   // invisible characters or in full-width form.
   const nativePrefix = value => /^[!#/]/.test(value.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
   function createMobileClient({ request, storage, newId, onChange = () => {} }) {
-    const state = { session: null, selected: null, row: null, draft: '', revision: 0, busy: false, notice: '', storageError: false, drafts: [], pending: [] };
-    let readEpoch = 0, unreadableStorage = false;
+    const state = { authorization: 0, session: null, selected: null, row: null, draft: '', revision: 0, busy: false, notice: '', storageError: false, drafts: [], pending: [] };
+    let readEpoch = 0, startEpoch = 0, pairing = false, unreadableStorage = false;
     try {
       const raw = storage.getItem(KEY);
       if (raw) {
@@ -49,27 +49,41 @@
         MOBILE_REQUEST_CONFLICT: '请求记录冲突，未替换或重发原请求。' };
       return messages[error?.code] || '访问或结果未确认。请保留草稿，刷新配对状态或回 Mac 核对。';
     }
+    const grantKey = session => JSON.stringify([session.deviceId, session.csrf, session.workspace, session.candidate,
+      [session.consent?.registered, session.consent?.enabled, session.consent?.verified],
+      session.sessions.map(s => [s.id, s.nativeId, s.available, [...(s.actions || [])].sort()]).sort((a, b) => a[0].localeCompare(b[0]))]);
+    function clearAuthorization() {
+      ++readEpoch; ++state.authorization;
+      state.session = null; state.selected = null; state.row = null; state.draft = ''; state.revision = 0; state.busy = false;
+    }
     async function start(pairSecret) {
+      if (pairSecret === undefined && pairing) return state;
+      if (pairSecret !== undefined) { pairing = true; clearAuthorization(); changed(); }
+      const epoch = ++startEpoch, authorization = state.authorization;
       try {
         if (pairSecret !== undefined) { if (!token(pairSecret)) throw failure('MOBILE_BAD_PAIR'); await call('/mobile/pair', { secret: pairSecret }); }
+        if (epoch !== startEpoch || authorization !== state.authorization) { if (epoch === startEpoch) pairing = false; return state; }
         const session = await call('/mobile/session');
+        if (epoch !== startEpoch || authorization !== state.authorization) { if (epoch === startEpoch) pairing = false; return state; }
         if (!uuid(session.deviceId) || !token(session.csrf) || !Array.isArray(session.sessions)) throw failure('MOBILE_BAD_SESSION');
+        if (state.session && grantKey(state.session) !== grantKey(session)) clearAuthorization();
         state.session = session;
         if (!state.storageError) state.notice = state.pending.some(p => p.deviceId !== session.deviceId && !terminal(p.status)) ? '旧配对仍有未确认记录；不会在新配对中重发，请回 Mac 核对。' : '已配对。请选择会话查看原文。';
-      } catch (error) { state.notice = explain(error); }
+      } catch (error) { if (epoch === startEpoch && authorization === state.authorization) state.notice = explain(error); }
+      if (epoch === startEpoch) pairing = false;
       changed(); return state;
     }
     async function select(id) {
-      if (!state.session?.sessions.some(s => s.id === id)) throw failure('MOBILE_SESSION_UNAVAILABLE');
+      if (!state.session?.sessions.some(s => s.id === id && s.available !== false)) throw failure('MOBILE_SESSION_UNAVAILABLE');
       state.selected = id; state.row = null; const draft = currentDraft(); state.draft = draft?.text || ''; state.revision = draft?.revision || 0; changed();
       return refresh();
     }
     async function refresh() {
       if (!state.session || !state.selected) return;
-      const epoch = ++readEpoch, id = state.selected, deviceId = state.session.deviceId;
+      const epoch = ++readEpoch, id = state.selected, deviceId = state.session.deviceId, authorization = state.authorization;
       try {
         const row = await call('/mobile/read/' + encodeURIComponent(id));
-        if (epoch === readEpoch && id === state.selected && deviceId === state.session?.deviceId) {
+        if (authorization === state.authorization && epoch === readEpoch && id === state.selected && deviceId === state.session?.deviceId) {
           if (row.id !== id || !token(row.contextId)) throw failure('MOBILE_BAD_CONTEXT');
           state.row = row;
         }
@@ -83,41 +97,42 @@
       if (!draft) { draft = { deviceId: state.session.deviceId, sessionId: state.selected, text: '', revision: 0 }; state.drafts.push(draft); }
       draft.text = value; draft.revision = state.revision; const saved = persist(); changed(); return saved;
     }
-    function recordResult(pending, result) {
+    function recordResult(pending, result, authorization) {
       if (result.requestId !== pending.requestId || result.sessionId !== pending.sessionId || result.action !== pending.action || !Object.hasOwn(labels, result.status)) throw failure('MOBILE_RECEIPT_UNKNOWN');
       pending.status = result.status;
       // A late ACK cannot clear edits or a draft in a different reading view.
-      if (pending.action === 'send' && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
+      if (authorization === state.authorization && pending.action === 'send' && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
           state.draft === pending.text && state.revision === pending.revision) {
         const draft = currentDraft();
         if (draft && draft.text === pending.text && draft.revision === pending.revision) { state.draft = ''; state.revision++; draft.text = ''; draft.revision = state.revision; }
       }
-      if (persist()) state.notice = labels[result.status] + (result.storageWarning ? '；回执保存未确认，请回 Mac 核对。' : '');
+      if (persist() && authorization === state.authorization) state.notice = labels[result.status] + (result.storageWarning ? '；回执保存未确认，请回 Mac 核对。' : '');
     }
     async function submit(action, answers) {
-      if (state.busy || state.storageError || !state.session || !state.row || state.row.id !== state.selected || unresolved() ||
+      if (state.busy || state.storageError || !state.session?.sessions.some(s => s.id === state.selected && s.available !== false) || !state.row || state.row.id !== state.selected || unresolved() ||
           action === 'send' && (!state.row.canSend || !state.draft.trim()) || action === 'answer' && !state.row.question) throw failure('MOBILE_INPUT_UNAVAILABLE');
       if (action === 'send' && nativePrefix(state.draft)) {
         state.notice = '手机端不发送以 !、# 或 / 开头的文字：在原生终端里它们会被当成命令、记忆或斜杠命令。草稿已保留，请改写开头或回 Mac 输入。'; changed(); return;
       }
       const requestId = newId(); if (!uuid(requestId)) throw failure('MOBILE_BAD_REQUEST_ID');
-      const contextId = state.row.contextId, deviceId = state.session.deviceId, csrf = state.session.csrf;
+      const contextId = state.row.contextId, deviceId = state.session.deviceId, csrf = state.session.csrf, authorization = state.authorization;
       const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed' };
       const value = { contextId, requestId, ...(action === 'send' ? { text: state.draft } : { answers }) };
       state.pending.push(pending);
       if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
       state.busy = true; changed();
-      try { recordResult(pending, await request('/mobile/' + action, value, csrf)); }
-      catch (error) { state.notice = explain(error); }
-      finally { state.busy = false; changed(); }
+      try { recordResult(pending, await request('/mobile/' + action, value, csrf), authorization); }
+      catch (error) { if (authorization === state.authorization) state.notice = explain(error); }
+      finally { if (authorization === state.authorization) state.busy = false; changed(); }
     }
     async function receipt(requestId) {
       const pending = state.pending.find(p => p.requestId === requestId);
       if (!pending || pending.deviceId !== state.session?.deviceId || state.busy) throw failure('MOBILE_RECEIPT_UNAVAILABLE');
+      const authorization = state.authorization;
       state.busy = true; changed();
-      try { recordResult(pending, await call('/mobile/receipt', { requestId })); }
-      catch (error) { state.notice = explain(error); }
-      finally { state.busy = false; changed(); }
+      try { recordResult(pending, await call('/mobile/receipt', { requestId }), authorization); }
+      catch (error) { if (authorization === state.authorization) state.notice = explain(error); }
+      finally { if (authorization === state.authorization) state.busy = false; changed(); }
     }
     function forget(requestId) {
       const pending = state.pending.find(p => p.requestId === requestId);
@@ -126,14 +141,16 @@
     }
     async function logout() {
       if (!state.session || state.busy) return;
+      const authorization = state.authorization;
       state.busy = true; changed();
       try {
         const result = await call('/mobile/logout', {});
+        if (authorization !== state.authorization) return;
         state.notice = result.authorizationRevoked ? '此手机访问已撤销；已经写入的原生工作可能继续。' : '撤销未获确认，请在 Mac 核对；已经写入的原生工作可能继续。';
-      } catch { state.notice = '撤销未获确认，请在 Mac 核对。'; }
-      finally { ++readEpoch; state.session = null; state.row = null; state.busy = false; changed(); }
+      } catch { if (authorization === state.authorization) state.notice = '撤销未获确认，请在 Mac 核对。'; }
+      finally { if (authorization === state.authorization) { clearAuthorization(); changed(); } }
     }
-    return { state, start, select, refresh, setDraft, send: () => submit('send'), answer: answers => submit('answer', answers), receipt, forget, logout, labels };
+    return { state, start, select, refresh, invalidate: () => { clearAuthorization(); changed(); }, setDraft, send: () => submit('send'), answer: answers => submit('answer', answers), receipt, forget, logout, labels };
   }
   function mount(document, location, history, storage, fetch, crypto) {
     // Consume a pairing fragment before any fetch, renderer callback or storage.

@@ -44,7 +44,7 @@
     const d = global.document, el = id => d.getElementById(id);
     let pairSecret=global.location.hash.startsWith('#pair=')?global.location.hash.slice(6):undefined;
     if (pairSecret !== undefined) global.history.replaceState(null, '', global.location.pathname + '#zh/home');
-    let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '';
+    let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '', authorization = 0;
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
     const t = key => words[lang][key] || key;
     const node = (tag, value, cls) => { const n = d.createElement(tag); if (value !== undefined) n.textContent = value; if (cls) n.className = cls; return n; };
@@ -60,10 +60,12 @@
     let started;
     async function run(fn) { try { await started; await fn(); } catch { disconnected = true; paint(); toast('offline'); } }
     async function api(url, value, csrf) {
+      const generation = client?.state.authorization;
       const response = await global.fetch(url, { method: value === undefined ? 'GET' : 'POST', cache: 'no-store', credentials: 'same-origin',
         headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', 'X-NAW-CSRF': csrf || '' }) }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
       const result = await response.json();
-      if (!response.ok) { if ([401, 403].includes(response.status)) { locked = true; view = null; paint(); } throw Error(result.error || 'MOBILE_DENIED'); }
+      if (generation !== client?.state.authorization) throw Error('MOBILE_AUTH_CHANGED');
+      if (!response.ok) { if ([401, 403].includes(response.status)) { client.invalidate(); locked = true; view = null; paint(); } throw Error(result.error || 'MOBILE_DENIED'); }
       disconnected = false;
       if (url === '/mobile/session') locked = false;
       return result;
@@ -75,7 +77,13 @@
     let pairingNotice=false,pairingBusy=false;
     words.zh.bellNote='数量来自桌面同一份提醒。敏感卡需逐张系统验证；未启用或不支持的操作请回 Mac。';
     words.en.bellNote='The count uses the same desktop reminders. Sensitive cards require individual system verification; use the Mac when not enabled or supported.';
-    client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: () => updateCompose() });
+    client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: state => {
+      if (authorization !== state.authorization) {
+        authorization = state.authorization; view = null; busy = false; lastReceived = 0; composeKey = '';
+        if (el('dialog').open) el('dialog').close();
+        locked = !state.session; paint();
+      } else updateCompose();
+    } });
     const push = global.NAWMobilePush?.create({ request: api, session: () => client.state.session });
     Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量，不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
     Object.assign(words.en, { pushTitle: 'Phone notifications', pushEnable: 'Enable reminders', pushDisable: 'Disable reminders', pushNote: 'Only the reminder count is sent, without names or content. Notifications may be delayed; open NAW for current records.', pushHome: 'On iPhone, add this page to the Home Screen in Safari, then open it there. Requires iOS 16.4 or later.', pushUnsupported: 'Push is unavailable in this browser. On iPhone, add NAW to the Home Screen and open it there.', pushOff: 'Not enabled', pushSubscribed: 'Registered; no reminder submitted yet', pushAccepted: 'Accepted by the push service; phone delivery unconfirmed', pushDelayed: 'Submission unconfirmed; notifications may be delayed. Refresh for current reminders.', pushExpired: 'Subscription expired; enable again', pushDenied: 'Notification permission was not granted. Check system settings.', pushUnknown: 'Setting unconfirmed. Refresh to check, or revoke this phone on the Mac.' });
@@ -299,8 +307,8 @@
     }
     function updateCompose() {
       if (!client) return;
-      const active = !locked && route?.page === 'chat' && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active));
-      if (!active) { composeKey = ''; return; }
+      const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active));
+      if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
       if (composeKey !== route.id) {
         composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('chat'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
         input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit'; const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
@@ -328,7 +336,7 @@
       ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)(); updateCompose();
     }
     async function refresh() {
-      if (busy) return; busy = true; const ticket = ++epoch;
+      if (busy) return; busy = true; const ticket = ++epoch, generation = client.state.authorization;
       try { await client.start(); if (!locked && client.state.session) await client.refresh(); if (locked || !client.state.session) { view = null; return; }
         if(client.state.session.candidate){view=null;return;}
         const next = client.state.session.workspace ? await api('/mobile/workspace') : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
@@ -336,11 +344,12 @@
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
         if (ticket !== epoch) return; view = next; lastReceived = global.performance.now();
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
-      } catch { disconnected = true; toast('offline'); } finally { if (ticket === epoch) { busy = false; paint(); } }
+      } catch { if (generation === client.state.authorization && ticket === epoch) { disconnected = true; toast('offline'); } } finally { if (ticket === epoch) { busy = false; paint(); } }
     }
     let navigation = 0;
     async function navigate() {
       const ticket = ++navigation;
+      let paired = false;
       d.documentElement.dataset.loading = 'true';
       try {
         // Opening a fresh pairing link in an already-open phone tab is also a
@@ -348,6 +357,7 @@
         if (global.location.hash.startsWith('#pair=')) {
           const secret = global.location.hash.slice(6);
           global.history.replaceState(null, '', global.location.pathname + '#' + lang + '/home');
+          paired = true;
           await client.start(secret);
         }
         if (ticket !== navigation) return;
@@ -359,7 +369,9 @@
         const id = route.page === 'chat' ? route.id : route.nativeId;
         if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
         if (ticket !== navigation) return;
-        await refresh();
+        const reading = refresh();
+        // A new grant must not keep the previous conversation visible while reading.
+        if (!paired) await reading;
         if (ticket === navigation) paint();
       } catch {
         if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
