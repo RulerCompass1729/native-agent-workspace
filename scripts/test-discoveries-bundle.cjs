@@ -18,7 +18,8 @@ function reportNames(main, helpers) {
   return [...names].sort();
 }
 function reports(names, directory = path.join(os.homedir(), 'Library/Logs/DiagnosticReports')) {
-  return fs.readdirSync(directory).filter(name => name.endsWith('.ips') && names.some(stem => name.startsWith(stem + '-')) && fs.lstatSync(path.join(directory, name)).isFile()).sort();
+  const suffix = /^(?:\d{4}(?:-\d{2}-\d{2}-\d{6}(?:[._-]\d+)?)?|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.ips$/i;
+  return fs.readdirSync(directory).filter(name => names.some(stem => name.startsWith(stem + '-') && suffix.test(name.slice(stem.length + 1))) && fs.lstatSync(path.join(directory, name)).isFile()).sort();
 }
 function within(root, file) { const real = fs.realpathSync(file); if (!real.startsWith(root + path.sep)) throw Error('Bundle resource escaped its root'); return real; }
 function removeOwned(root, identity) {
@@ -50,6 +51,17 @@ function target(input) {
     helpers.push(entry.name.slice(0, -4), helper.CFBundleExecutable, ...[helper.CFBundleName, helper.CFBundleDisplayName].filter(value => value !== undefined));
   }
   if (!helpers.length) throw Error('Packaged Helper inventory is empty');
+  const directories = [frameworks], visited = new Set();
+  while (directories.length) {
+    const directory = directories.pop();
+    if (visited.has(directory)) continue;
+    visited.add(directory);
+    for (const name of fs.readdirSync(directory)) {
+      const file = within(bundle, path.join(directory, name)), stat = fs.statSync(file);
+      if (stat.isDirectory()) directories.push(file);
+      else if (stat.isFile() && (stat.mode & 0o111)) helpers.push(name, path.basename(file));
+    }
+  }
   return { bundle, app, executable, revision: info.NAWSourceRevision, identifier: info.CFBundleIdentifier, version: info.CFBundleShortVersionString, reportNames: reportNames(info.CFBundleExecutable, helpers) };
 }
 async function run(input) {
