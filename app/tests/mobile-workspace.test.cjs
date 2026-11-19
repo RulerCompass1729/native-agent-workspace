@@ -143,3 +143,34 @@ test('the phone names the Mac butler only when this pairing already reads it; ot
   f.adapter.steward = () => { throw Error('Synthetic unreadable designation'); };
   assert.deepEqual(await steward(), { state: 'unavailable' }, 'an unreadable designation is never reported as none');
 });
+// The real role record and rotation log, in the window where the old butler ended but the done line is not written yet.
+function handover(t) {
+  const f = fixture(t), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-steward-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { StewardRole } = require('../steward-role.cjs'), role = new StewardRole(dir);
+  role.set({ sessionId: 'a', nativeId: 'native-a' });
+  f.adapter.steward = () => role.current();
+  const next = { id: 'c', nativeId: 'native-c', name: 'Synthetic successor', state: 'idle', roomIds: ['shared'], nativeContextPending: true, messages: [] };
+  f.source.sessions.push(next);
+  const both = [...f.scopes, { serviceKey: '.', sessionId: 'c', nativeId: 'native-c', actions: ['read', 'send'] }];
+  const steward = async (scopes = f.scopes, grant = f.grant) => (await f.adapter.read(f.client, grant, scopes)).steward;
+  return { f, role, old: f.source.sessions[0], next, both, steward };
+}
+for (const state of ['ended', 'closed']) test('a chosen butler whose session is ' + state + ' during a handover is unavailable, not the current entry', async t => {
+  const h = handover(t);
+  assert.deepEqual(await h.steward(), { state: 'shared', sessionId: 'a' });
+  h.old.state = state;
+  assert.deepEqual(await h.steward(), { state: 'unavailable' }, 'the old session still reads but is not the current butler');
+  assert.deepEqual(await h.steward(h.both), { state: 'unavailable' }, 'nor is the pending successor');
+  assert.deepEqual(await h.steward(h.f.scopes, { allRooms: true, records: false }), { state: 'unavailable' }, 'all-session pairing agrees');
+  assert.equal((await h.f.adapter.read(h.f.client, h.f.grant, h.f.scopes)).sessions.some(s => s.id === 'a'), true, 'the selected historical read is unchanged');
+});
+test('after the done log the chosen butler card follows the successor again', async t => {
+  const h = handover(t);
+  h.old.state = 'ended';
+  assert.deepEqual(await h.steward(h.both), { state: 'unavailable' });
+  fs.writeFileSync(h.role.logFile, JSON.stringify({ event: 'done', old: { id: 'a', nativeId: 'native-a' }, new: { id: 'c', nativeId: 'native-c' } }) + '\n', { mode: 0o600 });
+  h.next.nativeContextPending = false;
+  assert.deepEqual(await h.steward(h.both), { state: 'shared', sessionId: 'c' });
+  assert.deepEqual(await h.steward(), { state: 'notSelected' }, 'a pairing that chose only the old session does not gain the successor');
+});
