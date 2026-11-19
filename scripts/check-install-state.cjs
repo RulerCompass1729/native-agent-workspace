@@ -155,21 +155,19 @@ function backendState(profile, target) {
   if (safePath(directory) !== directory) throw refusal('Backend directory linked');
   const lock = json(path.join(directory, 'service.lock'));
   if (lock.format !== 1 || lock.kind !== 'service' || lock.directory !== directory) throw refusal('Backend ownership unconfirmed');
-  const process = processInfo(lock.pid);
-  if (process.started !== lock.started || process.executable !== target.executable) throw refusal('Backend process mismatch');
+  const owner = processInfo(lock.pid);
+  if (owner.started !== lock.started || owner.executable !== target.executable) throw refusal('Backend process mismatch');
   const command = invoke('/bin/ps', ['-ww', '-p', String(lock.pid), '-o', 'command=']).trim();
   const suffix = ' ' + directory;
   if (!command.endsWith(suffix)) throw refusal('Backend command unconfirmed');
   const runtimeMatch = command.slice(0, -suffix.length).match(/ (\/.*\/runtimes\/[a-f0-9]{16})\/daemon\.cjs$/);
   if (!runtimeMatch || !runtimeMatch[1].startsWith(directory + '/runtimes/')) throw refusal('Backend runtime unconfirmed');
-  const runtime = runtimeMatch[1], digest = createHash('sha256').update(target.version);
+  const runtime = runtimeMatch[1];
   if (safePath(runtime) !== runtime) throw refusal('Runtime closure directory unconfirmed');
   for (const name of identityFiles) {
     const source = read(path.join(target.app, 'app', name)), running = read(path.join(runtime, name));
     if (!source.equals(running)) throw refusal('Backend source mismatch');
-    digest.update(source);
   }
-  if (key !== 'backends/' + digest.digest('hex').slice(0, 20)) throw refusal('Backend version unconfirmed');
   const closure = runtimeClosure(target.app), liveHash = createHash('sha256');
   for (const [source, destination] of closure.files) {
     let actual, expected;
@@ -180,7 +178,20 @@ function backendState(profile, target) {
   }
   const runtimeHash = liveHash.digest('hex').slice(0, 16);
   if (path.basename(runtime) !== runtimeHash || runtimeHash !== closure.hash) throw refusal('Runtime closure hash unconfirmed');
-  return { key, pid: process.pid, started: process.started, version: target.version, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
+  // Slot names survive reuse; only the verified live daemon can report its version.
+  let receipt;
+  try {
+    receipt = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'install-backend-version.cjs'), directory], {
+      encoding: 'utf8', timeout: 6000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'], env: { ELECTRON_RUN_AS_NODE: '1' },
+    }));
+  } catch { throw refusal('Backend version unconfirmed'); }
+  if (!receipt || Object.keys(receipt).sort().join(',') !== 'runtimeVersion,servicePid' || receipt.servicePid !== owner.pid ||
+      typeof receipt.runtimeVersion !== 'string' || !receipt.runtimeVersion || receipt.runtimeVersion !== target.version) throw refusal('Backend version unconfirmed');
+  const current = processInfo(lock.pid), latest = json(path.join(directory, 'service.lock'));
+  if (current.started !== owner.started || current.executable !== owner.executable ||
+      invoke('/bin/ps', ['-ww', '-p', String(lock.pid), '-o', 'command=']).trim() !== command ||
+      JSON.stringify(latest) !== JSON.stringify(lock) || JSON.stringify(json(path.join(profile, 'services.json'))) !== JSON.stringify(layout)) throw refusal('Backend process changed');
+  return { key, pid: owner.pid, started: owner.started, version: receipt.runtimeVersion, runtimeHash, files: closure.files.length, evidence: 'active-key+live-lock+runtime-source', directory };
 }
 function collector(options, helper, target) {
   return () => {

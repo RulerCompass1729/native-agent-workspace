@@ -145,7 +145,7 @@ test('pre metadata accepts an older bundle without discoveries modules and refus
     assert.throws(() => gate.bundleMetadata(app), /escaped/);
   } finally { fs.rmSync(root, { recursive: true }); }
 });
-test('backend metadata binds live process lifetime and the complete bootstrap closure without RPC', async () => {
+test('backend metadata binds live process lifetime, full closure, and the read-only version receipt', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'install-state-backend-'))); let live;
   try {
     const f = runtimeFixture.fixture(root); live = await runtimeFixture.start(f);
