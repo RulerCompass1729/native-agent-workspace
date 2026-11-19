@@ -31,7 +31,7 @@ async function open(context, { steward, busy = false, hash, rows = butlerRows })
     if (/^\/mobile\/[a-z]+\.(js|css|webmanifest)$/.test(p)) return route.fulfill({ status: 200, contentType: p.endsWith('.css') ? 'text/css' : 'text/javascript', body: fs.readFileSync(path.join(web, path.basename(p))) });
     if (p === '/mobile/session') return json({ deviceId: '10000000-0000-4000-8000-000000000001', csrf: 'c'.repeat(43), workspace: true,
       sessions: list.map(s => ({ id: s.id, name: s.name, state: s.state, available: true, actions: ['read', 'send', 'answer'] })) });
-    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? rows : [], earlierMessagesOmitted: 0 })), rooms: [],
+    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? (typeof rows === 'function' ? rows() : rows) : [], earlierMessagesOmitted: 0 })), rooms: [],
       confirmations: [], reminders: null, syncedAt: now, capabilities: { queue: false, records: false, sensitiveDecisions: false, nativeTerminal: false, push: false }, ...(steward ? { steward } : {}) });
     if (p.startsWith('/mobile/read/')) { const id = decodeURIComponent(p.split('/').pop());
       const idle = list.find(s => s.id === id)?.state === 'idle';
@@ -71,6 +71,21 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
     const opened = await page.evaluate(() => { const last = [...document.querySelectorAll('.thread .message')].at(-1).getBoundingClientRect(), compose = document.getElementById('compose').getBoundingClientRect();
       return { scrolled: window.scrollY > 0, lastAboveCompose: last.bottom <= compose.top && last.bottom > 0, controls: document.querySelectorAll('.control-strip').length }; });
     check('a long butler chat opens at its newest message, above the input, with no 中断/接管', () => assert.deepEqual(opened, { scrolled: true, lastAboveCompose: true, controls: 0 }));
+    await page.close();
+    // A repaint (after a send, or 刷新) keeps a reader at the end at the end, and leaves one reading earlier rows where they were.
+    let grown = false;
+    const growing = () => grown ? [...long, { id: 'new', role: 'user', name: '', text: 'Synthetic sent', time: now }] : long;
+    const repaint = async () => { grown = true; await page.click('.top button[aria-label="管理"]'); await page.click('.dialog-menu button:first-child'); await page.waitForFunction(() => document.querySelector('.thread .message:last-child')?.textContent.includes('Synthetic sent'));
+      return page.evaluate(() => { const last = [...document.querySelectorAll('.thread .message')].at(-1).getBoundingClientRect(), compose = document.getElementById('compose').getBoundingClientRect();
+        return { y: Math.round(window.scrollY), lastInView: last.bottom <= compose.top && last.bottom > 0 }; }); };
+    page = await open(context, { steward: { state: 'shared', sessionId: butler }, hash: '#zh/chat/' + butler, rows: growing });
+    const atEnd = await repaint();
+    await page.close();
+    grown = false; page = await open(context, { steward: { state: 'shared', sessionId: butler }, hash: '#zh/chat/' + butler, rows: growing });
+    await page.evaluate(() => window.scrollTo(0, 400)); const earlier = await repaint();
+    check('a repaint keeps the end in view for a reader at the end, and keeps an earlier place', () => {
+      assert.equal(atEnd.lastInView, true); assert.equal(earlier.y, 400); assert.equal(earlier.lastInView, false);
+    });
     await page.close();
     page = await open(context, { steward: { state: 'shared', sessionId: butler }, hash: '#zh/chat/' + sessions[1].id });
     const member = await page.$$eval('.control-strip button', nodes => nodes.map(n => n.textContent));

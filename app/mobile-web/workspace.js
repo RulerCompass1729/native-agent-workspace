@@ -371,6 +371,8 @@
       }
       if (route?.page === 'chat' && route.id === sessionId) toast(key); else toast(name + ' · ' + t(key)); await refresh(); }); });
     function paint() {
+      // A chat read to its end stays at its end when it repaints, so a message just sent or arrived is in view.
+      const stick = route?.page === 'chat' && global.innerHeight + global.scrollY >= d.documentElement.scrollHeight - 80;
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
@@ -385,6 +387,7 @@
       const nav = node('div', undefined, 'nav-inner'); for (const key of ['home', 'space', 'queue']) { const a = link('', key, route?.page === key ? 'active' : ''); a.append(icon(key), node('span', t(key))); if (route?.page === key) a.setAttribute('aria-current', 'page'); nav.append(a); } el('navigation').append(nav);
       if (!view) { el('content').append(node('p', t('offline'))); updateCompose(); return; }
       ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)(); updateCompose();
+      if (stick) global.scrollTo?.(0, d.documentElement.scrollHeight);
     }
     async function refresh() {
       if (busy) return; busy = true; const ticket = ++epoch, generation = client.state.authorization, acknowledged = acknowledgedMessages;
