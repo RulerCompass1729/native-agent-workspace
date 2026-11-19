@@ -16,6 +16,8 @@ const claudeAdapter = process.env.NAW_TEST_QUEUE_CLAUDE_ADAPTER === '1';
 const prompts = new Map();
 const failNext = new Set();
 const runtimes = new Map();
+// hold-send: the session's next send is accepted only at release-send, so the person's receipt can be seen waiting.
+const heldSends = new Set(), waitingSends = new Map();
 
 NativeHost.prototype.start = async function () {
   this.binaries = { claude: 'fixture', codex: 'fixture', python: 'fixture' };
@@ -67,15 +69,19 @@ NativeHost.prototype.create = function (record) {
   runtime.stopForMaintenance = check => { check(); return runtime.stop(); };
   runtime.send = (text, tag, guard) => new Promise((resolve, reject) => {
     if (failNext.delete(record.id)) { reject(Error('Synthetic send failure')); return; }
-    if (!guard()) {
-      reject(new Error('Synthetic acceptance refused'));
-      return;
-    }
-    sends.push({ id: record.id, text });
-    turns.set(record.id, tag);
-    runtime.emit('submitted', tag);
-    resolve();
-    runtime.emit('state', 'working');
+    const accept = () => {
+      if (!guard()) {
+        reject(new Error('Synthetic acceptance refused'));
+        return;
+      }
+      sends.push({ id: record.id, text });
+      turns.set(record.id, tag);
+      runtime.emit('submitted', tag);
+      resolve();
+      runtime.emit('state', 'working');
+    };
+    if (heldSends.delete(record.id)) waitingSends.set(record.id, accept);
+    else accept();
   });
   runtimes.set(record.id, runtime);
   return runtime;
@@ -170,6 +176,12 @@ async function hook(request) {
 
 process.on('message', request => {
   if (request.method === 'fail-next-send') failNext.add(request.session);
+  if (request.method === 'hold-send') heldSends.add(request.session);
+  if (request.method === 'release-send' && waitingSends.has(request.session)) {
+    const accept = waitingSends.get(request.session);
+    waitingSends.delete(request.session);
+    accept();
+  }
   if (request.method === 'hook') {
     hook(request)
       .then(done => process.send({ requestId: request.id, done, sends: sends.map(({ id, text }) => ({ id, text })) }))

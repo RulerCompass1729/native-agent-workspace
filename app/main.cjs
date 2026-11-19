@@ -1807,7 +1807,13 @@ async function boot() {
       }
       else if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));
       else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
-      else { roomState.queueResolve(args[0], roomId, by); queueDispatcher?.schedule(); }
+      else {
+        // The answer sent from the person's own window (search-view.js queueAnswerResolve); no agent records one.
+        const answer = args[1] ?? undefined;
+        if (answer !== undefined && c.background) throw uiError("error.queue.personOnly");
+        if (answer === undefined) roomState.queueResolve(args[0], roomId, by); else roomState.queueResolve(args[0], roomId, by, answer);
+        queueDispatcher?.schedule();
+      }
     }
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
       if (action === 'clearSharedHistory') {

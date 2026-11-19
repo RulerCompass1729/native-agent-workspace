@@ -1168,7 +1168,7 @@ function updateState(next) {
   }
   for (const [queuedId, mark] of queuedInputs) followQueuedInput(queuedId, mark);
   for (const [queuedId, mark] of queuedRoomInputs) followQueuedRoomInput(queuedId, mark);
-  if (typeof followSearchSend === 'function') followSearchSend();
+  if (typeof followSearchSend === 'function') { followSearchSend(); followQueueAnswers(); }
 }
 // Like a native TUI queue, a queued Claude message leaves the composer once
 // the service records it. Only a proven non-send comes back, and only into an
@@ -6307,6 +6307,10 @@ function queueRow(item, memberIds) {
   if (outcome) {
     row.append(outcome);
   }
+  const answer = queueAnswerNode(item, item.status === 'waiting' && statusKey !== 'queue.status.lookAt');
+  if (answer) {
+    row.append(answer);
+  }
   return row;
 }
 function renderQueue() {
@@ -6381,6 +6385,7 @@ function renderQueue() {
   if (list.dataset.signature === signature) return;
   list.dataset.signature = signature;
   renderQueueHandoff(handoff ? handoff.block : null);
+  const answering = queueAnswerFocus();
   const rows = [];
   for (const item of items) {
     const row = queueRow(item, memberIds);
@@ -6396,6 +6401,7 @@ function renderQueue() {
     rows.sort((a, b) => placed.indexOf(a.dataset.queueItem) - placed.indexOf(b.dataset.queueItem));
   }
   list.replaceChildren(...rows);
+  restoreQueueAnswerFocus(answering);
   if (!rows.length) {
     list.append(uiNode('p', 'queue.empty', undefined, 'quiet'));
   }

@@ -367,6 +367,7 @@ test('a queue row names its recipient and shows what came back; rotation links s
   };
   load('let queueSpace = null;', "$('room-queue').onclick");
   load('function archivedName(', 'function sessionWindowTitle('); // a member's name as people read it (archived: marked)
+  Object.assign(f.context, { queueAnswerNode: () => null, queueAnswerFocus: () => null, restoreQueueAnswerFocus() {} }); // queue-answer.test.cjs
   const oldLink = { id: f.people[1].id, nativeId: 'native-B-0001-0002', name: null, handedAt: Date.parse('2026-11-09T22:54:00Z'), outcome: 'done' };
   const newLink = { id: 'c3b28d9a-12ba-585a-9d8b-6dacfa0ce5e6', nativeId: '12b28ccc-b9b7-8c22-cbcb-278cf34b4e4f', name: 'Codex 2 · 续' };
   f.state.rotationChains = [{ spaces: ['shared'], sessions: [oldLink, newLink] }];

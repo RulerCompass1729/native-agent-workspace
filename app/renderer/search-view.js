@@ -370,11 +370,9 @@ async function confirmSearchSend() {
     }
     follow = searchSendFollow = { id: s.id, name: participantLabel(s, state.sessions), phase: 'dialog' };
     reportShown();
-    const own = new Map(), call = deliverSessionInput(s, pick, text, SEARCH_SEND_REVISION, own);
-    follow.mark = own.get(s.id);
-    const receipt = await call;
+    const receipt = await sendFollowStart(follow, s, pick, text, SEARCH_SEND_REVISION);
     if (searchSendFollow !== follow) return;
-    follow.tag = typeof receipt === 'string' ? receipt : receipt?.tag || receipt?.id || follow.mark?.tag || '';
+    sendFollowTag(follow, receipt);
     if (follow.phase === 'dialog') showSearchSendReceipt(follow); else updateSearchSendReceipt(follow);
   } catch (error) {
     if (follow?.phase === 'toast') {
@@ -386,9 +384,9 @@ async function confirmSearchSend() {
     }
     // Only proof that nothing was sent offers the same words again. Otherwise the outcome stays unconfirmed:
     // its own row, whenever it reaches this window, decides (followSearchSend); no wait ends that by time.
-    if (follow && searchSendFollow === follow && !searchSendNotSent(follow, error)) {
-      const queued = follow.mark && searchSendQueuedRow(follow), shown = searchSend === open && $('send-dialog').open;
-      if (queued) follow.mark.tag = follow.tag = queued.id;
+    const failed = follow && searchSendFollow === follow && sendFollowFailure(follow, error);
+    if (failed && !failed.notSent) {
+      const queued = failed.row, shown = searchSend === open && $('send-dialog').open;
       // A row still awaiting native is about to record the outcome: the open dialog waits for it.
       if (queued && (queued.status !== 'awaiting-native' || !shown)) { showSearchSendReceipt(follow); return; }
       if (shown) { follow.phase = 'unconfirmed'; open.unconfirmed = true; ui.display.text($('send-note'), 'send.unconfirmed', () => ({ name: follow.name })); }
@@ -402,20 +400,38 @@ async function confirmSearchSend() {
     if (searchSend === open) { open.busy = false; renderSearchSend(); }
   }
 }
+// One confirmed send, followed by its own message row: the send dialog's and a queue row's answer (follow: { id }).
+// It keeps its own queue mark, never the composer's.
+function sendFollowStart(follow, s, pick, text, revision) {
+  const own = new Map(), call = deliverSessionInput(s, pick, text, revision, own);
+  follow.mark = own.get(s.id);
+  return call;
+}
+function sendFollowTag(follow, receipt) {
+  follow.tag = typeof receipt === 'string' ? receipt : receipt?.tag || receipt?.id || follow.mark?.tag || '';
+}
 // This send's own queue row, found as followQueuedInput finds the composer's (queuedRowFor). The same words
 // queued from the composer at the same moment are known only by this call's receipt.
-function searchSendQueuedRow(follow) {
+function sendFollowRow(follow) {
   return queuedRowFor(state.sessions.find(x => x.id === follow.id), follow.mark);
 }
 // Proof that nothing was sent: this send's own row says so, or the service refused before recording anything.
-function searchSendNotSent(follow, error) {
-  const row = follow.mark && searchSendQueuedRow(follow);
+function sendFollowNotSent(follow, error) {
+  const row = follow.mark && sendFollowRow(follow);
   if (row) return row.status === 'not-sent';
   const key = error?.uiMessage?.key;
   return error?.notSent === true || Boolean(key) && (searchSendRefusals.has(key) || staleMethodRefusals.has(key));
 }
+// After a failed call: proven not sent (the same words may go again), or its own queue row, which then records the
+// outcome; with neither, the outcome is unconfirmed and nothing sends it again.
+function sendFollowFailure(follow, error) {
+  if (sendFollowNotSent(follow, error)) return { notSent: true };
+  const row = follow.mark && sendFollowRow(follow);
+  if (row) follow.mark.tag = follow.tag = row.id;
+  return { notSent: false, row };
+}
 // The notice reads the status of the message row itself (readingDeliveryStatusKey), never the fact that a call returned.
-function searchSendStatusKey(follow) {
+function sendFollowStatusKey(follow) {
   const s = state.sessions.find(x => x.id === follow.id), tag = follow.tag || follow.mark?.tag;
   const row = tag && s?.messages?.find(m => m.id === tag);
   return row ? readingDeliveryStatusKey(row, row) : 'delivery.awaiting';
@@ -431,7 +447,7 @@ function showSearchSendReceipt(follow) {
 function updateSearchSendReceipt(follow) {
   // The notice was closed or another one took its place: stop following.
   if (follow.key && ($('toast').hidden || $('toast').querySelector('.toast-action') !== follow.button || $('toast-text').textContent !== follow.render())) { if (searchSendFollow === follow) searchSendFollow = null; return; }
-  const key = searchSendStatusKey(follow);
+  const key = sendFollowStatusKey(follow);
   if (key !== follow.key) {
     follow.key = key;
     follow.render = () => uiText('delivery.recipient', { recipient: follow.name, status: uiText(key) });
@@ -442,7 +458,7 @@ function updateSearchSendReceipt(follow) {
 function searchSendShownId() { return searchSendFollow?.id || searchSendNew?.id || ''; }
 // Called after every state update (updateState).
 function followSearchSend() {
-  const follow = searchSendFollow, row = (follow?.phase === 'dialog' || follow?.phase === 'unconfirmed') && follow.mark && searchSendQueuedRow(follow);
+  const follow = searchSendFollow, row = (follow?.phase === 'dialog' || follow?.phase === 'unconfirmed') && follow.mark && sendFollowRow(follow);
   if (row) {
     follow.mark.tag = row.id;
     // Not sent: a waiting call's refusal follows and keeps the text; after an unconfirmed failure the text may go
@@ -486,4 +502,159 @@ function resumeSearchSendNew() {
   if (document.querySelector('dialog[open]') || s.state === 'starting') return;
   searchSendNew = null;
   openSearchSend(pending.text, pending.id);
+}
+// Answering a waiting queue row in place: the send dialog's confirmed send and receipt, to the session the item
+// went to. Kept by item id across re-renders; a row handled without an answer in flight drops it.
+const QUEUE_ANSWER_REVISION = Symbol('queue-answer');
+const QUEUE_ANSWER_LIMIT = 6000;
+const QUEUE_ANSWER_DELIVERED = new Set(['delivery.submitted', 'delivery.midturnRead', 'delivery.midturnStored']);
+const queueAnswers = new Map();
+function queueAnswerItem(entry) {
+  return (spaceRecord(entry.roomId)?.queue || []).find(item => item.id === entry.itemId) || null;
+}
+// The member is usually on its next item when the answer arrives: the first line says what it answers.
+function queueAnswerQuote(item) {
+  let head = globalThis.nativeWorkspaceTaskStream.decisionQuestion(item.reply).split(/[。！？；（(]|[.!?;](?:\s|$)/u)[0].trim();
+  if (!head) return '';
+  if (head.length > 40) head = head.slice(0, 39) + '…';
+  return uiText('queue.answer.quote', { head }) + '\n';
+}
+// Only the session the item went to, still running with the same native session and still in this space; otherwise
+// the text goes only through the send dialog, never by itself to a successor.
+function queueAnswerTarget(entry, text = '.') {
+  const s = state.sessions.find(x => x.id === entry.sentTo);
+  if (!s || s.archived || entry.nativeId && s.nativeId !== entry.nativeId) return { gone: 'queue.answer.ended' };
+  if (!inSpace(s, entry.roomId)) return { gone: 'queue.answer.left' };
+  if (!disconnected && ['none', 'resume'].includes(soloAction(s, { mode: 'chat' }).kind)) return { gone: 'queue.answer.ended' };
+  return searchSendTarget({ id: s.id, nativeId: s.nativeId }, text);
+}
+function queueAnswerNode(item, open) {
+  let entry = queueAnswers.get(item.id);
+  if (!open && !entry?.follow) return item.answer ? queueAnswerDelivered(item) : null;
+  if (!entry) {
+    const s = state.sessions.find(x => x.id === item.sentTo);
+    entry = { roomId: queueSpace, itemId: item.id, sentTo: item.sentTo, nativeId: s?.nativeId || '', text: queueAnswerQuote(item), follow: null, note: null };
+    queueAnswers.set(item.id, entry);
+  }
+  const block = node('div', undefined, 'queue-answer'), box = node('textarea');
+  box.rows = 2; box.maxLength = QUEUE_ANSWER_LIMIT; box.value = entry.text; box.dataset.queueAnswer = item.id;
+  ui.display.attribute(box, 'aria-label', 'queue.answer.label', () => ({ name: queueMemberName(entry.sentTo) }));
+  box.addEventListener('input', () => { entry.text = box.value; entry.note = null; renderQueueAnswer(entry); });
+  const foot = node('div', undefined, 'queue-answer-foot'), why = node('span', undefined, 'quiet'), send = node('button', undefined, 'small');
+  send.type = 'button';
+  send.addEventListener('click', () => attempt(() => queueAnswerSend(entry)));
+  const line = node('div', undefined, 'queue-answer-line'), note = node('div', undefined, 'queue-answer-line warn');
+  foot.append(why, send); block.append(box, foot, line, note);
+  entry.ui = { box, foot, why, send, line, note };
+  renderQueueAnswer(entry);
+  return block;
+}
+// What the record keeps once native received the answer (room-state.cjs queueResolve).
+function queueAnswerDelivered(item) {
+  const block = node('div', undefined, 'queue-answer'), line = node('div', undefined, 'queue-answer-line'), strong = node('strong');
+  ui.display.text(strong, 'delivery.row', () => ({ recipient: queueMemberName(item.sentTo), status: uiText('delivery.submitted') }));
+  line.append(strong);
+  block.append(line, node('div', item.answer.text, 'queue-answer-line'));
+  return block;
+}
+function renderQueueAnswer(entry) {
+  const parts = entry.ui;
+  if (!parts) return;
+  const { box, foot, why, send, line, note } = parts, follow = entry.follow;
+  box.readOnly = Boolean(entry.busy || follow);
+  foot.hidden = Boolean(follow); line.hidden = !follow;
+  ui.display.unbind(note); note.textContent = ''; note.hidden = true;
+  if (follow) {
+    const key = follow.unconfirmed ? 'delivery.unconfirmed' : sendFollowStatusKey(follow);
+    ui.display.text(line, 'delivery.row', () => ({ recipient: follow.name, status: uiText(key) }));
+    line.classList.toggle('warn', key === 'delivery.unconfirmed');
+    if (key === 'delivery.unconfirmed') { note.hidden = false; ui.display.text(note, 'send.unconfirmed', () => ({ name: follow.name })); }
+    else if (entry.note?.error) { note.hidden = false; ui.showError(note, entry.note.error); }
+    return;
+  }
+  const target = queueAnswerTarget(entry), name = () => ({ name: queueMemberName(entry.sentTo) });
+  ui.display.unbind(why); why.textContent = '';
+  why.classList.toggle('warn', Boolean(target.gone));
+  if (target.gone) ui.display.text(why, target.gone, name);
+  else if (target.blocked && target.hintKey && target.hintKey !== 'composer.keyboardHint') ui.display.text(why, target.hintKey);
+  else if (entry.note?.error) ui.showError(why, entry.note.error);
+  else if (entry.note) ui.display.text(why, entry.note.key, entry.note.params);
+  send.classList.toggle('primary', !target.gone);
+  if (target.gone) ui.display.text(send, 'search.send'); else ui.display.text(send, 'queue.answer.send', name);
+  send.disabled = Boolean(entry.busy) || !entry.text.trim() || !target.gone && target.blocked;
+}
+async function queueAnswerSend(entry) {
+  if (entry.busy || entry.follow) return;
+  const text = entry.text;
+  if (!text.trim() || queueAnswerItem(entry)?.status !== 'waiting') return;
+  const shown = queueAnswerTarget(entry);
+  // The existing dialog with the text and no preferred session: the person picks one or 新开一个.
+  if (shown.gone) return openSearchSend(text);
+  if (shown.blocked) return;
+  // What the button shows at this click: the recipient and the way it reaches them (as confirmSearchSend).
+  const seen = { nativeId: shown.s.nativeId, method: shown.method, turnId: shown.turnId };
+  entry.busy = true; entry.note = null; renderQueueAnswer(entry);
+  try {
+    const loading = ensureMessages([shown.s.id]);
+    if (loading) await loading;
+    const target = queueAnswerTarget(entry, text);
+    if (target.gone || target.blocked || target.s.messagesOmitted || queueAnswerItem(entry)?.status !== 'waiting') return;
+    const s = target.s, pick = sessionInputMethod(s);
+    if (seen.nativeId !== s.nativeId || seen.method !== pick.method || seen.turnId !== (pick.turnId || '')) {
+      entry.note = { key: 'send.changed', params: () => ({ name: participantLabel(s, state.sessions), action: searchSendLabel(soloAction(s, { mode: 'chat' }).labelKey) }) };
+      return;
+    }
+    const follow = entry.follow = { id: s.id, name: participantLabel(s, state.sessions), text };
+    reportShown();
+    const call = sendFollowStart(follow, s, pick, text, QUEUE_ANSWER_REVISION);
+    renderQueueAnswer(entry);
+    try { sendFollowTag(follow, await call); }
+    catch (error) {
+      const failed = sendFollowFailure(follow, error);
+      if (failed.notSent) { entry.follow = null; entry.note = { error }; }
+      else if (!failed.row) follow.unconfirmed = true;
+    }
+  } finally {
+    entry.busy = false;
+    followQueueAnswer(entry);
+  }
+}
+// Called after every state update (updateState), with followSearchSend.
+function followQueueAnswers() {
+  for (const entry of [...queueAnswers.values()]) followQueueAnswer(entry);
+}
+function followQueueAnswer(entry) {
+  const item = queueAnswerItem(entry), follow = entry.follow;
+  if (!item || item.status !== 'waiting' && (!follow || item.answer)) { queueAnswers.delete(entry.itemId); return; }
+  if (follow?.mark && !follow.tag) { const row = sendFollowRow(follow); if (row) follow.mark.tag = follow.tag = row.id; }
+  const row = follow?.tag && state.sessions.find(x => x.id === follow.id)?.messages?.find(m => m.id === follow.tag);
+  // Its own row decides an unconfirmed call too; only a row that says not sent lets the same words go again.
+  if (row?.status === 'not-sent') {
+    entry.follow = null;
+    entry.note = { key: 'delivery.row', params: () => ({ recipient: follow.name, status: uiText('delivery.notSent') }) };
+  } else if (follow?.unconfirmed && row && row.status !== 'awaiting-native') follow.unconfirmed = false;
+  if (entry.follow && !follow.unconfirmed && !entry.resolving && item.status === 'waiting' && QUEUE_ANSWER_DELIVERED.has(sendFollowStatusKey(follow))) queueAnswerResolve(entry);
+  renderQueueAnswer(entry);
+}
+// Handled as the person's 已处理 is, with the answer on the item; only once native received it.
+async function queueAnswerResolve(entry) {
+  entry.resolving = true;
+  try {
+    await api.spaceAction(entry.roomId, 'queueResolve', [entry.itemId, entry.follow.text]);
+    updateState(await api.initial());
+    renderQueue();
+  } catch (error) {
+    if (queueAnswerItem(entry)?.status === 'waiting') { entry.note = { error }; renderQueueAnswer(entry); }
+  }
+}
+// Rows are rebuilt when the queue changes: the box being written in keeps its focus and selection.
+function queueAnswerFocus() {
+  const box = document.activeElement;
+  return box?.dataset?.queueAnswer ? { id: box.dataset.queueAnswer, start: box.selectionStart, end: box.selectionEnd } : null;
+}
+function restoreQueueAnswerFocus(kept) {
+  const box = kept && queueAnswers.get(kept.id)?.ui?.box;
+  if (!box || !box.isConnected || document.activeElement === box) return;
+  box.focus({ preventScroll: true });
+  box.setSelectionRange(kept.start, kept.end);
 }

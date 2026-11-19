@@ -323,6 +323,11 @@ function validateItem(item) {
   if (item.afterDecision !== undefined && item.afterDecision !== true) {
     throw Error('Invalid queue delivery');
   }
+  // The person's answer from the queue row, once native received it (room-state.cjs queueResolve).
+  if (item.answer !== undefined && !(item.answer && typeof item.answer === 'object' && !Array.isArray(item.answer) &&
+      Object.keys(item.answer).length === 2 && validText(item.answer.text, ITEM_TEXT_LIMIT) && validTime(item.answer.deliveredAt))) {
+    throw Error('Invalid queue answer');
+  }
   // Who acted when it was not the person or the item's creator: only the butler, for now.
   for (const key of ['addedBy', 'finishedBy']) {
     if (item[key] !== undefined && item[key] !== 'steward') {
