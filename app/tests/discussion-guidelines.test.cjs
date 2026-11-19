@@ -128,8 +128,8 @@ test('the guidelines do not use the 6000-character material allowance', async t 
 // Simulates editing the one source file: both modes pick up the edit on their next delivery.
 test('editing the one source changes the next delivery in both modes', async t => {
   const file = require.resolve('../discussion-guidelines.cjs'), source = fs.readFileSync(file, 'utf8');
-  const edited = source.replace(/const VERSION = \d+;/, 'const VERSION = 99;');
-  assert.notEqual(edited, source);
+  const edited = source.replace(/const VERSION = \d+;/, 'const VERSION = 99;').replace('6. 写短：', '6. 写短（改过的一条）：');
+  assert.equal(edited.match(/VERSION = 99;|写短（改过的一条）/g)?.length, 2);
   const forget = () => {
     for (const key of Object.keys(require.cache)) if (key.startsWith(APP + path.sep) && !key.startsWith(__dirname + path.sep)) delete require.cache[key];
   };
@@ -151,6 +151,7 @@ test('editing the one source changes the next delivery in both modes', async t =
     assert.equal(f.sent.length, 2, mode);
     for (const s of f.sent) {
       assert.equal(s.text.match(HEADER)?.[1], '99', mode + ' delivery carries the edited version');
+      assert.ok(s.text.includes('6. 写短（改过的一条）：'), mode + ' delivery carries the edited item');
       carriesOnce(s.text, mode + ' delivery');
     }
   }
