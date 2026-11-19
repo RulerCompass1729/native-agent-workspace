@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
 const workers = require('./test-discoveries-bundle.cjs');
+const { literalLists } = require('./runtime-closure-source.cjs');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const refusal = reason => Object.assign(new Error(reason), { installStateReason: reason });
 const invoke = (file, args, timeout = 1000) => execFileSync(file, args, { encoding: 'utf8', timeout, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -32,11 +33,10 @@ function runtimeClosure(app) {
   let source;
   try { source = read(path.join(app, 'app/service-client.cjs')).toString('utf8'); }
   catch { throw refusal('Runtime closure definition unconfirmed'); }
-  const lists = {};
+  let lists;
+  try { lists = literalLists(source); }
+  catch { throw refusal('Runtime closure definition unconfirmed'); }
   for (const name of ['names', 'pluginFiles', 'pluginTests']) {
-    const matches = [...source.matchAll(new RegExp('const ' + name + ' = (\\[[^;\\n]+\\]);', 'g'))];
-    if (matches.length !== 1 || !/^\[\s*'[A-Za-z0-9_./@-]+'(?:,\s*'[A-Za-z0-9_./@-]+')*\s*\]$/.test(matches[0][1])) throw refusal('Runtime closure definition unconfirmed');
-    lists[name] = [...matches[0][1].matchAll(/'([^']+)'/g)].map(m => m[1]);
     if (lists[name].some(file => file.startsWith('/') || file.split('/').includes('..'))) throw refusal('Runtime closure path unconfirmed');
   }
   if (!identityFiles.every(file => lists.names.includes(file)) || !lists.names.includes('dsh-tui.cjs')) throw refusal('Runtime closure coverage unconfirmed');
