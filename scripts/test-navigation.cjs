@@ -78,7 +78,11 @@ async function run() {
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
   const archived = page.locator('[data-archived-session="synthetic-session-89"]');
   // 31 archived records: the list shows 15 at a time, so bring the earlier ones until the record appears.
+  const lines = () => page.locator('#archive-list .disclosure-item').count();
+  await until(async () => (await lines()) === 15, 'The archive opens on its latest 15 lines');
+  await page.locator('#archive-list .disclosure-more').scrollIntoViewIfNeeded(); await capture('archive-first-page');
   for (let i = 0; i < 3 && !(await archived.count()); i++) await page.locator('#archive-list .disclosure-more').click();
+  await archived.scrollIntoViewIfNeeded(); await capture('archive-earlier');
   const viewBefore = await page.locator('#title').innerText(); assert.notEqual(viewBefore, '学习项目 89');
   await archived.getByRole('button', { name: /^恢复会话 / }).click();
   // T-159: since e32d515 (T-92, the person: 「我希望在哪个界面就一直在这个界面」) restoring keeps the current view; its

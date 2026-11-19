@@ -60,7 +60,8 @@ async function main() {
   app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_UI_LANGUAGE: 'zh' }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message));
   await revealDefaultSpace(page);
-  await page.locator('#room-nav').waitFor(); await page.locator('#room-nav').click();
+  // The saved view already opens the space, and its members and record leave the sidebar as a rail at this width.
+  if (!(await page.locator('#activity-stream').isVisible())) { await page.locator('#room-nav').waitFor(); await page.locator('#room-nav').click(); }
   if (!before) { await page.locator('#activity-stream').waitFor(); assert.ok(await page.locator('#collaboration-overview').isVisible()); record('saved full-page record view restores as sidebar beside members'); }
   const rpc = mcp(); await rpc('initialize');
   async function control(method, args) {

@@ -51,7 +51,7 @@ async function size(width, height) {
 const dialogText = () => page.evaluate(() => {
   const d = document.getElementById('steward-record-dialog');
   const cells = li => ['.disclosure-time', '.disclosure-title', '.disclosure-end'].map(c => li.querySelector(`summary ${c}`).innerText.trim().replace(/\s+/g, ' '));
-  return { open: d.open, current: d.querySelector('p')?.innerText.trim(), rows: [...d.querySelectorAll('li.disclosure-item')].map(cells),
+  return { open: d.open, current: d.querySelector(':scope > p.quiet')?.innerText.trim(), rows: [...d.querySelectorAll('li.disclosure-item')].map(cells),
     attention: [...d.querySelectorAll('li.disclosure-item.attention')].length, note: [...d.querySelectorAll('p.quiet')].map(p => p.innerText.trim()) };
 });
 async function openRecord() {
@@ -178,6 +178,32 @@ async function run() {
   await shot('en-1280-steward-resolved-sent'); save('resolved-sent', { closed, sentNow: sentNow.map(s => s.id === worker), notices });
   await fixture('release', worker, undefined, '换掉旧按钮完成'); await fixture('backgroundReport', worker);
   checks.push('The butler marks handled an item NAW already sent; when the member then asks for a decision the item stays handled, is sent once only, and the member gets its next item; the record lists the step as done');
+
+  // 4c. A long record (the person, 2026-11-19: 「如果内容过多就都用渐进式展开的方式做」): the latest 15 steps, and 15 more
+  //     read from NAW's own service on each press, down to the first step.
+  await page.keyboard.press('Escape'); await page.locator('#steward-record-dialog').waitFor({ state: 'hidden' });
+  for (let n = 0; n < 20; n++) assert.equal((await control({ action: 'snapshot' })).value.state, 'complete');
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh');
+  await until(async () => await page.locator('#ui-language').getAttribute('aria-busy') === 'false' && await page.locator('#setup-title').innerText() === say('common.settings'), 'Chinese again');
+  await page.locator('#close-setup').click(); await page.locator('#setup-dialog').waitFor({ state: 'hidden' });
+  const total = (await page.evaluate(() => workspace.stewardRecord())).total;
+  assert.ok(total > 30, `A record longer than two pages: ${total}`);
+  await openRecord(); seen = await dialogText();
+  const more = page.locator('#steward-record-dialog .disclosure-more'), status = page.locator('#steward-record-dialog .disclosure-status');
+  assert.deepEqual([seen.rows.length, await more.innerText(), await status.getAttribute('role'), await status.textContent()],
+    [15, say('disclosure.older', { count: 15, total }), 'status', say('disclosure.shown', { shown: 15, total })]);
+  await more.scrollIntoViewIfNeeded(); await shot('zh-1280-steward-record-long');
+  await more.click();
+  await until(async () => (await dialogText()).rows.length === 30, 'Fifteen earlier steps read from NAW');
+  const focused = await page.evaluate(() => { const rows = [...document.querySelectorAll('#steward-record-dialog li.disclosure-item')]; return rows.indexOf(document.activeElement.closest('li')); });
+  assert.equal(focused, 15, 'Focus goes to the first step that appeared');
+  assert.equal(await status.textContent(), say('disclosure.shown', { shown: 30, total }));
+  while (await more.isVisible()) { const before = (await dialogText()).rows.length; await more.click(); await until(async () => (await dialogText()).rows.length > before, 'Another page'); }
+  seen = await dialogText();
+  assert.deepEqual([seen.rows.length, seen.rows.at(-1)[1]], [total, say('stewardRecord.role.designated', { name: 'Codex 管家' })], 'Every step down to the first is reached');
+  await page.locator('#steward-record-dialog li.disclosure-item summary').nth(1).click();
+  await shot('zh-1280-steward-record-all');
+  checks.push('A record longer than two pages shows its latest 15 steps with 「显示更早的 15 条 · 共 N 条」; each press reads 15 more from NAW, focus goes to the first new step, the status line says how many are shown, and the first step is reached');
 
   // 5. Revoking keeps the record; the dialog of nobody designated is not offered (no butler row), the record stays on disk.
   await page.keyboard.press('Escape'); await page.evaluate(() => workspace.steward(null));
