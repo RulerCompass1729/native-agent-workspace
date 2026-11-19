@@ -62,14 +62,18 @@ async function capture(name) {
   fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
   await page.locator('#queue-dialog').screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png'), timeout: 5000 });
 }
-async function createMember(name) {
+async function createSession(name) {
   await page.locator('#new-session').click();
   await page.locator('input[name="provider"][value="claude"]').check();
   await page.locator('#session-name').fill(name);
   await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name), 'Created ' + name);
-  await joinSpace(page);
   return (await snapshot()).sessions.find(s => s.name === name).id;
+}
+async function createMember(name) {
+  const id = await createSession(name);
+  await joinSpace(page);
+  return id;
 }
 async function openQueue() {
   if (await page.locator('#queue-dialog').isVisible()) return;
@@ -118,7 +122,7 @@ async function run() {
   page.on('pageerror', error => errors.push(error.message));
   await page.locator('#new-session').waitFor({ timeout: 60000 });
   await revealDefaultSpace(page);
-  const a = await createMember('队员甲'), b = await createMember('队员乙');
+  const c = await createSession('旁人'), a = await createMember('队员甲'), b = await createMember('队员乙');
 
   // ②a: the box under the question, its first line quoting it; 「已处理」 stays.
   const first = await waitingItem('合并 r4', a, '需要你决定：两个提交改了同一处列缓存（提交 1 和 r4）。A：都合；B：只合提交 1。');
@@ -143,9 +147,22 @@ async function run() {
   await capture('2b-awaiting-native');
   passed.push('②b After clicking: the text locks and the row shows 等待原生确认 while it still waits');
 
+  // The person closes the queue and goes to 旁人, a session outside the space, before the receipt comes (F review Q1).
+  await page.keyboard.press('Escape');
+  await until(async () => !(await page.locator('#queue-dialog').evaluate(el => el.open)), 'Queue closed');
+  await page.locator('#independent-nav').click();
+  const outside = page.getByRole('menuitem');
+  await outside.first().waitFor();
+  assert.equal(await outside.count(), 1, 'only 旁人 is outside the space');
+  assert.ok((await outside.textContent()).includes('旁人'));
+  await outside.click();
+  await until(async () => (await page.locator(`.session-link.active[data-session-id="${c}"]`).count()) === 1, 'Showing 旁人');
+
   // ②c: only native's receipt handles the row, with the answer stored on it; it was sent once.
   await fixture('release-send', a);
   await until(async () => (await item('合并 r4')).status === 'done', 'Handled after the receipt');
+  passed.push('With the queue closed and 旁人 (outside the space) shown, the late receipt still handled the row');
+  await openQueue();
   const done = await item('合并 r4');
   assert.equal(done.answer.text, text);
   assert.equal(done.answer.deliveredAt, done.finishedAt);

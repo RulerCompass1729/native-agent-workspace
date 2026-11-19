@@ -763,7 +763,7 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
   }
-  queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false) {
+  queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false, nativeId = null) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'queued') {
       throw uiError("error.queue.notQueued");
@@ -771,6 +771,12 @@ class RoomState {
     // The refusal that put it back is over once it is sent; attempts keeps the count (queueRequeue).
     const next = { ...item, status: 'sent', sentTo: sessionId, sentAt: now, tag: null };
     delete next.reason;
+    // The native session that gets it, so an answer from the queue row goes only there (search-view.js queueAnswerTarget).
+    if (nativeId) {
+      next.sentNative = nativeId;
+    } else {
+      delete next.sentNative;
+    }
     // Sent while that member's decision is open (queue-dispatch.cjs, replyAfter).
     if (afterDecision) {
       next.afterDecision = true;
@@ -799,6 +805,7 @@ class RoomState {
     }
     const next = { ...item, status: 'queued', attempts, reason };
     delete next.sentTo;
+    delete next.sentNative;
     delete next.sentAt;
     delete next.tag;
     delete next.control;

@@ -831,6 +831,8 @@ function shownSessionIds(pending = true) {
   for (const id of queuedInputs.keys()) ids.add(id);
   // A sent sentence whose notice still follows its row, or a new session waiting for it.
   if (typeof searchSendShownId === 'function' && searchSendShownId()) ids.add(searchSendShownId());
+  // Queue answers still waiting for their own receipt, after the queue is closed or another session is shown.
+  if (typeof queueAnswerShownIds === 'function') for (const id of queueAnswerShownIds()) ids.add(id);
   return [...ids].filter(id => state?.sessions.some(s => s.id === id)).sort();
 }
 function reportShown() {
