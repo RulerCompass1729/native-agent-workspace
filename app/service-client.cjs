@@ -132,6 +132,19 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       return;
     }
     for (const key of layout.entries) states.set(key, await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace));
+    const dsh = require('./dsh-tui.cjs');
+    const inheritDsh = async (target, sources) => {
+      for (const source of sources) {
+        try {
+          const result = await dsh.inheritRuntime(path.join(dataDir, source), path.join(dataDir, target), { cleanStaging: true });
+          if (result.status !== 'absent') return;
+        } catch (error) {
+          const reason = ['deadline', 'filesystem', 'unqualified'].includes(error?.reason) ? error.reason : 'unavailable';
+          console.warn('DSH runtime inheritance skipped:', reason);
+          if (reason !== 'unqualified') return;
+        }
+      }
+    };
     const version = process.env.NAW_APP_VERSION;
     if (layout.pending || (version && states.get(layout.active).runtimeVersion !== version)) {
       // Reuse a confirmed all-ended slot before adding another service. Its
@@ -145,12 +158,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         // leave a pending slot, but never an unrecorded detached service.
         if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
       }
-      try {
-        await require('./dsh-tui.cjs').inheritRuntime(path.join(dataDir, layout.active), path.join(dataDir, key), { cleanStaging: true });
-      } catch (error) {
-        const reason = ['deadline', 'filesystem', 'unqualified'].includes(error?.reason) ? error.reason : 'unavailable';
-        console.warn('DSH runtime inheritance skipped:', reason);
-      }
+      await inheritDsh(key, [layout.active, ...layout.entries.filter(entry => entry !== layout.active && entry !== key)]);
       const next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
       for (const old of layout.entries) {
@@ -159,11 +167,17 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);
+    } else if (!fs.existsSync(dsh.paths(path.join(dataDir, layout.active)).root)) {
+      const sources = layout.entries.filter(key => key !== layout.active && fs.existsSync(dsh.paths(path.join(dataDir, key)).root));
+      await inheritDsh(layout.active, sources);
     }
+    const runtimeMissing = !fs.existsSync(dsh.paths(path.join(dataDir, layout.active)).root);
     // Retire only truly empty inactive services. Ended sessions, shared replies,
     // orphan drafts and unreadable stores all retain their service and records.
     for (const key of [...layout.entries]) {
       if (key === layout.active || !emptyService(states.get(key)) || !emptyStore(path.join(dataDir, key))) continue;
+      // Keep a potential donor reachable after a transient inheritance failure.
+      if (runtimeMissing && fs.existsSync(dsh.paths(path.join(dataDir, key)).root)) continue;
       const client = await connectService(path.join(dataDir, key), 'retire-empty');
       try {
         const current = await client.call('initial');

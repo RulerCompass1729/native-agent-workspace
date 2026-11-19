@@ -123,3 +123,25 @@ test('copying is asynchronous, bounded in time and calls no network, npm or prov
  let ticks=0;const timer=setInterval(()=>ticks++,1);const started=performance.now();try{await offlineTui.inheritRuntime(f.source,f.target);}finally{clearInterval(timer);}const elapsedMs=performance.now()-started;
  assert.ok(ticks>1,'event loop progresses');assert.ok(elapsedMs<10000,`copy took ${elapsedMs}ms`);console.log('COPY_TIMING',JSON.stringify({bytes:8*1024*1024,elapsedMs,ticks}));
 });
+
+for (const copyMs of [13000,31000]) test('cleanup and copying have separate deadlines, copy='+copyMs+'ms',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source),old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));
+ write(path.join(old,'dsh-tui/runtime/partial'),'interrupted');
+ const {performance}=require('node:perf_hooks'),now=performance.now.bind(performance),rm=fsp.rm,open=fsp.open;let offset=0,copyStarted=false;
+ t.mock.method(performance,'now',()=>now()+offset);
+ t.mock.method(fsp,'rm',async function(file,...args){const result=await Reflect.apply(rm,this,[file,...args]);if(file===old)offset+=18000;return result;});
+ t.mock.method(fsp,'open',async function(file,...args){if(!copyStarted&&String(file).startsWith(s.root)){copyStarted=true;offset+=copyMs;}return Reflect.apply(open,this,[file,...args]);});
+ if(copyMs>30000){await assert.rejects(tui.inheritRuntime(f.source,f.target,{cleanStaging:true}),refused(/Runtime inheritance deadline/));assert.equal(tui.installed(f.target),false);}
+ else {const result=await tui.inheritRuntime(f.source,f.target,{cleanStaging:true});assert.equal(result.status,'copied');assert.ok(result.elapsedMs>=31000);tui.verifyRuntime(f.target);}
+ assert.equal(fs.existsSync(old),false);assert.equal(fs.readdirSync(f.target).some(name=>name.startsWith('.dsh-tui-inherit-')),false);tui.verifyRuntime(f.source);
+});
+
+for(const kind of ['writable-file','writable-directory','hardlink'])test('start reports unsafe runtime attributes for '+kind+' without launching or reading a key',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source),file=path.join(s.root,'synthetic-file');write(file,'synthetic');
+ if(kind==='writable-file')fs.chmodSync(file,0o660);
+ if(kind==='writable-directory')fs.chmodSync(f.source,0o770);
+ if(kind==='hardlink')fs.linkSync(file,path.join(s.root,'synthetic-link'));
+ const dsh=new tui.DshTui({id:'synthetic-dsh'},{dataDir:f.source,binaries:{dsh:process.execPath}},{key:async()=>assert.fail('No key read')});
+ dsh.launch=async()=>assert.fail('Unsafe runtime must not launch');
+ await assert.rejects(dsh.start(),e=>e.code==='dsh-runtime-unqualified'&&e.uiMessage?.key==='error.dsh.runtimeUnsafe');
+});

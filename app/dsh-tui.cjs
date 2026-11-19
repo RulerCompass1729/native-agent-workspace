@@ -127,7 +127,8 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   if (uid === undefined) return { status: 'unsupported' };
   if (![sourceDataDir, targetDataDir].every(value => typeof value === 'string' && path.isAbsolute(value))) throw uiError('error.dsh.runtimeUnqualified');
   const source = paths(path.resolve(sourceDataDir)), target = paths(path.resolve(targetDataDir));
-  const tick = () => { if (performance.now() - started > 30000) throw Error('Runtime inheritance deadline'); };
+  let deadlineStarted = started;
+  const tick = () => { if (performance.now() - deadlineStarted > 30000) throw Error('Runtime inheritance deadline'); };
   const directory = file => {
     const s = fs.lstatSync(file);
     if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== uid || s.mode & 0o022) throw Error('Unsafe runtime directory');
@@ -204,6 +205,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
         }
       }
     }
+    deadlineStarted = performance.now();
     if (rootState(targetDataDir, target)) { await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' }; }
     if (!rootState(sourceDataDir, source)) return { status: 'absent' };
     if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
@@ -559,7 +561,8 @@ class DshTui extends EventEmitter {
       await inheritRuntime(this.host.dataDir, this.host.dataDir);
       where = verifyRuntime(this.host.dataDir);
     } catch (error) {
-      throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-unqualified', cause: error });
+      const unsafe = ['Unsafe runtime directory', 'Writable runtime entry', 'Unsafe runtime entry'].includes(error.cause?.message);
+      throw Object.assign(uiError(unsafe ? 'error.dsh.runtimeUnsafe' : 'error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-unqualified', cause: error });
     }
     const execPath = this.testOnly.execPath || this.host.binaries?.dsh;
     if (!execPath) throw uiError('error.nativeRuntimeMissing');
