@@ -144,3 +144,11 @@ test('incomplete binding never enables quick approval', async t => {
   const h = harness(); t.after(() => h.dispose()); h.context.backgroundControl.mobileBinding = () => ({}); await h.notify();
   assert.equal(h.notices[0].options.actions, undefined); assert.match(h.notices[0].options.body, /截止/);
 });
+test('failed-boot controller replacement disposes old notices and binds new ones to the replacement', async t => {
+  const h = harness(); t.after(() => h.dispose()); await h.notify(); const old = h.notices[0], oldManager = h.context.backgroundNotifications;
+  h.context.backgroundControl.closed = true;
+  h.context.backgroundControl = { ...h.context.backgroundControl, closed: false };
+  h.record.id = 'next-operation'; await h.notify();
+  assert.equal(oldManager.disposed, true); assert.equal(old.closed, true); assert.equal(h.notices[1].options.actions.length, 2);
+  old.emit('action', { actionIndex: 0 }); h.notices[1].emit('action', { actionIndex: 0 }); await flush(); assert.equal(h.decisions.length, 1);
+});

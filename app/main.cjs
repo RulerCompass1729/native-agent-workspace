@@ -590,6 +590,9 @@ function auditBackgroundOperation(record) {
   broadcastRoom().catch(() => {});
 }
 function notifyBackgroundConfirmation(record) {
+  if (backgroundNotifications && backgroundNotifications.control !== backgroundControl) {
+    backgroundNotifications.dispose(); backgroundNotifications = null;
+  }
   backgroundNotifications ||= new (require('./confirmation-notifications.cjs').ConfirmationNotifications)({
     Notification, control: backgroundControl, format: displayText, reveal: revealRecord,
     active: () => primary && !quitting, seen: queueOutcomeSeen,
