@@ -1,6 +1,6 @@
 const { uiError, uiNotice, uiActivity } = require('./ui-errors.cjs');
 const { readCodexProfile, catalogConfig } = require('./codex-profile.cjs');
-const { claudeUsage, codexAccountUsage } = require('./native-usage.js');
+const { claudeUsage, codexAccountUsage, codexQuotaError, codexQuotaBlock } = require('./native-usage.js');
 const { EventEmitter } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
@@ -2653,6 +2653,7 @@ class Codex extends EventEmitter {
         this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: p.turn.id });
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
         this.turn(p.turn.id).liveStarted = true;
+        if (p.threadId === this.record.nativeId) this.turn(p.turn.id).quotaBinding = this.quotaBinding(sourceRpc);
         this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
         this.emit('state', 'working'); this.publishNativeActivity(); break;
       case 'item/agentMessage/delta':
@@ -2705,6 +2706,8 @@ class Codex extends EventEmitter {
         // Completion can be our first observed error. Keep its native body;
         // an identical preceding error notice already carries the full text.
         if (errorText && errorText !== turn.errorText) this.emit('nativeBlock', { id: `notice:terminal-error:${p.turn.id}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turn.id, title: '', text: errorText, status: 'complete' });
+        if (p.turn.status === 'failed') this.observeQuota(p.turn.id, p.turn.error, sourceRpc);
+        turn.quotaCompletionRpc = sourceRpc;
         turn.completed = p.turn;
         // Events can arrive before the RPC acknowledgement names our turn.
         // Wait for that identity instead of assigning whichever turn finishes.
@@ -2716,8 +2719,9 @@ class Codex extends EventEmitter {
         if (text) this.emit('nativeBlock', { id: `notice:error:${p.turnId || crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turnId,
           title: '', text, status: 'complete' });
         const turn = this.turns.get(p.turnId); if (turn && text) turn.errorText = text;
+        const quota = p.threadId === this.record.nativeId && this.observeQuota(p.turnId, p.error, sourceRpc);
         if (!p.turnId || p.turnId === this.turnId) {
-          if (p.willRetry === true) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
+          if (p.willRetry === true && !quota) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
           else { const notice = uiNotice("notice.failure.nativeError"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
         }
         break;
@@ -2727,11 +2731,40 @@ class Codex extends EventEmitter {
         break;
     }
   }
+  quotaBinding(rpc) {
+    return { nativeId: this.record.nativeId, rpc, lifecycle: this.lifecycleRevision,
+      model: typeof this.record.model === 'string' ? this.record.model : null };
+  }
+  quotaTurnCurrent(id, rpc) {
+    const binding = this.turns.get(id)?.quotaBinding;
+    return Boolean(rpc && id && id === this.turnId && binding && binding.nativeId === this.record.nativeId &&
+      binding.rpc === rpc && this.currentRpc(rpc) && binding.lifecycle === this.lifecycleRevision &&
+      !this.stopped && !this.transportDisconnected && !this.record.nativeContextPending);
+  }
+  observeQuota(id, error, rpc) {
+    const typed = codexQuotaError(error);
+    if (!typed || !this.quotaTurnCurrent(id, rpc)) return false;
+    // Keep the first failed turn for this blocked episode, including on manual retries.
+    if (!codexQuotaBlock(this.record)) {
+      this.record.nativeQuota = { ...typed, nativeId: this.record.nativeId, turnId: id,
+        model: this.turns.get(id).quotaBinding.model, observedAt: Date.now() };
+      this.emit('nativeQuota');
+    }
+    this.nativeRetry = null;
+    return true;
+  }
   turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '', inputItems: new Set(), itemInputs: new Map(), inputTag: '' }); return this.turns.get(id); }
   finishTurn(id) {
     const turn = this.turns.get(id); if (!turn?.completed || this.steering?.turnId === id || this.pendingSteer && this.turnId === id) return;
     const live = turn.liveStarted === true && this.turnId === id && !this.stopped && !this.transportDisconnected;
     const pending = this.pending?.turnId === id ? this.pending : null;
+    if (turn.completed.status === 'failed') this.observeQuota(id, turn.completed.error, turn.quotaCompletionRpc);
+    const quota = codexQuotaBlock(this.record), model = typeof this.record.model === 'string' ? this.record.model : null;
+    if (turn.completed.status === 'completed' && quota && quota.turnId !== id &&
+        this.quotaTurnCurrent(id, turn.quotaBinding?.rpc) && model === turn.quotaBinding.model) {
+      delete this.record.nativeQuota;
+      this.emit('nativeQuota');
+    }
     if (pending) this.pending = null;
     this.turns.delete(id); this.hasHistory = true;
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
@@ -2773,12 +2806,14 @@ class Codex extends EventEmitter {
     if (!rpc || this.scopedOutboxRpc() !== rpc || this.pending || !guard()) throw uiError('error.nativeSendUnavailable');
     const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
     const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
+    const quotaBinding = this.quotaBinding(rpc);
     try {
       const result = await rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag,
         input: [{ type: 'text', text, text_elements: [] }] });
       if (lifecycle !== this.lifecycleRevision || this.stopped || this.scopedOutboxRpc() !== rpc) throw uiError('error.nativeObservationChanged');
       if (typeof result.turn?.id !== 'string' || !result.turn.id) throw uiError('error.nativeObservationChanged');
       pending.turnId = result.turn.id;
+      this.turn(pending.turnId).quotaBinding ||= quotaBinding;
       if (!this.turnId) this.turnId = result.turn.id;
       if (revision === this.stateRevision) this.emit('state', 'working');
       this.emit('submitted', tag); this.emit('replyBound', { tag, nativeId: this.record.nativeId, turnId: pending.turnId });
@@ -2799,10 +2834,12 @@ class Codex extends EventEmitter {
     const input = spaceImages ? spaceImages.input(text) : [{ type: 'text', text, text_elements: [] }];
     const pending = this.pending = { tag, turnId: null, ...(spaceImages ? { spaceImages, imageRpc: this.host.rpc, imageLifecycle: this.lifecycleRevision } : {}) }; this.ownInputs.add(tag);
     const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
+    const quotaBinding = this.quotaBinding(this.host.rpc);
     try {
       const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag, input });
       if (lifecycle !== this.lifecycleRevision || this.stopped) { this.emit('submitted', tag); return; }
       pending.turnId = r.turn.id;
+      this.turn(pending.turnId).quotaBinding ||= quotaBinding;
       if (spaceImages && this.spaceImageCurrent(pending)) {
         const receipt = spaceImages.confirm(pending.turnId);
         if (receipt) this.emit('spaceImagesAccepted', receipt);

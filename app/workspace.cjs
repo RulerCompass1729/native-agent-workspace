@@ -1,3 +1,4 @@
+const { codexQuotaBlock } = require('./native-usage.js');
 const backgroundOperation = require('./background-operation.cjs');
 const { copySnapshotImages } = require('./native-images.cjs');
 const { EventEmitter } = require('node:events');
@@ -673,7 +674,7 @@ class Workspace extends EventEmitter {
   }
   capacityValid(s, r) {
     const runtime = this.runtimes.get(s.id);
-    return !this.closed && !this.storageWarning && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
+    return !this.closed && !this.storageWarning && !codexQuotaBlock(s) && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
       s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle && runtime.rootLease === r.lease && runtime.observationEpoch === r.epoch &&
       (s.provider !== 'claude' || runtime.rootTurn?.id === r.turnId && r.errorMessageId && runtime.rootTurn.errorMessageId === r.errorMessageId && runtime.rootTurn.failedTranscript === r.transcript && runtime.failedTurnInputMatches(r.turnId)) &&
       s.owner === r.owner && s.controlRevision === r.control && s.memberRevision === r.member &&
@@ -876,6 +877,7 @@ class Workspace extends EventEmitter {
       if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);
       else this.cancelCapacity(s.id);
     });
+    on('nativeQuota', () => { this.cancelCapacity(s.id); this.changed(); });
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = s.provider === 'codex' ? processIdentity(runtime.host?.codexProcess?.pid) : null; this.changed(); });
     // Kept with the record: the vendor icon needs it before the session runs again.
@@ -1463,12 +1465,13 @@ class Workspace extends EventEmitter {
     if (images && (!forward || route || mobile || wakeTicket || recovery || !media.validSpaceImagePacket(images, forward.roomId || 'shared') || !runtime.spaceImagesAvailable)) throw uiError('error.roomImages.deliveryUnavailable');
     const imageTag = images && randomUUID();
     const imageSubmission = images && new media.SpaceImageSubmission(media.spaceImageRoot(this.dataDir), forward.roomId || 'shared', images.version, images.refs, s.nativeId, imageTag);
+    if (dispatch && codexQuotaBlock(s)) throw uiError('error.nativeSendUnavailable');
     if (dispatch && terminalDialogPrompt(s, runtime)) throw uiError("error.queue.terminalDialog");
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
     if (forward && !wakeTicket && text) text = originalText;
     // A NAW queue item sent under the person's automatic-message switches: never a
     // takeover, never human input, refused while the person has a draft (queue-dispatch.cjs).
-    const dispatchAllowed = () => { try { return wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
+    const dispatchAllowed = () => { try { return !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
     if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
     if (mobile) mobile.human();
     else if (dispatch) {

@@ -47,6 +47,25 @@
     }
     return accepted ? { source: 'codex-account-rate-limits', buckets: [...buckets.values()] } : null;
   }
+  function codexQuotaError(error) {
+    const kind = value => ['usageLimitExceeded', 'usage_limit_exceeded'].includes(value) ? 'usage_limit_exceeded' : null;
+    if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
+    const camel = error.codexErrorInfo, snake = error.codex_error_info;
+    if (camel !== undefined && snake !== undefined && (!kind(camel) || kind(camel) !== kind(snake))) return null;
+    if (!kind(camel ?? snake)) return null;
+    const reset = error.resetsAt ?? error.resets_at;
+    return { kind: 'usage_limit_exceeded',
+      ...(count(reset) && reset <= 8640000000000 && (error.resetsAt === undefined || error.resets_at === undefined || error.resetsAt === error.resets_at)
+        ? { resetsAt: reset } : {}) };
+  }
+  // A model label alone cannot establish that a different quota bucket is usable.
+  function codexQuotaBlock(session) {
+    const q = session?.nativeQuota;
+    return session?.provider === 'codex' && q?.kind === 'usage_limit_exceeded' &&
+      typeof q.nativeId === 'string' && q.nativeId && q.nativeId === session.nativeId &&
+      typeof q.turnId === 'string' && q.turnId && count(q.observedAt) &&
+      (q.model === null || typeof q.model === 'string') ? q : null;
+  }
   function usageLines(provider, usage, language = 'zh') {
     const formatter = typeof module === 'object' && module.exports ? require('./ui-locale.js') : root.nativeWorkspaceLocale;
     const text = (key, params) => formatter.format(language, key, params);
@@ -85,7 +104,7 @@
     lines.push(count(usage.reportedAt) ? text('usage.timestamp', { time: new Date(usage.reportedAt).toLocaleString(language) }) : text('usage.noTimestamp'));
     return lines;
   }
-  const api = { claudeUsage, codexAccountUsage, usageLines };
+  const api = { claudeUsage, codexAccountUsage, codexQuotaError, codexQuotaBlock, usageLines };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.nativeWorkspaceUsage = api;
 })(typeof window === 'object' ? window : globalThis);

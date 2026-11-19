@@ -14,6 +14,7 @@ const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
+const { codexQuotaBlock } = require('./native-usage.js');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
 const { sessionPlan, endedByThisStop } = require('./backend-switch.cjs');
 
@@ -405,6 +406,7 @@ function sessionReady(session, wakePolicy) {
   if (session.wakeDisabled) {
     return { ready: false, reason: 'paused' };
   }
+  if (codexQuotaBlock(session)) return { ready: false, reason: 'usage-limit-exceeded' };
   if (session.nativeTerminalDialog) {
     return { ready: false, reason: 'native-terminal-dialog' };
   }

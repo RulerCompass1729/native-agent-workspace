@@ -6,6 +6,7 @@ const { ButlerLedger } = require('./butler-ledger.cjs');
 const { validateEvent } = require('./butler-policy.cjs');
 const { storedReadySource, storedDoneSource } = require('./butler-ready.cjs');
 const { nonBlockingQuestion } = require('./approval-policy.js');
+const { codexQuotaBlock } = require('./native-usage.js');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const unavailable = () => Object.assign(Error('Butler source unavailable'), { code: 'BUTLER_SOURCE_UNAVAILABLE' });
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
@@ -138,6 +139,12 @@ class ButlerIngress {
   // The backend validates the live failed turn; intake never settles or replays its task.
   observeRecoveryFailures(sessions = []) {
     for (const s of Array.isArray(sessions) ? sessions : []) {
+      const quota = codexQuotaBlock(s);
+      if (quota && typeof s.id === 'string' && s.id && !s.archived) {
+        const identity = hash([s.id, quota.nativeId, quota.turnId]);
+        this.record({ eventId: `codex-quota:${identity}`, sourceRef: `codex-quota:${s.id}`, kind: 'blocked',
+          payload: { memberId: s.id, reason: 'codex-usage-limit-exceeded' } });
+      }
       const r = s?.capacityRecovery, reason = Object.hasOwn(recoveryFailureReasons, r?.reason) ? recoveryFailureReasons[r.reason] : null;
       if (!reason || !(s?.provider === 'claude' && r.reason !== 'routing' || s?.provider === 'codex' && ['capacity', 'routing'].includes(r.reason)) ||
           s.state !== 'error' && !(s.provider === 'codex' && s.state === 'idle') || s.archived || s.backendUnavailable || s.transportDisconnected || s.nativeContextPending ||
