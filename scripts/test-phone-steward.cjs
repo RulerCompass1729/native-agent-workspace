@@ -93,6 +93,7 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
     await page.close();
     // A busy butler takes a queued message, as a busy Claude session does; only a named refusal disables the button (2026-11-19).
     const compose = () => page.evaluate(() => ({ button: document.getElementById('send-message').textContent, note: document.getElementById('compose-note').textContent, disabled: document.getElementById('send-message').disabled }));
+    const buttonHeight = () => page.$eval('#send-message', n => Math.round(n.getBoundingClientRect().height));
     readWhenBusy = { canSend: true, sendMode: 'queueMidturn' };
     page = await open(context, { steward: { state: 'shared', sessionId: butler }, busy: true, hash: '#zh/chat/' + butler });
     await page.fill('#message', 'Synthetic question');
@@ -104,9 +105,9 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
       readWhenBusy = { canSend: false, sendMode: null, sendBlocked: reason };
       page = await open(context, { steward: { state: 'shared', sessionId: butler }, busy: true, hash: '#zh/chat/' + butler });
       await page.fill('#message', 'Synthetic question');
-      const refused = await compose();
-      check('a refusal says why in plain words, never "wait until idle": ' + reason, () => {
-        assert.match(refused.note, note); assert.doesNotMatch(refused.note, /空闲/); assert.equal(refused.disabled, true);
+      const refused = await compose(), height = await buttonHeight();
+      check('a refusal says why in plain words, never "wait until idle", and 发送 stays on one line: ' + reason, () => {
+        assert.match(refused.note, note); assert.doesNotMatch(refused.note, /空闲/); assert.equal(refused.disabled, true); assert.ok(height <= 46, 'button height ' + height);
       });
       await page.close();
     }
