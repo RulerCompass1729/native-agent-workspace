@@ -19,10 +19,9 @@ test('phone question indicator and current-native confirmation links coexist wit
   const grant = { roomIds: [], records: false }, scopes = [{ sessionId: 'a', nativeId: 'current', serviceKey: '.', actions: ['read'] }];
   const view = await adapter.read(client, grant, scopes), row = view.sessions[0];
   assert.equal(row.question, true);
-  assert.deepEqual(row.messages.map(message => message.id), ['human', 'current-card']);
+  // No readable card for 'current-card' in this view, so it is not a row (it would only say "not shown").
+  assert.deepEqual(row.messages.map(message => message.id), ['human']);
   assert.equal(row.messages[0].text, 'Original human text');
-  assert.equal(row.messages[1].text, '');
-  assert.equal(row.messages[1].confirmationId, 'a:current:request:current');
   assert.doesNotMatch(JSON.stringify(view), /PRIVATE_|previous|request:old/);
   assert.equal(authorityCalls, 0);
   session.approvals[0].pending = true;

@@ -15,6 +15,9 @@ const reasons = {
   unavailable: ['暂时打不开', '大管家会话现在不能在手机上打开，例如正在交接给新会话。请稍后刷新，或在 Mac 上查看。'],
   none: ['Mac 上还没有指定', '在 Mac 上把一个会话指定为大管家后，这里就能打开它、和它对话。'],
 };
+// A NAW dispatch, the butler's own reply (no name on the row) and the person's message, as the projection sends them.
+const butlerRows = [{ id: 'd', role: 'user', name: 'NAW 派活', text: 'Synthetic dispatch', time: now - 3000 },
+  { id: 'r', role: 'assistant', name: '', text: 'Synthetic reply', time: now - 2000 }, { id: 'h', role: 'user', name: '', text: 'Synthetic own message', time: now - 1000 }];
 let passed = 0;
 const check = (label, fn) => { fn(); passed++; console.log('PASS ' + label); };
 async function open(context, { steward, busy = false, hash }) {
@@ -27,7 +30,7 @@ async function open(context, { steward, busy = false, hash }) {
     if (/^\/mobile\/[a-z]+\.(js|css|webmanifest)$/.test(p)) return route.fulfill({ status: 200, contentType: p.endsWith('.css') ? 'text/css' : 'text/javascript', body: fs.readFileSync(path.join(web, path.basename(p))) });
     if (p === '/mobile/session') return json({ deviceId: '10000000-0000-4000-8000-000000000001', csrf: 'c'.repeat(43), workspace: true,
       sessions: list.map(s => ({ id: s.id, name: s.name, state: s.state, available: true, actions: ['read', 'send', 'answer'] })) });
-    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: [], earlierMessagesOmitted: 0 })), rooms: [],
+    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? butlerRows : [], earlierMessagesOmitted: 0 })), rooms: [],
       confirmations: [], reminders: null, syncedAt: now, capabilities: { queue: false, records: false, sensitiveDecisions: false, nativeTerminal: false, push: false }, ...(steward ? { steward } : {}) });
     if (p.startsWith('/mobile/read/')) { const id = decodeURIComponent(p.split('/').pop());
       return json({ id, contextId: 'x'.repeat(43), canSend: list.find(s => s.id === id)?.state === 'idle', question: null, messages: [], earlierMessagesOmitted: 0 }); }
@@ -56,6 +59,9 @@ const listed = page => page.$$eval('section .box a.row strong', nodes => nodes.m
     await page.fill('#message', 'Synthetic question');
     const idle = await page.evaluate(() => ({ title: document.querySelector('.top-title').textContent, note: document.getElementById('compose-note').textContent, disabled: document.getElementById('send-message').disabled }));
     check('the butler chat is titled 大管家 and sends while idle', () => assert.deepEqual(idle, { title: '大管家', note: '草稿仅在此浏览器保存', disabled: false }));
+    const authors = await page.$$eval('.thread .message', nodes => nodes.map(n => [n.classList.contains('human'), n.querySelector('.author span').textContent, n.querySelector('.avatar')?.textContent || null]));
+    check('a NAW dispatch is not labelled as you; the butler\'s replies carry its name', () => assert.deepEqual(authors,
+      [[false, 'NAW 派活', 'N'], [false, 'Synthetic butler · 19', 'C'], [true, '你', null]]));
     await page.close();
     page = await open(context, { steward: { state: 'shared', sessionId: butler }, busy: true, hash: '#zh/chat/' + butler });
     await page.fill('#message', 'Synthetic question');

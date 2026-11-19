@@ -176,10 +176,12 @@
       for (const s of others) { const a = link('', 'chat/' + encodeURIComponent(s.id), 'row'), main = node('div', undefined, 'row-main'); main.append(node('strong', s.name), node('p', providerName(s.provider))); a.append(avatar(s), main, stateTag(s)); box.append(a); }
       if (!others.length) box.append(node('p', t('noData'))); sessions.append(box); roomList(section(t('space'), view.rooms.length, 'newSpace'));
     }
-    function thread(rows, container) {
+    // owner: the session whose chat this is; its replies carry no name of their own.
+    function thread(rows, container, owner) {
       for (const m of rows || []) {
-        const human = ['human', 'user'].includes(m.role), article = node('article', undefined, 'message' + (human ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
-        const s = view.sessions.find(s => s.name === m.name) || { provider: 'codex' };
+        // A user row with a name was written by NAW or another agent (NAW 派活, a space), as the Mac labels it.
+        const human = m.role === 'human' || m.role === 'user' && !m.name, article = node('article', undefined, 'message' + (human ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
+        const s = (m.role === 'assistant' && owner) || view.sessions.find(s => s.name === m.name) || (m.role === 'assistant' ? { provider: 'codex' } : {});
         author.append(node('span', human ? (lang === 'zh' ? '你' : 'You') : m.name || s.name || 'NAW'));
         if (m.time) { const time = node('time', new Date(m.time).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); author.append(time); }
         const bubble = node('div', m.text || '', 'bubble');
@@ -198,7 +200,7 @@
         button(t('interrupt'), () => dialog(t('interrupt'), t('mac')), 'danger'),
         button(t('takeover'), () => dialog(t('takeover'), t('mac'))),
       ); el('content').append(controls);
-      const rows = node('div', undefined, 'thread'); thread(s.messages, rows); el('content').append(rows);
+      const rows = node('div', undefined, 'thread'); thread(s.messages, rows, s); el('content').append(rows);
       if (s.earlierMessagesOmitted) el('content').append(node('p', t('omit'), 'small-note'));
       if (client.state.row?.question && client.state.selected === s.id) el('content').append(link(t('question') + ' ›', 'confirm/native/' + encodeURIComponent(s.id), 'link-row'));
       receipts(el('content'));
@@ -316,9 +318,16 @@
       }
       if (!view.reminders.count) el('content').append(node('p', t('noData'), 'quiet'));
     }
+    // The fixed compose box grows with its note, the textarea and the safe area; the list keeps that much room below it.
+    function composeSpace() {
+      const box = el('compose'), space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
+      d.documentElement.style.setProperty('--compose-space', Math.ceil(space) + 'px');
+    }
+    if (global.ResizeObserver) new global.ResizeObserver(composeSpace).observe(el('compose'));
+    global.addEventListener('resize', composeSpace);
     function updateCompose() {
       if (!client) return;
-      const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active));
+      const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
       if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
       if (composeKey !== route.id) {
         composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('chat'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;

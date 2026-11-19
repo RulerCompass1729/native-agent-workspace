@@ -13,7 +13,9 @@ const denied = () => Object.assign(Error('Mobile workspace authorization or stat
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
 const text = (s, limit = 65536) => typeof s === 'string' ? s.slice(0, limit) : '';
-function conversation(rows = [], sessionId, budget) {
+// cards: the confirmation ids this view can show. Other background operations and rows with no text
+// are not messages; on the phone they only took row slots as "earlier messages not shown" notes.
+function conversation(rows = [], sessionId, budget, cards) {
   let bytes = 0, omitted = 0;
   const result = [];
   const limit = budget ?? 128 * 1024;
@@ -24,11 +26,13 @@ function conversation(rows = [], sessionId, budget) {
   };
   for (const m of rows.slice().reverse()) {
     if (!m || !['user', 'human', 'assistant', 'system'].includes(m.role)) continue;
+    const card = sessionId && m.backgroundOperation?.id ? [sessionId, m.backgroundOperation.nativeId, m.backgroundOperation.id].join(':') : null;
+    if (m.backgroundOperation ? !cards?.has(card) : !(typeof m.text === 'string' && m.text.trim()) && !m.images?.length) continue;
     let content = m.backgroundOperation ? '' : text(m.text);
     if (budget !== undefined && /[\ud800-\udbff]$/.test(content)) content = content.slice(0, -1);
     const row = { id: text(m.id, 200), role: m.role, text: content, name: text(m.name, 200), time: m.time,
-      status: text(m.status, 80), kind: text(m.kind, 80), textOmitted: typeof m.text === 'string' && m.text.length > content.length,
-      ...(sessionId && m.backgroundOperation?.id ? { confirmationId: [sessionId, m.backgroundOperation.nativeId, m.backgroundOperation.id].join(':') } : {}),
+      status: text(m.status, 80), kind: text(m.kind, 80), textOmitted: !card && typeof m.text === 'string' && m.text.length > content.length,
+      ...(card ? { confirmationId: card } : {}),
       attachments: Array.isArray(m.images) ? m.images.length : 0 };
     let size = budget === undefined ? Buffer.byteLength(content) : Buffer.byteLength(JSON.stringify(row));
     if (budget !== undefined && size > limit - bytes) {
@@ -127,7 +131,7 @@ class MobileWorkspace {
       // question: a Codex question that does not block the turn is open; the home row says it needs you, as 等你 does.
       return { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
         ...conversation((s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
-          (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget) };
+          (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget, cards) };
     });
     const rooms = roomRows.map(r => ({
       id: r.id, name: r.name, queue: (r.queue || []).map(i => ({ id: i.id, text: i.text, status: i.status,

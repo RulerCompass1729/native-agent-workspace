@@ -174,3 +174,25 @@ test('after the done log the chosen butler card follows the successor again', as
   assert.deepEqual(await h.steward(h.both), { state: 'shared', sessionId: 'c' });
   assert.deepEqual(await h.steward(), { state: 'notSelected' }, 'a pairing that chose only the old session does not gain the successor');
 });
+test('a busy butler thread shows its messages, not a page of "not shown" notes from background operations and empty turns', async t => {
+  // The daily shape (2026-11-19): about 80 background operations and 40 empty turn rows among the messages.
+  const f = fixture(t), s = f.source.sessions[0];
+  s.messages = [];
+  for (let i = 0; i < 260; i++) {
+    const kind = i % 4;
+    if (kind === 0) s.messages.push({ id: 'op' + i, role: 'system', kind: 'background-operation', name: 'Synthetic A', text: 'PRIVATE_ARGS', time: i, backgroundOperation: { id: 'op' + i, nativeId: 'native-a' } });
+    else if (kind === 1) s.messages.push({ id: 'turn' + i, role: 'system', kind: 'turn', text: '', time: i });
+    else if (kind === 2) s.messages.push({ id: 'tool' + i, role: 'tool', text: 'tool output', time: i });
+    else s.messages.push({ id: 'reply' + i, role: i % 8 === 3 ? 'user' : 'assistant', text: 'message ' + i, time: i });
+  }
+  s.messages.push({ id: 'card', role: 'system', kind: 'background-operation', text: 'PRIVATE_CARD_ARGS', time: 300, backgroundOperation: { id: 'card-op', nativeId: 'native-a' } });
+  f.source.backgroundConfirmations = [{ id: 'card', key: 'a:native-a:card-op', operationId: 'card-op', sessionId: 'a', nativeId: 'native-a', actorName: 'Synthetic A',
+    state: 'confirmation-required', actionable: true, time: 300, expiresAt: 600, summary: { action: 'input', target: 'Synthetic B' }, title: 'Synthetic card' }];
+  f.adapter.confirmation = () => { throw Error('No decision grant'); };
+  const view = await f.adapter.read(f.client, f.grant, f.scopes), rows = view.sessions[0].messages;
+  assert.deepEqual(rows.map(m => m.id), [...Array.from({ length: 65 }, (_, i) => 'reply' + (4 * i + 3)), 'card']);
+  assert.equal(rows.filter(m => m.textOmitted).length, 0);
+  assert.equal(rows.at(-1).confirmationId, 'a:native-a:card-op');
+  assert.equal(view.sessions[0].earlierMessagesOmitted, 0);
+  assert.doesNotMatch(JSON.stringify(view), /PRIVATE_/);
+});
