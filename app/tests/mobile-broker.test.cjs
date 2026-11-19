@@ -31,7 +31,7 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
       if (method === 'mobileRead') {
         if (holdRead) await new Promise(resolve => { releaseRead = resolve; });
         return { ...record, messages: [{ id: 'message-a', kind: 'assistant', status: 'complete', text: 'Original reply', textOmitted: false,
-          unsupportedAttachments: 0, nativeId: 'native-a', privateExtra: 'PRIVATE_EXTRA' }], questionOmitted: false, canSend: true, earlierMessagesOmitted: 0 };
+          unsupportedAttachments: 0, nativeId: 'native-a', privateExtra: 'PRIVATE_EXTRA' }], questionOmitted: false, canSend: record.canSend ?? true, earlierMessagesOmitted: 0 };
       }
       if (method.endsWith('Receipt')) {
         const existing = receipts.get(spec.requestId);
@@ -216,6 +216,25 @@ test('the native question identity stays local while the selected original answe
   const row = await f.broker.read(auth, f.record.id); assert.ok(!JSON.stringify(row).includes(f.record.question.requestId));
   const value = { contextId: row.contextId, requestId: randomUUID(), answers: { choice: ['Original answer'] } };
   assert.equal((await f.broker.answer(auth, value)).status, 'reply-written'); assert.equal(f.answered.length, 1); assert.equal(f.answered[0].questionId, f.record.question.requestId);
+});
+test('the phone gets only fixed words for how a send would go or why it cannot', async t => {
+  const f = fixture(t), { auth } = await f.pair(), pick = row => [row.canSend, row.sendMode, row.sendBlocked];
+  for (const [canSend, sendMode, sendBlocked, expected] of [
+    [true, 'queueMidturn', null, [true, 'queueMidturn', null]],
+    [true, 'queue', 'steer', [true, 'queue', null]],
+    [true, 'PRIVATE_MODE', null, [true, null, null]],
+    [false, 'queue', 'steer', [false, null, 'steer']],
+    [false, null, 'PRIVATE_REASON', [false, null, null]],
+  ]) {
+    Object.assign(f.record, { canSend, sendMode, sendBlocked });
+    const row = await f.broker.read(auth, f.record.id);
+    assert.deepEqual(pick(row), expected); assert.ok(!JSON.stringify(row).includes('PRIVATE_'));
+  }
+});
+test('a read-only device is told it is read-only, whatever the session could take', async t => {
+  const f = fixture(t), { auth } = await f.pair(['read']); Object.assign(f.record, { canSend: true, sendMode: 'queue', sendBlocked: null });
+  const row = await f.broker.read(auth, f.record.id);
+  assert.deepEqual([row.canSend, row.sendMode, row.sendBlocked], [false, null, 'readOnly']);
 });
 test('a read-only device cannot send or answer but may explicitly log out with its own origin and CSRF', async t => {
   const f = fixture(t), { auth } = await f.pair(['read']), row = await f.broker.read(auth, f.record.id);

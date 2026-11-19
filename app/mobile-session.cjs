@@ -34,6 +34,26 @@ function readableTarget(s) { return Boolean(s && !s.archived && !s.nativeContext
 function currentTarget(s, runtime) {
   return readableTarget(s) && !['ended','closed'].includes(s.state) && !s.backendUnavailable && !s.backendExitConfirmed && !s.stopped && !runtime?.stopped && !runtime?.backendExitConfirmed;
 }
+// How a phone message would go now, decided as the Mac composer decides (renderer.js composer choice): an idle
+// session takes it at once; a working Claude session takes one queued message (Workspace.queue). Nothing else does.
+function sendMode(s, r) {
+  if (!r || r.transportDisconnected || r.chatAvailable === false || r.nativeInputRequired || r.nativeAbortRequest || r.pendingQueue || s.approval) return null;
+  if (s.state === 'idle') return s.pendingTag ? null : 'send';
+  if (s.state === 'working' && s.provider === 'claude' && r.queueAvailable) return r.midturnAvailable === true ? 'queueMidturn' : 'queue';
+  return null;
+}
+// Why the phone cannot send now, so the phone can say it instead of only greying the button.
+function sendBlocked(s, r, question) {
+  if (!r || r.transportDisconnected || r.chatAvailable === false) return 'disconnected';
+  if (r.nativeAbortRequest || r.nativeInputRequired) return 'interrupt';
+  if (question) return 'question';
+  // An answer already given (from the phone or the Mac) waits for native, not for the person.
+  if (s.approval?.pending === true) return 'answerPending';
+  if (s.approval || s.state === 'approval') return 'approval';
+  if (r.pendingQueue || s.state === 'idle' && s.pendingTag) return 'queueBusy';
+  if (s.state === 'working') return s.provider === 'codex' ? 'steer' : 'noQueue';
+  return null;
+}
 function checked(w, ticket, action) {
   const { root, key } = location(w), s = w.get(ticket?.sessionId);
   const target = { serviceKey: key, sessionId: s.id, nativeId: s.nativeId };
@@ -110,13 +130,28 @@ function delegate(w, ticket, spec, action) {
   delegates.add(d); return d;
 }
 function valid(d) { return delegates.has(d) && d.valid(); }
-async function executeSend(w, d) {
-  const s = w.get(d.ticket.sessionId);
-  try { await w.send(s.id, d.spec.text, null, null, null, null, null, null, d); }
-  catch (e) { if (!d.row) throw e; d.row.status = !d.started || e.notSent === true ? 'not-sent' : 'unconfirmed'; d.row.error = String(e.message || e).slice(0, 16000); }
+function sent(w, d, s, error) {
+  if (error) { if (!d.row) throw error; d.row.status = !d.started || error.notSent === true ? 'not-sent' : 'unconfirmed'; d.row.error = String(error.message || error).slice(0, 16000); }
   if (!d.row) throw denied();
   if (s.messages.find(m => m.id === d.row.tag)?.status === 'submitted') d.row.status = 'submitted';
   else if (d.row.status === 'awaiting-native') d.row.status = 'unconfirmed';
+  w.persist(); return receipt(w, d.row);
+}
+async function executeSend(w, d) {
+  const s = w.get(d.ticket.sessionId), mode = sendMode(s, w.runtimes.get(s.id));
+  if (mode !== 'queue' && mode !== 'queueMidturn') {
+    try { await w.send(s.id, d.spec.text, null, null, null, null, null, null, d); } catch (e) { return sent(w, d, s, e); }
+    return sent(w, d, s);
+  }
+  // Claude reads a queued message only at its next tool step or after its turn, possibly minutes later. As the butler
+  // designation does (main.cjs stewardDuty), the phone hears back once the message stands queued; its receipt follows.
+  const outcome = w.queue(s.id, d.spec.text, null, null, d).then(() => null, error => error || denied());
+  const first = await Promise.race([outcome, new Promise(resolve => setImmediate(resolve, 'waiting'))]);
+  if (first !== 'waiting') return sent(w, d, s, first || undefined);
+  // Early only when this request's own row, the native queue slot and the queued message share one tag (B's review, C1).
+  const tag = d.row?.tag, standing = d.row?.status === 'awaiting-native' && w.runtimes.get(s.id)?.pendingQueue === tag && s.messages.some(m => m.id === tag && m.status === 'awaiting-native');
+  if (!standing) return sent(w, d, s, (await outcome) || undefined);
+  outcome.then(error => { try { sent(w, d, s, error || undefined); } catch { /* The stored row keeps its last status. */ } });
   w.persist(); return receipt(w, d.row);
 }
 function executeAnswer(w, d) {
@@ -137,7 +172,7 @@ function prepare(w, ticket, spec, action, connection) {
   if (records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance).length >= MAX_REQUESTS) throw denied();
   ticket = JSON.parse(JSON.stringify(ticket)); spec = JSON.parse(JSON.stringify(spec));
   const s = w.get(ticket.sessionId), r = w.runtime(s.id);
-  if (action === 'send' && (s.state !== 'idle' || s.pendingTag || s.approval || r.pendingQueue || r.nativeInputRequired || r.nativeAbortRequest || r.chatAvailable === false)) throw denied();
+  if (action === 'send' && !sendMode(s, r)) throw denied();
   const d = delegate(w, ticket, spec, action);
   d.ticket = ticket; d.spec = spec; d.action = action; d.connection = connection; d.until = clock() + PREPARE_MS; d.used = false;
   if (action === 'answer') {
@@ -217,9 +252,9 @@ function read(w, ticket) {
     return { id: m.id, kind: m.kind || null, status: m.status || null, text: omitted ? null : text, textOmitted: omitted,
       unsupportedAttachments: Array.isArray(m.images) ? m.images.length : 0 };
   }).reverse();
-  const q = question(w, s);
+  const q = question(w, s), mode = currentTarget(s, r) && !w.storageWarning ? sendMode(s, r) : null;
   return { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name, state: s.state, proof: proof(s),
-    canSend: currentTarget(s, r) && s.state === 'idle' && !!r && !r.transportDisconnected && r.chatAvailable !== false && !r.nativeInputRequired && !r.nativeAbortRequest && !r.pendingQueue && !s.pendingTag && !s.approval && !w.storageWarning,
+    canSend: Boolean(mode), sendMode: mode, sendBlocked: mode || !currentTarget(s, r) || w.storageWarning ? null : sendBlocked(s, r, q),
     question: q && Buffer.byteLength(JSON.stringify(q)) <= TEXT_BYTES ? q : null, questionOmitted: Boolean(q && Buffer.byteLength(JSON.stringify(q)) > TEXT_BYTES),
     messages, earlierMessagesOmitted: Math.max(0, rows.length - messages.length) };
 }

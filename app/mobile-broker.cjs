@@ -19,6 +19,8 @@ const fingerprint = value => digest(JSON.stringify(stable(value)));
 // it is refused before any record or call. The check folds compatibility forms (so full-width ！＃／ count) and looks
 // past leading whitespace, control characters and invisible characters that trim() keeps (U+0085, U+200B and other
 // default-ignorables). The same rule is in mobile-web/client.js and mobile-session.cjs.
+// Only these fixed words cross to the phone: how a send would go now, or why it cannot (mobile-session.cjs sendMode).
+const SEND_MODES = ['send', 'queue', 'queueMidturn'], SEND_BLOCKS = ['steer', 'noQueue', 'queueBusy', 'question', 'answerPending', 'approval', 'interrupt', 'disconnected'];
 const nativePrefix = text => /^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''));
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
@@ -292,6 +294,8 @@ class MobileBroker {
     this.#contexts.set(contextId, { ticket, proof: structuredClone(row.proof), questionId: row.question?.requestId || null });
     return { contextId, id: row.id, provider: row.provider, name: row.name, state: row.state,
       canSend: scope.actions.includes('send') && row.canSend === true,
+      sendMode: scope.actions.includes('send') && row.canSend === true && SEND_MODES.includes(row.sendMode) ? row.sendMode : null,
+      sendBlocked: !scope.actions.includes('send') ? 'readOnly' : row.canSend !== true && SEND_BLOCKS.includes(row.sendBlocked) ? row.sendBlocked : null,
       question: row.question && scope.actions.includes('answer') ? { questions: row.question.questions.map(value => ({
         id: value.id, header: value.header, question: value.question, multiSelect: value.multiSelect, isOther: value.isOther,
         options: value.options.map(option => ({ label: option.label, description: option.description })),

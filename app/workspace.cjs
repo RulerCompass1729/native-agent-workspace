@@ -1563,31 +1563,38 @@ class Workspace extends EventEmitter {
     } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }
     return tag;
   }
-  async queue(id, text, owner, shared = null) {
+  async queue(id, text, owner, shared = null, mobile = null) {
     const backgroundValid = backgroundOperation.inputGuard(this, [id]);
-    const originalText = text; text = cleanText(text); if (backgroundOperation.current()) text = originalText;
+    const originalText = text; text = cleanText(text); if (mobile || backgroundOperation.current()) text = originalText;
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
+    // A phone delegate (mobile-session.cjs) is the person's input without the Mac's control, as in send().
+    const mobileSession = mobile && require('./mobile-session.cjs');
+    if (mobile && (!mobileSession.valid(mobile) || shared)) throw uiError("error.workspace.mobileDelegationUnconfirmed");
     const s = this.get(id), runtime = this.runtime(id);
     // Public space input does not take over the private composer or terminal.
-    const controller = shared ? s.owner : owner;
+    const controller = shared || mobile ? s.owner : owner;
     const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
     const roomId = shared?.roomId || 'shared', room = this.roomFor(roomId);
     if (shared && !spaces.isMember(s, roomId)) throw uiError("error.workspace.recipientLeftSpace");
     if (s.owner !== controller || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw uiError("error.workspace.nativeWaitingInputUnavailable");
-    s.peerRevision = (s.peerRevision || 0) + 1;
-    if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
-    // Private input still ends the old public reply scope; only the butler's wake permission survives.
-    if (!shared) s.controlRevision++;
-    if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
+    // mobile.human() makes the same control and peer changes as the Mac's private queue.
+    if (mobile) { mobile.human(); wake.messageInput(this, s, { control: 1, peer: 1 }); }
+    else {
+      s.peerRevision = (s.peerRevision || 0) + 1;
+      if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
+      // Private input still ends the old public reply scope; only the butler's wake permission survives.
+      if (!shared) s.controlRevision++;
+      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
+    }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const sameControl = !shared && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
-    const valid = () => backgroundValid() && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
+    const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
+    const valid = () => backgroundValid() && (!mobile || mobileSession.valid(mobile)) && this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
       sameControl() && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
-    if (!shared && !backgroundOperation.current()) valid.ownInput = true;
-    const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    if (!shared && !mobile && !backgroundOperation.current()) valid.ownInput = true;
+    const tag = mobile?.row?.tag || randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     // Like a native TUI queue, the recorded message leaves the composer at once.
-    const clearedDraft = !backgroundOperation.current() && !shared && typeof draft === 'string' && draft.trim() === text;
+    const clearedDraft = !backgroundOperation.current() && !shared && !mobile && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
     // midturn: read at the running turn's next tool boundary, or as its own turn if the turn ends first.
     const midturn = runtime.midturnAvailable === true ? { midturn: true } : {};
@@ -1595,7 +1602,7 @@ class Workspace extends EventEmitter {
     // Only words offered into the running turn can be read there; any other outcome leaves the turn revoked.
     const readable = !shared && !backgroundOperation.current() && midturn.midturn === true;
     if (readable) wake.humanQueued(this, runtime, s, tag);
-    const message = { id: tag, role: 'user', text, origin: 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now() };
+    const message = { id: tag, role: 'user', text, origin: mobile ? 'human-mobile' : 'human', ...backgroundOperation.message(), status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now() };
     if (shared) {
       const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, uiNameMessage: backgroundOperation.current() ? undefined : youToName(s.name), ...backgroundOperation.message(s.name), text, status: 'awaiting-native', inputMode: 'queue', ...midturn, time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
@@ -1607,6 +1614,7 @@ class Workspace extends EventEmitter {
     s.messages.push(message); if (clearedDraft) this.drafts.set(id, ''); this.versions.dispatches++; this.changed();
     try {
       if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
+      if (mobile) { mobile.reserve(tag); mobile.started = true; }
       const actor = backgroundOperation.current();
       const midturnText = shared && midturn.midturn ? spaceMidturnText(room.name || roomId, actor && { id: actor.id, name: actor.name }, text) : undefined;
       const receipt = await runtime.queue(text, tag, valid, midturnText);
@@ -1636,7 +1644,7 @@ class Workspace extends EventEmitter {
     } catch (error) {
       // Only a proven non-send returns the text to an untouched draft. An
       // uncertain outcome stays in the record so it is not sent twice.
-      const status = error.notSent === true ? 'not-sent' : 'unconfirmed';
+      const status = error.notSent === true || mobile && !mobile.started ? 'not-sent' : 'unconfirmed';
       if (message.status !== 'submitted') message.status = status;
       if (readable) wake.humanNotRead(runtime, tag);
       if (status === 'not-sent' && clearedDraft && this.draftRevisions.get(id) === draftRevision && !this.drafts.get(id)) this.drafts.set(id, draft);
