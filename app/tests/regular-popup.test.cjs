@@ -90,6 +90,80 @@ test('a catch-up and current-day trigger share the execution-day paid-call limit
   const f = fixture(); enable(f); f.set(new Date(2026, 10, 22, 8).getTime()); await f.engine.tick();
   f.set(new Date(2026, 10, 22, 10).getTime()); await f.engine.tick(); assert.equal(f.stats().selections, 1); assert.equal(f.engine.status().runs[0].state, 'daily-limit'); f.engine.dispose();
 });
+test('counterexample_fetch_crossing_midnight_preserves_daily_execution_budget', async () => {
+  let at = new Date(2026, 10, 18, 23, 59).getTime(), release, reads = 0; const calls = [];
+  const f = fixture({ now: () => at, readSource: () => ++reads === 1 ? new Promise(resolve => { release = resolve; }) : candidates,
+    select: async () => { calls.push({ at, costMicros: 7000 }); return { picks: [], costMicros: 7000 }; } });
+  f.engine.configure({ enabled: true, concern: 'Cross-midnight budget fixture', time: '00:00' });
+  const first = f.engine.tick(); at = new Date(2026, 10, 19, 0, 2).getTime(); release(candidates); await first; await f.engine.tick();
+  assert.ok(calls.reduce((n, call) => n + call.costMicros, 0) <= DAILY_MICROS);
+  const paid = f.engine.status().runs.find(r => r.attempted);
+  assert.equal(paid.day, '2026-11-18'); assert.equal(paid.budgetDay, '2026-11-19'); assert.equal(paid.budgetAt, at);
+  assert.equal(calls.length, 1); f.engine.dispose();
+});
+test('budget is rechecked after fetching, with reservation durable before selection', async () => {
+  let at = day, mono = 1000, release, selected = 0;
+  const f = fixture({ now: () => at, monotonicNow: () => mono, readSource: () => new Promise(resolve => { release = resolve; }),
+    select: async () => { selected++; const paid = f.saved().runs.find(r => r.attempted); assert.equal(paid.budgetAt, at); assert.equal(paid.budgetMonoMs, mono); assert.equal(paid.chargedMicros, 7000); return { picks: [], costMicros: 7000 }; } });
+  enable(f); const pending = f.engine.tick(); at += 86400000; mono += 1000; release(candidates); await pending;
+  assert.equal(selected, 1); assert.equal(f.saved().runs[0].budgetAt, at); f.engine.dispose();
+});
+test('changing timezone across the date line cannot reset the real 24-hour budget', async () => {
+  const previous = process.env.TZ; let calls = 0;
+  try {
+    process.env.TZ = 'Pacific/Honolulu'; const at = Date.parse('2026-11-19T09:30:00Z');
+    const f = fixture({ now: () => at, monotonicNow: () => 1000, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } });
+    enable(f); await f.engine.tick(); assert.equal(f.saved().runs[0].day, '2026-11-18');
+    process.env.TZ = 'Pacific/Kiritimati'; await f.engine.tick(); assert.equal(f.saved().runs[0].day, '2026-11-19');
+    assert.equal(calls, 1); assert.equal(f.saved().runs[0].state, 'budget'); f.engine.dispose();
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});
+test('DST spring transition is only 23 hours and cannot reset the rolling budget', async () => {
+  const previous = process.env.TZ; let at = Date.parse('2026-03-07T14:00:00Z'), mono = 1000, calls = 0;
+  try {
+    process.env.TZ = 'America/New_York';
+    const f = fixture({ now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } });
+    enable(f); await f.engine.tick(); at += 23 * 3600000; mono += 23 * 3600000;
+    assert.equal(new Date(at).getHours(), 9); await f.engine.tick(); assert.equal(calls, 1); assert.equal(f.saved().runs[0].state, 'budget'); f.engine.dispose();
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});
+test('wall-clock forward jumps and restart do not expire a recent reservation', async () => {
+  let at = day, mono = 1000, calls = 0;
+  const options = { now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } };
+  const f = fixture(options); enable(f); await f.engine.tick(); f.engine.dispose(); at += 2 * 86400000; mono += 1000;
+  const e = new RegularPopup({ ...options, store: f.store, permitted: true, readSource: async () => candidates }); await e.tick();
+  assert.equal(calls, 1); assert.equal(e.status().runs[0].state, 'budget'); e.dispose();
+});
+test('elapsed-clock reset and legacy receipts conservatively retain the budget debt', async () => {
+  for (const legacy of [false, true]) {
+    let at = day, mono = 100000, calls = 0;
+    const options = { now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } };
+    const f = fixture(options); enable(f); await f.engine.tick(); f.engine.dispose();
+    if (legacy) { const s = f.saved(); delete s.runs[0].budgetMonoMs; delete s.runs[0].budgetAt; f.store.write(s); }
+    at += 86400000; mono = 10;
+    const e = new RegularPopup({ ...options, store: f.store, permitted: true, readSource: async () => candidates }); await e.tick();
+    assert.equal(calls, 1); assert.equal(e.status().runs[0].state, 'budget'); e.dispose();
+  }
+});
+test('a full elapsed 24 hours permits the next day without erasing history', async () => {
+  let at = day, mono = 1000, calls = 0;
+  const f = fixture({ now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } });
+  enable(f); await f.engine.tick(); at += 86400000; mono += 86400000; await f.engine.tick();
+  assert.equal(calls, 2); assert.equal(f.saved().runs.length, 2); f.engine.dispose();
+});
+test('wall-clock rollback to an unvisited source day cannot reset recent spending', async () => {
+  let at = day, mono = 1000, calls = 0;
+  const f = fixture({ now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: 7000 }; } });
+  enable(f); await f.engine.tick(); at -= 86400000; mono += 1000; await f.engine.tick();
+  assert.equal(calls, 1); assert.equal(f.saved().runs[0].state, 'budget'); f.engine.dispose();
+});
+test('a cheap prior-day call does not block a new day when both fit the rolling cap', async () => {
+  let at = new Date(2026, 10, 18, 23, 59).getTime(), mono = 1000, calls = 0;
+  const f = fixture({ now: () => at, monotonicNow: () => mono, select: async () => { calls++; return { picks: [], costMicros: calls === 1 ? 3000 : 7000 }; } });
+  f.engine.configure({ enabled: true, concern: 'Budget positive control', time: '00:00' }); await f.engine.tick();
+  at += 3 * 60000; mono += 3 * 60000; await f.engine.tick();
+  assert.equal(calls, 2); assert.equal(f.saved().runs.reduce((n, r) => n + r.chargedMicros, 0), DAILY_MICROS); f.engine.dispose();
+});
 test('storage refusal is fail closed and never selects', async () => {
   const f = fixture({ store: { read() { throw Error('untrusted file'); }, write() { assert.fail(); } } });
   assert.equal(f.engine.status().error, 'storage-unavailable'); await f.engine.tick(); assert.equal(f.stats().reads, 0); f.engine.dispose();

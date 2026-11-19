@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), { randomUUID } = require('node:crypto');
 const DAILY_MICROS = 10000, RESERVE_MICROS = 7000, MAX_BYTES = 1024 * 1024;
+const BUDGET_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SOURCE = 'https://github.com/trending';
 const STATES = ['fetching', 'generating', 'ready', 'source-failed', 'unconfirmed', 'budget', 'daily-limit', 'cancelled'];
 const copy = value => structuredClone(value);
@@ -15,7 +16,7 @@ function emptyState() { return { version: 1, revision: 0, config: { enabled: fal
 function validConfig(c) { return known(c, ['enabled', 'concern', 'time']) && typeof c.enabled === 'boolean' && text(c.concern, 200) && typeof c.time === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(c.time) && (!c.enabled || c.concern.trim().length > 0); }
 function validState(s) {
   return known(s, ['version', 'revision', 'config', 'runs']) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(r =>
-    known(r, ['id', 'day', 'budgetDay', 'at', 'state', 'chargedMicros', 'attempted', 'items']) && text(r.id, 80) && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && /^\d{4}-\d{2}-\d{2}$/.test(r.budgetDay) && Number.isSafeInteger(r.at) && STATES.includes(r.state) && Number.isSafeInteger(r.chargedMicros) && r.chargedMicros >= 0 && r.chargedMicros <= DAILY_MICROS && typeof r.attempted === 'boolean' && Array.isArray(r.items) && r.items.length <= 3 && r.items.every(i =>
+    known(r, ['id', 'day', 'budgetDay', 'budgetAt', 'budgetMonoMs', 'at', 'state', 'chargedMicros', 'attempted', 'items']) && text(r.id, 80) && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && /^\d{4}-\d{2}-\d{2}$/.test(r.budgetDay) && ['budgetAt', 'budgetMonoMs'].every(k => r[k] === undefined || Number.isSafeInteger(r[k]) && r[k] >= 0) && Number.isSafeInteger(r.at) && STATES.includes(r.state) && Number.isSafeInteger(r.chargedMicros) && r.chargedMicros >= 0 && r.chargedMicros <= DAILY_MICROS && typeof r.attempted === 'boolean' && Array.isArray(r.items) && r.items.length <= 3 && r.items.every(i =>
       known(i, ['id', 'title', 'url', 'why', 'read', 'ignored']) && text(i.id, 60) && text(i.title, 140) && validUrl(i.url) && text(i.why, 240) && typeof i.read === 'boolean' && typeof i.ignored === 'boolean'));
 }
 class FileStore {
@@ -34,11 +35,16 @@ class FileStore {
   }
 }
 class RegularPopup {
-  constructor({ directory, store, now = Date.now, permitted = false, readSource, select, notify = () => {}, changed = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ directory, store, now = Date.now, monotonicNow = () => Number(process.hrtime.bigint() / 1000000n), permitted = false, readSource, select, notify = () => {}, changed = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store || new FileStore(directory); this.now = now; this.permitted = permitted === true && typeof readSource === 'function' && typeof select === 'function';
-    this.readSource = readSource; this.select = select; this.notify = notify; this.changed = changed; this.setTimer = setTimer; this.clearTimer = clearTimer;
+    this.readSource = readSource; this.select = select; this.notify = notify; this.changed = changed; this.setTimer = setTimer; this.clearTimer = clearTimer; this.monotonicNow = monotonicNow;
     this.active = false; this.closed = false; this.timer = null; this.flight = null; this.abort = null; this.error = null;
-    try { const loaded = this.store.read(); this.data = loaded === null ? emptyState() : loaded; if (!validState(this.data)) throw Error('storage-unavailable'); this.data = copy(this.data); }
+    try {
+      const loaded = this.store.read(); this.data = loaded === null ? emptyState() : loaded; if (!validState(this.data)) throw Error('storage-unavailable'); this.data = copy(this.data);
+      const mono = this.monotonicNow(); if (!Number.isSafeInteger(mono) || mono < 0) throw Error();
+      // Legacy or reset clocks cannot prove debt expiry; retain it for another full elapsed day.
+      for (const r of this.data.runs) if (r.chargedMicros > 0 && (r.budgetMonoMs === undefined || r.budgetMonoMs > mono)) r.budgetMonoMs = mono;
+    }
     catch { this.data = emptyState(); this.error = 'storage-unavailable'; }
   }
   status() {
@@ -86,11 +92,19 @@ class RegularPopup {
     let resolve, reject; const flight = new Promise((a, b) => { resolve = a; reject = b; }); this.flight = flight;
     this.run().then(value => { this.flight = null; resolve(value); }, error => { this.flight = null; reject(error); }); return flight;
   }
+  budgetWindow(at = this.now()) {
+    const mono = this.monotonicNow();
+    if (!Number.isSafeInteger(at) || at < 0 || !Number.isSafeInteger(mono) || mono < 0) throw Error('clock-unavailable');
+    // Local calendar day for accounting; elapsed 24h additionally prevents timezone/wall-clock resets.
+    const budgetDay = dateKey(new Date(at)), recent = this.data.runs.filter(r => r.budgetDay === budgetDay || r.chargedMicros > 0 && (r.budgetMonoMs === undefined || mono - r.budgetMonoMs < BUDGET_WINDOW_MS));
+    const spent = recent.reduce((n, r) => n + r.chargedMicros, 0);
+    const limited = spent + RESERVE_MICROS > DAILY_MICROS ? 'budget' : recent.some(r => r.budgetDay === budgetDay && r.attempted) ? 'daily-limit' : null;
+    return { budgetDay, budgetAt: at, budgetMonoMs: mono, limited };
+  }
   async run() {
-    const at = this.now(), day = this.due(at), budgetDay = dateKey(new Date(at));
+    const at = this.now(), day = this.due(at);
     if (this.data.runs.some(r => r.day === day)) return this.status();
-    const spent = this.data.runs.filter(r => r.budgetDay === budgetDay).reduce((n, r) => n + r.chargedMicros, 0);
-    const limited = spent + RESERVE_MICROS > DAILY_MICROS ? 'budget' : this.data.runs.some(r => r.budgetDay === budgetDay && r.attempted) ? 'daily-limit' : null;
+    const { budgetDay, limited } = this.budgetWindow(at);
     const record = { id: randomUUID(), day, budgetDay, at, state: limited || 'fetching', chargedMicros: 0, attempted: false, items: [] };
     const next = copy(this.data); next.runs.unshift(record); this.save(next);
     if (limited) return this.status();
@@ -107,7 +121,9 @@ class RegularPopup {
     if (!source.length) return finish('ready');
     const payload = { concern, candidates: source.map(i => ({ id: i.id, title: i.title, description: i.description })) };
     if (Buffer.byteLength(JSON.stringify(payload)) > 16384) return finish('source-failed');
-    finish('generating', { chargedMicros: RESERVE_MICROS, attempted: true });
+    const budget = this.budgetWindow(), { limited: blocked, ...stamp } = budget;
+    if (blocked) return finish(blocked, stamp);
+    finish('generating', { ...stamp, chargedMicros: RESERVE_MICROS, attempted: true });
     if (!current()) return finish('cancelled');
     let result;
     try { result = await this.select(copy(payload), { signal: this.abort.signal }); }
