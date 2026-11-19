@@ -43,11 +43,15 @@ test('the real renderer intake only passes task-board fields and a waiting flag'
   const q = task('sent', 'safe', { sentTo: 'actual', assignee: 'requested', reason: '', finishedAt: now, wait, unused: 'NOT_FOR_TASK_BOARD' });
   const r = room([q]), s = { id: 'actual', name: 'Actual' };
   for (const [o, k] of [[r, 'messages'], [s, 'messages'], [q, 'reply']]) Object.defineProperty(o, k, { enumerable: true, get() { throw Error('Conversation access forbidden'); } });
+  const card = { key: 'actor:native:operation', id: 'message', operationId: 'operation', sessionId: 'actor', nativeId: 'native', state: 'confirmation-required', actionable: true, expiresAt: now + 100000 };
+  for (const key of ['message', 'summary', 'arguments', 'guard']) Object.defineProperty(card, key, { get() { throw Error('Confirmation body access forbidden'); } });
   let input;
-  const context = vm.createContext({ state: { sessions: [s] }, disconnected: false, spaceId: r.id,
+  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js') }, state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
     allSpaces: () => [r, { id: 'missing', unavailable: true }], spaceName: value => value.name,
     taskBoard: { update(value) { input = value; } } });
   vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
+  assert.equal(input.confirmations[0].expiresAt, card.expiresAt);
+  assert.equal(Object.hasOwn(input.confirmations[0], 'message'), false);
   const projected = input.rooms[0].queue[0];
   assert.notEqual(input.rooms[0].queue, r.queue); assert.notEqual(projected, q);
   assert.deepEqual(Object.keys(projected).sort(), ['assignee', 'finishedAt', 'id', 'reason', 'sentTo', 'status', 'text', 'waiting']);

@@ -13,7 +13,8 @@ function clock() {
   // The clock with the state it keeps just above it (an older renderer has the clock alone).
   const start = source.includes('let staleStatusKeys') ? source.indexOf('let staleStatusKeys') : at;
   assert.ok(fresh && at > 0 && end > at && start <= at);
-  const context = { now: 1_000_000, renders: 0, refreshed: 0, tick: null, selected: '', state: null, roomOverview: null, panorama: null };
+  const context = { now: 1_000_000, renders: 0, refreshed: 0, tick: null, selected: '', state: null, roomOverview: null, panorama: null, statusTicks: 0 };
+  context.taskBoard = { tick() { context.statusTicks++; } };
   context.Date = { now: () => context.now };
   context.setInterval = fn => { context.tick = fn; return 1; };
   context.render = () => { context.renders++; };

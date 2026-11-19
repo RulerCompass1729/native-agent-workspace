@@ -1,8 +1,9 @@
 // Design B: a shared record beside the member view, and the same confirmation
 // cards above every view. Reads existing state; never creates a model call.
 (function (root) {
+  const waitingCount = items => items.filter(item => item.kind !== 'background-confirmation').length;
   function waitingLabel(items, text) {
-    const confirmations = items.filter(item => item.kind === 'background-confirmation').length, other = items.length - confirmations;
+    const other = waitingCount(items), confirmations = items.length - other;
     return [confirmations ? text(confirmations === 1 ? 'confirmation' : 'confirmations', { count: confirmations }) : '', other ? text('waiting', { count: other }) : ''].filter(Boolean).join(' · ');
   }
   function bind(host) {
@@ -43,6 +44,7 @@
     function drawWaiting() {
       const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations,
         butlerId: state()?.steward?.sessionId, roomOf, nameOf });
+      host.waitingChanged?.(waitingCount(items));
       const questionState = items.filter(i => i.kind === 'question').map(i => {
         const s = sessions().find(s => s.id === i.sessionId);
         return [s?.nativeId, s?.owner, s?.state, s?.approvalOverflow, s?.serviceCapabilities, state()?.capabilities];
@@ -175,5 +177,5 @@
     doc.addEventListener('pointerdown', e => { if (waitingOpen && !strip.contains(e.target)) { waitingOpen = false; drawWaiting(); } });
     return { render, open, toggle(roomId) { if (openRoom === roomId) { openRoom = ''; render(); host.toggleChanged(); } else open(roomId); } };
   }
-  root.nativeWorkspaceActivityStream = { bind, waitingLabel };
+  root.nativeWorkspaceActivityStream = { bind, waitingLabel, waitingCount };
 })(globalThis);
