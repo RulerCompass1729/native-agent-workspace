@@ -6,6 +6,7 @@
   'use strict';
   function bind({ button, badge, dialog, document, api, text, display, summaryText = summary => summary.method || '', confirmation = async () => false, now = Date.now }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
+    const disclosure = global.nativeWorkspaceDisclosure || require('./disclosure-list.js');
     const format = text || ((key, params) => locale.format('zh', key, params));
     const say = (el, key, params) => { if (display) display.text(el, key, params); else el.textContent = format(key, params); return el; };
     const make = (tag, cls, key, params) => { const el = document.createElement(tag); if (cls) el.className = cls; if (key) say(el, key, params); return el; };
@@ -16,6 +17,13 @@
     const tempSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 ** 2 ? `${Math.floor(bytes / 1024)} KiB` : bytes < 1024 ** 3 ? `${(Math.floor(bytes / 1024 ** 2 * 10) / 10).toFixed(1)} MiB` : `${(Math.floor(bytes / 1024 ** 3 * 10) / 10).toFixed(1)} GiB`;
     let current = null, ticket = 0, lastResult = null, working = false, cleanupFailed = false;
     let filter = 'pending', clock = null, clockRows = [], disposed = false, navigationFailed = false;
+    // The latest 15 confirmations, earlier ones brought in above them; one still waiting for the person is always listed.
+    let confirmationsShown = disclosure.PAGE;
+    const earlier = disclosure.pager({ document, say: (el, key, params) => display ? display.text(el, key, params) : (el.textContent = format(key, params())), onMore: () => {
+      const before = new Set(focusTargets.keys());
+      confirmationsShown += disclosure.PAGE; draw();
+      [...focusTargets].find(([key]) => key.startsWith('confirmation:') && !before.has(key))?.[1].focus?.();
+    } });
     const expiryRequested = new Set();
     function stopClock() { clearTimeout(clock); clock = null; }
     function updateTimes() {
@@ -44,12 +52,15 @@
       section.append(make('h3', '', 'records.confirmations.title'));
       const filters = make('div', 'records-actions'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', format('records.confirmations.filters'));
       for (const value of ['pending', 'all']) {
-        const tab = control('records.confirmations.' + value, value === 'pending' ? 'pendingConfirmations' : 'allConfirmations', () => { filter = value; draw(); });
+        const tab = control('records.confirmations.' + value, value === 'pending' ? 'pendingConfirmations' : 'allConfirmations', () => { filter = value; confirmationsShown = disclosure.PAGE; draw(); });
         if (filter === value) tab.className = 'primary';
         tab.setAttribute('aria-pressed', String(filter === value)); filters.append(tab);
       }
       section.append(filters);
-      const rows = (current.confirmations || []).filter(row => filter === 'all' || row.actionable === true);
+      const all = (current.confirmations || []).filter(row => filter === 'all' || row.actionable === true);
+      all.sort((a, b) => (a.time || 0) - (b.time || 0));
+      const settled = all.filter(row => row.actionable !== true), from = Math.max(0, settled.length - confirmationsShown);
+      const hidden = new Set(settled.slice(0, from)), rows = all.filter(row => !hidden.has(row));
       const list = make('ul', 'records-confirmations');
       for (const row of rows) {
         const li = make('li'), key = row.key || [row.sessionId, row.nativeId, row.operationId].join(':');
@@ -78,7 +89,8 @@
         li.append(link); list.append(li);
       }
       if (!rows.length) section.append(make('p', 'records-empty', filter === 'all' ? 'records.confirmations.emptyAll' : current.count === 0 && !current.confirmations.length ? 'records.nothing' : 'records.confirmations.empty'));
-      section.append(list); return section;
+      earlier.show({ count: Math.min(disclosure.PAGE, from), total: all.length, shown: rows.length });
+      section.append(earlier.button, list, earlier.status); return section;
     }
 
     // The original bell position remains available even when no reminder is due.
@@ -226,7 +238,7 @@
       }
       dialog.append(list, where, status, about, actions); update();
     }
-    async function open() { await refresh(true); if (disposed) return; draw(); if (!dialog.open) dialog.showModal(); armClock(); }
+    async function open() { await refresh(true); if (disposed) return; confirmationsShown = disclosure.PAGE; draw(); if (!dialog.open) dialog.showModal(); armClock(); }
     const click = () => { void open(); };
     const onClose = () => { stopClock(); clockRows = []; expiryRequested.clear(); dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; navigationFailed = false; filter = 'pending'; };
     button.addEventListener('click', click);

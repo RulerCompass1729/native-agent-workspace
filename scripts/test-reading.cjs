@@ -38,7 +38,7 @@ const historical = () => page.locator('#messages [data-message-id="history-40"]'
 // reads stays put. Reading position is measured where record 40's first paragraph sits in the reader; both readings must exist.
 const anchorTop = () => page.evaluate(() => { const el = document.querySelector('#messages [data-message-id="history-40"] .message-body p'); return el ? el.getBoundingClientRect().top - document.getElementById('messages').getBoundingClientRect().top : null; });
 const same = (a, b) => a !== null && b !== null && Math.abs(a - b) < 3;
-// T-148: the conversation is paged. A record not on the shown page opens with 显示更早的记录 or 显示较新的记录.
+// T-148: the conversation is paged. A record not on the shown page opens with 显示更早的 N 条 or 显示较新的 N 条.
 async function showRecord(locator, n) {
   for (let i = 0; i < 60 && !(await locator.count()); i++) {
     const shown = await page.locator('#messages [data-message-id^="history-"]').evaluateAll(els => els.map(el => Number(el.dataset.messageId.slice(8))));

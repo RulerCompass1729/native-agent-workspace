@@ -16,3 +16,17 @@ test('midnight refresh only resets finished outcomes',()=>{const f=setup();f.inp
 test('dispose detaches contents, observers and listeners without a countdown lease',()=>{const f=setup();f.board.dispose();assert.equal(f.host.children.length,0);assert.equal(f.timers.size,0);assert.equal(f.win.listeners.get('resize')?.size||0,0);assert.equal(f.doc.listeners.get('visibilitychange')?.size||0,0);f.advance(1000);});
 
 test('the card link delegates only its stable identity to the existing confirmation path',()=>{const f=setup();let opened;f.board.dispose();f.board=board.bind({host:f.host,document:f.doc,text:(k,p)=>locale.format('zh',k,p),onQueue(){},onConfirmation:r=>opened=r,now:f.now});f.input.confirmations=[{key:'actor:native:operation',id:'message',sessionId:'actor',nativeId:'native',operationId:'operation',state:'confirmation-required',actionable:true,expiresAt:f.now()+100000}];f.board.update(f.input);f.board.open();f.host.querySelector('.task-board-full').fire('click');const group=f.host.querySelector('[data-group-key="@confirmations"]');group.open=true;group.querySelector('.task-board-card-link').fire('click');assert.deepEqual(opened,{sessionId:'actor',nativeId:'native',operationId:'operation',messageId:'message',history:true});assert.equal(f.host.querySelector('.task-board-panel').matches(':popover-open'),false);f.board.dispose();});
+
+test('a group\'s more button says how many a press brings and how many the group holds',()=>{
+ for(const lang of ['zh','en']){
+  const f=setup(lang),format=(k,p)=>locale.format(lang,k,p);
+  f.input.rooms[0].queue.push(...Array.from({length:7},(_,i)=>({id:'queued'+i,status:'queued',text:'Synthetic queued '+i})));f.board.update(f.input);
+  f.board.open();f.host.querySelector('.task-board-full').fire('click');
+  const group=f.host.querySelector('.task-board-group'),more=group.querySelector('.task-board-more'),rows=()=>group.querySelectorAll('.task-board-task').length;
+  assert.deepEqual([rows(),more.textContent],[3,format('taskBoard.more',{count:3,total:9})]);
+  more.fire('click');assert.deepEqual([rows(),more.textContent],[6,format('taskBoard.more',{count:3,total:9})]);
+  more.fire('click');assert.deepEqual([rows(),more.textContent,more.getAttribute('aria-disabled')],[9,format('taskBoard.allShown'),'true']);
+  f.board.dispose();
+ }
+ assert.equal(locale.format('zh','taskBoard.more',{count:3,total:9}),'再显示 3 条 · 共 9 条');
+});

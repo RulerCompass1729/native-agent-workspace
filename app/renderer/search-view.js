@@ -55,7 +55,8 @@ async function renderSearch() {
   ui.display.computed($('search-options-summary'), 'text', () => [uiText({ all: 'search.allRecords', current: 'search.current', room: 'search.shared' }[$('search-scope').value] || 'search.allRecords'), $('search-archived').checked && uiText('search.includeArchived')].filter(Boolean).join(' · '));
   $('search-more').hidden = total <= searchLimit;
   $('search-more').disabled = searchLimit >= 600;
-  ui.display.text($('search-more'), searchLimit >= 600 ? 'search.narrow' : 'common.more');
+  if (searchLimit >= 600) ui.display.text($('search-more'), 'search.narrow');
+  else ui.display.text($('search-more'), 'disclosure.more', () => ({ count: Math.min(60, total - searchLimit), total }));
   if (!total) { const label = node('p', undefined, 'quiet'); ui.display.text(label, 'search.emptyHelp'); list.append(label); }
   return true;
 }

@@ -80,7 +80,7 @@
     "taskBoard.reasonInQueue": "等待或异常原因见原空间队列。",
     "taskBoard.items": "{count} 项",
     "taskBoard.shown": "已显示 {shown}/{total} 项",
-    "taskBoard.more": "再显示 {count} 条 · 余 {left}",
+    "taskBoard.more": "再显示 {count} 条 · 共 {total} 条",
     "taskBoard.allShown": "已全部显示",
     "taskBoard.status.sent": "已派出",
     "taskBoard.status.queued": "待派",
@@ -1101,8 +1101,7 @@
     "reading.copyAction": "\u590d\u5236\uff1a{label}",
     "reading.shareAction": "\u9009\u62e9\u5e76\u5206\u4eab\uff1a{label}",
     "reading.records": "\u4f1a\u8bdd\u8bb0\u5f55",
-    "reading.older": "\u663e\u793a\u66f4\u65e9\u7684\u8bb0\u5f55",
-    "reading.newer": "\u663e\u793a\u8f83\u65b0\u7684\u8bb0\u5f55",
+    "reading.newer": "显示较新的 {count} 条 · 共 {total} 条",
     "reading.latest": "\u2193 \u8df3\u5230\u6700\u65b0",
     "reading.unknownTime": "\u65f6\u95f4\u672a\u8bb0\u5f55",
     "reading.share": "\u9009\u62e9\u5e76\u5206\u4eab",
@@ -3622,8 +3621,8 @@
     "butler.reads.unreadable": "有 {count} 条记录这一版看不懂，没有显示。",
     "butler.reads.gap": "第 {from}–{through} 条（UTC {days}，共 {count} 条）现在读不到：这一块不见了、和记录清单对不上，或已损坏。NAW 没有动它，其他记录照常显示。",
     "butler.reads.gapDeleted": "第 {from}–{through} 条（UTC {days}，共 {count} 条）已由你在 {when} 删除，删除前已导出并核对。这几天读过的页仍算在每天的上限里。",
-    "butler.reads.olderFailed": "更早的记录现在读不到；上面是已经读到的。可以再点「更早的记录」试一次。",
-    "butler.reads.older": "更早的记录",
+    "butler.reads.olderFailed": "更早的记录现在读不到；上面是已经读到的。可以再点「显示更早的记录」试一次。",
+    "butler.reads.older": "显示更早的记录",
     "butler.reads.refresh": "刷新",
     "butler.reads.retry": "再读一次",
     "error.dsh.keyMissing": "还没有给 DSH 用的 DeepSeek key：请先在钥匙串里新建项目「NAW DSH TUI DeepSeek API key」（账户 deepseek），再新建会话。",
@@ -3636,7 +3635,8 @@
     "notice.activity.dshEgressBlocked": "外联被拦：{target}；会话已停止",
     "notice.activity.dshWitnessLost": "沙盒拦截记录中断；会话已停止",
     "disclosure.older": "显示更早的 {count} 条 · 共 {total} 条",
-    "disclosure.shown": "已显示 {shown}/{total} 条"
+    "disclosure.shown": "已显示 {shown}/{total} 条",
+    "disclosure.more": "再显示 {count} 条 · 共 {total} 条"
   },
   "en": {
     "taskBoard.title": "Task board",
@@ -3717,7 +3717,7 @@
     "taskBoard.reasonInQueue": "See the original space queue for the wait or failure reason.",
     "taskBoard.items": "{count} tasks",
     "taskBoard.shown": "Showing {shown}/{total}",
-    "taskBoard.more": "Show {count} more · {left} left",
+    "taskBoard.more": "Show {count} more · {total} in all",
     "taskBoard.allShown": "All shown",
     "taskBoard.status.sent": "Sent",
     "taskBoard.status.queued": "Queued",
@@ -4738,8 +4738,7 @@
     "reading.copyAction": "Copy: {label}",
     "reading.shareAction": "Select and share: {label}",
     "reading.records": "Conversation records",
-    "reading.older": "Show earlier records",
-    "reading.newer": "Show newer records",
+    "reading.newer": "Show {count} newer · {total} in all",
     "reading.latest": "\u2193 Jump to latest",
     "reading.unknownTime": "Time not recorded",
     "reading.share": "Select and share",
@@ -7259,8 +7258,8 @@
     "butler.reads.unreadable": "{count} records are not understood by this version and are not shown.",
     "butler.reads.gap": "Records {from}\u2013{through} (UTC {days}, {count} in all) cannot be read now: their block is missing, does not match the log\u2019s manifest, or is damaged. NAW has not touched it; the other records are shown as usual.",
     "butler.reads.gapDeleted": "Records {from}–{through} (UTC {days}, {count} in all) were deleted by you at {when}, after they were exported and checked. Pages read on those days still count toward the daily limit.",
-    "butler.reads.olderFailed": "Earlier records cannot be read right now; what was read is above. You can choose Earlier records again.",
-    "butler.reads.older": "Earlier records",
+    "butler.reads.olderFailed": "Earlier records cannot be read right now; what was read is above. You can choose Show earlier records again.",
+    "butler.reads.older": "Show earlier records",
     "butler.reads.refresh": "Refresh",
     "butler.reads.retry": "Read again",
     "error.dsh.keyMissing": "No DeepSeek key for DSH yet. Add the Keychain item “NAW DSH TUI DeepSeek API key” (account deepseek), then create the session again.",
@@ -7273,7 +7272,8 @@
     "notice.activity.dshEgressBlocked": "Blocked a connection to {target}; the session was stopped",
     "notice.activity.dshWitnessLost": "The sandbox refusal record stopped; the session was stopped",
     "disclosure.older": "Show {count} earlier · {total} in all",
-    "disclosure.shown": "{shown} of {total} shown"
+    "disclosure.shown": "{shown} of {total} shown",
+    "disclosure.more": "Show {count} more · {total} in all"
   }
 };
   Object.freeze(messages.zh); Object.freeze(messages.en); Object.freeze(messages);

@@ -6140,30 +6140,43 @@ $('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminal
 $('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 13; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
 $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
 let filePreview = null, fileTarget = null, fileChoosing = false, filesSpace = '';
+// The first 15 files in the order they were added; each press brings the next 15 below them.
+let spaceFilesShown = 15, spaceFilesPager = null;
 function openSpaceFiles() {
-  filesSpace = spaceId; $('space-files-list').dataset.signature = ''; renderSpaceFiles(); openTransientDialog('space-files-dialog');
+  filesSpace = spaceId; spaceFilesShown = 15; $('space-files-list').dataset.signature = ''; renderSpaceFiles(); openTransientDialog('space-files-dialog');
 }
 function renderSpaceFiles() {
   if (!filesSpace) return;
   const room = spaceRecord(filesSpace); if (!room) return;
   ui.display.text($('space-files-title'), 'files.titleName', () => ({ name: spaceName(room) }));
   $('add-space-files').disabled = disconnected || room.archived;
-  const signature = JSON.stringify(room.files || []), list = $('space-files-list');
+  const files = room.files || [], shown = files.slice(0, spaceFilesShown);
+  const signature = JSON.stringify([files, spaceFilesShown]), list = $('space-files-list');
   if (list.dataset.signature !== signature) {
     list.dataset.signature = signature;
-    list.replaceChildren(...(room.files || []).map(file => {
+    list.replaceChildren(...shown.map(file => {
       const row = node('div', undefined, 'space-file-row'), open = button(file.name, async () => { $('space-files-dialog').close(); if (spaceId !== filesSpace) await selectSpace(filesSpace); await openLocalFile(true, file.id); }); open.title = file.path;
       const remove = uiButton('files.remove', async () => { await api.spaceAction(filesSpace, 'removeFile', [file.id, remove.fileRevision]); updateState(await api.initial()); renderSpaceFiles(); });
       row.append(open, remove); return row;
     }));
     if (!list.children.length) list.append(uiNode('p', 'files.empty', undefined, 'quiet'));
   }
-  for (const [index, file] of (room.files || []).entries()) {
+  for (const [index, file] of shown.entries()) {
     const remove = list.children[index].lastElementChild;
     remove.disabled = room.archived;
     remove.fileRevision = room.metadataRevision;
     ui.display.attribute(remove, 'aria-label', 'files.removeAction', () => ({ space: spaceName(room), file: file.name }));
   }
+  if (!spaceFilesPager) {
+    spaceFilesPager = window.nativeWorkspaceDisclosure.pager({ document, key: 'disclosure.more', say: (el, key, params) => ui.display.text(el, key, params), onMore: () => {
+      const first = spaceFilesShown;
+      spaceFilesShown += 15;
+      renderSpaceFiles();
+      $('space-files-list').children[first]?.firstElementChild?.focus();
+    } });
+    list.after(spaceFilesPager.button, spaceFilesPager.status);
+  }
+  spaceFilesPager.show({ count: Math.min(15, files.length - shown.length), total: files.length, shown: shown.length });
 }
 $('close-space-files').onclick = () => $('space-files-dialog').close();
 $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace; await api.spaceFiles(id); updateState(await api.initial()); if (filesSpace === id) renderSpaceFiles(); });

@@ -5,8 +5,9 @@
   'use strict';
   const PAGE = 15;
 
-  // The button that brings the next earlier items, and the count read out after each press.
-  function pager({ document, say, onMore }) {
+  // The button that brings the next earlier items, and the count read out after each press. A list that is not in time
+  // order (files, search results) says 'disclosure.more' instead of 'disclosure.older'.
+  function pager({ document, say, onMore, key = 'disclosure.older' }) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'disclosure-more';
@@ -30,7 +31,7 @@
     function show({ count, total, shown }) {
       Object.assign(counts, { count, total, shown });
       button.hidden = count <= 0;
-      say(button, 'disclosure.older', () => ({ count: counts.count, total: counts.total }));
+      say(button, key, () => ({ count: counts.count, total: counts.total }));
       say(status, 'disclosure.shown', () => ({ shown: counts.shown, total: counts.total }));
     }
     return { button, status, show };

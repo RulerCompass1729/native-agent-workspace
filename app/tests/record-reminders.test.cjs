@@ -104,6 +104,7 @@ class Element {
   showModal() { if (this.open) throw Error('already open'); this.open = true; }
   close() { if (!this.open) return; this.open = false; this.fire('close'); }
   all() { return [this, ...this.children.flatMap(child => child.all())]; }
+  focus() { Element.focused = this; }
 }
 function page(t, dir, now = NOW, options = {}) {
   const document = { createElement: tag => new Element(tag) }, button = new Element('button'), badge = new Element('span'), dialog = new Element('dialog'), calls = [];
@@ -263,6 +264,34 @@ test('confirmations lead the bell, All includes ended cards, and a row only navi
  await p.find('allConfirmations').fire('click');assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,2);
  await p.find('openConfirmation').fire('click');assert.deepEqual(p.navigated,[{sessionId:'requester',nativeId:'old-native',messageId:card.id,operationId:card.operationId,history:true}]);
  assert.equal(p.dialog.open,false);assert.ok(p.calls.every(c=>c[0]==='status'),'No decision, terminal input, cleanup or acknowledgement from filtering/navigation');
+});
+
+
+test('All lists the latest 15 ended confirmations with the waiting one kept, and brings 15 earlier at a time above them', async t => {
+  const p = page(t, folder(t));
+  const card = n => ({ id: 'original-' + n, key: 'a:n:op-' + n, sessionId: 'a', nativeId: 'n', operationId: 'op-' + n, actorName: 'A', targetName: 'B', summary: { action: 'input' },
+    state: 'not-executed', disposition: 'expired', actionable: false, time: NOW - (40 - n) * 60000, expiresAt: NOW });
+  const waiting = { ...card(99), id: 'original-waiting', key: 'a:n:op-waiting', state: 'confirmation-required', disposition: undefined, actionable: true, time: NOW - 3600000, expiresAt: NOW + 600000 };
+  p.status({ count: 1, confirmationCount: 1, confirmations: [...Array.from({ length: 40 }, (_, n) => card(n)), waiting] });
+  const links = () => p.dialog.all().filter(n => n.dataset.action === 'openConfirmation').map(n => n.dataset.confirmationKey);
+  const more = () => p.dialog.all().find(n => n.className === 'disclosure-more');
+  const status = () => p.dialog.all().find(n => n.className === 'disclosure-status');
+  await p.view.open();
+  assert.deepEqual([links(), more().hidden], [['a:n:op-waiting'], true], 'Waiting only: nothing earlier to bring');
+  await p.find('allConfirmations').fire('click');
+  assert.deepEqual(links(), ['a:n:op-waiting', ...Array.from({ length: 15 }, (_, n) => 'a:n:op-' + (25 + n))], 'The waiting card stays, then the latest 15 in time order');
+  assert.deepEqual([more().hidden, more().textContent, status().attributes.role, status().textContent],
+    [false, zh('disclosure.older', { count: 15, total: 41 }), 'status', zh('disclosure.shown', { shown: 16, total: 41 })]);
+  assert.ok(p.dialog.all().indexOf(more()) < p.dialog.all().findIndex(n => n.dataset.action === 'openConfirmation'), 'Earlier ones appear above');
+  await more().fire('click');
+  assert.equal(links().length, 31);
+  assert.equal(Element.focused?.dataset.confirmationKey, 'a:n:op-10', 'Focus goes to the first card that appeared');
+  assert.deepEqual([more().textContent, status().textContent], [zh('disclosure.older', { count: 10, total: 41 }), zh('disclosure.shown', { shown: 31, total: 41 })]);
+  await more().fire('click');
+  assert.deepEqual([links().length, more().hidden, status().textContent], [41, true, zh('disclosure.shown', { shown: 41, total: 41 })]);
+  await p.find('pendingConfirmations').fire('click'); await p.find('allConfirmations').fire('click');
+  assert.equal(links().length, 16, 'Switching filters starts again from the latest 15');
+  assert.ok(p.calls.every(c => c[0] === 'status'), 'Paging reads nothing new and decides nothing');
 });
 
 

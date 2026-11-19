@@ -394,9 +394,9 @@ function readingView(el, key, room = false) {
     if (!el.hasAttribute('role')) el.setAttribute('role', 'region');
     if (!el.hasAttribute('aria-label')) ui.display.attribute(el, 'aria-label', 'reading.records');
     view.older = button('', () => changeReadingPage(view, 'older', true), 'reading-page');
-    ui.display.text(view.older, 'reading.older');
+    ui.display.text(view.older, 'disclosure.older', { count: 0, total: 0 });
     view.newer = button('', () => changeReadingPage(view, 'newer', true), 'reading-page');
-    ui.display.text(view.newer, 'reading.newer');
+    ui.display.text(view.newer, 'reading.newer', { count: 0, total: 0 });
     view.older.dataset.direction = 'older'; view.newer.dataset.direction = 'newer';
     view.jump = button('', () => changeReadingPage(view, 'latest'), 'jump-latest');
     ui.display.text(view.jump, 'reading.latest');
@@ -1160,6 +1160,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     rows.push(label);
   }
   view.older.hidden = !range.start; view.newer.hidden = range.tail;
+  // Each button says how many records it brings and how many there are in all.
+  const step = action => readingPageRange(view.pageData, range, { action });
+  const counts = { older: range.start - step('older').start, newer: step('newer').end - range.end, total: view.pageData.messages.length };
+  ui.display.text(view.older, 'disclosure.older', () => ({ count: counts.older, total: counts.total }));
+  ui.display.text(view.newer, 'reading.newer', () => ({ count: counts.newer, total: counts.total }));
   rows.unshift(view.older); rows.push(view.newer);
   if (!view.jumpSlot) rows.push(view.jumpBar);
   // Do not detach/reinsert unchanged rows: that would destroy live selections.

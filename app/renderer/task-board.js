@@ -285,7 +285,7 @@
         const p = mode === 'space' && data.find(p => p.id === key);
         set(g.empty, f(p && !p.available ? 'unavailable' : p && !p.all.length ? 'empty' : 'noRecords'));
         set(g.count, f('items', { count: value.items.length })); set(g.shown, f('shown', { shown: Math.min(g.limit, value.items.length), total: value.items.length }));
-        const left = Math.max(0, value.items.length - g.limit); set(g.more, left ? f('more', { count: Math.min(g.batch, left), left }) : f('allShown'));
+        const left = Math.max(0, value.items.length - g.limit); set(g.more, left ? f('more', { count: Math.min(g.batch, left), total: value.items.length }) : f('allShown'));
         if (left) g.more.removeAttribute('aria-disabled'); else attr(g.more, 'aria-disabled', 'true');
       }
       for (const [key, g] of groups) if (!wanted.has(key)) { move(g.tasks, []); g.empty.hidden = false; set(g.empty, f('noRecords')); set(g.count, f('items', { count: 0 })); set(g.shown, f('shown', { shown: 0, total: 0 })); set(g.more, f('allShown')); attr(g.more, 'aria-disabled', 'true'); }

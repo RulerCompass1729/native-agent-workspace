@@ -148,6 +148,17 @@ test('legacy process metadata cannot reject or truncate a long original native t
   assert.ok(heading.includes(nativeTitle + ' · Retained-connection record')); assert.equal(f.view.entries.get(rows[0].id).body.textContent, item.text); assert.deepEqual(f.calls, []);
 });
 
+
+test('the conversation pager says how many records a press brings and how many there are, in either language', () => {
+  const rows = count => Array.from({ length: count }, (_, n) => ({ id: 'record-' + n, role: 'user', name: 'SYNTHETIC', text: 'Synthetic record ' + n, time: 1000 + n }));
+  const f = fixture(rows(120));
+  assert.deepEqual([f.view.older.hidden, f.view.older.textContent, f.view.newer.hidden], [false, '显示更早的 50 条 · 共 120 条', true]);
+  f.switch('en');
+  assert.equal(f.view.older.textContent, 'Show 50 earlier · 120 in all');
+  assert.equal(fixture(rows(70)).view.older.textContent, '显示更早的 20 条 · 共 70 条', 'The last press brings only what is left');
+  assert.equal(fixture(rows(50)).view.older.hidden, true, 'Everything already shown');
+});
+
 test('actual messageList changes labels and recorded dates without rerendering original bodies or reader state', async () => {
   const time = new Date(2026, 8, 6, 9, 5).getTime();
   const rows = [
@@ -168,7 +179,7 @@ test('actual messageList changes labels and recorded dates without rerendering o
   assert.equal(answer.body, body); assert.equal(answer.heading, heading); assert.equal(answer.copyText, copy);
   assert.equal(body.textContent, rows[1].text); assert.equal(body.textWrites, writes); assert.equal(f.markdown.length, 1);
   assert.equal(copy.textContent, 'Copy'); assert.equal(copy.getAttribute('aria-label'), 'Copy: reply from Codex');
-  assert.equal(input.heading.firstChild.textContent, 'You'); assert.equal(f.view.older.textContent, 'Show earlier records');
+  assert.equal(input.heading.firstChild.textContent, 'You'); assert.equal(f.view.older.textContent, 'Show 0 earlier · 3 in all');
   assert.notEqual(timeNode.textContent, beforeClock);
   assert.equal(timeNode.dateTime, new Date(time).toISOString());
   assert.ok(timeNode.getAttribute('aria-label').startsWith('Recorded at: '));
@@ -270,6 +281,17 @@ function searchFixture(messages, notes = '') {
   c.openSearch();
   return { ...f, dialog, room, focused, get: id => f.controls.get(id) };
 }
+
+
+test('the search pager says how many more results a press brings and how many there are', async () => {
+  // The fixture's session and its archived space hold the same 50 records: 100 results.
+  const f = searchFixture(Array.from({ length: 50 }, (_, n) => ({ id: 'message-' + n, role: 'assistant', text: 'needle ' + n })));
+  f.get('search-input').value = 'needle'; f.get('search-archived').checked = true;
+  await f.context.renderSearch();
+  assert.deepEqual([f.get('search-more').hidden, f.get('search-more').textContent], [false, '再显示 40 条 · 共 100 条']);
+  f.switch('en');
+  assert.equal(f.get('search-more').textContent, 'Show 40 more · 100 in all');
+});
 
 test('actual local search keeps query, original result nodes and an archived raw preview open while language changes', async () => {
   const raw = 'needle 中文 <native>{status} 复制</native>';

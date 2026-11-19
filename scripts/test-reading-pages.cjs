@@ -163,7 +163,7 @@ async function run() {
   await until(() => host.locator('[data-message-id="page-124"] .message-body').innerText().then(t => t.includes('Updated already-loaded original.')), 'A mounted older record still receives its real update');
   assert.ok(Math.abs(await host.locator('[data-message-id="page-123"]').evaluate(el => el.getBoundingClientRect().top - el.closest('.messages').getBoundingClientRect().top) - targetOffset) < 3);
   await copyOriginal(host, 'page-123', history[123].text);
-  await host.getByRole('button', { name: '显示较新的记录', exact: true }).focus(); await page.keyboard.press('Enter');
+  await host.getByRole('button', { name: /^显示较新的 \d+ 条 · 共 \d+ 条$/ }).focus(); await page.keyboard.press('Enter');
   await until(() => host.locator('article[data-message-id]').count().then(n => n >= 100), 'Newer-page keyboard navigation loads original neighbours');
   assert.equal(await host.evaluate(el => document.activeElement === el), true, 'Paging leaves focus on the named reader, not an offscreen navigation button');
   await page.locator('#return-reading').click();

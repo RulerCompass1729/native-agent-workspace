@@ -106,7 +106,7 @@ async function run() {
   for (let pages = 0; pages < 3; pages++) {
     for (const id of await rendered()) if (expected.has(id)) seen.add(id);
     if (seen.size === expected.size) break;
-    const previous = seen.size; await page.locator('#messages').getByRole('button', { name: '显示更早的记录', exact: true }).click();
+    const previous = seen.size; await page.locator('#messages').getByRole('button', { name: /^显示更早的 \d+ 条 · 共 \d+ 条$/ }).click();
     await until(async () => (await rendered()).filter(id => expected.has(id)).length > previous, 'Explicit older originals loaded');
   }
   assert.deepEqual([...seen].sort(), [...expected].sort(), 'All 105 exact original records remain readable without initial full rendering');
