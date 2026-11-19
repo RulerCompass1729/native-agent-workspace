@@ -11,6 +11,7 @@ function tokens(source) {
     if (/\s/.test(c)) { i++; continue; }
     if (source.startsWith('//', i)) { i += 2; while (i < source.length && !/[\r\n\u2028\u2029]/.test(source[i])) i++; continue; }
     if (source.startsWith('/*', i)) { const end = source.indexOf('*/', i + 2); if (end < 0) unsupported(); i = end + 2; continue; }
+    if (source.startsWith('<!--', i) || source.startsWith('-->', i)) unsupported();
     if (c === "'" || c === '"') {
       const start = ++i;
       while (i < source.length && source[i] !== c) {

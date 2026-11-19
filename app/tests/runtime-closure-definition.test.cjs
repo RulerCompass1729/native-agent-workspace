@@ -1,12 +1,16 @@
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), os = require('node:os'), { createHash } = require('node:crypto');
 const code = process.env.NAW_INSTALL_GATE_TEST_ROOT || path.resolve(__dirname, '../../scripts'), g = require(path.join(code, 'check-install-state.cjs'));
 const helper = require('../../scripts/fixtures/install-runtime.cjs');
-test('F-r8-1: commented old array cannot authenticate a computed extra-file bootstrap', async () => {
+for (const comment of ['block', '<!--', '-->']) test((comment === 'block' ? 'F-r8-1' : 'F-r9-1: ' + comment) + ': commented old array cannot authenticate a computed extra-file bootstrap', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-closure-definition-'))); let live;
   try {
     const f = helper.fixture(root), bootstrap = path.join(f.app, 'app/service-client.cjs'), original = fs.readFileSync(bootstrap, 'utf8');
     const literal = original.match(/const names = (\[[^;\n]+\]);/)[1], count = [...literal.matchAll(/'([^']+)'/g)].length;
-    fs.writeFileSync(bootstrap, original.replace('const names = ' + literal + ';', 'const baseNames = ' + literal + '; /* const names = ' + literal + "; */ const names = baseNames.concat(['extra-runtime.cjs']);"));
+    const replacement = comment === 'block'
+      ? 'const baseNames = ' + literal + '; /* const names = ' + literal + "; */ const names = baseNames.concat(['extra-runtime.cjs']);"
+      : "const replacement = " + literal + ".concat(['extra-runtime.cjs']); globalThis['names'] = replacement;\n" + comment + ' ; const names = ' + literal + ';\n';
+    fs.writeFileSync(bootstrap, original.replace('const names = ' + literal + ';', replacement));
+    require('node:child_process').execFileSync(process.execPath, ['--check', bootstrap], { stdio: 'pipe', timeout: 5000 });
     fs.writeFileSync(path.join(f.app, 'app/daemon.cjs'), "const extra=require('./extra-runtime.cjs');process.on('message',()=>process.send({loaded:{sha:extra.sha||'old'}}));setInterval(()=>{},1000);");
     fs.writeFileSync(path.join(f.app, 'app/extra-runtime.cjs'), 'exports.sha="new";');
     const identity = createHash('sha256').update(f.version);
@@ -26,7 +30,7 @@ test('F-r8-1: commented old array cannot authenticate a computed extra-file boot
       const box = { x: 20, y: 30, width: 640, height: 480 }, before = { profile: f.profile, gui: { pid: 200, started: 'old' }, views: [{ owner: 'view', bounds: box }], windows: [{ id: 1, onScreen: true, bounds: box }], bundle: { version: f.version, revision: 'a'.repeat(40), runtimeHash: g.runtimeClosure(f.app).hash }, backend: result, dsh: { status: 'qualified', digest: 'same-tree' } };
       combinedOk = (await g.post(before, () => ({ ...before, gui: { pid: 201, started: 'new' } }), { version: f.version, revision: 'a'.repeat(40) }, async () => { workerCalls++; }, { minimumMs: 0, quietMs: 0 })).ok;
     }
-    console.log(JSON.stringify({ actualTargetFiles: actualFiles.length, parserFiles: result?.files, actualHash, liveHash: f.runtimeHash, loaded: live.loaded.sha, accepted: Boolean(result), combinedOk, workerCalls, reason }));
+    console.log(JSON.stringify({ comment, actualTargetFiles: actualFiles.length, parserFiles: result?.files, actualHash, liveHash: f.runtimeHash, loaded: live.loaded.sha, accepted: Boolean(result), combinedOk, workerCalls, reason }));
     assert.equal(Boolean(result), false); assert.equal(combinedOk, false); assert.equal(workerCalls, 0); assert.match(reason, /Runtime closure definition unconfirmed/);
   } finally { await live?.close(); fs.rmSync(root, { recursive: true }); }
 });
@@ -81,4 +85,15 @@ test('target source is inspected without executing its top-level side effect', t
   let marker;
   const f = bootstrap(t, (source, root) => { marker = path.join(root, 'must-not-exist'); return 'require("node:fs").writeFileSync(' + JSON.stringify(marker) + ',"executed");\n' + source; });
   assert.equal(g.runtimeClosure(f.app).hash, f.runtimeHash); assert.equal(fs.existsSync(marker), false);
+});
+
+for (const prefix of [
+  'const example = "<!-- -->";',
+  "const example = '<!-- -->';",
+  'const example = `<!-- -->`;',
+  '// <!-- -->',
+  '/* <!-- --> */',
+]) test('HTML markers inside strings or recognized comments preserve the literal closure: ' + prefix, t => {
+  const f = bootstrap(t, source => prefix + '\n' + source), closure = g.runtimeClosure(f.app);
+  assert.deepEqual(closure.files, f.entries); assert.equal(closure.hash, f.runtimeHash);
 });
