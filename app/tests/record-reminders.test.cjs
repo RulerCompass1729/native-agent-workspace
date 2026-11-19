@@ -240,7 +240,14 @@ test('the bell is worked out again when the main process says a record changed, 
   assert.ok(p.text().includes(zh('records.item.unavailable')));
   // The main process: a sealed or added block, or a record not loaded at start, sends the event; nothing polls.
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
-  assert.ok(main.includes("changed: change => { broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },"));
+  const changed = main.match(/changed: change => \{([\s\S]*?)\},\s*confirmationFingerprint:/);
+  assert.ok(changed, 'The BackgroundControl change callback remains present');
+  const callback = changed[1], broadcast = callback.indexOf('broadcastRoom().catch(() => {});'), records = callback.indexOf('recordsChanged(change?.confirmations === true);');
+  assert.ok(broadcast >= 0, 'Record changes still broadcast room state and handle rejection');
+  assert.ok(records >= 0, 'Record changes retain the strict confirmation flag');
+  assert.ok(broadcast < records, 'The original broadcast and records-change order remains');
+  const sync = callback.indexOf('backgroundNotifications?.sync();');
+  assert.ok(sync >= 0 && sync < broadcast && sync < records, 'Notifications sync before both existing change calls');
   assert.ok(main.includes("operationsUnavailable = /history cannot be read/.test(String(error?.message)) ? 'history' : 'other'; recordsChanged(); }"));
   assert.ok(main.includes("for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');"));
   assert.ok(fs.readFileSync(path.join(__dirname, '..', 'preload.cjs'), 'utf8').includes("['onRecordsChanged', 'workspace:records-changed']"));
