@@ -878,7 +878,15 @@ class Workspace extends EventEmitter {
       if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);
       else this.cancelCapacity(s.id);
     });
-    on('nativeQuota', () => { this.cancelCapacity(s.id); this.changed(); });
+    on('nativeQuota', () => {
+      this.cancelCapacity(s.id);
+      const quota = codexQuotaBlock(s), episode = s.rotationEpisode;
+      const waiting = quota && episode?.state === 'open' && episode.nativeId === s.nativeId &&
+        runtime.pending?.tag === episode.tag && runtime.pending?.turnId === quota.turnId;
+      if (waiting) s.rotationEpisode = { ...episode, state: 'waiting-provider', providerBlock: {
+        kind: quota.kind, turnId: quota.turnId, observedAt: quota.observedAt } };
+      this.changed(); if (waiting) this.persist();
+    });
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = s.provider === 'codex' ? processIdentity(runtime.host?.codexProcess?.pid) : null; this.changed(); });
     // Kept with the record: the vendor icon needs it before the session runs again.

@@ -152,7 +152,7 @@ const NOT_SENT_KEYS = [
   NATIVE_DRAFT_KEY,
   'error.room.updatingDraftRetained',
 ];
-const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'waiting-trust', 'failed', 'kept'];
+const ROTATION_PHASES = ['requested', 'creating', 'joining', 'created', 'handed', 'waiting-trust', 'waiting-provider', 'failed', 'kept'];
 // Records that only stop a member from being rotated again for a while.
 const RESTING_PHASES = ['failed', 'kept'];
 // The active backend can start a session with given settings (workspace.cjs createSettings).
@@ -410,6 +410,7 @@ function sessionReady(session, wakePolicy) {
   if (session.wakeDisabled) {
     return { ready: false, reason: 'paused' };
   }
+  if (rotationBlocked(session) && session.rotationEpisode.state === 'waiting-provider') return { ready: false, reason: 'waiting-provider' };
   if (codexQuotaBlock(session)) return { ready: false, reason: 'usage-limit-exceeded' };
   if (rotationBlocked(session)) return { ready: false, reason: 'rotation-control-unresolved' };
   if (session.nativeTerminalDialog) {
@@ -1010,8 +1011,8 @@ function planDispatch(input) {
     const record = rotations[id];
     if (quarantinedSuccessor(record) && record.newId !== id) hold(record.newId, 'trust-hold');
     if (record && !RESTING_PHASES.includes(record.phase)) {
-      rotationSlots -= 1;
-      hold(id, 'rotating');
+      if (record.phase !== 'waiting-provider') rotationSlots -= 1;
+      hold(id, record.phase === 'waiting-provider' ? 'waiting-provider' : 'rotating');
       if (record.newId && !record.handoffConfirmed) {
         hold(record.newId, 'rotating');
       }
@@ -1861,7 +1862,10 @@ function readRotations(file, now, faults = {}) {
       reject(oldId, record); continue;
     }
     if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) { reject(oldId, record); continue; }
-    if (record.episodeEpoch !== undefined && (!validTrustReceipt(record.episodeEpoch) || !['open', 'invalid', 'complete'].includes(record.episodeState))) { reject(oldId, record); continue; }
+    if (record.episodeEpoch !== undefined && (!validTrustReceipt(record.episodeEpoch) || !['open', 'invalid', 'complete', 'waiting-provider'].includes(record.episodeState))) { reject(oldId, record); continue; }
+    if (record.phase === 'waiting-provider' && (!validTrustReceipt(record.episodeEpoch) || !validId(record.tag) ||
+        record.episodeState !== 'waiting-provider' || record.providerBlock?.kind !== 'usage_limit_exceeded' ||
+        !validId(record.providerBlock.turnId) || !validTime(record.providerBlock.observedAt))) { reject(oldId, record); continue; }
     if (record.trustNoticeId !== undefined && !validTrustReceipt(record.trustNoticeId)) { reject(oldId, record); continue; }
     if (record.trustNotified !== undefined && typeof record.trustNotified !== 'boolean') { reject(oldId, record); continue; }
     if (record.trustWaitingAt !== undefined && !validTime(record.trustWaitingAt)) { reject(oldId, record); continue; }
@@ -2476,7 +2480,7 @@ class QueueDispatcher {
   activeRotations() {
     const ids = [];
     for (const id of Object.keys(this.rotations)) {
-      if (this.rotations[id] && !this.faultedRotations.has(id) && !RESTING_PHASES.includes(this.rotations[id].phase)) {
+      if (this.rotations[id] && !this.faultedRotations.has(id) && !RESTING_PHASES.includes(this.rotations[id].phase) && this.rotations[id].phase !== 'waiting-provider') {
         ids.push(id);
       }
     }
@@ -3351,9 +3355,26 @@ class QueueDispatcher {
     } catch { /* The backend's unresolved request stays blocked when its receipt is unknown. */ }
   }
 
+  providerWaitProof(session, record) {
+    const episode = session?.rotationEpisode;
+    if (!episode || session.nativeId !== record.oldNativeId || episode.nativeId !== record.oldNativeId ||
+        episode.epoch !== record.episodeEpoch || episode.tag !== record.tag) return null;
+    if (!(episode.state === 'waiting-provider' && episode.providerBlock?.kind === 'usage_limit_exceeded' &&
+        validId(episode.providerBlock.turnId) && validTime(episode.providerBlock.observedAt))) return null;
+    return { ...episode.providerBlock };
+  }
+  async waitForProvider(oldId, record, snapshot) {
+    if (snapshot?.storageWarning) return false;
+    const proof = this.providerWaitProof((snapshot?.sessions || []).find(s => s.id === oldId), record);
+    if (!proof || !['requested', 'waiting-provider'].includes(record.phase)) return false;
+    record.phase = 'waiting-provider'; record.episodeState = 'waiting-provider'; record.providerBlock = proof;
+    this.save(); await this.broadcast(); return true;
+  }
+
   // Undo what a failed rotation started; the old member keeps its session and work.
   async failRotation(oldId, record, reason, now, snapshot) {
     reason = rotationReasonCode(reason);
+    if (reason === 'handoff-missing' && await this.waitForProvider(oldId, record, snapshot)) return;
     const phase = record.phase;
     const due = record.reason;
     const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
@@ -3591,6 +3612,8 @@ class QueueDispatcher {
     if (this.closed) return;
     const old = snapshot.sessions.find(s => s.id === oldId);
     const successor = snapshot.sessions.find(s => s.id === record.newId);
+    if (record.phase === 'waiting-provider') return;
+    if (record.phase === 'requested' && await this.waitForProvider(oldId, record, snapshot)) return;
     if (record.phase === 'waiting-trust') {
       if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
       if (!successor || ['ended', 'background', 'recoverable', 'error'].includes(successor.state)) throw Error('new-session-directory-trust-unavailable');
