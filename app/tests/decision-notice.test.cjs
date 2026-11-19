@@ -182,7 +182,7 @@ for (const closed of [false,true]) test(`actual loading window ${closed?'closes'
   Object.assign(win,{isDestroyed:()=>destroyed,loadURL:async()=>{},getBounds:()=>({})});
   win.webContents=new EventEmitter();Object.assign(win.webContents,{id:9,setWindowOpenHandler(){},send(){}});
   Object.assign(h.sandbox,{windows:new Map(),views:[],connect:async()=>({close(){}}),dataDir:'synthetic',
-    startupWindow:null,createWindow:()=>win,backups(){},saveViews(){},bindClient(){},
+    startupWindow:null,createWindow:()=>win,backups(){},saveViews(){},bindClient(){},closeAppMobileSetup(){},
     setTimeout:fn=>{timers.push(fn);return 1;},clearTimeout(){},entry:'synthetic',displayLanguage:()=>'zh',startupMessage:e=>e.message});
   vm.runInContext(section(main,'async function openWindow(', '\nfunction hasSavedSpaceDraft('),h.sandbox);
   const opening=h.sandbox.openWindow({owner:'synthetic'});
@@ -192,6 +192,16 @@ for (const closed of [false,true]) test(`actual loading window ${closed?'closes'
   timers[0]();
   if(closed) await opening;else await assert.rejects(opening,/UI did not become ready/);
   assert.equal(h.sandbox.pendingReveal,null);
+});
+test('mobile cleanup failure cannot preserve a closed window notification click', () => {
+  const h = harness(), win = new EventEmitter(); let cleanups = 0;
+  h.c.uiReady = false; h.fire(); h.notices[0].emit('click'); assert.ok(h.sandbox.pendingReveal);
+  Object.assign(h.sandbox, { win, context: h.c, view: {}, id: 1,
+    closeAppMobileSetup() { cleanups++; throw Error('Synthetic mobile cleanup failure'); } });
+  vm.runInContext(section(main, "  win.on('closed', () => {", '\n  try { await win.loadURL'), h.sandbox);
+  assert.throws(() => win.emit('closed'), /Synthetic mobile cleanup failure/);
+  assert.equal(cleanups, 1); assert.equal(h.sandbox.pendingReveal, null);
+  h.ready(); assert.equal(h.sent.length, 0);
 });
 test('recorded fallback also rejects a session ID', () => {
   const h=harness();h.sandbox.roomState.metadata=()=>({name:'Space',events:[{sessionId:'internal-id',uiMessage:{key:'notice.queue.dispatched',params:{name:'internal-id'}}}]});

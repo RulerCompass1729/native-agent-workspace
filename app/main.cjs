@@ -1115,8 +1115,8 @@ async function openWindow(saved) {
     catch { view.active = wasActive; event.preventDefault(); }
   });
   win.on('closed', () => {
-    closeAppMobileSetup(context);
     discardReveal(context);
+    closeAppMobileSetup(context);
     // A renderer/webContents shutdown can bypass the cancellable close event.
     if (!quitting && !context.failed && view.active !== false) {
       view.active = false;
