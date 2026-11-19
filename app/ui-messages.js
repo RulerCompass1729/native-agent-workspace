@@ -3,6 +3,9 @@
   const messages = {
   "zh": {
     "taskBoard.title": "任务板",
+    "taskBoard.currentItemCount": "{count}\u9879",
+    "taskBoard.currentHint": "\u5728\u539f\u4f1a\u8bdd\u56de\u590d\u6216\u786e\u8ba4\u3002",
+    "taskBoard.cardState": "\u786e\u8ba4\u5361",
     "taskBoard.currentTasks": "\u5f53\u524d\u4efb\u52a1",
     "taskBoard.fullView": "\u5b8c\u6574\u4efb\u52a1\u677f",
     "taskBoard.backCurrent": "\u8fd4\u56de\u5f53\u524d\u4efb\u52a1",
@@ -134,6 +137,7 @@
     "stream.confirmations": "有 {count} 件等你确认",
     "stream.confirmation": "有 {count} 件等你确认",
     "stream.waiting": "{count} 件等你",
+    "stream.reviewCount": "{count} 件待查看",
     "stream.close": "收起",
     "stream.search": "搜索共享记录",
     "stream.filter": "记录筛选",
@@ -3516,6 +3520,9 @@
   },
   "en": {
     "taskBoard.title": "Task board",
+    "taskBoard.currentItemCount": "{count} items",
+    "taskBoard.currentHint": "Reply or confirm in the original view.",
+    "taskBoard.cardState": "Confirmation",
     "taskBoard.currentTasks": "Current tasks",
     "taskBoard.fullView": "Full task board",
     "taskBoard.backCurrent": "Back to current tasks",
@@ -3647,6 +3654,7 @@
     "stream.confirmations": "{count} actions need your confirmation",
     "stream.confirmation": "{count} action needs your confirmation",
     "stream.waiting": "{count} waiting for you",
+    "stream.reviewCount": "{count} to review",
     "stream.close": "Close",
     "stream.search": "Search shared records",
     "stream.filter": "Filter records",

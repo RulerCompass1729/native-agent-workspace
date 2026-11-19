@@ -69,6 +69,7 @@ const clean = scratch.cleanup(async () => {
       check(cells===Math.min(total,cap),`${kind} ${width} ${theme}: one square per unfinished item within cap; completed items excluded`);
       const squares=await page.locator('.task-status-square').evaluateAll(es=>es.map(e=>({w:e.getBoundingClientRect().width,h:e.getBoundingClientRect().height})));check(squares.every(x=>x.w===8&&x.h===8),`${width} ${theme}: the single CSS variable gives 8px squares`);
       if(total>cap)check((await page.locator('.task-status-more').innerText())===(kind==='unknown'?'…':'+'+(total-cap)),`${width} ${theme}: exact remainder only when known`);
+      const title=await page.locator('#title').evaluate(e=>({width:e.getBoundingClientRect().width,natural:e.scrollWidth}));if(!(title.width+1>=Math.min(title.natural,64)&&title.width>0)){console.log('Title geometry',JSON.stringify(title));if(pictures)await page.screenshot({path:path.join(pictures,'title-layout-failure.png'),scale:'css'});}check(title.width+1>=Math.min(title.natural,64)&&title.width>0,`${kind} ${width} ${theme}: the current space name remains visible`);
       check(g.rect.x>=0&&g.rect.right<=width+1&&g.scroll<=g.width+1,`${kind} ${width} ${theme}: all numbers fit without clipping`);
       check(g.rect.top>=g.header.top&&g.rect.bottom<=g.header.bottom,`${kind} ${width} ${theme}: existing header row owns the status`);
       check(g.dark===(theme==='dark')&&g.overflow<=0,`${kind} ${width} ${theme}: correct theme, no document overflow`);
@@ -87,11 +88,12 @@ const clean = scratch.cleanup(async () => {
         check(p.nonmodal&&p.top>=p.anchor&&p.top-p.anchor<20&&p.bottom<=height&&p.left>=0&&p.right<=width,`${width} ${theme}: anchored nonmodal current list stays in the viewport`);
         const entries=page.locator('.task-board-current-list .task-board-entry');check(await entries.count()===13,`${width} ${theme}: every unfinished row is reachable`);check((await entries.first().getAttribute('data-source'))==='confirmation',`${width} ${theme}: nearest confirmation precedes other waiting items`);
         if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-${kind}-${theme}-${width}-open.png`)});
-        await entries.last().focus();check(await entries.last().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.closest('.task-board-current-list').getBoundingClientRect();return r.top>=p.top&&r.bottom<=p.bottom+1;}),`${width} ${theme}: the final queued row can be reached with keyboard focus`);await page.keyboard.press('Escape');check(await page.locator('.task-board-toggle').evaluate(e=>document.activeElement===e),`${width} ${theme}: Escape returns focus to the status`);
+        await entries.last().focus();check(await entries.last().evaluate(e=>{const r=e.getBoundingClientRect(),p=e.closest('.task-board-current-list').getBoundingClientRect();return r.top>=p.top&&r.bottom<=p.bottom+1;}),`${width} ${theme}: the final queued row can be reached with keyboard focus`);await page.locator('.task-board-toggle').click();check(await page.locator('#task-board-panel').isHidden(),`${width} ${theme}: second click collapses the current list`);await page.locator('.task-board-toggle').press('Enter');await entries.first().focus();await page.keyboard.press('Escape');check(await page.locator('.task-board-toggle').evaluate(e=>document.activeElement===e),`${width} ${theme}: Escape returns focus to the status`);
       }
 
     }
   }
+  await page.locator('.task-board-toggle').click();const outsideDraft=await page.locator('#shared-input').inputValue();await page.locator('#shared-input').click({position:{x:10,y:10}});await page.locator('#shared-input').fill('Synthetic nonmodal input');check(await page.locator('#task-board-panel').isHidden()&&await page.locator('#shared-input').evaluate(e=>document.activeElement===e&&e.value==='Synthetic nonmodal input'),'Clicking the original composer dismisses the popover without taking input focus');await page.locator('#shared-input').fill(outsideDraft);
   await scene('normal');
   await app.evaluate((_,q)=>globalThis.taskBoardFixture.update({queue:q},undefined,'shared'),Array.from({length:24},(_,i)=>item('queued',i,{assignee:null})));await client.call('draft',ids[0],'Synthetic block overflow');
   for(const width of [1240,850]){await app.evaluate(({BrowserWindow},w)=>BrowserWindow.getAllWindows()[0].setContentSize(w,600),width);await settled();await until(async()=>await page.locator('.task-status-square').count()===(width===1240?20:8),'Block overflow resize');check((await page.locator('.task-status-more').innerText())==='+'+(28-(width===1240?20:8)),width+': overflow preserves the exact unfinished remainder');}
@@ -108,6 +110,10 @@ const clean = scratch.cleanup(async () => {
   await until(async()=>(await page.locator('.task-status-doing').innerText()).includes(en?'4 working':'4 在做'),'Queued assignment retains native work');
   check(true,'A queued assignee does not hide unrelated native work');
   await scene('waiting');
+  await app.evaluate((_,q)=>globalThis.taskBoardFixture.update({queue:q},undefined,'shared'),normalQueue.concat(item('waiting',200,{reason:'no-reply'}),item('waiting',201)));await client.call('draft',ids[0],'Synthetic shared classification');
+  await until(async()=>(await page.locator('.task-status-waiting').innerText()).includes(en?'2 need you':'2 等你'),'Shared classification excludes review');
+  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'1 to review':'1 件待查看'),'Shared review classification stays separate from waiting');
+  await page.locator('.task-board-toggle').click();check((await page.locator('.task-board-current-list .task-board-entry[data-kind="review"]').innerText()).includes(en?'To review':'待查看'),'The drop-down retains the review row without calling it waiting');await page.keyboard.press('Escape');await scene('waiting');
   const trigger=page.locator('.task-board-toggle');
   const identities=()=>page.evaluate(async()=>{const x=await workspace.initial();return x.sessions.map(s=>({id:s.id,nativeId:s.nativeId,rooms:nativeWorkspaceSpaces.roomIds(s)}));});const originalIdentities=await identities();
   const returnToSpace=async()=>{if(!await page.locator('#room-nav').isVisible())await page.locator('#sidebar-toggle').click();await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page);await page.locator('#room-nav').click();await settled();};

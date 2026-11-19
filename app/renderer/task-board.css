@@ -1,4 +1,4 @@
-/* The global status shares the existing header row; the modal keeps its own viewport. */
+/* The global status shares the existing header row. */
 .task-board{--task-status-square-size:8px;flex:none;min-width:0;--task-board-error:#b03938}
 body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-status-button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;border:0;background:transparent;padding:4px 6px;min-height:28px}
@@ -14,7 +14,7 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-status-card-time,.task-status-warning{color:var(--approval-ink);font-weight:650}
 .task-status-done{color:var(--muted)}
 .task-status-button>span:not(.task-status-track)+span::before{content:'·';padding-right:6px;color:var(--muted)}
-#header.compact-room{grid-template-columns:minmax(0,1fr) auto auto auto}
+#header.compact-room{grid-template-columns:minmax(128px,1fr) auto auto auto}
 .compact-room #task-board{grid-column:3;grid-row:1}
 .compact-room #header-actions{grid-column:4}
 #header:not(.compact-room) #task-board{margin-left:auto}
@@ -50,7 +50,10 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-entry:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}.task-board-entry:disabled{opacity:1;cursor:default}
 .task-board-entry.task-board-card-link{text-decoration:none}
 .task-board-current-list{list-style:none;padding:0;margin:0;flex:1;min-height:0;overflow:auto;overflow-anchor:none;scrollbar-gutter:stable}
-.task-board-panel[data-mode=current] .task-board-entry{grid-template-columns:minmax(0,1fr) auto}
+.task-board-panel[data-mode=current] .task-board-entry{grid-template-columns:minmax(0,1fr) auto 10px}
+.task-board-entry>div{min-width:0}.task-board-entry-chevron{display:none;color:var(--muted)}
+.task-board-panel[data-mode=current] .task-board-entry-chevron{display:block}
+.task-board-panel[data-mode=current] .task-board-task-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .task-board-panel[data-mode=current] .task-board-owner{display:none}
 .task-board-panel[data-mode=current] .task-board-heading{padding:10px 12px}.task-board-panel[data-mode=current] .task-board-heading h2{font-size:14px}
 .task-board-panel[data-mode=current] .task-board-heading>span{font-size:12px}
@@ -69,3 +72,5 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-footer>span{flex:1;min-width:0;color:var(--muted)}
 .task-board-footer button{font-size:13px;text-decoration:underline;border:0;background:transparent;padding:5px}
 .task-board button:focus-visible,.task-board select:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+
+@media(max-width:1000px){.compact-room .header-identity{flex-wrap:wrap;row-gap:0}.compact-room h1{flex:none;max-width:100%}.task-status-button{display:grid;grid-template-columns:repeat(7,max-content);grid-template-rows:calc(var(--task-status-square-size) + 3px) auto;row-gap:2px;column-gap:4px;padding-block:2px}.task-status-button>span{grid-row:2}.task-status-button>.task-status-track{grid-row:1;grid-column:1/4;justify-self:start;height:calc(var(--task-status-square-size) + 2px)}.task-status-more{line-height:10px}.task-status-button>.task-status-warning{grid-row:1;grid-column:4/-1;justify-self:end}}

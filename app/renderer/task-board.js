@@ -137,13 +137,13 @@
     function translate() {
       attr(host, 'aria-label', f('title'));
       attr(toggle, 'aria-label', f(opened ? 'collapse' : 'expand')); attr(toggle, 'aria-expanded', String(opened));
-      set(h2, f(full ? 'full' : 'currentTasks')); set(caption, full ? f(scope === 'today' ? 'range' : 'historyRange') : f('items', { count: currentItems().length }));
+      set(h2, f(full ? 'full' : 'currentTasks')); set(caption, full ? f(scope === 'today' ? 'range' : 'historyRange') : f('currentItemCount', { count: currentItems().length }));
       set(fullButton, f('fullView')); set(back, f('backCurrent')); back.hidden = !full; set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(scopeControls, 'role', 'group'); attr(scopeControls, 'aria-label', f('scope')); attr(groupControls, 'role', 'group'); attr(groupControls, 'aria-label', f('group'));
       for (const [value, b] of scopeButtons) { set(b, f(value)); attr(b, 'aria-pressed', String(scope === value)); }
       for (const [value, b] of groupButtons) { set(b, f('by.' + value)); attr(b, 'aria-pressed', String(mode === value)); }
       for (const o of select.options) set(o, f(o.value === 'all' ? 'allStates' : 'status.' + o.value));
-      attr(select, 'aria-label', f('filter')); attr(queueSpace, 'aria-label', f('chooseQueue')); set(queue, f('queue')); set(hint, f(input.connected === false ? 'stale' : 'readOnly'));
+      attr(select, 'aria-label', f('filter')); attr(queueSpace, 'aria-label', f('chooseQueue')); set(queue, f('queue')); set(hint, f(input.connected === false ? 'stale' : full ? 'readOnly' : 'currentHint'));
       set(regroup, f(needsRegroup ? 'regroup' : 'groupCurrent')); attr(regroup, 'aria-description', f('regroupHint')); regroup.title = f('regroupHint');
     }
     function positionPanel() {
@@ -210,7 +210,7 @@
       let view = rows.get(item.key);
       if (!view) {
         const element = make('li', 'task-board-task'), link = control(() => activate(item.key), 'task-board-entry'), body = make('div'), title = make('span', 'task-board-task-title'), note = make('small'), status = make('span', 'task-board-status'), member = make('span', 'task-board-owner');
-        body.append(title, note); link.append(body, status, member); element.append(link); element.dataset.taskKey = item.key; view = { element, link, title, note, status, member }; rows.set(item.key, view);
+        const arrow = make('span', 'task-board-entry-chevron'); set(arrow, '›'); attr(arrow, 'aria-hidden', 'true'); body.append(title, note); link.append(body, status, member, arrow); element.append(link); element.dataset.taskKey = item.key; view = { element, link, title, note, status, member }; rows.set(item.key, view);
       }
       const actor = input.sessions?.find(s => s.id === item.memberKey), actorName = item.memberName || actor?.name || f(item.memberKey ? 'memberMissing' : 'unassigned');
       const origin = (item.source === 'confirmation' ? input.rooms?.find(p => actor?.roomIds?.includes(p.id))?.name : item.spaceName || data.find(p => p.id === item.spaceId)?.name) || f(item.source === 'confirmation' ? 'confirmations' : 'independent');
@@ -218,7 +218,7 @@
       view.link.disabled = item.source === 'confirmation' ? !item.target : !actor && !data.some(p => p.source === 'space' && p.id === item.spaceId);
       view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
       set(view.title, item.source === 'confirmation' ? f('confirmation') : item.source === 'conversation' ? f(item.kind === 'sent' ? 'nativeWork' : 'status.' + item.kind) : item.text);
-      set(view.status, !full && item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('confirmation') + ' · ' + remaining(item.expiresAt) : f(item.source === 'conversation' && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
+      set(view.status, !full && item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f((!full || item.source === 'conversation') && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
       set(view.member, actorName);
       set(view.note, !full ? origin + ' · ' + actorName : item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardDeadlineOne', { count: 1, time: remaining(item.expiresAt) }) : item.reason || item.waiting ? f('reasonInQueue') : mode !== 'space' ? origin : ''); view.note.hidden = !view.note.textContent;
       return view.element;

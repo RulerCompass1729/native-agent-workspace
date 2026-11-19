@@ -1,10 +1,11 @@
 // Design B: a shared record beside the member view, and the same confirmation
 // cards above every view. Reads existing state; never creates a model call.
 (function (root) {
-  const waitingCount = items => items.filter(item => item.kind !== 'background-confirmation').length;
+  const waitingCount = items => items.filter(item => item.kind !== 'background-confirmation' && item.kind !== 'look').length;
   function waitingLabel(items, text) {
-    const other = waitingCount(items), confirmations = items.length - other;
-    return [confirmations ? text(confirmations === 1 ? 'confirmation' : 'confirmations', { count: confirmations }) : '', other ? text('waiting', { count: other }) : ''].filter(Boolean).join(' · ');
+    const other = waitingCount(items), confirmations = items.filter(item => item.kind === 'background-confirmation').length, reviews = items.filter(item => item.kind === 'look').length;
+    return [confirmations ? text(confirmations === 1 ? 'confirmation' : 'confirmations', { count: confirmations }) : '', other ? text('waiting', { count: other }) : '',
+      reviews ? text('reviewCount', { count: reviews }) : ''].filter(Boolean).join(' · ');
   }
   function bind(host) {
     const doc = host.document, model = root.nativeWorkspaceTaskStream;
