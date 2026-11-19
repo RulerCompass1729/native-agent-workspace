@@ -211,6 +211,12 @@ async function run() {
   await until(async () => (await page.locator('#send-confirm').innerText()) === '等本轮结束后发送', 'Shown as queue');
   await hold(); await page.locator('#send-confirm').click();
   await until(async () => (await heldCalls()) > 0, 'The click waits for the messages');
+  // B3: while the click waits, the words and recipient stay as confirmed; Cancel stays usable.
+  assert.equal(await page.locator('#send-text').evaluate(e => e.readOnly), true, 'B3: words frozen during the wait');
+  await page.locator('#send-text').focus(); await page.keyboard.type(' 再改');
+  assert.equal(await page.locator('#send-text').inputValue(), afterQueue, 'B3: typing during the wait changes nothing');
+  assert.equal(await page.locator('#send-list input[type=radio]').evaluateAll(list => list.every(r => r.disabled)), true, 'B3: recipients frozen');
+  assert.equal(await page.locator('#send-cancel').isEnabled(), true, 'B3: Cancel stays');
   await fixture('set-state', ledger, 'idle');
   await until(async () => (await page.locator('#send-confirm').innerText()) === '发送', 'The turn ends during the wait');
   await release();
@@ -219,12 +225,13 @@ async function run() {
   assert.deepEqual(s.sends.slice(1), [], 'C1 queue → send: nothing sent at that click'); assert.equal(s.queued.length, 1, 'C1: not queued either');
   assert.equal(await note(), '「账单助手」的发送方式变了，现在是「发送」。确认无误请再点一次。');
   assert.equal(await isOpen('send-dialog'), true); assert.deepEqual(await checkedIds(), [ledger], 'Same recipient, not swapped');
+  assert.equal(await page.locator('#send-text').evaluate(e => e.readOnly), false, 'B3: editable again once nothing waits');
   await page.locator('#send-confirm').click();
   await until(async () => (await page.locator('#toast-text').innerText()) === '账单助手：原生已接收', 'Reconfirmed send notice');
   s = await stats();
   assert.deepEqual(s.sends.at(-1), { id: ledger, text: afterQueue }); assert.equal(s.sends.length, 2, 'C1 reconfirmed: one send'); assert.equal(s.queued.length, 1);
   await fixture('complete', ledger, { text: '好的' }); await until(async () => (await session(ledger)).state === 'idle', 'Ledger idle');
-  checks.push('C1 queue → send: the turn ended while the click loaded messages; nothing sent or queued, the note names the new way, the recipient stays; the next click sends once');
+  checks.push('C1 queue → send: the turn ended while the click loaded messages; nothing sent or queued, the note names the new way, the recipient stays; the next click sends once. B3: during that wait typed keys change nothing, recipients are disabled, Cancel works');
 
   // 6. Two sessions with the same name: nothing preselected, rows told apart by short id (G11).
   const twin = await create('学习记录');

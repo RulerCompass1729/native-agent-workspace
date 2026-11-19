@@ -457,12 +457,14 @@ function sessionInputMethod(s) {
   if (s.state === 'working' && s.steerAvailable && s.activeTurnId) return { method: 'steer', turnId: s.activeTurnId };
   return { method: 'send' };
 }
-async function deliverSessionInput(s, pick, text, revision) {
+// marks: where this call's queue mark lives. The composer's is queuedInputs; another entry passes its own, so
+// it never replaces or borrows the composer's.
+async function deliverSessionInput(s, pick, text, revision, marks = queuedInputs) {
   const { id, nativeId } = s;
   const mark = pick.method === 'queue' && { text, revision, before: new Set(s.messages.map(m => m.id)) };
-  if (mark) queuedInputs.set(id, mark);
+  if (mark) marks.set(id, mark);
   try { return mark ? await api.queue(id, text, nativeId) : pick.method === 'steer' ? await api.steer(id, text, nativeId, pick.turnId) : await api.send(id, text, nativeId); }
-  finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
+  finally { if (mark && !mark.tag && marks.get(id) === mark) marks.delete(id); }
 }
 async function submitSession(binding) {
   const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
@@ -1158,7 +1160,7 @@ function updateState(next) {
 // untouched composer; an uncertain one stays in the record so it is not resent.
 function followQueuedInput(id, mark) {
   const s = state.sessions?.find(x => x.id === id);
-  const row = s?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id));
+  const row = queuedRowFor(s, mark);
   if (!row) { if (!s) queuedInputs.delete(id); return; }
   mark.tag = row.id;
   const input = sessionComposers.get(id)?.ui.input, untouched = input && draftRevisions.get(id) === mark.revision;
@@ -1167,6 +1169,9 @@ function followQueuedInput(id, mark) {
   if (row.status === 'not-sent' && mark.cleared && untouched && !input.value && s.liveDraft) sessionComposers.get(id).ui.setValue(s.liveDraft);
   queuedInputs.delete(id);
 }
+// The row a queue mark's own call recorded: new since the call began and holding its words (the service stores
+// them trimmed). Another entry's queued words are not this row.
+const queuedRowFor = (s, mark) => s?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id) && m.text === mark.text.trim());
 function writeRoomDraft(id, view) {
   if (id === spaceId) { $('shared-input').value = view.sharedDraft || ''; roomMention = view.roomMention && { ...view.roomMention }; roomDraftRevision = view.draftRevision || 0; }
   attempt(persistView);

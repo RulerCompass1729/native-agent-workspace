@@ -214,8 +214,11 @@ function searchKey(event) {
 // send dialog and confirms, through deliverSessionInput like the composer. The sentence lives only in these variables:
 // never in a draft, views.json or the create parameters. Candidates are a local string match, no model.
 let searchShownSessions = new Set(), searchSend = null, searchSendFollow = null, searchSendNew = null, searchSendRetry = null;
-// Never equal to a composer's draft revision, so followQueuedInput never clears or refills a composer for this send.
+// Never equal to a composer's draft revision. The queue mark of this send lives apart from the composer's
+// (deliverSessionInput's marks), so followQueuedInput neither sees it nor clears or refills a composer for it.
 const SEARCH_SEND_REVISION = Symbol('search-send');
+// Refused by the service before anything is recorded (with staleMethodRefusals): the same text may be sent again.
+const searchSendRefusals = new Set(['error.nativeCommandUseTerminal', 'error.workspace.inputLimit']);
 const searchSendLabel = key => uiText(key).replace(/\s*↑$/u, '');
 function searchSendCandidates(text, first = '') {
   const lower = text.toLocaleLowerCase();
@@ -281,15 +284,19 @@ function renderSearchSend() {
   const open = searchSend;
   if (!open || !state || !$('send-dialog').open && open.ui) return;
   const text = $('send-text').value;
+  // While a click waits (messages, the call) or its outcome is unconfirmed, the text and recipient stay as
+  // confirmed; Cancel still works.
+  const frozen = open.busy || Boolean(open.unconfirmed);
+  $('send-text').readOnly = frozen;
   for (const row of open.rows) {
     const target = searchSendTarget(row), { label, radio, name, meta, detail } = row.ui;
     // A target that can no longer take it is let go, never swapped for another session.
     if (open.prefer === row.id && !target.blocked && !open.selected && !open.chosen) { open.selected = row.id; open.chosen = true; }
-    if (target.blocked && open.selected === row.id && !open.busy) {
+    if (target.blocked && open.selected === row.id && !frozen) {
       open.selected = '';
       if (!$('send-note').textContent || open.changed) ui.display.text($('send-note'), 'send.lost', () => ({ name: target.s ? participantLabel(target.s, state.sessions) : row.name }));
     }
-    radio.disabled = target.blocked; radio.checked = open.selected === row.id;
+    radio.disabled = target.blocked || frozen; radio.checked = open.selected === row.id;
     label.classList.toggle('blocked', target.blocked);
     const s = target.s;
     ui.display.computed(name, 'text', () => s?.name || row.name || sessionShortId(row.id));
@@ -299,17 +306,18 @@ function renderSearchSend() {
     });
     if (target.hintKey && target.hintKey !== 'composer.keyboardHint') ui.display.text(detail, target.hintKey); else { ui.display.unbind(detail); detail.textContent = ''; }
   }
-  open.newRow.ui.radio.checked = open.selected === 'new';
+  open.newRow.ui.radio.checked = open.selected === 'new'; open.newRow.ui.radio.disabled = frozen;
   const chosen = open.rows.find(row => row.id === open.selected), target = chosen && searchSendTarget(chosen);
   const key = open.selected === 'new' ? 'send.next' : target && !target.blocked ? target.action.labelKey : 'composer.send';
   ui.display.computed($('send-confirm'), 'text', () => searchSendLabel(key));
-  $('send-confirm').disabled = open.busy || !text.trim() || (open.selected === 'new' ? creatingSession : !target || target.blocked);
+  $('send-confirm').disabled = frozen || !text.trim() || (open.selected === 'new' ? creatingSession : !target || target.blocked);
   open.ui = true;
   const focused = document.activeElement;
   if ($('send-dialog').open && (!focused || focused === document.body || focused.disabled)) $('send-text').focus({ preventScroll: true });
 }
 function searchSendChoose(event) {
   if (!searchSend || event.target?.name !== 'send-target') return;
+  if (searchSend.busy || searchSend.unconfirmed) return renderSearchSend();
   searchSend.selected = event.target.value; searchSend.chosen = true; searchSend.changed = false;
   ui.display.unbind($('send-note')); $('send-note').textContent = '';
   renderSearchSend();
@@ -322,13 +330,15 @@ function closeSearchSendDialogs() {
 function finishSearchSend() {
   if ($('send-dialog').open) return;
   searchSend = null;
-  $('send-list').replaceChildren(); $('send-text').value = '';
+  // An unconfirmed outcome was stated in the dialog; nothing more follows it once the dialog is gone.
+  if (searchSendFollow?.phase === 'unconfirmed') searchSendFollow = null;
+  $('send-list').replaceChildren(); $('send-text').value = ''; $('send-text').readOnly = false;
   ui.display.unbind($('send-note')); $('send-note').textContent = ''; ui.display.unbind($('send-confirm'));
   if ($('search-dialog').open) $('search-send').focus();
 }
 async function confirmSearchSend() {
   const open = searchSend;
-  if (!open || open.busy || !$('send-dialog').open || $('send-confirm').disabled) return;
+  if (!open || open.busy || open.unconfirmed || !$('send-dialog').open || $('send-confirm').disabled) return;
   const text = $('send-text').value;
   if (!text.trim()) return;
   if (open.selected === 'new') return startSearchSendNew(open, text);
@@ -360,8 +370,8 @@ async function confirmSearchSend() {
     }
     follow = searchSendFollow = { id: s.id, name: participantLabel(s, state.sessions), phase: 'dialog' };
     reportShown();
-    const call = deliverSessionInput(s, pick, text, SEARCH_SEND_REVISION);
-    if (pick.method === 'queue') follow.mark = queuedInputs.get(s.id);
+    const own = new Map(), call = deliverSessionInput(s, pick, text, SEARCH_SEND_REVISION, own);
+    follow.mark = own.get(s.id);
     const receipt = await call;
     if (searchSendFollow !== follow) return;
     follow.tag = typeof receipt === 'string' ? receipt : receipt?.tag || receipt?.id || follow.mark?.tag || '';
@@ -374,14 +384,16 @@ async function confirmSearchSend() {
       if (searchSendFollow === follow) { searchSendFollow = null; toastError(error); }
       return;
     }
-    // A queued message is recorded before native answers, and the refusal can come before its row reaches this
-    // window. Unless the row proves it was not sent, the dialog closes on the row's status rather than offer the
-    // same words a second time (as the composer clears an uncertain queued draft).
-    if (follow?.mark && searchSendFollow === follow) {
-      const until = Date.now() + 1500;
-      let queued = searchSendQueuedRow(follow);
-      while ((!queued || queued.status === 'awaiting-native') && Date.now() < until) { await nextStateArrival(stateArrivals, until); queued = searchSendQueuedRow(follow); }
-      if (queued && queued.status !== 'not-sent' && searchSendFollow === follow) { follow.tag = queued.id; showSearchSendReceipt(follow); return; }
+    // Only proof that nothing was sent offers the same words again. Otherwise the outcome stays unconfirmed:
+    // its own row, whenever it reaches this window, decides (followSearchSend); no wait ends that by time.
+    if (follow && searchSendFollow === follow && !searchSendNotSent(follow, error)) {
+      const queued = follow.mark && searchSendQueuedRow(follow), shown = searchSend === open && $('send-dialog').open;
+      if (queued) follow.mark.tag = follow.tag = queued.id;
+      // A row still awaiting native is about to record the outcome: the open dialog waits for it.
+      if (queued && (queued.status !== 'awaiting-native' || !shown)) { showSearchSendReceipt(follow); return; }
+      if (shown) { follow.phase = 'unconfirmed'; open.unconfirmed = true; ui.display.text($('send-note'), 'send.unconfirmed', () => ({ name: follow.name })); }
+      else { searchSendFollow = null; toastMessage('send.unconfirmed', () => ({ name: follow.name })); }
+      return;
     }
     if (follow && searchSendFollow === follow) searchSendFollow = null;
     if (searchSend === open && $('send-dialog').open) ui.showError($('send-note'), error);
@@ -390,10 +402,19 @@ async function confirmSearchSend() {
     if (searchSend === open) { open.busy = false; renderSearchSend(); }
   }
 }
-// The new queue row for these words, found as followQueuedInput finds it; the mark itself is gone once the call ends.
+// This send's own queue row, found as followQueuedInput finds the composer's (queuedRowFor). The same words
+// queued from the composer at the same moment leave that row to the composer until a receipt names it.
 function searchSendQueuedRow(follow) {
-  const s = state.sessions.find(x => x.id === follow.id), mark = follow.mark;
-  return s?.messages?.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id) && [mark.text, mark.text.trim()].includes(m.text));
+  const s = state.sessions.find(x => x.id === follow.id), mark = follow.mark, composer = queuedInputs.get(follow.id);
+  const row = queuedRowFor(s, mark);
+  return row && !mark.tag && composer && queuedRowFor(s, composer) === row ? undefined : row;
+}
+// Proof that nothing was sent: this send's own row says so, or the service refused before recording anything.
+function searchSendNotSent(follow, error) {
+  const row = follow.mark && searchSendQueuedRow(follow);
+  if (row) return row.status === 'not-sent';
+  const key = error?.uiMessage?.key;
+  return error?.notSent === true || Boolean(key) && (searchSendRefusals.has(key) || staleMethodRefusals.has(key));
 }
 // The notice reads the status of the message row itself (readingDeliveryStatusKey), never the fact that a call returned.
 function searchSendStatusKey(follow) {
@@ -423,9 +444,18 @@ function updateSearchSendReceipt(follow) {
 function searchSendShownId() { return searchSendFollow?.id || searchSendNew?.id || ''; }
 // Called after every state update (updateState).
 function followSearchSend() {
-  const follow = searchSendFollow;
-  if (follow?.phase === 'dialog' && follow.mark?.tag) showSearchSendReceipt(follow);
-  else if (follow?.phase === 'toast') updateSearchSendReceipt(follow);
+  const follow = searchSendFollow, row = (follow?.phase === 'dialog' || follow?.phase === 'unconfirmed') && follow.mark && searchSendQueuedRow(follow);
+  if (row) {
+    follow.mark.tag = row.id;
+    // Not sent: a waiting call's refusal follows and keeps the text; after an unconfirmed failure the text may go
+    // again. A failed call's row still awaiting native records its outcome next.
+    if (row.status === 'not-sent') {
+      if (follow.phase === 'unconfirmed' && searchSend) {
+        searchSendFollow = null; searchSend.unconfirmed = false;
+        ui.display.text($('send-note'), 'delivery.recipient', () => ({ recipient: follow.name, status: uiText('delivery.notSent') }));
+      }
+    } else if (follow.phase === 'dialog' || row.status !== 'awaiting-native') showSearchSendReceipt(follow);
+  } else if (follow?.phase === 'toast') updateSearchSendReceipt(follow);
   resumeSearchSendNew();
   if ($('search-dialog').open && !$('send-dialog').open) updateSearchSend();
   if ($('send-dialog').open) renderSearchSend();
