@@ -159,3 +159,77 @@ test('Workspace.queue takes a phone delegate only from mobile-session', async t 
   await assert.rejects(f.w.queue(a.id, 'Forged delegate', null, null, { valid: () => true, human() {}, reserve() {} }));
   assert.equal(f.calls.length, 0); assert.equal(a.r.pendingQueue ?? null, null);
 });
+
+// Claude 7's review, F1: the phone presses what it was shown. NAW's own dispatch starts a turn without a control change.
+const mobile = require('../mobile-session.cjs');
+test('a press made on an idle read is not queued into a turn that started since (F1)', async t => {
+  const f = await fixture(t), [a] = f.sessions, spec = f.spec(a, 'Typed while it looked idle');
+  assert.deepEqual(Object.keys(spec.proof).sort(), ['connectionRevision', 'controlRevision', 'nativeId']);
+  working(a);
+  const receipt = await f.w.mobileSend(f.ticket('send', a), spec);
+  assert.equal(receipt.status, 'not-sent'); assert.equal(f.calls.length, 0);
+  assert.equal(a.s.messages.some(m => m.origin === 'human-mobile'), false);
+  assert.deepEqual(await f.w.mobileSend(f.ticket('send', a), spec), receipt); assert.equal(f.calls.length, 0);
+});
+test('a send prepared while idle is not committed into a turn that started before commit (F1)', async t => {
+  const f = await fixture(t), [a] = f.sessions, connection = {};
+  const ready = mobile.prepare(f.w, f.ticket('send', a), f.spec(a, 'Prepared while idle'), 'send', connection);
+  assert.equal(ready.prepared, true);
+  working(a);
+  const receipt = await mobile.commit(f.w, f.ticket('send', a), ready.lease, connection, 'send');
+  assert.equal(receipt.status, 'not-sent'); assert.equal(f.calls.length, 0);
+});
+test('a queued phone message goes only into the turn and the way it was read (F1, comparison C-a2)', async t => {
+  const f = await fixture(t), [a] = f.sessions;
+  working(a);
+  const spec = f.spec(a, 'Read in the first turn');
+  assert.equal(spec.proof.sendMode, 'queueMidturn'); assert.equal(spec.proof.turnId, 'synthetic-turn');
+  a.r.turnId = 'synthetic-turn-dispatched';
+  assert.equal((await f.w.mobileSend(f.ticket('send', a), spec)).status, 'not-sent');
+  const queueRead = (a.r.midturnAvailable = false, f.spec(a, 'Read as an after-turn queue'));
+  a.r.midturnAvailable = true;
+  assert.equal((await f.w.mobileSend(f.ticket('send', a), queueRead)).status, 'not-sent');
+  const connection = {}, ready = mobile.prepare(f.w, f.ticket('send', a), f.spec(a, 'Prepared in this turn'), 'send', connection);
+  a.r.turnId = 'synthetic-turn-next';
+  assert.equal((await mobile.commit(f.w, f.ticket('send', a), ready.lease, connection, 'send')).status, 'not-sent');
+  assert.equal(f.calls.length, 0);
+  const same = await f.w.mobileSend(f.ticket('send', a), f.spec(a, 'Read in this turn'));
+  assert.equal(same.status, 'awaiting-native'); assert.deepEqual(f.calls.map(c => c.method), ['queue']);
+});
+
+// F2: the phone hears back early from a queued send; the person's refresh asks once for this session's open receipts.
+const { createMobileClient } = require('../mobile-web/client.js');
+test('a refresh brings a queued phone message to submitted once native read it; opening the session alone does not ask (F2)', async t => {
+  const f = await fixture(t, ['claude', 'claude']), [a, b] = f.sessions;
+  working(a); working(b);
+  const disk = new Map(), storage = { getItem: k => disk.get(k) ?? null, setItem: (k, v) => { disk.set(k, v); } };
+  const deviceId = randomUUID(), csrf = 'c'.repeat(43), contextId = 'x'.repeat(43), specs = new Map(), routes = [], proofs = new Map();
+  const target = id => f.sessions.find(x => x.id === id);
+  const request = async (route, value) => {
+    routes.push(route.replace(a.id, 'A').replace(b.id, 'B'));
+    if (route === '/mobile/session') return { deviceId, csrf, sessions: [{ id: a.id, available: true }, { id: b.id, available: true }] };
+    if (route.startsWith('/mobile/read/')) { const x = target(decodeURIComponent(route.split('/').pop())), row = f.read(x); proofs.set(x.id, row.proof); return { ...row, contextId }; }
+    const x = route === '/mobile/send' ? target(client.state.selected) : target(specs.get(value.requestId).sessionId);
+    if (route === '/mobile/send') {
+      const spec = { requestId: value.requestId, proof: proofs.get(x.id), text: value.text }; specs.set(value.requestId, { spec, sessionId: x.id });
+      return f.w.mobileSend(f.ticket('send', x), spec);
+    }
+    if (route === '/mobile/receipt') return f.w.mobileReceipt(f.ticket('send', x), specs.get(value.requestId).spec, 'send');
+    throw Error('unexpected ' + route);
+  };
+  const client = createMobileClient({ request, storage, newId: randomUUID });
+  await client.start(); await client.select(b.id); client.setDraft('Words for B'); await client.send();
+  await client.select(a.id); client.setDraft('Words for A'); await client.send();
+  assert.deepEqual(client.state.pending.map(p => p.status), ['awaiting-native', 'awaiting-native']);
+  a.r.read(); await settle();
+  routes.length = 0;
+  await client.select(a.id);
+  assert.deepEqual(routes, ['/mobile/read/A']); assert.equal(client.state.pending[1].status, 'awaiting-native');
+  await client.refresh();
+  assert.deepEqual(routes, ['/mobile/read/A', '/mobile/read/A', '/mobile/receipt']);
+  assert.deepEqual(client.state.pending.map(p => p.status), ['awaiting-native', 'submitted']);
+  assert.equal(client.state.draft, '');
+  routes.length = 0; await client.refresh();
+  assert.deepEqual(routes, ['/mobile/read/A']);
+  assert.deepEqual(f.calls.map(c => c.method), ['queue', 'queue']);
+});

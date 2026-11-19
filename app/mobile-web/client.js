@@ -76,9 +76,9 @@
     async function select(id) {
       if (!state.session?.sessions.some(s => s.id === id && s.available !== false)) throw failure('MOBILE_SESSION_UNAVAILABLE');
       state.selected = id; state.row = null; const draft = currentDraft(); state.draft = draft?.text || ''; state.revision = draft?.revision || 0; changed();
-      return refresh();
+      return refresh(false);
     }
-    async function refresh() {
+    async function refresh(receipts = true) {
       if (!state.session || !state.selected) return;
       const epoch = ++readEpoch, id = state.selected, deviceId = state.session.deviceId, authorization = state.authorization;
       try {
@@ -88,6 +88,12 @@
           state.row = row;
         }
       } catch (error) { if (epoch === readEpoch) state.notice = explain(error); }
+      // A queued send hears back early; the person's refresh also asks once for this session's open receipts
+      // (read-only, the same route as the receipt button: no polling, no resend). Opening a session alone does not.
+      for (const p of receipts ? state.pending.filter(p => p.action === 'send' && p.deviceId === deviceId && p.sessionId === id && !terminal(p.status)) : []) {
+        if (epoch !== readEpoch || state.busy) break;
+        try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId })); } catch { /* The row keeps its status; its receipt button stays. */ }
+      }
       changed();
     }
     function setDraft(value) {

@@ -61,11 +61,26 @@ function checked(w, ticket, action) {
   verifyTicket(root, ticket, target, action);
   return s;
 }
-function proof(s) { return { nativeId: s.nativeId, controlRevision: number(s.controlRevision), connectionRevision: number(s.connectionRevision) }; }
-function sameProof(s, value) { return exact(value, ['nativeId', 'controlRevision', 'connectionRevision']) && Object.entries(proof(s)).every(([k, v]) => value[k] === v); }
+const PROOF = ['nativeId', 'controlRevision', 'connectionRevision'], QUEUED = ['queue', 'queueMidturn'];
+const turnOf = r => typeof r?.turnId === 'string' && r.turnId ? r.turnId : null;
+// What the phone was shown: a queued send also names its mode and the turn it was read in. An idle send keeps the
+// original three keys, so receipts stored before keep their digest.
+function proof(s, r = null, mode = sendMode(s, r)) {
+  const base = { nativeId: s.nativeId, controlRevision: number(s.controlRevision), connectionRevision: number(s.connectionRevision) };
+  if (!QUEUED.includes(mode)) return base;
+  const turnId = turnOf(r);
+  return { ...base, sendMode: mode, ...(turnId ? { turnId } : {}) };
+}
+const proofShape = v => exact(v, PROOF) || QUEUED.includes(v?.sendMode) &&
+  (exact(v, [...PROOF, 'sendMode']) || exact(v, [...PROOF, 'sendMode', 'turnId']) && typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 512);
+function sameProof(s, value) { const current = proof(s, null, null); return proofShape(value) && PROOF.every(k => value[k] === current[k]); }
+// A send goes only the way the phone showed it, and a queued one only into the turn it was read in (Claude 7, F1:
+// NAW's own dispatch starts a turn without a control change). An unsendable state is left to the send's own refusal.
+function asShown(s, r, value) { const now = proof(s, r); return (now.sendMode || 'send') === (value.sendMode || 'send') && (now.turnId || null) === (value.turnId || null); }
+const CHANGED = '手机读到后会话的状态已经变了，没有发送。';
 function request(spec, action) {
   const keys = action === 'send' ? ['requestId', 'proof', 'text'] : ['requestId', 'proof', 'questionId', 'answers'];
-  if (!exact(spec, keys) || !uuid(spec.requestId) || !exact(spec.proof, ['nativeId', 'controlRevision', 'connectionRevision'])) throw denied();
+  if (!exact(spec, keys) || !uuid(spec.requestId) || !proofShape(spec.proof)) throw denied();
   if (action === 'send') {
     if (typeof spec.text !== 'string' || !spec.text.trim() || spec.text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(spec.text) || /^\//.test(spec.text.trim())) throw denied();
   } else if (!uuid(spec.questionId) || !spec.answers || typeof spec.answers !== 'object' || Array.isArray(spec.answers) || Buffer.byteLength(JSON.stringify(spec.answers)) > TEXT_BYTES) throw denied();
@@ -138,8 +153,9 @@ function sent(w, d, s, error) {
   w.persist(); return receipt(w, d.row);
 }
 async function executeSend(w, d) {
-  const s = w.get(d.ticket.sessionId), mode = sendMode(s, w.runtimes.get(s.id));
-  if (mode !== 'queue' && mode !== 'queueMidturn') {
+  const s = w.get(d.ticket.sessionId), r = w.runtimes.get(s.id), mode = sendMode(s, r);
+  if (!asShown(s, r, d.spec.proof)) return sent(w, d, s, Object.assign(Error(CHANGED), { notSent: true }));
+  if (!QUEUED.includes(mode)) {
     try { await w.send(s.id, d.spec.text, null, null, null, null, null, null, d); } catch (e) { return sent(w, d, s, e); }
     return sent(w, d, s);
   }
@@ -188,6 +204,7 @@ function prepare(w, ticket, spec, action, connection) {
     d.row.status = 'not-sent'; d.row.error = String(e.message || e).slice(0, 16000);
     return { receipt: receipt(w, d.row) };
   }
+  if (action === 'send' && !asShown(s, r, spec.proof)) { d.used = true; d.row.status = 'not-sent'; d.row.error = CHANGED; w.persist(); return { receipt: receipt(w, d.row) }; }
   const entries = leases(w);
   for (const [key, old] of entries) if (old.ticket.deviceId !== ticket.deviceId || old.ticket.generation !== ticket.generation) entries.delete(key);
   const lease = randomBytes(32).toString('base64url'); entries.set(lease, d);
@@ -253,7 +270,7 @@ function read(w, ticket) {
       unsupportedAttachments: Array.isArray(m.images) ? m.images.length : 0 };
   }).reverse();
   const q = question(w, s), mode = currentTarget(s, r) && !w.storageWarning ? sendMode(s, r) : null;
-  return { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name, state: s.state, proof: proof(s),
+  return { id: s.id, nativeId: s.nativeId, provider: s.provider, name: s.name, state: s.state, proof: proof(s, r, mode),
     canSend: Boolean(mode), sendMode: mode, sendBlocked: mode || !currentTarget(s, r) || w.storageWarning ? null : sendBlocked(s, r, q),
     question: q && Buffer.byteLength(JSON.stringify(q)) <= TEXT_BYTES ? q : null, questionOmitted: Boolean(q && Buffer.byteLength(JSON.stringify(q)) > TEXT_BYTES),
     messages, earlierMessagesOmitted: Math.max(0, rows.length - messages.length) };
