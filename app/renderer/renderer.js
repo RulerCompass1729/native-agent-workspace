@@ -6651,7 +6651,7 @@ function queueEarlierRows(shown, rows, memberIds, handoff, total) {
   queuePager.status.hidden = false;
   queuePager.show({ count: Math.min(QUEUE_FINISHED_SHOWN, shown.hidden), total, shown: shown.items.length + back.length });
   const latest = new Set(shown.items.slice(-QUEUE_FINISHED_SHOWN).map(item => item.id));
-  const at = rows.findIndex(row => latest.has(row.dataset.queueItem));
+  const at = rows.findIndex(row => latest.has(row.dataset.queueItem) && !handoff?.rows[row.dataset.queueItem]?.front);
   rows.splice(at < 0 ? rows.length : at, 0, queuePager.button, ...back);
 }
 // The sessions behind one continuing conversation, oldest first, with their ids.

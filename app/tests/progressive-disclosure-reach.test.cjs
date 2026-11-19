@@ -235,6 +235,38 @@ const finishedTask = (i, over = {}) => ({ id: `t${pad(i)}`, text: `[Q${pad(i)}] 
 const queueRows = f => f.$('queue-list').querySelectorAll('.queue-row').map(row => row.dataset.queueItem);
 const acted = f => f.calls.filter(call => call[0] === 'spaceAction' || call[0] === 'handoff' && call[1] !== 'space');
 
+for (const status of ['returned', 'held', 'asking']) test(`queue pagination stays below the latest ${status} task awaiting the person`, async () => {
+  const items = Array.from({ length: 25 }, (_, i) => finishedTask(i + 1));
+  items.push({ id: 'open-1', text: 'Queued task', assignee: null, status: 'queued', createdAt: 100 });
+  const handoff = { started: true, items: { t0025: { state: status, key: 'latest', memberId: 'member-a' } }, summary: {}, waiting: null, reasons: [] };
+  const f = queueFixture(items, { handoff });
+  f.context.openQueue('shared');
+  await settle();
+  const list = f.$('queue-list');
+  assert.equal(list.children[0].dataset.queueItem, 't0025', 'the waiting task precedes the pager when opened');
+  await list.querySelector('button.disclosure-more').click();
+  await settle();
+  assert.equal(list.children[0].dataset.queueItem, 't0025', 'earlier tasks never displace the waiting task');
+  assert.deepEqual(queueRows(f), ['t0025', 'open-1', ...items.slice(5, 24).map(item => item.id)]);
+  assert.equal(focus.active?.dataset.queueItem, 't0006', 'focus continues at the first newly revealed task');
+  assert.deepEqual(acted(f), [], 'pagination only reads the queue');
+});
+
+test('queue pagination stays below waiting tasks when every recent finished task needs the person', async () => {
+  const items = Array.from({ length: 25 }, (_, i) => finishedTask(i + 1));
+  const front = items.slice(-10).map(item => item.id);
+  const handoff = { started: true, items: Object.fromEntries(front.map(id => [id, { state: 'returned', key: id, memberId: 'member-a' }])), summary: {}, waiting: null, reasons: [] };
+  const f = queueFixture(items, { handoff });
+  f.context.openQueue('shared');
+  await settle();
+  const list = f.$('queue-list');
+  assert.deepEqual(list.children.slice(0, front.length).map(row => row.dataset.queueItem), front);
+  await list.querySelector('button.disclosure-more').click();
+  await settle();
+  assert.deepEqual(list.children.slice(0, front.length).map(row => row.dataset.queueItem), front);
+  assert.equal(focus.active?.dataset.queueItem, 't0006');
+});
+
 test('every finished task in a space\'s queue can be reached from 查看全部, the earliest included', async () => {
   const total = 240;
   const items = Array.from({ length: total }, (_, i) => finishedTask(i + 1));
