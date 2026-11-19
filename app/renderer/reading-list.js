@@ -737,11 +737,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   messages = messages.filter(m => !(m.kind === 'turn' && !nativeCompletionText(m)?.trim() && !readingTurnFooter(m)) &&
     !(m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)));
   const explorations = commandExplorations(messages, room, originals), groups = nativeProcessGroups(messages, room, originals, room ? state.sessions : session ? [session] : [], explorations); let lastDay = '';
-  view.paged = !room;
+  view.paged = true;
   view.pageData = readingPageData(messages, [...explorations.values(), ...groups.values()]);
   const active = document.activeElement, pinned = Boolean(selected || active && el.contains(active) && active.closest('[data-message-id]'));
-  const range = room ? { start: 0, end: messages.length, tail: true }
-    : readingPageRange(view.pageData, view.pageRange, view.pageRequest, intent.position, pinned);
+  const range = readingPageRange(view.pageData, view.pageRange, view.pageRequest, intent.position, pinned);
   // Removing an old top row triggers browser scroll anchoring before our next
   // frame. It is layout, not a human scroll that revokes the follow/anchor.
   // While following, any render can do the same: rows moved into a fold or a
@@ -750,9 +749,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   // person's own wheel, pointer or key input clears this at once (interact).
   // Only a render that changes this reader's rows can do that; a column drawn
   // again unchanged keeps every scroll, including a screen reader's.
-  const contentKey = room ? '' : readingContentKey(messages.slice(range.start, range.end)), contentChanged = contentKey !== view.contentKey;
+  const contentKey = readingContentKey(messages.slice(range.start, range.end)), contentChanged = contentKey !== view.contentKey;
   view.contentKey = contentKey;
-  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && contentChanged && followRenderGuard(view))) view.pageChanging = true;
+  if ((view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && contentChanged && followRenderGuard(view))) view.pageChanging = true;
   view.pageRange = range; view.pageRequest = null;
   const turnMarks = readingTurnMarks(messages.slice(range.start, range.end), room, originals);
   view.reload = readingReload(view, el, sourceMessages, room, key, context);
@@ -1160,8 +1159,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     ui.display.text(label, room ? ($('room-search').value || $('room-filter').value ? 'reading.emptySharedMatch' : 'reading.emptyShared') : empty);
     rows.push(label);
   }
-  view.older.hidden = room || !range.start; view.newer.hidden = room || range.tail;
-  if (!room) { rows.unshift(view.older); rows.push(view.newer); }
+  view.older.hidden = !range.start; view.newer.hidden = range.tail;
+  rows.unshift(view.older); rows.push(view.newer);
   if (!view.jumpSlot) rows.push(view.jumpBar);
   // Do not detach/reinsert unchanged rows: that would destroy live selections.
   let cursor = el.firstChild;

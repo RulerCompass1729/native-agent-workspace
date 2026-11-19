@@ -69,7 +69,7 @@ function fixture(messages, room = false, roomMetadata = {}, imageAPI = {}) {
     participantLabel: person => person.name, historicalParticipantLabel: (name, id) => name || id,
     roomThreads: { roots: new Map(), groups: new Map() },
     ResizeObserver: class { observe() {} disconnect() {} },
-    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, toast: text => notices.push(text), toastMessage: (key, params) => notices.push(uiText(key, typeof params === 'function' ? params() : params)),
+    requestAnimationFrame: () => 1, cancelAnimationFrame() {}, performance: { now: () => 0 }, toast: text => notices.push(text), toastMessage: (key, params) => notices.push(uiText(key, typeof params === 'function' ? params() : params)),
     attempt() { throw Error('Unexpected actor'); },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/native-images.js'), 'utf8'), context);

@@ -128,3 +128,25 @@ test('legacy text without an exact body suffix remains intact and source-copy ke
   g.acceptCopy(); await typedCopy;
   assert.equal(g.copies[0], typed.text, 'splitting the visible original body never drops its source notice from Copy');
 });
+
+// Progressive disclosure ③ (the person, 2026-11-19): the space stream pages like a chat, 50 records at a time,
+// with the earlier ones on top; it never folds a single message.
+test('a long space stream shows the latest fifty records, reaches every earlier one, and keeps each message whole', () => {
+  const long = 'Whole shared message 中文 '.repeat(400);
+  const rows = Array.from({ length: 400 }, (_, i) => ({ id: 'shared-' + i, role: 'user', name: 'Mira',
+    text: i === 399 ? long : 'Shared record ' + i, time: time + i * 1000 }));
+  const f = fixture(rows), r = f.context;
+  r.attempt = () => {};
+  f.root.focus = () => {};
+  const shown = () => rows.filter(row => f.view.entries.has(row.id)).map(row => row.id);
+  assert.equal(shown().length, 50);
+  assert.equal(shown()[0], 'shared-350');
+  assert.equal(f.root.childNodes[0], f.view.older, 'the earlier records come in at the top, as in a chat');
+  assert.equal(f.view.older.hidden, false);
+  assert.equal(f.view.newer.hidden, true);
+  assert.equal(f.entry('shared-399').body.textContent, long, 'the newest message is drawn whole, not folded to a line');
+  for (let presses = 0; presses < 7; presses++) r.changeReadingPage(f.view, 'older', true);
+  assert.equal(shown().length, 400);
+  assert.equal(shown()[0], 'shared-0');
+  assert.equal(f.view.older.hidden, true, 'no button once the first record is shown');
+});
