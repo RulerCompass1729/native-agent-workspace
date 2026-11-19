@@ -121,7 +121,7 @@ function verifyRuntime(dataDir) {
 }
 
 // Only the immutable runtime crosses backends; each backend keeps its own home and guards.
-async function inheritRuntime(sourceDataDir, targetDataDir) {
+async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = false } = {}) {
   const { performance } = require('node:perf_hooks');
   const started = performance.now(), io = fs.promises, uid = process.getuid?.();
   if (uid === undefined) return { status: 'unsupported' };
@@ -142,15 +142,18 @@ async function inheritRuntime(sourceDataDir, targetDataDir) {
     return found;
   };
   const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid && a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && b.nlink === 1;
-  async function tree(root) {
+  async function tree(root, links = true) {
     const entries = new Map(), dirs = ['']; let bytes = 0, count = 0;
     while (dirs.length) {
       const rel = dirs.shift(), dir = path.join(root, rel); directory(dir);
       for (const name of fs.readdirSync(dir)) {
         const relative = path.join(rel, name), file = path.join(root, relative), s = fs.lstatSync(file);
-        if (++count > 120000 || relative.split(path.sep).length > 32 || s.uid !== uid) throw Error('Runtime tree limit or owner');
+        if (++count > 120000 + (links ? 0 : 2) || relative.split(path.sep).length > (links ? 32 : 34) || s.uid !== uid) throw Error('Runtime tree limit or owner');
         const entry = { relative, stat: s };
-        if (s.isSymbolicLink()) entry.link = fs.readlinkSync(file);
+        if (s.isSymbolicLink()) {
+          if (!links) throw Error('Linked staging entry');
+          entry.link = fs.readlinkSync(file);
+        }
         else if (s.mode & 0o022) throw Error('Writable runtime entry');
         else if (s.isDirectory()) { entry.kind = 'dir'; dirs.push(relative); }
         else if (s.isFile() && s.nlink === 1 && s.size <= 256 * 1024 * 1024) { entry.kind = 'file'; bytes += s.size; }
@@ -178,6 +181,29 @@ async function inheritRuntime(sourceDataDir, targetDataDir) {
   }
   let staging, stagingIdentity, placeholder, published = false;
   try {
+    if (cleanStaging) {
+      // The service startup lock excludes a live copier; unknown trees remain untouched.
+      directory(targetDataDir);
+      for (const name of fs.readdirSync(targetDataDir)) {
+        tick();
+        if (!/^\.dsh-tui-inherit-[A-Za-z0-9]{6}$/.test(name)) continue;
+        const old = path.join(targetDataDir, name), where = paths(old);
+        try {
+          const identity = directory(old);
+          if (fs.readdirSync(old).some(entry => entry !== 'dsh-tui')) continue;
+          if (lstatOrNull(where.base)) {
+            directory(where.base);
+            if (fs.readdirSync(where.base).some(entry => entry !== 'runtime')) continue;
+          }
+          if (lstatOrNull(where.root)) directory(where.root);
+          await tree(old, false);
+          const current = directory(old);
+          if (current.dev === identity.dev && current.ino === identity.ino) await io.rm(old, { recursive: true });
+        } catch (error) {
+          if (error.message === 'Runtime inheritance deadline') throw error;
+        }
+      }
+    }
     if (rootState(targetDataDir, target)) { await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' }; }
     if (!rootState(sourceDataDir, source)) return { status: 'absent' };
     if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
@@ -233,13 +259,14 @@ async function inheritRuntime(sourceDataDir, targetDataDir) {
     await io.rename(staged.root, target.root); published = true;
     return { status: 'copied', entries: inventory.entries.size, bytes: inventory.bytes, elapsedMs: performance.now() - started };
   } catch (cause) {
-    throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', cause });
+    const reason = cause.message === 'Runtime inheritance deadline' ? 'deadline' : cause.code ? 'filesystem' : 'unqualified';
+    throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', reason, cause });
   } finally {
     if (placeholder && !published) {
       const current = lstatOrNull(target.root);
       if (current?.isDirectory() && !current.isSymbolicLink() && current.dev === placeholder.dev && current.ino === placeholder.ino && !fs.readdirSync(target.root).length) await io.rmdir(target.root);
     }
-    if (staging) {
+    if (staging && stagingIdentity) {
       const current = lstatOrNull(staging);
       if (current?.isDirectory() && !current.isSymbolicLink() && current.dev === stagingIdentity.dev && current.ino === stagingIdentity.ino) await io.rm(staging, { recursive: true, force: true });
     }
@@ -529,6 +556,7 @@ class DshTui extends EventEmitter {
   async start() {
     let where;
     try {
+      await inheritRuntime(this.host.dataDir, this.host.dataDir);
       where = verifyRuntime(this.host.dataDir);
     } catch (error) {
       throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-unqualified', cause: error });
