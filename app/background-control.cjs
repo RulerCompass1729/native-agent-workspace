@@ -163,6 +163,8 @@ class BackgroundControl {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
+    // The person's answers by actor and operation, and the last one of each actor (see decide).
+    this.decisions = new Map(); this.decisionTails = new Map();
     // Opened windows by view key with their agent, when each was last used, what a retired one hands to the next, calls under way.
     this.opened = new Map(); this.used = new Map(); this.kept = new Map(); this.busy = 0; this.retireAfter = retireAfter; this.retireHold = retireHold;
     // Queued deliveries whose operation has answered but whose native receipt is still awaited (they hold no slot).
@@ -964,12 +966,56 @@ class BackgroundControl {
     return { sessionId, nativeId, operationId: id, decision: response, expiresAt: confirmationExpiresAt(row), presentation: digest([options.message || '', options.detail || '']),
       version: digest({ at: row.at, actor: row.actor, command: row.command, confirmation: row.confirmation, guard: row.guard, terminalConsent: row.terminalConsent }) };
   }
+  // The person's answers to one agent's cards are carried out one at a time, in the order given. An answer given while
+  // another operation of that agent runs is accepted and waits for it; it then goes through every check of carryOut, at
+  // that time (expiry included), exactly as if it had been clicked then. The wait is held in memory only: if background
+  // control closes first, the card is still waiting for the person and nothing was carried out.
   async decide(sessionId, nativeId, id, response, authorize) {
     if (authorize !== undefined && typeof authorize !== 'function') throw Error('Invalid confirmation authority');
     authorize?.();
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
-    if (!row || row.state !== 'confirmation-required' || row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
-        !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length || this.inflight.has(this.key(row.actor))) throw Error('This confirmation is no longer current');
+    const key = row && this.key(row.actor), slot = key + ':' + id, known = row && this.decisions.get(slot);
+    // A second click on an answer that waits or runs is that same answer: carried out once.
+    if (known) { if (known.response === response) return known.result; throw require('./ui-errors.cjs').uiError('error.background.answerPending', {}, { rawLanguage: 'en' }); }
+    this.waitingCard(row, response);
+    const ahead = this.decisionTails.get(key), entry = { response, waiting: Boolean(ahead || this.inflight.has(key)) };
+    entry.result = entry.waiting ? this.afterCurrent(key, ahead, entry, () => this.carryOut(sessionId, nativeId, id, response, authorize, true))
+      : this.carryOut(sessionId, nativeId, id, response, authorize, false);
+    const tail = entry.result.then(() => {}, () => {});
+    this.decisions.set(slot, entry); this.decisionTails.set(key, tail);
+    tail.then(() => {
+      if (this.decisions.get(slot) === entry) this.decisions.delete(slot);
+      if (this.decisionTails.get(key) === tail) this.decisionTails.delete(key);
+      this.changed();
+    });
+    this.changed();
+    return entry.result;
+  }
+  async afterCurrent(key, ahead, entry, run) {
+    await ahead;
+    while (this.inflight.has(key)) await this.inflight.get(key).then(() => {}, () => {});
+    // No await between the check above and the synchronous reservation in carryOut.
+    entry.waiting = false;
+    return run();
+  }
+  // Why a card cannot take this answer, in the person's words; the raw message stays the one callers match.
+  waitingCard(row, response) {
+    const stale = key => require('./ui-errors.cjs').uiError(key, {}, { rawLanguage: 'en' });
+    if (!row) throw stale('error.background.cardGone');
+    if (row.state !== 'confirmation-required') throw stale(row.disposition === 'expired' ? 'error.background.cardExpired' : 'error.background.cardHandled');
+    if (row.confirmation?.kind !== 'message' || !Array.isArray(row.confirmation.options.buttons) ||
+        !Number.isSafeInteger(response) || response < 0 || response >= row.confirmation.options.buttons.length) throw Error('This confirmation is no longer current');
+  }
+  answerState(row) {
+    const entry = row.state === 'confirmation-required' && this.decisions?.get(this.key(row.actor) + ':' + row.id);
+    return entry ? (entry.waiting ? 'queued' : 'running') : null;
+  }
+  async carryOut(sessionId, nativeId, id, response, authorize, queued) {
+    if (queued) authorize?.();
+    const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
+    // Settled while it waited (expired, withdrawn, answered elsewhere): its own receipt says how; nothing is carried out.
+    if (queued && row && row.state !== 'confirmation-required') return this.receipt(row.actor, id);
+    this.waitingCard(row, response);
     const decision = response === (row.confirmation.options.cancelId ?? 0) ? 'cancelled' : 'confirmed';
     if (decision === 'confirmed' && this.sameRequests(row).some(({ r, later }) => later && confirmedDecision(r))) throw require('./ui-errors.cjs').uiError('error.background.confirmedOnLaterCard');
     // Reserved synchronously, so no window is closed while the person's answer is carried out.
@@ -1056,7 +1102,7 @@ class BackgroundControl {
     return own.map(saved => { const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved; return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${r.disposition ? require('./ui-locale.js').format('zh', r.stateUiMessage.key) : ({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}),
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}), ...(this.answerState(r) ? { answer: this.answerState(r) } : {}),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
