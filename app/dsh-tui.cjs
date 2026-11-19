@@ -352,6 +352,8 @@ const HOME_PATCH = [
   '- id: dsh-tui-webserver',
   "  name: '@deepseek-ai/dsh-host-webserver'",
   '  disabled: true',
+  '- id: session-title-llm',
+  '  disabled: true',
   '',
 ].join('\n');
 

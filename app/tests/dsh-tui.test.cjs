@@ -580,19 +580,21 @@ test('the TUI home is NAW-owned: its profile is rewritten and linked to this run
 // The sandbox refuses every listening socket, so the TUI's sign-in callback
 // server stays off: the home-level patch outranks the profile's own patch,
 // where the TUI's /settings saves, and is restored on every launch.
-test('the home patch turns off the sign-in web server and is rewritten on every launch', t => {
+test('the home patch disables sign-in and title LLM for new and existing homes', t => {
   const { where } = fakeRuntime(t);
   const profileDir = dshTui.prepareHome(where);
   const patch = path.join(where.dshHome, 'cordis.patch.yml');
   assert.equal(fs.readFileSync(patch, 'utf8'), dshTui.HOME_PATCH);
   const rows = dshTui.HOME_PATCH.split('\n').filter(line => line !== '' && !line.startsWith('#'));
-  assert.deepEqual(rows, ['- id: dsh-tui-webserver', "  name: '@deepseek-ai/dsh-host-webserver'", '  disabled: true']);
-  writeFile(patch, '- id: dsh-tui-webserver\n  disabled: false\n');
+  assert.deepEqual(rows, ['- id: dsh-tui-webserver', "  name: '@deepseek-ai/dsh-host-webserver'", '  disabled: true',
+    '- id: session-title-llm', '  disabled: true']);
+  writeFile(patch, '- id: dsh-tui-webserver\n  disabled: false\n- id: session-title-llm\n  disabled: false\n');
   writeFile(path.join(profileDir, 'cordis.patch.yml'), 'settings saved by the TUI\n');
   const manifest = path.join(profileDir, 'package.json');
   const before = [fs.statSync(patch).ino, fs.statSync(manifest).ino];
   dshTui.prepareHome(where);
   assert.equal(fs.readFileSync(patch, 'utf8'), dshTui.HOME_PATCH);
+  assert.match(fs.readFileSync(patch, 'utf8'), /- id: session-title-llm\n  disabled: true/);
   assert.equal(fs.readFileSync(path.join(profileDir, 'cordis.patch.yml'), 'utf8'), 'settings saved by the TUI\n');
   // R2-B3: each file is replaced by a new one, never written in place, and
   // no temporary file is left behind.
