@@ -20,11 +20,11 @@ async function scene(language, options = {}) {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== 'https://phone.invalid') { errors.push('Unexpected external request'); return route.abort(); }
     if (request.method() === 'POST') writes.push(url.pathname);
-    const data = url.pathname === '/mobile/session' ? session : url.pathname === '/mobile/workspace' ? workspace :
+    const data = url.pathname === '/mobile/session' ? session : (url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname)) ? workspace :
       url.pathname.startsWith('/mobile/read/') ? row(decodeURIComponent(url.pathname.slice('/mobile/read/'.length))) :
       url.pathname === '/mobile/send' ? { requestId: request.postDataJSON().requestId, sessionId: 'claude', action: 'send', status: 'submitted' } : null;
     const fulfill = () => data ? route.fulfill({ json: data }) : route.fulfill({ status: 404, body: '' });
-    if (url.pathname === hold) { held.push({ route, fulfill }); return; }
+    if ((url.pathname === hold || hold === '/mobile/workspace' && /^\/mobile\/workspace\//.test(url.pathname))) { held.push({ route, fulfill }); return; }
     if (data) return fulfill();
     const file = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice('/mobile/'.length);
     if (!['index.html', 'client.js', 'workspace.js', 'passkeys.js', 'push.js', 'style.css', 'manifest.webmanifest'].includes(file)) return route.fulfill({ status: 404, body: '' });

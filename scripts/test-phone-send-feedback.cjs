@@ -26,7 +26,7 @@ async function scene(lang, history = false) {
       const status = await new Promise(resolve => { releaseNative = resolve; });
       hold = true; if (status === 'submitted') messages.push({ id: value.requestId, role: 'user', text: value.text, time: 1 });
       data = { requestId: value.requestId, sessionId: 'a', action: 'send', status };
-    } else if (url.pathname === '/mobile/workspace') {
+    } else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) {
       data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'a' ? [...messages] : [] })), rooms: [], confirmations: [], reminders: { count: 0, records: [] }, capabilities: { push: false }, ...(history ? { steward: { state: 'shared', sessionId: 'a' } } : {}), syncedAt: 1 };
       if (hold) { held.push(route); await new Promise(resolve => { releaseWorkspace = resolve; }); }
     }
@@ -75,7 +75,7 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         await s.send(); s.native('submitted'); await until(() => s.held.length);
         await s.page.locator('#message').fill('SYNTHETIC_SECOND'); await s.page.locator('#send-message').tap(); await until(() => s.posted.length === 2);
         s.native('submitted'); await until(async () => await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);
-        const response = s.page.waitForResponse(r => r.url().endsWith('/mobile/workspace')); await s.release(); await (await response).finished(); await wait(100);
+        const response = s.page.waitForResponse(r => new URL(r.url()).pathname === '/mobile/workspace/session/a'); await s.release(); await (await response).finished(); await wait(100);
         check('older full snapshot cannot remove a newer confirmed input', await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);
         await s.page.locator('#connection button').click(); await s.page.locator('.thread time[datetime="1970-01-01T00:00:00.001Z"]').first().waitFor();
         check('later native snapshot replaces both transient rows', await count(s.page) === 1 && await s.page.locator('.thread .bubble').filter({ hasText: 'SYNTHETIC_SECOND' }).count() === 1);

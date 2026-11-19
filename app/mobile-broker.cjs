@@ -309,12 +309,25 @@ class MobileBroker {
     if (!this.#desktop || !this.#workspaceGrant && !this.#consentView || this.#workspaceGrant && this.#workspaceGrant.generation !== state.generation) throw denied();
     return state;
   }
-  async workspaceRead(auth) {
+  async workspaceRead(auth, selection) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
-    const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch;
-    const result = await this.#desktop.read(client, this.#workspaceGrant?.value || { roomIds: [], records: false }, this.#scopes(state));
+    const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch, scopes = this.#scopes(state);
+    const grant = this.#workspaceGrant?.value || { roomIds: [], records: false };
+    const result = await this.#desktop.read(client, grant, scopes, selection);
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
-    this.#scopes(this.#workspaceState(auth));
+    const currentScopes = this.#scopes(this.#workspaceState(auth));
+    if (selection?.kind === 'session') {
+      const before = scopes.find(s => s.sessionId === selection.id && s.actions.includes('read'));
+      const after = currentScopes.find(s => s.sessionId === selection.id && s.actions.includes('read'));
+      const route = client.route(selection.id), record = route.state.sessions.find(s => s.id === selection.id);
+      if (!before || !after || before.nativeId !== after.nativeId || before.serviceKey !== after.serviceKey || route.key !== before.serviceKey ||
+          !record || record.archived || record.nativeContextPending || record.nativeId !== before.nativeId) throw denied();
+    }
+    if (selection?.kind === 'room') {
+      const current = this.#desktop.snapshot(client);
+      if (!this.#desktop.resolveGrant(grant, current).roomIds.includes(selection.id) ||
+          !(current.rooms || [current.room]).some(r => r?.id === selection.id && !r.archived)) throw denied();
+    }
     const consent = this.#consent.status(state);
     result.capabilities.sensitiveDecisions = consent.enabled;
     result.capabilities.push = !this.#all(state) && this.#workspaceGrant?.value.records === true;

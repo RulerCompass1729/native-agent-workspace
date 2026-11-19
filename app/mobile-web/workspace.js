@@ -74,6 +74,7 @@
     let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '', authorization = 0;
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
     const t = key => words[lang][key] || key;
+    words.zh.loadingBody = '正在读取对话内容…'; words.en.loadingBody = 'Loading this conversation…';
     const node = (tag, value, cls) => { const n = d.createElement(tag); if (value !== undefined) n.textContent = value; if (cls) n.className = cls; return n; };
     const paths = { home: 'm3 10 9-7 9 7v10H3Z M9 20v-7h6v7', space: 'M3 4h8v7H3z M13 4h8v7h-8z M3 13h8v7H3z M13 13h8v7h-8z', queue: 'M4 4h16v16H4Z M8 8h8 M8 12h8 M8 16h5', bell: 'M6 9a6 6 0 0 1 12 0c0 7 3 7 3 8H3c0-1 3-1 3-8Z M10 21h4', back: 'm14 5-7 7 7 7', menu: 'M5 12h.01 M12 12h.01 M19 12h.01' };
     function icon(name) { const svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg'), p = d.createElementNS(svg.namespaceURI, 'path'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); p.setAttribute('d', paths[name] || paths.menu); svg.append(p); return svg; }
@@ -438,20 +439,46 @@
       if (locked || !client.state.session) { login(); updateCompose(); return; }
       if(client.state.session.candidate){candidate();updateCompose();return;}
       const nav = node('div', undefined, 'nav-inner'); for (const key of ['home', 'space', 'queue']) { const a = link('', key, route?.page === key ? 'active' : ''); a.append(icon(key), node('span', t(key))); if (route?.page === key) a.setAttribute('aria-current', 'page'); nav.append(a); } el('navigation').append(nav);
-      if (!view) { el('content').append(node('p', t('offline'))); updateCompose(); return; }
-      ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)(); updateCompose();
+      if (!view) { el('content').append(node('p', t(busy || d.documentElement.dataset.loading === 'true' ? 'reading' : 'offline'))); updateCompose(); return; }
+      const body = route?.page === 'chat' ? view.sessions.find(s => s.id === route.id)
+        : route?.page === 'space' && route.id ? view.rooms.find(r => r.id === route.id) : null;
+      if (body?.conversationLoaded === false && !body.messages?.length) {
+        el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
+        if (route.page === 'chat') receipts(el('content'));
+      }
+      else ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)();
+      if (body?.conversationLoaded === false && body.messages?.length) el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
+      updateCompose();
       if (stick) global.scrollTo?.(0, d.documentElement.scrollHeight);
     }
-    async function refresh() {
-      if (busy) return; busy = true; const ticket = ++epoch, generation = client.state.authorization, acknowledged = acknowledgedMessages;
-      try { await client.start(); if (!locked && client.state.session) await client.refresh(); if (locked || !client.state.session) { view = null; return; }
-        if(client.state.session.candidate){view=null;return;}
-        const next = client.state.session.workspace ? await api('/mobile/workspace') : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
+    const routeKey = () => JSON.stringify([lang, route?.page, route?.id, route?.nativeId]);
+    const workspacePath = () => '/mobile/workspace/' + (route?.page === 'chat' && route.id ? 'session/' + encodeURIComponent(route.id)
+      : route?.page === 'space' && route.id ? 'room/' + encodeURIComponent(route.id) : 'summary');
+    let refreshRead;
+    function refresh() {
+      const key = routeKey(), acknowledged = acknowledgedMessages;
+      if (refreshRead?.key === key && refreshRead.authorization === client.state.authorization && refreshRead.acknowledged === acknowledged) { paint(); return refreshRead.promise; }
+      const read = { key, authorization: client.state.authorization, acknowledged }, ticket = ++epoch;
+      refreshRead = read; busy = true;
+      read.promise = (async () => {
+      let generation = client.state.authorization, deviceId;
+      const current = () => ticket === epoch && key === routeKey();
+      try { await client.start(); if (!current()) return;
+        generation = client.state.authorization; deviceId = client.state.session?.deviceId;
+        if (!locked && client.state.session) await client.refresh();
+        if (!current() || generation !== client.state.authorization) return;
+        if (locked || !client.state.session || client.state.session.candidate) { view = null; return; }
+        paint();
+        const next = client.state.session.workspace ? await api(workspacePath()) : { sessions: client.state.session.sessions.filter(s => s.available).map(s => ({ ...s,
           messages: client.state.row?.id === s.id ? client.state.row.messages.map(m => ({ ...m, role: 'assistant', name: s.name, attachments: m.unsupportedAttachments })) : [],
           earlierMessagesOmitted: client.state.row?.id === s.id ? client.state.row.earlierMessagesOmitted : 0 })), rooms: [], confirmations: [], reminders: null, syncedAt: Date.now() };
-        if (ticket !== epoch || acknowledged !== acknowledgedMessages) return; view = next; lastReceived = global.performance.now();
+        if (!current() || generation !== client.state.authorization || deviceId !== client.state.session?.deviceId || acknowledged !== acknowledgedMessages) return;
+        view = next; lastReceived = global.performance.now();
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
-      } catch { if (generation === client.state.authorization && ticket === epoch) { disconnected = true; toast('offline'); } } finally { if (ticket === epoch) { busy = false; paint(); } }
+      } catch { if (generation === client.state.authorization && current()) { disconnected = true; toast('offline'); } }
+      finally { if (current()) { busy = false; paint(); } if (refreshRead === read) refreshRead = null; }
+      })();
+      return read.promise;
     }
     let navigation = 0;
     async function navigate() {
@@ -472,6 +499,10 @@
         route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null };
         d.documentElement.dataset.page = route.page;
         d.documentElement.dataset.route = global.location.hash;
+        if (view) {
+          const unloaded = ({ messages, earlierMessagesOmitted, ...row }) => ({ ...row, conversationLoaded: false });
+          view = { ...view, sessions: view.sessions.map(unloaded), rooms: view.rooms.map(unloaded) };
+        }
         composeKey = ''; el('toast').hidden = true; paint();
         const id = route.page === 'chat' ? route.id : route.nativeId;
         if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);

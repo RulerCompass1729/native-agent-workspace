@@ -74,7 +74,9 @@ class MobileWorkspace {
     for (const id of value.roomIds) if (!(state.rooms || [state.room]).some(r => r?.id === id && !r.archived)) throw denied();
     return structuredClone(value);
   }
-  async read(client, grant, scopes) {
+  async read(client, grant, scopes, selection) {
+    if (selection !== undefined && !(exact(selection, ['kind']) && selection.kind === 'summary' ||
+        exact(selection, ['kind', 'id']) && ['session', 'room'].includes(selection.kind) && identifier(selection.id))) throw denied();
     await client.refresh();
     const state = this.snapshot(client), permitted = new Map(), cards = new Map(), originals = new Map();
     const all = exact(grant, ['allRooms','records']) && grant.allRooms === true;
@@ -122,14 +124,17 @@ class MobileWorkspace {
       } catch { /* Readable cards without complete, current proof remain disabled. */ }
     }
     const roomRows = (state.rooms || [state.room]).filter(r => r && grant.roomIds.includes(r.id) && !r.archived);
+    if (selection?.kind === 'session' && !permitted.has(selection.id) || selection?.kind === 'room' && !roomRows.some(r => r.id === selection.id)) throw denied();
     // Share a body budget across all threads; leave the existing response cap
     // for metadata, exact confirmation content and reminders. Selected mode
     // keeps its original per-thread contract. Native data is never modified.
     const bodyBudget = all ? Math.min(128 * 1024, Math.floor(4 * 1024 * 1024 / Math.max(1, permitted.size + roomRows.length))) : undefined;
     const sessions = [...permitted.values()].map(s => {
-      const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
       // question: a Codex question that does not block the turn is open; the home row says it needs you, as 等你 does.
-      return { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)),
+      const row = { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)) };
+      if (selection && (selection.kind !== 'session' || selection.id !== s.id)) return { ...row, conversationLoaded: false };
+      const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
+      return { ...row, ...(selection ? { conversationLoaded: true } : {}),
         ...conversation((s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
           (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget, cards) };
     });
@@ -137,7 +142,8 @@ class MobileWorkspace {
       id: r.id, name: r.name, queue: (r.queue || []).map(i => ({ id: i.id, text: i.text, status: i.status,
         assignee: i.assignee, sentTo: i.sentTo, reply: i.reply, reason: i.reason, question: i.question })),
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
-      ...conversation(r.messages, undefined, bodyBudget),
+      ...(selection && (selection.kind !== 'room' || selection.id !== r.id) ? { conversationLoaded: false }
+        : { ...conversation(r.messages, undefined, bodyBudget), ...(selection ? { conversationLoaded: true } : {}) }),
     }));
     const shared = grant.records ? this.records.status(state, client) : null;
     const reminders = shared && { ...shared,

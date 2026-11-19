@@ -41,7 +41,7 @@ async function open(lang, { blocked = false, duplicate = false, long = false, un
     if (url.pathname === '/mobile/session') data = { deviceId, csrf: (narrowed ? 'd' : 'c').repeat(43), workspace: !narrowed, sessions: narrowed ? sessions.slice(0, 1) : sessions };
     else if (url.pathname.startsWith('/mobile/read/')) data = { id: url.pathname.split('/').at(-1), contextId: 'x'.repeat(43), canSend: !blocked, sendBlocked: blocked ? 'noQueue' : null, messages: [], question: null };
     else if (url.pathname === '/mobile/receipt') data = { requestId: req.postDataJSON().requestId, sessionId: 'butler', action: 'send', status: confirmReceipt ? 'submitted' : 'unconfirmed' };
-    else if (url.pathname === '/mobile/workspace') data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'butler' ? [{ id: 'reply', role: 'assistant', text: zh ? '我会分别检查回执和按钮。' : 'I will check the receipts and the button.', time: 1795113660000 }] : [] })),
+    else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'butler' ? [{ id: 'reply', role: 'assistant', text: zh ? '我会分别检查回执和按钮。' : 'I will check the receipts and the button.', time: 1795113660000 }] : [] })),
       rooms: [{ id: 'room', name: names[2], members: [], messages: [], queue: [] }], reminders: { count: 0, records: [] }, confirmations: [], syncedAt: 1795113660000,
       capabilities: { queue: true, records: false, push: false }, steward: { state: 'shared', sessionId: 'butler' } };
     if (data) return route.fulfill({ json: data });

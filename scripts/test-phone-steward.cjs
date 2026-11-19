@@ -31,7 +31,7 @@ async function open(context, { steward, busy = false, hash, rows = butlerRows })
     if (/^\/mobile\/[a-z]+\.(js|css|webmanifest)$/.test(p)) return route.fulfill({ status: 200, contentType: p.endsWith('.css') ? 'text/css' : 'text/javascript', body: fs.readFileSync(path.join(web, path.basename(p))) });
     if (p === '/mobile/session') return json({ deviceId: '10000000-0000-4000-8000-000000000001', csrf: 'c'.repeat(43), workspace: true,
       sessions: list.map(s => ({ id: s.id, name: s.name, state: s.state, available: true, actions: ['read', 'send', 'answer'] })) });
-    if (p === '/mobile/workspace') return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? (typeof rows === 'function' ? rows() : rows) : [], earlierMessagesOmitted: 0 })), rooms: [],
+    if ((p === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(p))) return json({ sessions: list.map(s => ({ ...s, question: false, roomIds: [], messages: s.id === butler ? (typeof rows === 'function' ? rows() : rows) : [], earlierMessagesOmitted: 0 })), rooms: [],
       confirmations: [], reminders: null, syncedAt: now, capabilities: { queue: false, records: false, sensitiveDecisions: false, nativeTerminal: false, push: false }, ...(steward ? { steward } : {}) });
     if (p.startsWith('/mobile/read/')) { const id = decodeURIComponent(p.split('/').pop());
       const idle = list.find(s => s.id === id)?.state === 'idle';

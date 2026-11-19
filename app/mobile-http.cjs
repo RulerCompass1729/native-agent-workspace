@@ -100,6 +100,13 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
         if (typeof broker.workspaceRead !== 'function') throw reject(403, 'MOBILE_DENIED');
         return respond(response, 200, await broker.workspaceRead(credentials));
       }
+      const selection = request.method === 'GET' && request.url.match(/^\/mobile\/workspace\/(summary|session\/([A-Za-z0-9_-]{1,100})|room\/([A-Za-z0-9_-]{1,100}))$/);
+      if (selection) {
+        const credentials = auth(values);
+        if (typeof broker.workspaceRead !== 'function') throw reject(403, 'MOBILE_DENIED');
+        return respond(response, 200, await broker.workspaceRead(credentials, selection[1] === 'summary' ? { kind: 'summary' }
+          : { kind: selection[2] ? 'session' : 'room', id: selection[2] || selection[3] }));
+      }
       const reading = request.method === 'GET' && request.url.match(/^\/mobile\/read\/([A-Za-z0-9_-]{1,100})$/);
       if (reading) return respond(response, 200, await broker.read(auth(values), reading[1]));
       if (request.method !== 'POST' || !['/mobile/pair', '/mobile/pair/activate', '/mobile/send', '/mobile/answer', '/mobile/receipt', '/mobile/logout', '/mobile/workspace/action', '/mobile/push', ...Object.keys(consentRoutes)].includes(request.url)) throw reject(404, 'MOBILE_NOT_FOUND');

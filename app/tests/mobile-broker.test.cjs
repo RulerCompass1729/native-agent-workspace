@@ -517,3 +517,33 @@ for(const rebind of [false,true])test(`bound push count: ${rebind?'a new client 
  }
  assert.deepEqual(f.calls,[],'No original conversation read or native input is needed to count');
 });
+
+for (const change of ['native', 'route', 'archived', 'pending', 'revoke', 'repair']) test('selected workspace read rejects a late ' + change + ' before returning body', async t => {
+  let release, entered; const started = new Promise(r => { entered = r; }), held = new Promise(r => { release = r; });
+  const desktop = { grant: (_c, g) => g, read: async () => { entered(); await held; return { capabilities: {}, confirmations: [] }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(['read'], false, { roomIds: [], records: false });
+  const pending = f.broker.workspaceRead(auth, { kind: 'session', id: f.record.id }); await started;
+  if (change === 'native') f.record.nativeId = 'successor-native';
+  if (change === 'route') f.clients.at(-1).entry.key = 'successor-service';
+  if (change === 'archived') f.record.archived = true;
+  if (change === 'pending') f.record.nativeContextPending = true;
+  if (change === 'revoke') f.broker.revoke();
+  if (change === 'repair') await f.pair(['read'], true, { roomIds: [], records: false });
+  release(); await assert.rejects(pending); assert.equal(f.sent.length, 0); assert.equal(f.answered.length, 0);
+});
+test('selected workspace body forwards the exact selector without granting native send', async t => {
+  let seen; const desktop = { grant: (_c, g) => g, read: async (_c, _g, scopes, choice) => { seen = { scopes, choice }; return { capabilities: {}, confirmations: [] }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(['read'], false, { roomIds: [], records: false });
+  await f.broker.workspaceRead(auth, { kind: 'session', id: f.record.id });
+  assert.deepEqual(structuredClone(seen.choice), { kind: 'session', id: f.record.id }); assert.deepEqual(seen.scopes[0].actions, ['read']);
+  assert.equal(f.calls.length, 0); assert.equal(f.sent.length, 0);
+});
+test('selected room rejects archive after its body was computed', async t => {
+  let release, entered; const started = new Promise(r => { entered = r; }), held = new Promise(r => { release = r; });
+  const source = { rooms: [{ id: 'shared', archived: false }] };
+  const desktop = { grant: (_c, g) => g, snapshot: () => source, resolveGrant: (_g, s) => ({ roomIds: s.rooms.filter(r => !r.archived).map(r => r.id) }),
+    read: async () => { entered(); await held; return { capabilities: {}, confirmations: [] }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(['read'], false, { roomIds: ['shared'], records: false });
+  const pending = f.broker.workspaceRead(auth, { kind: 'room', id: 'shared' }); await started; source.rooms[0].archived = true; release();
+  await assert.rejects(pending); assert.equal(f.calls.length, 0);
+});

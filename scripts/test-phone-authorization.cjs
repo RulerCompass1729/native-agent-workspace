@@ -22,11 +22,11 @@ async function scene(language, options = {}) {
     if (request.method() === 'POST') writes.push({path:url.pathname,body:request.postDataJSON()});
     if(url.pathname==='/mobile/pair'){session.deviceId='00000000-0000-4000-8000-000000000002';session.csrf='D'.repeat(43);session.sessions=[sessions[1]];workspace.sessions=[sessions[1]];return route.fulfill({json:{paired:true}});}
     if(url.pathname.startsWith('/mobile/read/')&&!session.sessions.some(s=>s.id===decodeURIComponent(url.pathname.slice('/mobile/read/'.length))))return route.fulfill({status:403,json:{error:'MOBILE_DENIED'}});
-    const data = url.pathname === '/mobile/session' ? session : url.pathname === '/mobile/workspace' ? workspace :
+    const data = url.pathname === '/mobile/session' ? session : (url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname)) ? workspace :
       url.pathname.startsWith('/mobile/read/') ? row(decodeURIComponent(url.pathname.slice('/mobile/read/'.length))) :
       url.pathname === '/mobile/send' ? { requestId: request.postDataJSON().requestId, sessionId: request.postDataJSON().contextId==='L'.repeat(43)?'codex':'claude', action: 'send', status: 'submitted' } : null;
     const frozenData=data?structuredClone(data):null; const fulfill = () => frozenData ? route.fulfill({ json: frozenData }) : route.fulfill({ status: 404, body: '' });
-    if (url.pathname === hold) { held.push({ route, fulfill }); return; }
+    if ((url.pathname === hold || hold === '/mobile/workspace' && /^\/mobile\/workspace\//.test(url.pathname))) { held.push({ route, fulfill }); return; }
     if (data) return fulfill();
     const file = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice('/mobile/'.length);
     if (!['index.html', 'client.js', 'workspace.js', 'passkeys.js', 'push.js', 'style.css', 'manifest.webmanifest'].includes(file)) return route.fulfill({ status: 404, body: '' });
@@ -44,7 +44,7 @@ async function scene(language, options = {}) {
 (async()=>{try{
  browser=await browsers[engine].launch({headless:true,executablePath:process.env.NAW_BROWSER_EXECUTABLE});const s=await scene('zh');
  try{
-  s.hold('/mobile/workspace');await s.page.locator('#content a[href="#zh/chat/claude"]').tap();await until(()=>s.held.length);await s.page.locator('#message').fill('OLD-A-DRAFT');
+  await s.page.locator('#content a[href="#zh/chat/claude"]').tap();await s.page.waitForFunction(()=>document.documentElement.dataset.loading==='false');await s.page.locator('#message').fill('OLD-A-DRAFT');s.hold('/mobile/workspace');await s.page.evaluate(()=>{void nawPhone.refresh();});await until(()=>s.held.length);
   check('positive control: old grant and A content are visible',await s.page.evaluate(()=>nawPhone.client.state.session.sessions.some(s=>s.id==='claude')&&document.querySelector('.thread').textContent.includes('WORKSPACE-claude')));
   await s.page.evaluate(()=>location.hash='#pair='+'P'.repeat(43));await s.page.waitForFunction(()=>nawPhone.client.state.session?.deviceId==='00000000-0000-4000-8000-000000000002'&&document.documentElement.dataset.loading==='false');
   const home=await s.page.evaluate(()=>({scopes:nawPhone.client.state.session.sessions.map(s=>s.id),oldLink:document.querySelectorAll('#content a[href="#zh/chat/claude"]').length,loading:document.documentElement.dataset.loading}));
