@@ -4,7 +4,7 @@ As of 2026-11-08. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Next daily GUI: pending batch installation; version and release commit will be recorded after installation.
+Daily GUI installed: `0.1.0-alpha.266` / release `9c88c2f953200205fcd08b0f179fd438698d7ab2`; post-install window geometry verification is pending.
 Ordinary launch retains all 16 records, native identities/live process start
 identities, reported settings and private/shared draft scopes. The five original
 development/secretary backends remain alpha.215; the newly occupied alpha.219
