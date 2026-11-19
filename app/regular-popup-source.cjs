@@ -27,6 +27,21 @@ function attributes(tag, start) {
   }
   return result;
 }
+// One forward pass. The former /^<\s*(\/?)\s*name/i split each whitespace run between two
+// quantifiers, so whitespace-only tags cost quadratic time.
+function tagHead(tag) {
+  let i = 1;
+  while (i < tag.length && /\s/.test(tag[i])) i++;
+  const closing = tag[i] === '/';
+  if (closing) {
+    i++;
+    while (i < tag.length && /\s/.test(tag[i])) i++;
+  }
+  if (!/[a-z]/i.test(tag[i] || '')) return null;
+  const begin = i;
+  while (i < tag.length && /[a-z0-9:-]/i.test(tag[i])) i++;
+  return { name: tag.slice(begin, i).toLowerCase(), closing, end: i };
+}
 function parseTrending(html, { deadline = Infinity } = {}) {
   if (typeof html !== 'string' || Buffer.byteLength(html) > MAX_BYTES) throw Error('source-invalid');
   const check = () => { if (performance.now() >= deadline) throw Error('source-deadline'); }; check();
@@ -47,9 +62,9 @@ function parseTrending(html, { deadline = Infinity } = {}) {
       else if (c === '<') throw Error('source-invalid');
     }
     if (html[end] !== '>' || quote) throw Error('source-invalid');
-    const tag = html.slice(start, end + 1), head = /^<\s*(\/?)\s*([a-z][a-z0-9:-]*)/i.exec(tag); cursor = end + 1;
+    const tag = html.slice(start, end + 1), head = tagHead(tag); cursor = end + 1;
     if (!head) continue;
-    const name = head[2].toLowerCase(), closing = Boolean(head[1]), attr = closing ? null : attributes(tag, head[0].length);
+    const { name, closing } = head, attr = closing ? null : attributes(tag, head.end);
     if (!closing && ['script', 'style'].includes(name)) {
       const pattern = rawEnds[name]; pattern.lastIndex = cursor; const close = pattern.exec(html);
       if (!close) throw Error('source-invalid'); cursor = close.index; continue;

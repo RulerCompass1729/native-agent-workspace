@@ -10,12 +10,16 @@ function boundedParse(kind) {
     const worker = new Worker(`const { parentPort, workerData } = require('node:worker_threads');
       const { EventEmitter } = require('node:events'), s = require(workerData.file), start = performance.now();
       const unit = '<article class="Box-row">', broken = unit.repeat(Math.floor(s.MAX_BYTES / unit.length));
-      const body = workerData.kind === 'description' ? '<article class="Box-row"><h2><a href="/example/tool">x</a></h2><p>' + '<'.repeat(s.MAX_BYTES - 200) + '</p></article>' : broken;
+      // F1-r5: whitespace-only tags at the 4KiB tag limit, then one valid row, within 2MiB.
+      const tail = '<article class="Box-row"><h2><a href="/example/tool">x</a></h2><p>Public</p></article>', space = '<' + ' '.repeat(4094) + '>';
+      const body = workerData.kind === 'description' ? '<article class="Box-row"><h2><a href="/example/tool">x</a></h2><p>' + '<'.repeat(s.MAX_BYTES - 200) + '</p></article>'
+        : workerData.kind.startsWith('space') ? space.repeat(Math.floor((s.MAX_BYTES - tail.length) / space.length)) + tail : broken;
       const done = outcome => parentPort.postMessage({ outcome, elapsed: performance.now() - start });
-      if (workerData.kind !== 'read') { try { s.parseTrending(body); done('accepted'); } catch { done('rejected'); } }
+      const accepted = rows => done(rows.length === 1 && rows[0].title === 'example/tool' ? 'accepted' : 'wrong-rows');
+      if (!workerData.kind.endsWith('read')) { try { accepted(s.parseTrending(body)); } catch { done('rejected'); } }
       else { const get = (_, options, callback) => { const req = new EventEmitter(); req.destroy = () => {};
         queueMicrotask(() => { const res = new EventEmitter(); res.statusCode = 200; res.headers = { 'content-type': 'text/html' }; res.destroy = () => {}; callback(res); res.emit('data', Buffer.from(body)); res.emit('end'); }); return req; };
-        s.readSource({}, { get }).then(() => done('accepted'), () => done('rejected')); }
+        s.readSource({}, { get }).then(accepted, () => done('rejected')); }
     `, { eval: true, workerData: { kind, file: require.resolve('../regular-popup-source.cjs') }, resourceLimits: { maxOldGenerationSizeMb: 64 } });
     let settled = false;
     const timer = setTimeout(async () => { if (settled) return; settled = true; await worker.terminate(); resolve({ outcome: 'deadline-exceeded' }); }, 1500);
@@ -25,6 +29,14 @@ function boundedParse(kind) {
 }
 for (const kind of ['parse', 'read', 'description']) test('F1: bounded rejection of adversarial source ' + kind, async () => {
   const result = await boundedParse(kind); assert.equal(result.outcome, 'rejected'); assert.ok(result.elapsed < 1000);
+});
+for (const kind of ['space-parse', 'space-read']) test('F1-r5: 2MiB of whitespace-only tag heads parses in linear time ' + kind, async () => {
+  const result = await boundedParse(kind); assert.equal(result.outcome, 'accepted'); assert.ok(result.elapsed < 1000, String(result.elapsed));
+});
+test('F1-r5: spaced and slashed tag heads keep their meaning; heads without a name are skipped', () => {
+  const spaced = '<   ><article class="Box-row">< h2 ><\ta href="/example/tool">tool</a></ h2 ><p>Public description< /p></ 1></article >';
+  assert.deepEqual(source.parseTrending(spaced), source.parseTrending(html));
+  assert.throws(() => source.parseTrending(spaced + '< article class="Box-row">'));
 });
 test('F1: parsing cannot succeed after its monotonic deadline', () => {
   assert.throws(() => source.parseTrending(html, { deadline: performance.now() - 1 }));
