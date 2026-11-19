@@ -609,12 +609,20 @@ class DshTui extends EventEmitter {
   }
   attach(terminal) {
     this.terminal = terminal;
+    this.record.nativeId = null;
     terminal.on('data', event => this.emit('terminal', event));
     terminal.on('started', pid => {
+      if (this.terminal !== terminal) return;
+      const epoch = terminal.journal?.epoch;
+      // A NAW terminal-instance identity, never an upstream history/resume ID.
+      this.record.nativeId = Number.isSafeInteger(pid) && pid > 1 && typeof epoch === 'string' &&
+        /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(epoch) ? `naw-dsh:${epoch}` : null;
       this.emit('pid', pid);
       this.emit('state', 'idle');
     });
     terminal.on('closed', result => {
+      if (this.terminal !== terminal) return;
+      this.record.nativeId = null;
       this.closeGuards().catch(() => {});
       // As for Claude: an exit the PTY host could not confirm is not an end.
       if (!result?.confirmed) {
