@@ -34,7 +34,7 @@ function fixture() {
   const state = { sessions: [record], queueSecretary: null };
   const row = { more: new Element('button') };
   const c = vm.createContext({ ...l, state, disconnected: false, node: (tag, text, cls) => new Element(tag, text, cls),
-    queueSpace: 'shared', queueMemberName: id => 'Recipient ' + id, queueReasonKey: () => null, queueOutcomeNode: () => null,
+    queueSpace: 'shared', queueMemberName: id => 'Recipient ' + id, queueReasonKey: () => null, queueOutcomeNode: () => null, queueAnswerNode: () => null,
     button: (text, action, cls) => { const el = new Element('button', text, cls); el.click = action; return el; },
     api: { queueSecretary: async id => calls.push(['secretary', id]), initial: async () => state, spaceAction: async (...args) => calls.push(args) },
     updateState: () => calls.push(['refresh']), render: () => calls.push(['render']), renderQueue() {},

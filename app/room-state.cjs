@@ -747,14 +747,21 @@ class RoomState {
   // did it from the board: on 11-13 the butler could only cancel items 61f9c09b and 862d6abb, done and merged, and the
   // record said 「已取消」. NAW never sends an item that is no longer queued (queueMarkSent), as for a cancel. One queued
   // for nobody is cancelled instead: marked done, it would name nobody in its row (queue.status.doneBySteward).
-  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null) {
+  // answer: what the person sent from the row of an item waiting for them, recorded once native received it; only
+  // their window passes it (main.cjs spaceAction).
+  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null, answer) {
     const item = this.queueFind(id, itemId);
     const assigned = item.status === 'queued' && typeof item.assignee === 'string' && item.assignee.length > 0;
-    if (!assigned && !['waiting', 'sent'].includes(item.status)) {
+    if (!assigned && !['waiting', 'sent'].includes(item.status) || answer !== undefined && (by !== null || item.status !== 'waiting')) {
       throw uiError("error.queue.notWaiting");
     }
+    const now = Date.now(), next = { ...item, status: 'done', finishedAt: now, ...(by === 'steward' ? { finishedBy: 'steward' } : {}) };
+    if (answer !== undefined) {
+      next.answer = { text: answer, deliveredAt: now };
+      try { queueRules.validateQueue([next]); } catch { throw uiError("error.queue.invalid"); }
+    }
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
-    this.queueReplace(id, itemId, { ...item, status: 'done', finishedAt: Date.now(), ...(by === 'steward' ? { finishedBy: 'steward' } : {}) }, event);
+    this.queueReplace(id, itemId, next, event);
   }
   queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false) {
     const item = this.queueFind(id, itemId);

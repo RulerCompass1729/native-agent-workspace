@@ -739,6 +739,17 @@ header h1, header p { overflow-wrap: anywhere; }
 .queue-text{grid-row:2;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
 .queue-outcome{grid-row:3;grid-column:1/-1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-size:12px;color:var(--muted)}
 .queue-actions{grid-row:1;grid-column:2;display:flex;gap:6px}
+/* The answer to a waiting row, under the member's question: the box, its send button and the receipt. */
+.queue-answer{grid-column:1/-1;min-width:0;display:grid;gap:6px;margin-top:4px}
+.queue-answer textarea{margin-bottom:0;font-size:13px;padding:8px 10px}
+.queue-answer textarea[readonly]{background:var(--panel);color:var(--muted)}
+.queue-answer-foot{display:flex;align-items:flex-start;gap:10px}
+.queue-answer-foot[hidden],.queue-answer-line[hidden]{display:none}
+.queue-answer-foot .quiet{flex:1;min-width:0;overflow-wrap:anywhere}
+.queue-answer-foot button{margin-left:auto;flex-shrink:0}
+.queue-answer-line{font-size:12px;color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap}
+.queue-answer-line strong{color:var(--ink);font-weight:600}
+.queue-answer .warn{color:var(--approval-ink)}
 /* The integration handoff in the queue panel (B6): one block on top, and on a delivered task's row a line that says why it waits. */
 .queue-handoff-why{grid-row:4;color:inherit}
 .queue-handoff-ask{grid-row:5}
