@@ -50,11 +50,12 @@ test('a stored delivery line is validated like every other field of a queue item
 });
 
 test('settling reads the line from the whole reply, for a finished item and for one that waits for the person', () => {
-  const member = (text, extra = {}) => ({ id: 'a', name: 'Agent a', provider: 'claude', nativeId: 'native-a', state: 'idle', roomIds: ['shared'], roomId: 'shared',
+  const item = { id: '1', text: 'Synthetic task', assignee: null, status: 'sent', createdAt: NOW - 60000, sentTo: 'a', sentNative: 'native-a', sentAt: NOW - 30000, tag: 't1', control: 0 };
+  const member = (text, extra = {}) => ({ id: 'a', name: 'Agent a', provider: 'claude', nativeId: item.sentNative, state: 'idle', roomIds: ['shared'], roomId: 'shared',
     createdAt: NOW - 3600000, background: 0, scheduled: 0, backgroundStale: false, chatAvailable: true, liveDraft: '', controlRevision: 0,
-    serviceCapabilities: [rules.CAPABILITY], fleet: [], messages: [{ id: 't1', role: 'user', origin: 'queue', text: 'sent', time: NOW - 30000 },
+    serviceCapabilities: [rules.CAPABILITY], fleet: [], messages: [{ id: item.tag, role: 'user', origin: 'naw-dispatch', dispatchItem: item.id,
+      dispatchPurpose: { kind: 'queue', itemId: item.id, nativeId: item.sentNative, epoch: null }, text: 'sent', time: item.sentAt },
       ...(text === null ? [] : [{ id: 'r1', role: 'assistant', text, time: NOW - 20000 }])], ...extra });
-  const item = { id: '1', text: 'Synthetic task', assignee: null, status: 'sent', createdAt: NOW - 60000, sentTo: 'a', sentAt: NOW - 30000, tag: 't1', control: 0 };
   const settle = (text, extra) => rules.planDispatch({ rooms: [{ id: 'shared', queue: [item] }], sessions: [member(text, extra)], wakePolicy: { enabled: true },
     idleSince: new Map([['a', NOW - 60000]]), now: NOW }).find(action => action.kind === 'settle');
   const long = 'x'.repeat(400) + '\nREADY lane/member-task abc1234';
@@ -68,6 +69,10 @@ test('settling reads the line from the whole reply, for a finished item and for 
   assert.equal(Object.hasOwn(settle('READY ../x abc1234'), 'ready'), false);
   const missing = settle(null, { messages: [] });
   assert.equal(missing.reason, 'record-missing'); assert.equal(Object.hasOwn(missing, 'ready'), false);
+  const unbound = settle(long, { messages: [{ id: item.tag, role: 'user', origin: 'queue', text: 'sent', time: item.sentAt }, member(long).messages[1]] });
+  assert.equal(unbound.status, 'waiting');
+  assert.equal(unbound.reason, 'input-purpose-unconfirmed');
+  assert.equal(Object.hasOwn(unbound, 'ready'), false, 'A legacy queue row without its task identity cannot deliver READY');
 });
 
 test('the dispatcher hands the line to the space record with the outcome', () => {
