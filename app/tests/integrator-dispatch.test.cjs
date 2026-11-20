@@ -38,7 +38,8 @@ function fixture(t, options = {}) {
     assert.equal(target.nativeId, nativeId);
     const tag = `tag-${f.calls.length + 1}`;
     f.calls.push({ id, text, itemId, tag });
-    target.state = 'working'; target.messages.push({ id: tag, role: 'user', text, origin: 'naw-dispatch', status: 'submitted', time: Date.now() });
+    target.state = 'working'; target.messages.push({ id: tag, role: 'user', text, origin: 'naw-dispatch', dispatchItem: itemId,
+      dispatchPurpose: { kind: 'queue', nativeId: target.nativeId, itemId, epoch: null }, status: 'submitted', time: Date.now() });
     return tag;
   };
   f.reply = (id, text) => { const target = client.state.sessions.find(candidate => candidate.id === id); target.messages.push({ id: `reply-${target.messages.length}`, role: 'assistant', text, time: Date.now() }); target.state = 'idle'; };
@@ -669,4 +670,26 @@ test('the engine is built only behind a switch that the daily app cannot open', 
   } };
   walk(path.join(root, 'app')); walk(path.join(root, 'scripts'));
   assert.deepEqual(loaders, ['app/main.cjs']);
+});
+
+
+test('a reply with the wrong dispatch purpose cannot publish an integrator delivery', async t => {
+  for (const change of ['source', 'item', 'native', 'epoch', 'rotation']) {
+    const f = fixture(t, { plain: true }), itemId = f.room.queueAdd('Synthetic task', null);
+    await f.pass();
+    const member = f.client.state.sessions.find(s => s.id === 'member-a'), input = member.messages.at(-1);
+    if (change === 'source') input.origin = 'human';
+    if (change === 'item') input.dispatchItem = 'another-item';
+    if (change === 'native') input.dispatchPurpose.nativeId = 'another-native';
+    if (change === 'epoch') input.dispatchPurpose.epoch = 'stale-epoch';
+    if (change === 'rotation') input.dispatchPurpose.kind = 'rotation-request';
+    f.reply(member.id, `Done.\nREADY lane/a ${COMMIT}`);
+    await f.pass();
+    const item = f.room.queueFind('shared', itemId);
+    assert.equal(item.status, 'waiting', change);
+    assert.equal(item.reason, 'input-purpose-unconfirmed', change);
+    assert.equal(item.ready, undefined, change);
+    assert.ok(!f.room.metadata('shared').events.some(event => event.monitor?.kind === 'ready'), change);
+    assert.equal(f.calls.length, 1, 'No input was replayed');
+  }
 });

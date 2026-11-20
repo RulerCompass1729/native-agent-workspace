@@ -203,7 +203,8 @@ test('a queue member that ended its turn asking the person is told too; one whos
   await g.elapse(30000);
   assert.deepEqual(g.told(), [], 'idle, but its item is still running');
   g.rooms.queueSetDelivery('shared', running, 'item-tag', 0);
-  g.client.set({ messages: [{ id: 'item-tag', role: 'user', text: 'Clean the build', time: NOW }, { id: 'r', role: 'assistant', text: 'Cleaned.', time: NOW + 1 }] });
+  g.client.set({ messages: [{ id: 'item-tag', role: 'user', text: 'Clean the build', origin: 'naw-dispatch', dispatchItem: running,
+    dispatchPurpose: { kind: 'queue', nativeId: g.client.state.sessions[0].nativeId, itemId: running, epoch: null }, status: 'submitted', time: NOW }, { id: 'r', role: 'assistant', text: 'Cleaned.', time: NOW + 1 }] });
   await g.elapse(21000);
   assert.equal(g.rooms.queueFind('shared', running).status, 'done', 'its item settled');
   assert.equal(g.told().length, 1, 'told after the item');
@@ -293,4 +294,23 @@ test('what is owed stays bounded and old answers expire', () => {
   assert.equal(store.add({ id: 'x', nativeId: 'n' }, { id: 'op-x', state: 'complete' }, 'maybe'), false);
   clock.now += notices.MAX_AGE_MS + 1; store.prune([]);
   assert.equal(store.waiting(), false, 'a day later nobody waits for it');
+});
+
+
+test('a different task receipt cannot complete the item before an answer notice', async t => {
+  const f = await fixture(t, 'claude', agent('claude', { roomIds: ['shared'], roomId: 'shared' }));
+  const id = f.rooms.queueAdd('Synthetic running task', 'agent', 'shared'), member = f.client.state.sessions[0];
+  f.rooms.queueMarkSent('shared', id, member.id, 'Asker', NOW, false, member.nativeId);
+  f.rooms.queueSetDelivery('shared', id, 'item-tag', 0);
+  f.client.set({ messages: [{ id: 'item-tag', role: 'user', text: 'Synthetic running task', time: NOW,
+    origin: 'naw-dispatch', dispatchItem: 'different-item', status: 'submitted',
+    dispatchPurpose: { kind: 'queue', nativeId: member.nativeId, itemId: 'different-item', epoch: null } },
+    { id: 'reply', role: 'assistant', text: 'Done.\nREADY lane/synthetic abcdef1234567', time: NOW + 1 }] });
+  await f.elapse(21000);
+  const item = f.rooms.queueFind('shared', id);
+  assert.equal(item.status, 'waiting');
+  assert.equal(item.reason, 'input-purpose-unconfirmed');
+  assert.equal(item.ready, undefined);
+  assert.ok(!f.rooms.metadata('shared').events.some(event => event.monitor?.kind === 'ready'));
+  assert.deepEqual(f.client.dispatches(), [], 'No input was replayed');
 });
