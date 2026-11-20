@@ -539,7 +539,8 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
     typeof lastMessage.turnId === 'string' && messages.some((m, i) => i > lastIndex && m?.kind === 'turn' &&
       m.nativeId === session.nativeId && m.turnId === lastMessage.turnId && m.status === 'complete' && (!m.inputTag || m.inputTag === tag)) &&
     !messages.some((m, i) => i >= lastIndex && m?.kind === 'turn' && m.nativeId === session.nativeId &&
-      m.status === 'failed' && failedReplies.has(m.turnId));
+      (m.status === 'failed' || m.status === 'interrupted') &&
+      (failedReplies.has(m.turnId) || !m.inputTag || m.inputTag === tag));
   return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
     ...(failedReplies.size && !recovered ? { failedTurnIds: [...failedReplies] } : {}) };
 }
