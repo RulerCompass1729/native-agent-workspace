@@ -519,18 +519,37 @@
     }
     // The fixed compose box grows with its note, the textarea and the safe area; the list keeps that much room below it.
     function composeSpace() {
-      const box = el('compose'), space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
+      const box = el('compose'), viewport = global.visualViewport;
+      const editing = !box.hidden && (d.activeElement === el('message') || d.body.classList.contains('keyboard-compose')) && viewport?.scale === 1 && global.innerHeight - viewport.height > 100;
+      d.body.classList.toggle('keyboard-compose', editing);
+      d.body.classList.toggle('compact-compose', editing && viewport.height < 200);
+      d.documentElement.style.setProperty('--keyboard-inset', (editing ? Math.max(0, global.innerHeight - viewport.height - viewport.offsetTop) : 0) + 'px');
+      const space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
       d.documentElement.style.setProperty('--compose-space', Math.ceil(space) + 'px');
     }
     if (global.ResizeObserver) new global.ResizeObserver(composeSpace).observe(el('compose'));
     global.addEventListener('resize', composeSpace);
+    global.visualViewport?.addEventListener('resize', composeSpace);
+    global.visualViewport?.addEventListener('scroll', composeSpace);
+    d.addEventListener('focusin', composeSpace);
+    d.addEventListener('focusout', composeSpace);
     function updateCompose() {
       if (!client) return;
       const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
       if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
       if (composeKey !== route.id) {
         composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('unsentDraft'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
-        input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit'; const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
+        input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit';
+        // Retain editing focus for a touch; Safari otherwise moves Send before click.
+        let touchSend = false;
+        send.addEventListener('touchstart', event => { touchSend = d.activeElement === input && event.touches.length === 1; if (touchSend) event.preventDefault(); }, { passive: false });
+        send.addEventListener('touchend', event => {
+          if (!touchSend) return; touchSend = false; event.preventDefault();
+          const touch = event.changedTouches[0], rect = send.getBoundingClientRect();
+          if (touch && touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom) send.click();
+        }, { passive: false });
+        send.addEventListener('touchcancel', () => { touchSend = false; });
+        const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
       }
       const input = el('message'), state = client.state; if (input.value !== state.draft) input.value = state.draft;
       // Mode and refusal reason come from mobile-session.cjs read(); the phone does not guess them.

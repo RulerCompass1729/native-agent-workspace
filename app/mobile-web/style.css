@@ -40,3 +40,12 @@
 #send-message{align-self:flex-end;flex:none;white-space:nowrap;overflow-wrap:normal;min-height:44px;max-width:100%}
 #send-message:disabled{background:#92a698;border-color:#92a698;opacity:1}
 @media (orientation:landscape) and (max-height:450px){.compose textarea{height:48px;min-height:48px}}
+.keyboard-compose .compose{bottom:calc(var(--keyboard-inset,0px) + 75px)}
+.keyboard-compose .nav{visibility:hidden}
+.compact-compose .compose{bottom:var(--keyboard-inset,0px)}
+.compact-compose .compose-inner{max-width:720px;padding:1px max(8px,env(safe-area-inset-right,0px)) 1px max(8px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"input send" "note note";gap:1px 8px}
+.compact-compose .compose label{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden;white-space:nowrap}
+.compact-compose .compose textarea{grid-area:input;height:48px;min-height:48px;max-height:48px}
+.compact-compose .compose-tools{display:contents}
+.compact-compose #send-message{grid-area:send;align-self:stretch;min-height:48px}
+.compact-compose #compose-note{grid-area:note;font-size:11px;line-height:1.2;white-space:nowrap;overflow-x:auto}
