@@ -20,7 +20,7 @@ for(const [label,reply,status,kind] of [
  const creator=person?{kind:'person',name:'Synthetic human',sessionId:null}:{kind:'secretary',name:'Synthetic steward',sessionId:'steward'};
  const id=room.queueAdd('Synthetic review task',null,'shared',creator,person?null:'steward');room.queueMarkSent('shared',id,'a','Synthetic member',NOW-30000);room.queueSetDelivery('shared',id,'task-tag',0);
  room.queueAdd('Keeps the space nonempty',null);
- const member={id:'a',name:'Synthetic member',provider:'claude',nativeId:'synthetic-native',model:'synthetic-model',state:'idle',roomIds:['shared'],roomId:'shared',createdAt:NOW-3600000,background:0,scheduled:0,backgroundStale:false,chatAvailable:true,liveDraft:'',controlRevision:0,draftRevision:0,placementRevision:0,serviceCapabilities:[rules.CAPABILITY,'guardedSessionStopV1'],fleet:[],messages:[{id:'task-tag',role:'user',text:'Synthetic assigned work',origin:'naw-dispatch'},...(reply===null?[]:[{id:'answer',role:'assistant',text:reply}])]};
+ const member={id:'a',name:'Synthetic member',provider:'claude',nativeId:'synthetic-native',model:'synthetic-model',state:'idle',roomIds:['shared'],roomId:'shared',createdAt:NOW-3600000,background:0,scheduled:0,backgroundStale:false,chatAvailable:true,liveDraft:'',controlRevision:0,draftRevision:0,placementRevision:0,serviceCapabilities:[rules.CAPABILITY,'guardedSessionStopV1'],fleet:[],messages:[{id:'task-tag',role:'user',text:'Synthetic assigned work',origin:'naw-dispatch',dispatchItem:id,dispatchPurpose:{kind:'queue',nativeId:'synthetic-native',itemId:id,epoch:null},status:'submitted'},...(reply===null?[]:[{id:'answer',role:'assistant',text:reply}])]};
  const actions=rules.planDispatch({rooms:[{...room.metadata(),id:'shared'}],sessions:reply===null?[]:[member],wakePolicy:{enabled:true},idleSince:new Map([['a',NOW-60000]]),now:NOW});
  const settle=actions.find(a=>a.kind==='settle'&&a.itemId===id);assert.ok(settle,JSON.stringify(actions));assert.equal(settle.status,status);
  const before=room.metadata().events.length;
@@ -33,4 +33,24 @@ for(const [label,reply,status,kind] of [
  else{assert.equal(emitted.length,0);assert.equal(room.metadata().events.length,before);assert.equal(room.butlerSources().length,0);}
  const row={label,status,hasReady:!!settle.ready,newRoomEvents:room.metadata().events.length-before,stewardKinds:emitted.map(e=>e.kind)};
  console.log(JSON.stringify(row));
+});
+
+
+test('a reply bound to another item emits neither a completion nor a decision',t=>{
+ for(const reply of ['PASS\nPRIVATE_FIXTURE_REPLY','需要你决定：Synthetic choice?\nPRIVATE_FIXTURE_REPLY']){
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'event-gap-refusal-')));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const room=new RoomState(root),ingress=new ButlerIngress(root,{roomState:room});bindQueueOutcomes(room,ingress,()=>{});
+  const creator={kind:'secretary',name:'Synthetic steward',sessionId:'steward'};
+  const id=room.queueAdd('Synthetic review task',null,'shared',creator,'steward');room.queueMarkSent('shared',id,'a','Synthetic member',NOW-30000,false,'synthetic-native');room.queueSetDelivery('shared',id,'task-tag',0);
+  room.queueAdd('Keeps the space nonempty',null);
+  const member={id:'a',name:'Synthetic member',provider:'claude',nativeId:'synthetic-native',model:'synthetic-model',state:'idle',roomIds:['shared'],roomId:'shared',createdAt:NOW-3600000,background:0,scheduled:0,backgroundStale:false,chatAvailable:true,liveDraft:'',controlRevision:0,fleet:[],serviceCapabilities:[rules.CAPABILITY,'guardedSessionStopV1'],messages:[
+   {id:'task-tag',role:'user',text:'Synthetic assigned work',origin:'naw-dispatch',dispatchItem:'another-item',dispatchPurpose:{kind:'queue',nativeId:'synthetic-native',itemId:'another-item',epoch:null},status:'submitted'},
+   {id:'answer',role:'assistant',text:reply}]};
+  const action=rules.planDispatch({rooms:[{...room.metadata(),id:'shared'}],sessions:[member],wakePolicy:{enabled:true},idleSince:new Map([['a',NOW-60000]]),now:NOW}).find(a=>a.kind==='settle'&&a.itemId===id);
+  assert.ok(action);assert.equal(action.status,'waiting');assert.equal(action.reason,'input-purpose-unconfirmed');assert.equal(action.ready,undefined);assert.equal(action.reportTitle,undefined);assert.equal(action.question,undefined);
+  room.queueSettle('shared',id,action.status,action.reason,'Synthetic member',action.reply||'',action.question,action.ready,action.reportTitle);
+  assert.equal(room.queueFind('shared',id).status,'waiting');
+  assert.ok(!ingress.ledger.eventsAfter(null).events.some(e=>e.kind==='done'||e.kind==='decision'));
+  assert.ok(!JSON.stringify(ingress.ledger.snapshot()).includes('PRIVATE_FIXTURE_REPLY'));
+ }
 });
