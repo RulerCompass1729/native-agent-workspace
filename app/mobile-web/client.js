@@ -107,7 +107,7 @@
       // (read-only, the same route as the receipt button: no polling, no resend). Opening a session alone does not.
       for (const p of receipts ? state.pending.filter(p => p.action === 'send' && p.deviceId === deviceId && p.sessionId === id && !terminal(p.status)) : []) {
         if (epoch !== readEpoch || state.busy) break;
-        try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId }), authorization); } catch { /* The row keeps its status; its receipt button stays. */ }
+        try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId }), authorization); } catch (error) { receiptUnavailable(p, error, authorization); }
       }
       changed();
       if (strict && (!readComplete || authorization !== state.authorization || epoch !== readEpoch || id !== state.selected || deviceId !== state.session?.deviceId)) throw failure('MOBILE_READ_UNCONFIRMED');
@@ -118,6 +118,11 @@
       let draft = currentDraft();
       if (!draft) { draft = { deviceId: state.session.deviceId, sessionId: state.selected, text: '', revision: 0 }; state.drafts.push(draft); }
       draft.text = value; draft.revision = state.revision; const saved = persist(); changed(); return saved;
+    }
+    function receiptUnavailable(pending, error, authorization) {
+      if (authorization !== state.authorization || pending.deviceId !== state.session?.deviceId || !state.pending.includes(pending)) return;
+      if (!terminal(pending.status)) { pending.status = 'unconfirmed'; pending.queued = false; }
+      if (persist()) state.notice = explain(error);
     }
     function recordResult(pending, result, authorization) {
       if (result.requestId !== pending.requestId || result.sessionId !== pending.sessionId || result.action !== pending.action || !Object.hasOwn(labels, result.status)) throw failure('MOBILE_RECEIPT_UNKNOWN');
@@ -163,7 +168,7 @@
       const authorization = state.authorization;
       state.busy = true; changed();
       try { recordResult(pending, await call('/mobile/receipt', { requestId }), authorization); }
-      catch (error) { if (authorization === state.authorization) state.notice = explain(error); }
+      catch (error) { receiptUnavailable(pending, error, authorization); }
       finally { if (authorization === state.authorization) state.busy = false; changed(); }
     }
     function forget(requestId) {
