@@ -606,3 +606,12 @@ test('a changed waiting question or native context cannot consume an old receive
     assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting'); assert.equal(f.room.queueFind('shared', f.itemId).answer, undefined);
   }
 });
+
+
+test('broker forwards a live queue witness but never infers it from unconfirmed', async t => {
+  const f=fixture(t), paired=await f.pair();const row=await f.broker.read(paired.auth,'session-a');
+  const original=f.clients[0].call.bind(f.clients[0]);let pending=true;
+  f.clients[0].call=async(method,ticket,spec)=>method==='mobileSend'||method==='mobileSendReceipt' ? {requestId:spec.requestId,sessionId:ticket.sessionId,nativeId:ticket.nativeId,action:'send',status:pending?'awaiting-native':'unconfirmed',queued:true}:original(method,ticket,spec);
+  const requestId=randomUUID();assert.equal((await f.broker.send(paired.auth,{contextId:row.contextId,requestId,text:'Synthetic queue'})).queued,true);
+  pending=false;assert.notEqual((await f.broker.receipt(paired.auth,requestId)).queued,true);
+});

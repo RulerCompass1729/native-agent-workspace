@@ -66,6 +66,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
   function publicReceipt(value) {
     if (!value || typeof value.status !== 'string') throw reject(409, 'MOBILE_REQUEST_UNCONFIRMED');
     return { requestId: value.requestId, sessionId: value.sessionId, action: value.action, status: value.status,
+      ...(value.status === 'awaiting-native' && value.queued === true ? { queued: true } : {}),
       error: value.error ? 'MOBILE_ACTION_FAILED' : null, storageWarning: value.storageWarning ? 'MOBILE_STORAGE_UNCONFIRMED' : null };
   }
   return async function mobileHTTP(request, response) {

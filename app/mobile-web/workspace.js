@@ -166,6 +166,8 @@
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
+    Object.assign(words.zh, { messageQueued: '已排队，等待会话读取；请勿重复发送。', oldReceiptGroup: '上次配对的记录', oldReceiptHelp: '仅保存在此浏览器，不是新消息，不会重发。已收起且未删除；未确认的结果需回 Mac 核对。' });
+    Object.assign(words.en, { messageQueued: 'Queued, waiting for the session to read it. Do not resend.', oldReceiptGroup: 'Previous pairing records', oldReceiptHelp: 'Stored only in this browser, not new messages; they will not be resent. Collapsed, not deleted. Check unresolved results on the Mac.' });
     function receipts(container, scope = {}) {
       const native = (client.state.pending || []).map(p => ({ ...p, native: true }));
       const rows = [...native, ...actions.state.pending].filter(row => {
@@ -175,8 +177,16 @@
         return room && scope.roomId === row.roomId && (task || row.action === 'queueAdd' && !row.itemId && row.status !== 'complete');
       });
       if (!rows.length) return;
-      const list = node('ol', undefined, 'receipt-list'); list.setAttribute('role', 'list');
-      container.append(node('h2', t('receiptTitle') + ' · ' + rows.length, 'receipt-heading'), list);
+      const oldRows = rows.filter(row => row.deviceId !== client.state.session?.deviceId);
+      const currentRows = rows.filter(row => !oldRows.includes(row));
+      const list = node('ol', undefined, 'receipt-list');
+      let oldList;
+      if (oldRows.length) {
+        const group = node('details', undefined, 'old-receipts');
+        group.append(node('summary', t('oldReceiptGroup') + ' · ' + oldRows.length), node('p', t('oldReceiptHelp'), 'quiet'));
+        oldList = node('ol', undefined, 'receipt-list'); group.append(oldList); container.append(group);
+      } list.setAttribute('role', 'list');
+      if (currentRows.length) container.append(node('h2', t('receiptTitle') + ' · ' + currentRows.length, 'receipt-heading'), list);
       for (const row of rows) {
         const visible = receiptVisible(row, client.state.session, view), context = visible ? row.context : null;
         const item = node('li', undefined, 'receipt context-receipt'), top = node('div', undefined, 'receipt-top');
@@ -202,7 +212,7 @@
           const full = node('details', undefined, 'receipt-full'); full.append(node('summary', t(context?.clipped ? 'receiptExcerpt' : 'receiptFull')), node('p', original)); item.append(full);
         }
         const bottom = node('div', undefined, 'receipt-bottom receipt-actions'), settled = ['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status);
-        const outcome = row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
+        const outcome = row.native && row.queued === true && row.status === 'awaiting-native' ? 'messageQueued' : row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
           : row.status === 'complete' ? ({ queueAdd: 'taskAdded', queueCancel: 'taskCancelled', queueResolve: 'taskHandled', recordAcknowledge: 'reminderAcknowledged' })[row.action] : row.status;
         if (visible) bottom.append(node('span', t(outcome), 'receipt-state receipt-status' + (settled ? '' : ' uncertain')));
         if (visible && original) bottom.append(button(t('inspectInput'), () => dialog(t('inspectInput'), original), 'receipt-inspect'));
@@ -218,7 +228,7 @@
           const suffix = row.requestId.slice(-8), short = rows.some(other => other !== row && other.requestId.endsWith(suffix)) ? row.requestId : '…' + suffix;
           item.append(node('p', short, 'quiet'));
         }
-        item.append(bottom); list.append(item);
+        item.append(bottom); (oldRows.includes(row) ? oldList : list).append(item);
       }
       container.append(node('p', t('receiptHelp'), 'receipt-help'));
     }
@@ -541,7 +551,7 @@
       el('send-message').textContent = t(mode === 'queue' ? 'queueSend' : mode === 'queueMidturn' ? 'queueMidturn' : mode === 'steer' ? 'steer' : 'send');
       // Every reason the button is disabled has its own note, local ones first (B's review, C2).
       const note = disconnected ? 'phoneOffline' : state.storageError ? 'storage' : !row || state.selected !== route.id ? 'reading'
-        : waiting ? (mine.some(p => p.status === 'unconfirmed') ? 'ownUnconfirmed' : 'ownPending')
+        : waiting ? (mine.some(p => p.queued === true && p.status === 'awaiting-native') ? 'messageQueued' : mine.some(p => p.status === 'unconfirmed') ? 'ownUnconfirmed' : 'ownPending')
         : mode === 'queue' ? 'queueNote' : mode === 'queueMidturn' ? 'queueMidturnNote' : mode === 'steer' ? 'steerNote'
         : reason === 'question' && !row.question ? 'blocked-questionMac' : reason ? 'blocked-' + reason
         : !row.canSend ? 'blocked-notReady' : 'draft';
@@ -549,12 +559,12 @@
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
     }
     let acknowledgedMessages = 0;
-    el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId, queued = ['queue', 'queueMidturn'].includes(client.state.row?.sendMode);
+    el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId;
       const generation = client.state.authorization, deviceId = client.state.session?.deviceId, scroll = global.scrollY;
       const before = new Set(client.state.pending.map(p => p.requestId)); await client.send();
       if (generation !== client.state.authorization || deviceId !== client.state.session?.deviceId) return;
       // The result of this click only, found by its own request id, not the last row or the current page.
-      const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = queued && status === 'awaiting-native' ? 'queuedToast' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
+      const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = mine?.queued === true && status === 'awaiting-native' ? 'messageQueued' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
       if (status === 'submitted' && view?.sessions.some(s => s.id === sessionId) && route?.page === 'chat' && route.id === sessionId && client.state.selected === sessionId) {
         // Render only a confirmed receipt; the next workspace snapshot replaces this transient row.
         acknowledgedMessages++;
