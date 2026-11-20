@@ -162,6 +162,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       const result = request.url === '/mobile/send' ? await broker.send(credentials, value) : await broker.answer(credentials, value);
       return respond(response, 200, publicReceipt(result));
     } catch (error) {
+      if (request.method === 'GET' && error.code === 'MOBILE_SOURCE_UNAVAILABLE') return respond(response, 503, { error: 'MOBILE_SOURCE_UNAVAILABLE' });
       // Neither thrown errors nor receipt diagnostics may expose local paths,
       // provider details or another backend's pause error through transport.
       const allowed = new Set(['MOBILE_REQUEST_CONFLICT', 'MOBILE_PAIR_LIMIT', 'MOBILE_CONTEXT_UNAVAILABLE', 'MOBILE_RECEIPT_UNKNOWN']);

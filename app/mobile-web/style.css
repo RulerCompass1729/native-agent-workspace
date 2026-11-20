@@ -40,3 +40,10 @@
 #send-message{align-self:flex-end;flex:none;white-space:nowrap;overflow-wrap:normal;min-height:44px;max-width:100%}
 #send-message:disabled{background:#92a698;border-color:#92a698;opacity:1}
 @media (orientation:landscape) and (max-height:450px){.compose textarea{height:48px;min-height:48px}}
+.proto.connection-warning,.proto.health-attention{background:#fff4d1;color:#593b00;border-inline-start:4px solid #805600}
+.proto .sync-time{min-width:0;flex:1 1 180px}
+.proto button,.proto>a{flex:none;white-space:nowrap}
+.proto .health-warning{flex:1 0 100%;white-space:normal;color:inherit;font-weight:650;text-decoration:underline}
+.proto.connection-warning .sync-time,.proto .health-warning{font-size:13px;line-height:1.5}
+.mobile-header{position:sticky;top:0;z-index:3}.mobile-header>.top{position:static}
+.proto{flex-wrap:wrap}

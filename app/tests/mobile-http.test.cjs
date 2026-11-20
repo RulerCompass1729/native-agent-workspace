@@ -24,6 +24,15 @@ function fixture() {
   }
   return { broker, calls, result, invoke, handler };
 }
+test('only a fixed read-source outage becomes 503; writes remain unconfirmed and secrets stay private', async () => {
+  const f = fixture(), failure = Object.assign(Error('PRIVATE_SOURCE_PATH_TOKEN'), { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.broker.refreshSession = async () => { throw failure; };
+  const reading = await f.invoke(); assert.equal(reading.statusCode, 503);
+  assert.deepEqual(reading.json(), { error: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.broker.send = async () => { throw failure; };
+  const sending = await f.invoke({ url: '/mobile/send', method: 'POST', value: { requestId, contextId: 'x'.repeat(43), text: 'Synthetic explicit message' } });
+  assert.equal(sending.statusCode, 409); assert.deepEqual(sending.json(), { error: 'MOBILE_REQUEST_UNCONFIRMED' });
+});
 test('QR activation keeps every fixed transport gate and accepts only its exact completion modes',async()=>{
  const f=fixture();let activated=0;f.broker.activateCandidate=async()=>{activated++;return {activated:true,sensitiveDecisions:false};};
  const raw=['Host','mobile.invalid','Tailscale-User-Login',actor,'X-NAW-Mobile','1','Origin',origin,'Cookie',`${COOKIE}=${bearer}`,'X-NAW-CSRF',csrf,'Content-Type','application/json'];

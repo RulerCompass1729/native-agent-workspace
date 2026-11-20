@@ -9,7 +9,7 @@ const actor = 'synthetic-human', origin = 'https://mobile.invalid';
 
 function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, pushOptions } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-broker-'))), original = fs.statSync(root);
-  let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false;
+  let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false, failConnect = false;
   const calls = [], clients = [], receipts = new Map(), sent = [], answered = [];
   const record = { id: 'session-a', nativeId: 'native-a', state: 'idle', provider: 'codex', name: 'Original member', owner: 'desktop-owner', liveDraft: 'PRIVATE_DESKTOP_DRAFT',
     proof: { nativeId: 'native-a', controlRevision: 0, connectionRevision: 0 }, question: null };
@@ -55,6 +55,7 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
       if (name === './mobile-access.cjs') return { MobileAccess: Access };
       if (name === './workspace-client.cjs') return { WorkspaceClient: Client };
       if (name === './service-client.cjs') return { connect: async directory => {
+        if (failConnect) throw Error('Synthetic connection unavailable');
         assert.equal(directory, root); const client = new Client(); clients.push(client);
         if (holdConnect) await new Promise(resolve => { releaseConnect = resolve; });
         return client;
@@ -73,8 +74,62 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
   t.after(() => { failRevoke = false; broker.revoke(); assert.equal(fs.statSync(root).ino, original.ino); fs.rmSync(root, { recursive: true }); });
   return { root, broker, record, selection, pair, calls, changes, clients, sent, answered, receipts,
     exclusive(value) { exclusive = value; }, wrongRoot(value) { wrongRoot = value; }, failRevoke(value) { failRevoke = value; },
+    holdConnect(value) { holdConnect = value; }, failConnect(value) { failConnect = value; },
     holdRead(value) { holdRead = value; }, holdSend(value) { holdSend = value; }, loseAck(value) { loseAck = value; }, releaseRead: () => releaseRead(), releaseSend: () => releaseSend(), releaseConnect: () => releaseConnect() };
 }
+
+test('an authenticated read reconnects once and keeps the original CSRF without sending input', async t => {
+  const f = fixture(t), { auth } = await f.pair();
+  f.clients[0].close(); f.holdConnect(true);
+  const first = f.broker.refreshSession(auth), second = f.broker.refreshSession(auth);
+  first.catch(() => {}); second.catch(() => {});
+  assert.equal(f.clients.length, 2); f.releaseConnect();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.csrf, auth.csrf); assert.equal(b.deviceId, a.deviceId);
+  assert.equal(a.sessions[0].available, true); assert.equal(a.consent.enabled, false);
+  assert.deepEqual(f.calls, []); assert.equal(f.sent.length, 0);
+});
+test('a failed source reconnect is retryable, while invalid authority never opens a connection', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  for (const bad of [{ ...auth, token: 'x'.repeat(43) }, { ...auth, actor: 'other' }, { ...auth, origin: 'https://other.invalid' }])
+    await assert.rejects(f.broker.refreshSession(bad));
+  assert.equal(f.clients.length, 1); f.failConnect(true);
+  await assert.rejects(f.broker.refreshSession(auth), { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.failConnect(false); assert.equal((await f.broker.refreshSession(auth)).csrf, auth.csrf);
+});
+test('source recovery preserves receipt identity but invalidates old send contexts', async t => {
+  const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
+  const value = { contextId: row.contextId, requestId: randomUUID(), text: 'One explicit original' };
+  await f.broker.send(auth, value); f.clients[0].close(); await f.broker.refreshSession(auth);
+  assert.equal((await f.broker.receipt(auth, value.requestId)).status, 'submitted');
+  await assert.rejects(f.broker.send(auth, { ...value, requestId: randomUUID() }));
+  assert.equal(f.sent.length, 1);
+});
+test('a late old body is rejected after reconnection and a changed native ID stays unavailable', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.holdRead(true);
+  const reading = f.broker.read(auth, f.record.id); f.clients[0].close(); await f.broker.refreshSession(auth);
+  f.releaseRead(); await assert.rejects(reading, { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.record.nativeId = 'replacement-native';
+  assert.equal((await f.broker.refreshSession(auth)).sessions[0].available, false);
+  await assert.rejects(f.broker.read(auth, f.record.id)); assert.equal(f.sent.length, 0);
+});
+test('a late workspace read from the closed source is transient without revoking current authority', async t => {
+  let release, entered; const started = new Promise(resolve => { entered = resolve; });
+  const desktop = { grant: (_client, grant) => grant, read: async () => { entered(); await new Promise(resolve => { release = resolve; }); return { capabilities: {}, confirmations: [] }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(['read'], false, { roomIds: [], records: true });
+  const reading = f.broker.workspaceRead(auth); await started; f.clients[0].close(); await f.broker.refreshSession(auth);
+  release(); await assert.rejects(reading, { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  assert.equal(f.broker.session(auth).csrf, auth.csrf); assert.equal(f.sent.length, 0);
+});
+for (const change of ['revoke', 'replace', 'root']) test('a held reconnect rejects changed ' + change + ' authority', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close(); f.holdConnect(true);
+  const reading = f.broker.refreshSession(auth); const next = f.clients[1];
+  reading.catch(() => {}); assert.equal(f.clients.length, 2, 'a same-authority read opens its replacement source');
+  if (change === 'revoke') f.broker.revoke();
+  if (change === 'replace') { const file = path.join(f.root, real.FILE), state = JSON.parse(fs.readFileSync(file)); state.generation = randomUUID(); fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 }); }
+  if (change === 'root') next.scope = f.root + '/missing';
+  f.releaseConnect(); await assert.rejects(reading); assert.equal(next.closing, true); assert.equal(f.sent.length, 0);
+});
 
 test('construction is disabled and makes no connection, grant or native call', t => {
   const f = fixture(t); assert.deepEqual(fs.readdirSync(f.root), []); assert.equal(f.clients.length, 0); assert.deepEqual(f.calls, []);

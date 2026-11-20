@@ -78,7 +78,7 @@ function executable(engine) {
   const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
   return engine === 'webkit' ? path.join(cache, 'webkit-2336/pw_run.sh') : path.join(cache, 'chromium_headless_shell-1254/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 }
-async function scenario(root, engine, language, shape, output, cases) {
+async function scenario(root, engine, language, shape, output, cases, probe) {
   const selected = name => !cases || cases.includes(name) || cases.includes('receipts') && ['busy', 'steer', 'reminders'].includes(name);
   const profile = fs.realpathSync(temporary(path.join(os.tmpdir(), 'naw-phone-acceptance-'))), cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd);
   const load = createRequire(path.join(root, 'package.json'));
@@ -223,6 +223,7 @@ async function scenario(root, engine, language, shape, output, cases) {
     if (process.argv.includes('--duplicate-checkpoint-fault')) await snapshot('deliberately-unchanged-home');
     await check('unsupported-create-controls-absent', await page.locator('.section-title button').count() === 0);
     if (engine === 'chromium') await check('pairing-uv-count', uv.registrations === 1 && uv.assertions === 1, { ...uv, simulated: true });
+    if (probe) await probe({ page, context, ids, ipc, check, go, snapshot, app });
     if (selected('read')) {
       await go('chat/' + ids[0]);
       const original = await page.locator('.thread').innerText(), latest = await page.locator('.bubble').filter({ hasText: 'SYNTHETIC_LATEST_REPLY_0' }).last().evaluate(e => { const b = e.getBoundingClientRect(); return b.top < innerHeight && b.bottom > 0; }).catch(() => false);
@@ -443,4 +444,4 @@ if (require.main === module) {
     console.log('TEMP ' + JSON.stringify(result)); if (remaining.length) process.exitCode = 1;
   });
 }
-module.exports = { THRESHOLDS, messages, defaultShape, validateShape, assertCheckpointChanged, receiptAssociations, messageVisibility };
+module.exports = { THRESHOLDS, messages, defaultShape, validateShape, assertCheckpointChanged, receiptAssociations, messageVisibility, scenario };

@@ -9,6 +9,7 @@ const { readLayout } = require('./service-layout.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const denied = (code = 'MOBILE_BROKER_DENIED') => Object.assign(new Error('Mobile authorization or the original session changed. Nothing was retried.'), { code });
+const unavailable = () => denied('MOBILE_SOURCE_UNAVAILABLE');
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
@@ -36,6 +37,7 @@ class MobileBroker {
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
   #push = null; #pushOptions;
+  #reconnectState = null; #reconnecting = null;
   #consent = new MobileConsent(); #decisions = new Map(); #consentView = false;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
   constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {} } = {}) {
@@ -49,20 +51,68 @@ class MobileBroker {
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
+  #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#reconnectState = this.#reconnecting = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
   #bound() {
     const client = this.#client;
+    if (!client && this.#reconnectState) throw unavailable();
     if (!(client instanceof WorkspaceClient) || client.closing || client.socket.destroyed ||
         client.scope !== this.#scope || fs.realpathSync(client.scope) !== this.#root || this.#access.issuer.pid !== process.pid) throw denied();
     return client;
   }
   #authenticate(auth) {
-    if (!auth || typeof auth !== 'object' || Array.isArray(auth) || Object.keys(auth).some(key => !['token', 'actor', 'origin', 'csrf'].includes(key))) throw denied();
+    if (!this.#reconnectState) this.#bound();
+    const state = this.#authenticateAccess(auth);
     this.#bound();
+    return state;
+  }
+  #authenticateAccess(auth) {
+    if (!auth || typeof auth !== 'object' || Array.isArray(auth) || Object.keys(auth).some(key => !['token', 'actor', 'origin', 'csrf'].includes(key))) throw denied();
     const state = this.#access.authenticate(auth);
     if (auth.origin !== undefined && auth.origin !== state.origin) throw denied();
     return state;
+  }
+  #identity(state) { return fingerprint([state.issuer, state.generation, state.actor, state.origin, state.device]); }
+  #watch(client) { client.once('closed', () => {
+    if (this.#client !== client) return;
+    try { this.#reconnectState = this.#identity(this.#access.load()); }
+    catch { this.#forget(); }
+    this.#epoch++; this.#contexts.clear(); this.#consent.revoke();
+    this.#refreshing = null;
+    this.#push?.close(); this.#push = null;
+    this.#disconnect();
+  }); }
+  // Only a same-authority session GET replaces this reader; pending writes are never replayed.
+  async #recover(auth) {
+    const state = this.#authenticateAccess(auth);
+    if (this.#client) return;
+    const identity = this.#reconnectState, epoch = this.#epoch;
+    if (!identity || this.#identity(state) !== identity) throw denied();
+    if (this.#reconnecting) { await this.#reconnecting; this.#authenticate(auth); return; }
+    const work = async () => {
+      let next;
+      try {
+        next = await connect(this.#scope, 'mobile-' + randomUUID());
+        if (epoch !== this.#epoch || identity !== this.#reconnectState || this.#identity(this.#authenticateAccess(auth)) !== identity ||
+            !(next instanceof WorkspaceClient) || next.scope !== this.#scope || fs.realpathSync(next.scope) !== this.#root || next.closing || next.socket.destroyed) throw denied();
+        this.#client = next; this.#reconnectState = null; this.#epoch++; this.#watch(next);
+      } catch (error) {
+        if (next && this.#client !== next) next.close();
+        if (epoch !== this.#epoch || identity !== this.#reconnectState || this.#identity(this.#authenticateAccess(auth)) !== identity) throw denied();
+        throw unavailable();
+      }
+    };
+    const pending = work(); this.#reconnecting = pending;
+    try { await pending; } finally { if (this.#reconnecting === pending) this.#reconnecting = null; }
+  }
+  async #reading(auth, read) {
+    const identity = this.#identity(this.#authenticateAccess(auth)), epoch = this.#epoch;
+    try { return await read(); }
+    catch (error) {
+      let current; try { current = this.#identity(this.#authenticateAccess(auth)); } catch { throw error; }
+      if (current === identity && (epoch !== this.#epoch || this.#reconnectState)) throw unavailable();
+      throw error;
+    }
   }
   #writeState(auth) {
     const state = this.#authenticate(auth);
@@ -157,7 +207,7 @@ class MobileBroker {
       this.#fullLayout=c.layout;this.#fullGeneration=next.generation;this.#workspaceGrant={value:c.grant,generation:next.generation};
       this.#consent=c.consent;if(value.mode==='basic')this.#consent.revoke();
       this.#csrf={generation:next.generation,deviceId:next.device.id,value:auth.csrf};
-      c.client.once('closed',()=>{if(this.#client===c.client){this.#forget();this.#disconnect();}});
+      this.#watch(c.client);
       try{old?.close();if(old && (!old.closing || !old.socket.destroyed))throw denied();}
       catch{this.revoke();this.#changed();throw denied('MOBILE_CLEANUP_UNCONFIRMED');}
       this.#changed();
@@ -185,7 +235,7 @@ class MobileBroker {
     const client = await connect(this.#scope, 'mobile-' + randomUUID());
     if (epoch !== this.#epoch) { client.close(); throw denied(); }
     this.#client = client;
-    client.once('closed', () => { if (this.#client === client) { this.#forget(); this.#disconnect(); } });
+    this.#watch(client);
     try {
       this.#bound();
       const scopes = selection.map(value => {
@@ -270,7 +320,7 @@ class MobileBroker {
           const fresh = this.#authenticate(auth);
           if (epoch !== this.#epoch || fresh.generation !== state.generation || layout !== this.#layout() || !(next instanceof WorkspaceClient) || fs.realpathSync(next.scope) !== this.#root || next.socket?.destroyed) throw denied();
           const old = this.#client; this.#client = next; this.#epoch++; this.#contexts.clear(); this.#fullLayout = layout;
-          next.once('closed', () => { if (this.#client === next) { this.#forget(); this.#disconnect(); } });
+          this.#watch(next);
           old.close();
         } catch (error) { if (this.#client !== next) next.close(); throw error; }
       }
@@ -281,8 +331,11 @@ class MobileBroker {
     const pending = work(); this.#refreshing = pending;
     try { await pending; } finally { if (this.#refreshing === pending) this.#refreshing = null; }
   }
-  async refreshSession(auth) { try{return this.#candidateSession(auth);}catch{} await this.#refreshFull(auth); return this.session(auth); }
+  async refreshSession(auth) { try{return this.#candidateSession(auth);}catch{} return this.#reading(auth, async () => { await this.#recover(auth); await this.#refreshFull(auth); return this.session(auth); }); }
   async read(auth, id) {
+    this.#authenticate(auth); return this.#reading(auth, () => this.#read(auth, id));
+  }
+  async #read(auth, id) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const { ticket, scope } = this.#grant(auth, id, 'read'), client = this.#bound(), epoch = this.#epoch;
     const row = await client.call('mobileRead', ticket);
@@ -310,6 +363,9 @@ class MobileBroker {
     return state;
   }
   async workspaceRead(auth, selection) {
+    this.#authenticate(auth); return this.#reading(auth, () => this.#workspaceRead(auth, selection));
+  }
+  async #workspaceRead(auth, selection) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch, scopes = this.#scopes(state);
     const grant = this.#workspaceGrant?.value || { roomIds: [], records: false };

@@ -186,7 +186,10 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   catch { temp = { id: 'naw-temp-files', version: 0, state: 'unavailable', checkedAt: Date.now(), directories: 0, bytes: 0, oldestDay: null, shown: true, result: null }; }
   const names = snapshot && sessionLabels.apply(roomState.apply(snapshot));
   const cards = snapshot?.backgroundConfirmations || (backgroundControl && names ? backgroundControl.confirmations(names, snapshot) : []);
-  return confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary));
+  let health;
+  try { health = require('./mobile-workspace.cjs').healthSummary(stewardWake?.view(), require('./steward-wake.cjs').BLOCK_REASONS); }
+  catch { health = { available: false, alerts: [] }; }
+  return { ...confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary)), health };
 }
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
