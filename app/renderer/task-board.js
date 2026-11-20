@@ -148,6 +148,7 @@
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
     h2.id = 'task-board-title'; h2.tabIndex = -1; heading.append(h2, caption, dismiss);
     const tablist = make('div', 'task-board-tabs'); attr(tablist, 'role', 'tablist');
+    const tabHint = make('p', 'task-board-tabs-hint'), stateHelp = make('p', 'task-board-state-help'); stateHelp.id = 'task-board-state-help';
     for (const value of TABS) {
       const button = control(() => chooseTab(value), 'task-board-tab'); button.id = 'task-board-tab-' + value; button.dataset.boardTab = value;
       attr(button, 'role', 'tab');
@@ -176,7 +177,7 @@
     const moreLine = make('div', 'task-board-more-line'), shown = make('span'), more = control(() => { if (!more.hasAttribute('aria-disabled')) { limit += 10; drawPanel(); } }, 'task-board-more');
     moreLine.append(shown, more);
     const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
-    panel.append(heading, tablist, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(toggle, panel);
+    panel.append(heading, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(toggle, panel);
     function options(select, values, name) {
       const previous = select.value;
       move(select, values.map(value => { let o = [...select.options].find(o => o.value === value); if (!o) { o = make('option'); o.value = value; } set(o, name(value)); return o; }));
@@ -186,6 +187,10 @@
       attr(host, 'aria-label', f('title')); attr(toggle, 'aria-expanded', String(opened));
       set(h2, f('title')); set(caption, f('global')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(tablist, 'aria-label', f('filter'));
+      set(tabHint, f('tabsHint'));
+      stateHelp.hidden = !['waiting', 'review', 'unknown'].includes(selection.tab);
+      set(stateHelp, stateHelp.hidden ? '' : f('stateHelp.' + selection.tab));
+      if (stateHelp.hidden) list.removeAttribute('aria-describedby'); else attr(list, 'aria-describedby', stateHelp.id);
       for (const [key, e] of labels) set(e, f(key));
       search.placeholder = f('searchPlaceholder');
       options(sort, ['recent', 'create', 'finish'], value => f('sort.' + value));
@@ -290,7 +295,8 @@
       set(view.note, [origin, actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].join(' · '));
       set(view.state, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
       view.state.dataset.kind = item.kind;
-      set(view.action, f(item.source === 'confirmation' ? 'openCard' : (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'openSession' : 'openQueue'));
+      const destination = item.source === 'confirmation' ? 'Card' : (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
+      set(view.action, f(['waiting', 'review', 'unknown'].includes(item.kind) ? 'action.' + item.kind + '.' + destination.toLowerCase() : 'open' + destination));
       return view.element;
     }
     function drawPanel() {
