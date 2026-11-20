@@ -260,6 +260,17 @@
       if (!rows?.length) container.append(node('p', t('noData'), 'quiet'));
     }
     function tabs(items, container = el('content')) { const bar = node('div', undefined, 'tabs'); for (const [label, dest, active] of items) bar.append(link(label, dest, active ? 'selected' : '')); container.append(bar); }
+    function latestMessage() { return el('content').querySelector('.thread > .message:last-child'); }
+    function readingLatest() {
+      const latest = latestMessage();
+      return latest && Math.abs(latest.getBoundingClientRect().bottom - el('compose').getBoundingClientRect().top) < 80;
+    }
+    function scrollToLatest() {
+      const latest = latestMessage();
+      if (!latest) return;
+      // Receipts follow the thread; the page bottom is not the newest message.
+      global.scrollTo?.(0, global.scrollY + latest.getBoundingClientRect().bottom - el('compose').getBoundingClientRect().top + 16);
+    }
     function chat() {
       const s = view.sessions.find(s => s.id === route.id); if (!s) { heading('chat'); el('content').append(node('p', t('noScope'))); return; }
       tabs([[t('chat'), 'chat/' + encodeURIComponent(s.id), true]]); const terminal = button(t('terminal'), () => dialog(t('terminal'), t('terminalOnly'))); el('content').querySelector('.tabs').append(terminal);
@@ -459,12 +470,12 @@
           id: 'mobile-receipt:' + mine.requestId, role: 'user', text: mine.text, time: Date.now(), status: 'submitted',
         }] } : s) };
         paint();
-        if (follow) global.scrollTo?.(0, d.documentElement.scrollHeight);
+        if (follow) scrollToLatest();
       }
       if (route?.page === 'chat' && route.id === sessionId) toast(key); else toast(name + ' · ' + t(key)); await refresh(); }); });
     function paint() {
       // A chat read to its end stays at its end when it repaints, so a message just sent or arrived is in view.
-      const stick = route?.page === 'chat' && global.innerHeight + global.scrollY >= d.documentElement.scrollHeight - 80;
+      const stick = route?.page === 'chat' && (readingLatest() || global.innerHeight + global.scrollY >= d.documentElement.scrollHeight - 80);
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
@@ -487,7 +498,7 @@
       else ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)();
       if (body?.conversationLoaded === false && body.messages?.length) el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
       updateCompose();
-      if (stick) global.scrollTo?.(0, d.documentElement.scrollHeight);
+      if (stick) scrollToLatest();
     }
     const routeKey = () => JSON.stringify([lang, route?.page, route?.id, route?.nativeId]);
     const workspacePath = () => '/mobile/workspace/' + (route?.page === 'chat' && route.id ? 'session/' + encodeURIComponent(route.id)
@@ -552,7 +563,7 @@
         if (!paired) await reading;
         if (ticket === navigation) paint();
         // A chat opens at its newest message, as on the Mac; later refreshes keep the reader's place.
-        if (ticket === navigation && route.page === 'chat') global.scrollTo?.(0, d.documentElement.scrollHeight);
+        if (ticket === navigation && route.page === 'chat') scrollToLatest();
       } catch {
         if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
       } finally { if (ticket === navigation) d.documentElement.dataset.loading = 'false'; }
