@@ -8,11 +8,12 @@ const scratch = testScratch.directory(path.join(os.tmpdir(), 'naw-phone-send-'))
 const check = (name, pass) => { results.push({ name, pass: Boolean(pass) }); console.log(JSON.stringify(results.at(-1))); };
 async function until(fn) { for (let i = 0; i < 200; i++) { if (await fn()) return; await wait(10); } throw Error('Synthetic phone did not settle'); }
 let browser;
-async function scene(lang, history = false, completed = 0, viewport) {
+async function scene(lang, history = false, completed = 0, viewport, tail) {
   const context = await browser.newContext({ ...devices['iPhone 13'], ...(viewport ? { viewport } : {}), serviceWorkers: 'block' }), page = await context.newPage();
   const sessions = ['a', 'b'].map(id => ({ id, name: 'Synthetic ' + id, provider: 'claude', state: 'idle', available: true, actions: ['read', 'send'] }));
   let generation = 0, hold = false, releaseNative, releaseWorkspace;
   const messages = history ? Array.from({ length: 60 }, (_, i) => ({ id: 'history-' + i, role: 'assistant', text: 'Synthetic history ' + i + ' '.repeat(2) + 'Earlier conversation. '.repeat(6), time: 1000 + i })) : [];
+  if (history && tail) messages.at(-1).text = tail;
   const posted = [], held = [];
   page.on('pageerror', e => errors.push(e.message));
   await context.route('**/*', async route => {
@@ -133,6 +134,22 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         await s.page.evaluate(() => nawPhone.refresh());
         check(viewport.width + ' refresh preserves earlier reading position', await s.page.evaluate(() => scrollY) === before);
         check(viewport.width + ' opening and refresh do not send', s.posted.length === 0);
+      } finally { await s.close(); }
+    }
+    {
+      const s = await scene('zh', true, 5, { width: 667, height: 375 }, 'SYNTHETIC_LATEST_REPLY\n合成最新回复的第二行。');
+      try {
+        const geometry = await s.page.locator('.thread .message:last-child .bubble').evaluate(e => {
+          const r = e.getBoundingClientRect(), header = document.querySelector('#top').getBoundingClientRect(), compose = document.querySelector('#compose').getBoundingClientRect();
+          const hit = [0.2, 0.5, 0.8].every(x => [0.2, 0.5, 0.8].every(y => { const at = document.elementFromPoint(r.left + x * r.width, r.top + y * r.height); return at === e || e.contains(at); }));
+          return { height: r.height, top: r.top, bottom: r.bottom, header: header.bottom, compose: compose.top, hit };
+        });
+        console.log(JSON.stringify({ scenario: 'landscape two-line reply', ...geometry }));
+        check('landscape regression has a real two-line latest reply', geometry.height > 40);
+        check('landscape latest reply is fully visible between header and composer', geometry.top >= geometry.header && geometry.bottom <= geometry.compose && geometry.hit);
+        const input = await s.page.locator('#message').evaluate(e => ({ height: e.getBoundingClientRect().height, font: parseFloat(getComputedStyle(e).fontSize) }));
+        check('landscape input retains readable type and a touch-sized field', input.height >= 48 && input.font >= 16);
+        check('landscape opening does not send', s.posted.length === 0);
       } finally { await s.close(); }
     }
     for (const earlier of [false, true]) {

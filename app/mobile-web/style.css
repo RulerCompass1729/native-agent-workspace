@@ -39,3 +39,4 @@
 #compose-note{min-width:0;line-height:1.5}
 #send-message{align-self:flex-end;flex:none;white-space:nowrap;overflow-wrap:normal;min-height:44px;max-width:100%}
 #send-message:disabled{background:#92a698;border-color:#92a698;opacity:1}
+@media (orientation:landscape) and (max-height:450px){.compose textarea{height:48px;min-height:48px}}

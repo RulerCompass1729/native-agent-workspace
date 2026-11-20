@@ -16,13 +16,13 @@ async function scene(lang) {
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== 'https://phone.invalid') { errors.push('external-request'); return route.abort(); }
-    if (offline || failRead && url.pathname === '/mobile/read/one' || failSession && url.pathname === '/mobile/session' || failWorkspace && url.pathname === '/mobile/workspace') return route.abort('internetdisconnected');
+    if (offline || failRead && url.pathname === '/mobile/read/one' || failSession && url.pathname === '/mobile/session' || failWorkspace && (url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) return route.abort('internetdisconnected');
     let data;
     if (url.pathname === '/mobile/session') data = { deviceId: '00000000-0000-4000-8000-000000000001', csrf: 'C'.repeat(43), workspace: true, sessions };
     else if (url.pathname === '/mobile/read/one') data = { id: 'one', contextId: 'B'.repeat(43), canSend: true, sendMode: 'send', question: null, messages: [] };
     else if (url.pathname === '/mobile/send') {
       writes.push(request.postDataJSON()); data = { requestId: writes.at(-1).requestId, sessionId: 'one', action: 'send', status: 'unconfirmed' };
-    } else if (url.pathname === '/mobile/workspace') {
+    } else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) {
       if (holdWorkspace) await new Promise(resolve => { releaseWorkspace = resolve; });
       data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms: [], confirmations: [], reminders: null, capabilities: { push: false } };
     }
