@@ -65,10 +65,11 @@
       ++readEpoch; ++state.authorization;
       state.session = null; state.selected = null; state.row = null; state.draft = ''; state.revision = 0; state.busy = false;
     }
-    async function start(pairSecret) {
+    async function start(pairSecret, { strict = false } = {}) {
       if (pairSecret === undefined && pairing) return state;
       if (pairSecret !== undefined) { pairing = true; clearAuthorization(); changed(); }
       const epoch = ++startEpoch, authorization = state.authorization;
+      let readError;
       try {
         if (pairSecret !== undefined) { if (!token(pairSecret)) throw failure('MOBILE_BAD_PAIR'); await call('/mobile/pair', { secret: pairSecret }); }
         if (epoch !== startEpoch || authorization !== state.authorization) { if (epoch === startEpoch) pairing = false; return state; }
@@ -78,23 +79,26 @@
         if (state.session && grantKey(state.session) !== grantKey(session)) clearAuthorization();
         state.session = session;
         if (!state.storageError) state.notice = state.pending.some(p => p.deviceId !== session.deviceId && !terminal(p.status)) ? '旧配对仍有未确认记录；不会在新配对中重发，请回 Mac 核对。' : '已配对。请选择会话查看原文。';
-      } catch (error) { if (epoch === startEpoch && authorization === state.authorization) state.notice = explain(error); }
+      } catch (error) { readError = error; if (epoch === startEpoch && authorization === state.authorization) state.notice = explain(error); }
       if (epoch === startEpoch) pairing = false;
-      changed(); return state;
+      changed();
+      if (strict && readError) throw readError;
+      return state;
     }
     async function select(id) {
       if (!state.session?.sessions.some(s => s.id === id && s.available !== false)) throw failure('MOBILE_SESSION_UNAVAILABLE');
       state.selected = id; state.row = null; const draft = currentDraft(); state.draft = draft?.text || ''; state.revision = draft?.revision || 0; changed();
       return refresh(false);
     }
-    async function refresh(receipts = true) {
+    async function refresh(receipts = true, { strict = false } = {}) {
       if (!state.session || !state.selected) return;
       const epoch = ++readEpoch, id = state.selected, deviceId = state.session.deviceId, authorization = state.authorization;
+      let readComplete = false;
       try {
         const row = await call('/mobile/read/' + encodeURIComponent(id));
         if (authorization === state.authorization && epoch === readEpoch && id === state.selected && deviceId === state.session?.deviceId) {
           if (row.id !== id || !token(row.contextId)) throw failure('MOBILE_BAD_CONTEXT');
-          state.row = row;
+          state.row = row; readComplete = true;
         }
       } catch (error) { if (epoch === readEpoch) state.notice = explain(error); }
       // A queued send hears back early; the person's refresh also asks once for this session's open receipts
@@ -104,6 +108,7 @@
         try { recordResult(p, await call('/mobile/receipt', { requestId: p.requestId }), authorization); } catch { /* The row keeps its status; its receipt button stays. */ }
       }
       changed();
+      if (strict && (!readComplete || authorization !== state.authorization || epoch !== readEpoch || id !== state.selected || deviceId !== state.session?.deviceId)) throw failure('MOBILE_READ_UNCONFIRMED');
     }
     function setDraft(value) {
       if (!state.session || !state.selected || !text(value)) throw failure('MOBILE_DRAFT_INVALID');

@@ -513,9 +513,9 @@
       read.promise = (async () => {
       let generation = client.state.authorization, deviceId;
       const current = () => ticket === epoch && key === routeKey();
-      try { await client.start(); if (!current()) return;
+      try { await client.start(undefined, { strict: true }); if (!current()) return;
         generation = client.state.authorization; deviceId = client.state.session?.deviceId;
-        if (!locked && client.state.session) await client.refresh();
+        if (!locked && client.state.session) await client.refresh(true, { strict: true });
         if (!current() || generation !== client.state.authorization) return;
         if (locked || !client.state.session || client.state.session.candidate) { view = null; return; }
         paint();
