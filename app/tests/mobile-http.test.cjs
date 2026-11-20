@@ -172,3 +172,13 @@ test('port: packaged push and passkey scripts coexist with fixed authenticated r
   }
   assert.equal(push, 1); assert.equal(consent, 1);
 });
+
+
+test('HTTP preserves the proven queued marker but never infers one from an uncertain receipt', async () => {
+  const f = fixture(); Object.assign(f.result, { status: 'awaiting-native', queued: true });
+  const first = await f.invoke({ method: 'POST', url: '/mobile/send', value: { requestId, contextId: 'x'.repeat(43), text: 'Synthetic queue' } });
+  assert.equal(first.json().queued, true);
+  Object.assign(f.result, { status: 'unconfirmed', queued: false });
+  const next = await f.invoke({ method: 'POST', url: '/mobile/receipt', value: { requestId } });
+  assert.notEqual(next.json().queued, true); assert.equal(next.json().status, 'unconfirmed');
+});

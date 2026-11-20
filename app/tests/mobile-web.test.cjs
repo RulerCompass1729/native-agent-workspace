@@ -167,3 +167,27 @@ test('a queue-card answer keeps the original chat draft and binds its own input 
   assert.deepEqual(sent.value.queueTarget, target); assert.equal(sent.value.text, 'Explicit queue answer');
   assert.deepEqual(JSON.parse(f.values.get(KEY)).pending[0].queueTarget, target);
 });
+
+
+test('queue witness is recorded only for an awaiting receipt and clears on an uncertain reply', async () => {
+  const values = new Map(), id = randomUUID(); let queued = true;
+  const client = createMobileClient({ storage: { getItem: k => values.get(k), setItem: (k,v) => values.set(k,v) }, newId: () => id,
+    request: async (route, value) => route === '/mobile/session' ? { deviceId, csrf: 'c'.repeat(43), sessions: [{ id: 'a', actions: ['read','send'] }] }
+      : route.startsWith('/mobile/read/') ? { id:'a',contextId:'x'.repeat(43),canSend:true }
+      : { requestId:id,sessionId:'a',action:'send',status:queued?'awaiting-native':'unconfirmed',queued } });
+  await client.start(); await client.select('a');client.setDraft('Synthetic retained input');await client.send();
+  assert.equal(client.state.pending[0].queued,true); assert.match(client.state.notice,/已排队/);
+  await assert.rejects(client.send());
+  const reloaded = createMobileClient({ storage: {getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)}, request:async()=>{},newId:randomUUID });
+  assert.equal(reloaded.state.pending[0].queued,false, 'a saved queue witness needs fresh server evidence');
+  queued=false;await client.receipt(id); assert.notEqual(client.state.pending[0].queued,true);
+  assert.equal(client.state.pending[0].status,'unconfirmed');assert.equal(client.state.draft,'Synthetic retained input');
+});
+
+
+test('route selection can defer input reading to the guarded refresh without an extra request',async()=>{
+ const f=fixture();await f.client.start();
+ await f.client.select('a',{read:false});assert.equal(f.client.state.selected,'a');assert.equal(f.client.state.row,null);
+ assert.equal(f.calls.filter(c=>c.route==='/mobile/read/a').length,0);
+ await f.client.refresh();assert.equal(f.client.state.row.id,'a');assert.equal(f.calls.filter(c=>c.route==='/mobile/read/a').length,1);
+});

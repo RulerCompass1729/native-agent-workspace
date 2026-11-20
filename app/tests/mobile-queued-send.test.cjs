@@ -239,3 +239,21 @@ test('a refresh brings a queued phone message to submitted once native read it; 
   assert.deepEqual(routes, ['/mobile/read/A']);
   assert.deepEqual(f.calls.map(c => c.method), ['queue', 'queue']);
 });
+
+
+test('queued receipt requires the same live slot, native identity and message; unknown remains unknown', async t => {
+  const f = await fixture(t), [a] = f.sessions; working(a);
+  const spec = f.spec(a, 'Synthetic queue witness');
+  const result = await f.w.mobileSend(f.ticket('send', a), spec);
+  assert.equal(result.queued, true);
+  a.r.transportDisconnected = true;
+  assert.notEqual(f.w.mobileReceipt(f.ticket('send', a), spec, 'send').queued, true);
+  a.r.transportDisconnected = false;
+  a.r.pendingQueue = 'different-slot';
+  assert.notEqual(f.w.mobileReceipt(f.ticket('send', a), spec, 'send').queued, true);
+  a.r.pendingQueue = result.tag;
+  a.r.refuse(Error('Synthetic lost acknowledgement')); await settle();
+  const uncertain = f.w.mobileReceipt(f.ticket('send', a), spec, 'send');
+  assert.equal(uncertain.status, 'unconfirmed'); assert.notEqual(uncertain.queued, true);
+  assert.equal(f.calls.length, 1);
+});

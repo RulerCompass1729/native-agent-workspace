@@ -38,7 +38,7 @@
             saved.pending.some(p => !uuid(p.deviceId) || typeof p.sessionId !== 'string' || !uuid(p.requestId) || !['send', 'answer'].includes(p.action) ||
               !Number.isSafeInteger(p.revision) || p.revision < 0 || !text(p.text) || typeof p.status !== 'string' || !validReceiptContext(p.context) || p.queueTarget !== undefined && !queueTarget(p.queueTarget)) ||
             new Set(saved.drafts.map(d => d.deviceId + '/' + d.sessionId)).size !== saved.drafts.length || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
-        state.drafts = saved.drafts; state.pending = saved.pending;
+        state.drafts = saved.drafts; state.pending = saved.pending.map(p => p.queued ? { ...p, queued: false } : p);
       }
     } catch { unreadableStorage = true; state.storageError = true; state.notice = '此浏览器的草稿存储不可用。处理存储问题并重新加载后才能发送。'; }
     function changed() { onChange(state); }
@@ -87,10 +87,10 @@
       if (strict && readError) throw readError;
       return state;
     }
-    async function select(id) {
+    async function select(id, { read = true } = {}) {
       if (!state.session?.sessions.some(s => s.id === id && s.available !== false)) throw failure('MOBILE_SESSION_UNAVAILABLE');
       state.selected = id; state.row = null; const draft = currentDraft(); state.draft = draft?.text || ''; state.revision = draft?.revision || 0; changed();
-      return refresh(false);
+      if (read) return refresh(false);
     }
     async function refresh(receipts = true, { strict = false } = {}) {
       if (!state.session || !state.selected) return;
@@ -127,13 +127,14 @@
     function recordResult(pending, result, authorization) {
       if (result.requestId !== pending.requestId || result.sessionId !== pending.sessionId || result.action !== pending.action || !Object.hasOwn(labels, result.status)) throw failure('MOBILE_RECEIPT_UNKNOWN');
       pending.status = result.status;
+      pending.queued = result.status === 'awaiting-native' && result.queued === true;
       // A late ACK cannot clear edits or a draft in a different reading view.
       if (authorization === state.authorization && pending.action === 'send' && !pending.queueTarget && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
           state.draft === pending.text && state.revision === pending.revision) {
         const draft = currentDraft();
         if (draft && draft.text === pending.text && draft.revision === pending.revision) { state.draft = ''; state.revision++; draft.text = ''; draft.revision = state.revision; }
       }
-      if (persist() && authorization === state.authorization) state.notice = labels[result.status] + (result.storageWarning ? '；回执保存未确认，请回 Mac 核对。' : '');
+      if (persist() && authorization === state.authorization) state.notice = (pending.queued ? '已排队，等待会话读取；请勿重复发送。' : labels[result.status]) + (result.storageWarning ? '；回执保存未确认，请回 Mac 核对。' : '');
     }
     async function submit(action, answers, queueAnswer) {
       const input = queueAnswer ? queueAnswer.text : state.draft;
