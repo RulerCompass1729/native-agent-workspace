@@ -11,6 +11,12 @@
 .receipt-input { margin: 10px 0; padding-inline-start: 10px; border-inline-start: 3px solid #b7c6a6; white-space: pre-wrap; }
 .receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .receipt-actions button { min-height: 48px; }
+.queue-question { border-block-start: 1px solid var(--border); margin-block-start: 14px; padding-block-start: 14px; font-weight: 650; }
+.queue-answer { display: flex; flex-direction: column; gap: 10px; margin-block-start: 14px; }
+.queue-answer label { font-size: 14px; font-weight: 650; }
+.queue-answer textarea { width: 100%; min-height: 96px; resize: vertical; padding: 10px; border: 1px solid #76866e; border-radius: 8px; font: inherit; font-size: 16px; }
+.queue-answer button { min-height: 48px; }
+.queue-answer-recorded { white-space: pre-wrap; margin-inline: 0; }
 .butler-entry { width: 100%; text-align: start; }
 /* A long note beside the send button must not squeeze its label to one character per line. */
 .compose-tools{gap:10px}.compose-tools .small-note{min-width:0}.compose-tools button{flex-shrink:0;max-width:52%}

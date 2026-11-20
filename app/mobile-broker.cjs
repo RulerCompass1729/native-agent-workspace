@@ -291,7 +291,7 @@ class MobileBroker {
     if (!row || row.id !== ticket.sessionId || row.nativeId !== ticket.nativeId || !row.proof || row.proof.nativeId !== ticket.nativeId) throw denied();
     const contextId = randomBytes(32).toString('base64url');
     if (this.#contexts.size >= MAX_REQUESTS) this.#contexts.delete(this.#contexts.keys().next().value);
-    this.#contexts.set(contextId, { ticket, proof: structuredClone(row.proof), questionId: row.question?.requestId || null });
+    this.#contexts.set(contextId, { ticket, proof: structuredClone(row.proof), sendMode: row.sendMode, questionId: row.question?.requestId || null });
     return { contextId, id: row.id, provider: row.provider, name: row.name, state: row.state,
       canSend: scope.actions.includes('send') && row.canSend === true,
       sendMode: scope.actions.includes('send') && row.canSend === true && SEND_MODES.includes(row.sendMode) ? row.sendMode : null,
@@ -452,7 +452,16 @@ class MobileBroker {
       this.#workspaceState(auth, true);
     };
     try {
-      const result = await this.#desktop.action(client, grant, structuredClone(value), valid);
+      const answerProof = () => {
+        valid();
+        const entry = this.#requests.get(value.answerRequestId), target = entry?.queueTarget;
+        if (!entry || entry.action !== 'send' || entry.pending || entry.result.status !== 'submitted' || entry.result.storageWarning ||
+            !target || target.roomId !== value.roomId || target.itemId !== value.itemId || target.questionId !== value.questionId) throw Object.assign(denied(), { notSent: true });
+        this.#after(auth, entry.ticket, client, epoch);
+        return { requestId: value.answerRequestId, sessionId: entry.ticket.sessionId, nativeId: entry.ticket.nativeId,
+          serviceKey: entry.ticket.serviceKey, text: entry.spec.text };
+      };
+      const result = await this.#desktop.action(client, grant, structuredClone(value), valid, answerProof);
       valid();
       row.result = { requestId: value.requestId, status: result.status === 'complete' ? 'complete' : 'unconfirmed',
         ...(typeof result.itemId === 'string' ? { itemId: result.itemId } : {}) };
@@ -463,7 +472,7 @@ class MobileBroker {
     valid(); return structuredClone(row.result);
   }
   async #submit(auth, value, action) {
-    const keys = action === 'send' ? ['contextId', 'requestId', 'text'] : ['contextId', 'requestId', 'answers'];
+    const keys = action === 'send' ? ['contextId', 'requestId', 'text', ...(Object.hasOwn(value || {}, 'queueTarget') ? ['queueTarget'] : [])] : ['contextId', 'requestId', 'answers'];
     if (!exact(value, keys) || !token(value.contextId) || !uuid(value.requestId) ||
         action === 'send' && (typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || !value.text.isWellFormed() || nativePrefix(value.text)) ||
         action === 'answer' && (!value.answers || typeof value.answers !== 'object' || Array.isArray(value.answers))) throw denied();
@@ -481,11 +490,19 @@ class MobileBroker {
     if (!context) throw denied('MOBILE_CONTEXT_UNAVAILABLE');
     const { ticket } = this.#grant(auth, context.ticket.sessionId, action);
     if (ticket.deviceId !== context.ticket.deviceId || ticket.generation !== context.ticket.generation || ticket.nativeId !== context.ticket.nativeId || ticket.serviceKey !== context.ticket.serviceKey) throw denied();
+    let queueTarget;
+    if (Object.hasOwn(value, 'queueTarget')) {
+      const grant = this.#workspaceGrant?.value;
+      this.#workspaceState(auth, true);
+      if (action !== 'send' || !grant || typeof this.#desktop.queueAnswerTarget !== 'function' || context.sendMode === 'steer' || context.proof.sendMode === 'steer' || value.text.length > 6000) throw denied();
+      queueTarget = this.#desktop.queueAnswerTarget(this.#bound(), grant, value.queueTarget);
+      if (queueTarget.sessionId !== ticket.sessionId || queueTarget.nativeId !== ticket.nativeId || queueTarget.serviceKey !== ticket.serviceKey) throw denied();
+    }
     const spec = { requestId: value.requestId, proof: structuredClone(context.proof),
       ...(action === 'send' ? { text: value.text } : { questionId: context.questionId, answers: structuredClone(value.answers) }) };
     if (action === 'answer' && !uuid(spec.questionId)) throw denied();
     this.#human(ticket.sessionId);
-    const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, pending: null, result:{status:'unconfirmed'} };
+    const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, ...(queueTarget ? { queueTarget } : {}), pending: null, result:{status:'unconfirmed'} };
     this.#requests.set(value.requestId, entry);
     entry.pending = (async () => {
       try {

@@ -196,3 +196,17 @@ test('a busy butler thread shows its messages, not a page of "not shown" notes f
   assert.equal(view.sessions[0].earlierMessagesOmitted, 0);
   assert.doesNotMatch(JSON.stringify(view), /PRIVATE_/);
 });
+
+test('waiting questions come from this authorized item and original member, not an arbitrary queue field', async t => {
+  const f = fixture(t), itemId = f.room.queueAdd('Synthetic waiting task', 'a');
+  f.room.queueMarkSent('shared', itemId, 'a', 'Synthetic A', Date.now() - 100, false, 'native-a');
+  f.room.queueSettle('shared', itemId, 'waiting', '', 'Synthetic A', '', 'Which synthetic option?');
+  const view = await f.adapter.read(f.client, f.grant, f.scopes), item = view.rooms[0].queue.find(i => i.id === itemId);
+  assert.equal(item.question, 'Which synthetic option?'); assert.ok(item.questionId);
+  const target = f.adapter.queueAnswerTarget(f.client, f.grant, { roomId: 'shared', itemId, questionId: item.questionId });
+  assert.equal(target.sessionId, 'a'); assert.equal(target.nativeId, 'native-a');
+  assert.throws(() => f.adapter.queueAnswerTarget(f.client, { roomIds: [], records: false }, { roomId: 'shared', itemId, questionId: item.questionId }));
+  assert.throws(() => f.adapter.queueAnswerTarget(f.client, f.grant, { roomId: 'shared', itemId, questionId: 'other-question' }));
+  f.source.sessions[0].nativeId = 'successor';
+  assert.throws(() => f.adapter.queueAnswerTarget(f.client, f.grant, { roomId: 'shared', itemId, questionId: item.questionId }));
+});

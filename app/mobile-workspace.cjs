@@ -9,6 +9,7 @@ const { nonBlockingQuestion } = require('./approval-policy.js');
 const { confirmationSummary } = require('./confirmation-inbox.cjs');
 const { tempSummary } = require('./temp-reminders.cjs');
 const { currentTarget } = require('./mobile-session.cjs');
+const { storedQueueSource } = require('./butler-ingress.cjs');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -54,6 +55,29 @@ class MobileWorkspace {
   constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now, steward }) {
     if (typeof snapshot !== 'function' || !roomState || !records || typeof records.status !== 'function' || typeof records.acknowledge !== 'function') throw denied();
     Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now, steward });
+  }
+  waitingQuestions(roomId, items) {
+    const questions = new Map();
+    if (!items.length) return questions;
+    const events = this.roomState.metadata?.(roomId)?.events || [], byId = new Map(items.map(i => [i.id, i]));
+    for (let n = events.length - 1; n >= 0; n--) {
+      const event = events[n], item = byId.get(event.itemId);
+      if (!item || questions.has(item.id) || event.kind !== 'queue' || event.sessionId !== item.sentTo) continue;
+      const source = storedQueueSource(roomId, event);
+      if (source.kind === 'decision' && source.payload.itemId === item.id && source.payload.memberId === item.sentTo && source.payload.title)
+        questions.set(item.id, { question: source.payload.title, questionId: event.id });
+    }
+    return questions;
+  }
+  queueAnswerTarget(client, grant, target) {
+    if (!exact(target, ['roomId', 'itemId', 'questionId']) || ![target.roomId, target.itemId, target.questionId].every(identifier)) throw denied();
+    grant = this.resolveGrant(grant, this.snapshot(client));
+    if (!grant.roomIds.includes(target.roomId)) throw denied();
+    const item = this.roomState.queueFind(target.roomId, target.itemId);
+    const session = this.snapshot(client).sessions.find(s => s.id === item.sentTo);
+    if (item.status !== 'waiting' || !session || session.archived || session.nativeContextPending || !item.sentNative ||
+        session.nativeId !== item.sentNative || this.waitingQuestions(target.roomId, [item]).get(item.id)?.questionId !== target.questionId) throw denied();
+    return { ...target, sessionId: session.id, nativeId: session.nativeId, serviceKey: client.route(session.id).key };
   }
   // Which phone entry the Mac's butler gets. Only a session this phone already reads is named; otherwise only why not.
   stewardEntry(all, permitted, scopes) {
@@ -138,13 +162,19 @@ class MobileWorkspace {
         ...conversation((s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
           (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget, cards) };
     });
-    const rooms = roomRows.map(r => ({
+    const rooms = roomRows.map(r => {
+      const questions = this.waitingQuestions(r.id, r.queue || []);
+      return {
       id: r.id, name: r.name, queue: (r.queue || []).map(i => ({ id: i.id, text: i.text, status: i.status,
-        assignee: i.assignee, sentTo: i.sentTo, reply: i.reply, reason: i.reason, question: i.question })),
+        assignee: i.assignee, sentTo: i.sentTo, reply: i.reply, reason: i.reason, ...questions.get(i.id),
+        ...(i.answer ? { answer: { text: i.answer.text, deliveredAt: i.answer.deliveredAt } } : {}),
+        canAnswer: i.status === 'waiting' && permitted.get(i.sentTo)?.nativeId === i.sentNative &&
+          scopes.some(s => s.sessionId === i.sentTo && s.nativeId === i.sentNative && s.actions.includes('send')) })),
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
       ...(selection && (selection.kind !== 'room' || selection.id !== r.id) ? { conversationLoaded: false }
         : { ...conversation(r.messages, undefined, bodyBudget), ...(selection ? { conversationLoaded: true } : {}) }),
-    }));
+      };
+    });
     const shared = grant.records ? this.records.status(state, client) : null;
     const reminders = shared && { ...shared,
       ...(shared.temp ? { temp: tempSummary(shared.temp) } : {}),
@@ -187,7 +217,7 @@ class MobileWorkspace {
     const binding = this.confirmationBinding(client, scopes, value);
     return this.decide(binding.sessionId, binding.nativeId, binding.operationId, binding.decision, check);
   }
-  async action(client, grant, value, valid) {
+  async action(client, grant, value, valid, answerProof) {
     if (typeof valid !== 'function') throw denied();
     grant = this.resolveGrant(grant, this.snapshot(client));
     if (value.action === 'recordAcknowledge') {
@@ -212,10 +242,19 @@ class MobileWorkspace {
       valid();
       itemId = this.roomState.queueAdd(value.text, value.assignee, value.roomId, { kind: 'person', name: 'You', sessionId: null }, null);
     } else {
-      if (!exact(value, ['requestId', 'action', 'roomId', 'itemId']) || !identifier(value.itemId)) throw denied();
+      const answering = value.action === 'queueResolve' && Object.hasOwn(value, 'answerRequestId');
+      if (!exact(value, answering ? ['requestId', 'action', 'roomId', 'itemId', 'questionId', 'answerRequestId'] : ['requestId', 'action', 'roomId', 'itemId']) || !identifier(value.itemId)) throw denied();
       itemId = value.itemId; valid();
       if (value.action === 'queueCancel') this.roomState.queueCancel(itemId, value.roomId, null);
-      else this.roomState.queueResolve(itemId, value.roomId, null);
+      else if (answering) {
+        if (typeof answerProof !== 'function') throw denied();
+        await client.refresh();
+        const target = this.queueAnswerTarget(client, grant, { roomId: value.roomId, itemId, questionId: value.questionId });
+        const proof = answerProof(); valid();
+        if (proof.requestId !== value.answerRequestId || proof.sessionId !== target.sessionId || proof.nativeId !== target.nativeId ||
+            proof.serviceKey !== target.serviceKey || typeof proof.text !== 'string' || !proof.text.trim() || proof.text.length > 6000) throw denied();
+        this.roomState.queueResolve(itemId, value.roomId, null, proof.text);
+      } else this.roomState.queueResolve(itemId, value.roomId, null);
     }
     await this.broadcast(); this.schedule();
     return { status: 'complete', itemId };
