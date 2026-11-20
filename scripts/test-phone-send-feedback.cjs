@@ -8,8 +8,8 @@ const scratch = testScratch.directory(path.join(os.tmpdir(), 'naw-phone-send-'))
 const check = (name, pass) => { results.push({ name, pass: Boolean(pass) }); console.log(JSON.stringify(results.at(-1))); };
 async function until(fn) { for (let i = 0; i < 200; i++) { if (await fn()) return; await wait(10); } throw Error('Synthetic phone did not settle'); }
 let browser;
-async function scene(lang, history = false) {
-  const context = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' }), page = await context.newPage();
+async function scene(lang, history = false, completed = 0, viewport) {
+  const context = await browser.newContext({ ...devices['iPhone 13'], ...(viewport ? { viewport } : {}), serviceWorkers: 'block' }), page = await context.newPage();
   const sessions = ['a', 'b'].map(id => ({ id, name: 'Synthetic ' + id, provider: 'claude', state: 'idle', available: true, actions: ['read', 'send'] }));
   let generation = 0, hold = false, releaseNative, releaseWorkspace;
   const messages = history ? Array.from({ length: 60 }, (_, i) => ({ id: 'history-' + i, role: 'assistant', text: 'Synthetic history ' + i + ' '.repeat(2) + 'Earlier conversation. '.repeat(6), time: 1000 + i })) : [];
@@ -34,6 +34,13 @@ async function scene(lang, history = false) {
     const name = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice('/mobile/'.length);
     if (!['index.html', 'client.js', 'workspace.js', 'passkeys.js', 'push.js', 'style.css', 'manifest.webmanifest'].includes(name)) return route.fulfill({ status: 404, body: '' });
     return route.fulfill({ contentType: name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.html') ? 'text/html' : 'application/json', body: fs.readFileSync(path.join(root, 'app/mobile-web', name)) });
+  });
+  if (completed) await context.addInitScript(saved => localStorage.setItem('naw.mobile.v1', JSON.stringify(saved)), {
+    version: 1, drafts: [], pending: Array.from({ length: completed }, (_, i) => ({
+      deviceId: '00000000-0000-4000-8000-000000000001', sessionId: 'a',
+      requestId: '00000000-0000-4000-8000-' + String(i + 10).padStart(12, '0'),
+      action: 'answer', text: '', revision: 0, status: 'reply-written',
+    })),
   });
   await page.goto('https://phone.invalid/mobile/#' + lang + '/home');
   await page.waitForFunction(() => document.documentElement.dataset.loading === 'false' && document.querySelector('#content a[href$="/chat/a"]'));
@@ -107,6 +114,25 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         await wait(100); s.native('submitted'); await wait(150);
         check('changed authorization never echoes old input', await count(s.page) === 0);
         check('changed authorization never resends', s.posted.length === 1);
+      } finally { await s.close(); }
+    }
+    for (const viewport of [{ width: 375, height: 667 }, { width: 430, height: 932 }]) {
+      const s = await scene('zh', true, 5, viewport);
+      const visible = () => s.page.locator('.thread .message:last-child .bubble').evaluate(e => {
+        const r = e.getBoundingClientRect(), compose = document.querySelector('#compose').getBoundingClientRect();
+        return r.top >= Math.max(0, document.querySelector('#top').getBoundingClientRect().bottom) && r.bottom <= compose.top;
+      });
+      try {
+        await s.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        console.log(JSON.stringify(await s.page.evaluate(() => ({ viewport: innerHeight, receipts: document.querySelectorAll('.receipt').length, tail: document.querySelector('.thread .message:last-child .bubble').getBoundingClientRect().toJSON(), compose: document.querySelector('#compose').getBoundingClientRect().toJSON() }))));
+        check(viewport.width + ' opens latest message above compose with five receipts', await visible());
+        s.reply(); await s.page.evaluate(() => nawPhone.refresh());
+        check(viewport.width + ' follows newest reply while reading the end', await visible());
+        await s.page.evaluate(() => scrollTo(0, 400));
+        const before = await s.page.evaluate(() => scrollY);
+        await s.page.evaluate(() => nawPhone.refresh());
+        check(viewport.width + ' refresh preserves earlier reading position', await s.page.evaluate(() => scrollY) === before);
+        check(viewport.width + ' opening and refresh do not send', s.posted.length === 0);
       } finally { await s.close(); }
     }
     for (const earlier of [false, true]) {
