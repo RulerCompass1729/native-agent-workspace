@@ -184,11 +184,12 @@
         const target = context?.target || (visible && row.native ? client.state.session.sessions.find(s => s.id === row.sessionId)?.name || row.sessionId : '');
         const action = row.native ? t(row.action === 'answer' ? 'receiptAnswer' : 'receiptSend') : t(({ queueAdd: 'add', queueCancel: 'cancelTask', queueResolve: 'handled', recordAcknowledge: 'ack' })[row.action]);
         const task = !row.native && view.rooms.find(r => r.id === row.roomId)?.queue.find(i => i.id === row.itemId);
-        const title = row.native ? action + (target ? ' · ' + target : '') : task ? task.text + ' · ' + action : action + (target ? ' · ' + target : '');
+        const title = row.native ? action + (target ? ' · ' + target : '') : task ? (target ? target + ' · ' : '') + task.text + ' · ' + action : action + (target ? ' · ' + target : '');
         top.append(node('strong', visible ? title : t(row.deviceId !== client.state.session?.deviceId ? 'oldPair' : 'receiptHidden')));
         let time = t('receiptTimeUnknown');
-        if (context) {
-          const at = new Date(context.at), today = at.toDateString() === new Date().toDateString();
+        const atValue = context?.at ?? row.createdAt;
+        if (visible && Number.isSafeInteger(atValue) && atValue >= 0 && atValue <= 8640000000000000) {
+          const at = new Date(atValue), today = at.toDateString() === new Date().toDateString();
           time = (today ? at.toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en')) + ' ' + t('receiptTime');
           const stamp = node('time', time); stamp.dateTime = at.toISOString(); top.append(stamp);
         } else if (visible) top.append(node('span', time, 'quiet'));
@@ -367,7 +368,8 @@
     }
     async function resolveQueueAnswer(row) {
       if (!row || row.deviceId !== client.state.session?.deviceId || row.status !== 'submitted' || !row.queueTarget) return;
-      const result = await actions.act(client.state.session, { action: 'queueResolve', ...row.queueTarget, answerRequestId: row.requestId });
+      const room = view?.rooms.find(r => r.id === row.queueTarget.roomId), item = room?.queue.find(i => i.id === row.queueTarget.itemId);
+      const result = await actions.act(client.state.session, { action: 'queueResolve', ...row.queueTarget, answerRequestId: row.requestId }, { target: room?.name, text: item?.text });
       if (result.status === 'complete') actions.clearAnswerDraft(client.state.session, row.queueTarget, row.text);
       toast(result.status); await refresh();
     }

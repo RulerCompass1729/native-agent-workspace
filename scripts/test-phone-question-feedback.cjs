@@ -24,7 +24,7 @@ async function scene(lang, status = 'reply-written') {
       writes.push(request.postDataJSON());
       if (status === 'reply-written') question = null;
       data = { requestId: writes.at(-1).requestId, sessionId: 'one', action: 'answer', status };
-    } else if (url.pathname === '/mobile/workspace') data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms: [], confirmations: [], reminders: null, capabilities: { push: false } };
+    } else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms: [], confirmations: [], reminders: null, capabilities: { push: false } };
     if (data) return route.fulfill({ json: data });
     const file = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice('/mobile/'.length);
     if (!['index.html', 'client.js', 'workspace.js', 'passkeys.js', 'push.js', 'style.css', 'manifest.webmanifest'].includes(file)) return route.fulfill({ status: 404, body: '' });

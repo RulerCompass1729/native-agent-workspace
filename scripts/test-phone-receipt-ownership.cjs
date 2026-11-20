@@ -38,7 +38,7 @@ async function scene(lang) {
     let data;
     if (url.pathname === '/mobile/session') data = { deviceId, csrf: 'C'.repeat(43), workspace: true, sessions };
     else if (url.pathname.startsWith('/mobile/read/')) data = { id: url.pathname.split('/').at(-1), contextId: 'B'.repeat(43), canSend: true, messages: [], question: null };
-    else if (url.pathname === '/mobile/workspace') data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms, confirmations: [], reminders: null, capabilities: { push: false } };
+    else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms, confirmations: [], reminders: null, capabilities: { push: false } };
     else if (url.pathname === '/mobile/receipt') data = { requestId: id(11), sessionId: 'a', action: 'send', status: 'unconfirmed' };
     if (data) return route.fulfill({ json: data });
     const file = url.pathname === '/mobile/' ? 'index.html' : url.pathname.slice(8);
@@ -59,6 +59,7 @@ async function scene(lang) {
         let text = await s.page.locator('#content').innerText();
         check(lang + ' only original-session native receipts appear', !text.includes(lang === 'zh' ? '回答已写入' : 'Answer written') && !text.includes(lang === 'zh' ? '操作已完成' : 'Action completed'));
         check(lang + ' current input and uncertain input are identifiable', text.includes('SYNTHETIC_A_INPUT') && text.includes('SYNTHETIC_A_UNCERTAIN'));
+        check(lang + ' saved creation times survive missing legacy context', await s.page.locator('.receipt time[datetime=\"1970-01-01T00:00:01.000Z\"]').count() === 2);
         check(lang + ' missing targets are not attached to the current session', !text.includes(lang === 'zh' ? '未执行，输入保留' : 'Not executed; input retained'));
         const old = s.page.locator('.receipt').filter({ hasText: lang === 'zh' ? '旧配对' : 'old pairing' });
         check(lang + ' old pairing receipts have no action controls', await old.getByRole('button').count() === 0);

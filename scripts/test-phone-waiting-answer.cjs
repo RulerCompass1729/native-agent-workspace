@@ -19,7 +19,7 @@ async function scene(status, mode = 'send') {
     if (req.method() === 'POST') calls.push({ url: url.pathname, body: req.postDataJSON() });
     if (url.pathname === '/mobile/session') data = { deviceId: '00000000-0000-4000-8000-000000000001', csrf: 'C'.repeat(43), workspace: true, sessions };
     else if (url.pathname === '/mobile/read/a') data = { id: 'a', contextId: 'B'.repeat(43), canSend: true, sendMode: mode, messages: [], question: null };
-    else if (url.pathname === '/mobile/workspace') data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms: [{ id: 'shared', name: 'Synthetic space', queue: [item], members: sessions, messages: [] }], confirmations: [], reminders: null, capabilities: { push: false } };
+    else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: [] })), rooms: [{ id: 'shared', name: 'Synthetic space', queue: [item], members: sessions, messages: [] }], confirmations: [], reminders: null, capabilities: { push: false } };
     else if (url.pathname === '/mobile/send') {
       const p = req.postDataJSON(); data = { requestId: p.requestId, sessionId: 'a', action: 'send', status };
     } else if (url.pathname === '/mobile/workspace/action') {
@@ -54,6 +54,8 @@ async function scene(status, mode = 'send') {
         check(name + ' explicit send is bound to the original task and question', sends.length === 1 && sends[0].body.queueTarget.itemId === 'task' && sends[0].body.queueTarget.questionId === 'question-one');
         if (status === 'submitted') {
           check(name + ' marks only with this input receipt', marks.length === 1 && marks[0].body.answerRequestId === sends[0].body.requestId && s.item.status === 'done');
+          const context = await s.page.evaluate(() => nawPhone.actions.state.pending.find(row => row.action === 'queueResolve')?.context);
+          check(name + ' handling receipt retains its original space and task snapshot', context?.target === 'Synthetic space' && context?.text === s.item.text && !(await s.page.locator('.receipt').innerText()).includes('原任务内容未保存'));
           check(name + ' question and delivered answer remain on one card', (await s.page.locator('.queue-card').innerText()).includes('SYNTHETIC_EXPLICIT_ANSWER') && (await s.page.locator('.queue-card').innerText()).includes('Synthetic original question?'));
         } else {
           check(name + ' unconfirmed or unsent answer stays waiting', marks.length === 0 && s.item.status === 'waiting');
