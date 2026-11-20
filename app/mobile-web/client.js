@@ -139,7 +139,11 @@
       const target = state.session.sessions.find(s => s.id === state.selected);
       const context = receiptContext({ target: target.name || state.row.name || target.id, scope: 'session', targetId: state.selected, nativeId: target.nativeId,
         text: action === 'answer' ? state.row.question.questions.map(q => q.question).join('\n') + '\n' + Object.values(answers || {}).flat().join(', ') : '' });
-      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed', context };
+      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed', context, createdAt: Date.now() };
+      if (action === 'answer' && Array.isArray(state.row.question.questions)) {
+        pending.question = state.row.question.questions.map(q => typeof q.question === 'string' ? q.question : '').join('\n').slice(0, 4000);
+        pending.answer = state.row.question.questions.map(q => Array.isArray(answers[q.id || q.question]) ? answers[q.id || q.question].filter(a => typeof a === 'string').join('、') : '').join('\n').slice(0, 4000);
+      }
       const value = { contextId, requestId, ...(action === 'send' ? { text: state.draft } : { answers }) };
       state.pending.push(pending);
       if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }

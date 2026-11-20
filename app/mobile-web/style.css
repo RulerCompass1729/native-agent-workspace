@@ -6,6 +6,11 @@
 .toast-message { flex: 1; min-width: 0; }
 .toast-close { pointer-events: auto; flex: none; min-width: 44px; min-height: 44px; padding: 0; background: transparent; color: inherit; border: 1px solid currentColor; }
 .with-compose .toast { bottom: calc(var(--compose-space,270px) + 8px); }
+.receipt { margin-block: 12px; border: 1px solid #b7c6a6; border-radius: 10px; padding: 12px; background: #f5f8f3; }
+.receipt strong { display: block; }
+.receipt-input { margin: 10px 0; padding-inline-start: 10px; border-inline-start: 3px solid #b7c6a6; white-space: pre-wrap; }
+.receipt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.receipt-actions button { min-height: 48px; }
 .butler-entry { width: 100%; text-align: start; }
 /* A long note beside the send button must not squeeze its label to one character per line. */
 .compose-tools{gap:10px}.compose-tools .small-note{min-width:0}.compose-tools button{flex-shrink:0;max-width:52%}

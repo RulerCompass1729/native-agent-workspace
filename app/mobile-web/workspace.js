@@ -26,21 +26,31 @@
       }
     } catch { state.storageError = true; }
     function save() { try { const raw = JSON.stringify({ version: 1, pending: state.pending }); if (raw.length > 256 * 1024) throw Error('limit'); storage.setItem(ACTION_KEY, raw); } catch { state.storageError = true; throw Error('MOBILE_STORAGE_UNAVAILABLE'); } }
+    function record(row, result) {
+      if (result.requestId !== row.requestId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status) ||
+          row.itemId && result.itemId && row.itemId !== result.itemId) throw Error('MOBILE_ACTION_UNCONFIRMED');
+      row.status = result.status;
+      if (typeof result.itemId === 'string') row.itemId = result.itemId;
+      save();
+    }
     async function act(session, fields, local = {}) {
       if (state.storageError || state.busy || !session || state.pending.some(p => p.deviceId === session.deviceId && !terminal(p.status)) || state.pending.length >= 64) throw Error('MOBILE_ACTION_UNCONFIRMED');
       const context = receiptContext({ target: local.target, text: local.text || fields.text || '',
         scope: fields.action === 'recordAcknowledge' ? 'record' : 'room', targetId: fields.record || fields.roomId || '' });
-      const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action, context };
+      const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action, context, createdAt: Date.now(),
+        ...(typeof fields.roomId === 'string' ? { roomId: fields.roomId } : {}),
+        ...(typeof fields.itemId === 'string' ? { itemId: fields.itemId } : {}),
+        ...(fields.action === 'queueAdd' ? { text: fields.text } : {}) };
       state.pending.push(row);
       try { save(); } catch (error) { state.pending.pop(); throw error; }
       state.busy = true; changed();
-      try { const result = await request('/mobile/workspace/action', { ...fields, requestId }, session.csrf); if (result.requestId !== requestId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); Object.assign(row, { status: result.status, itemId: result.itemId }); save(); return result; }
+      try { const result = await request('/mobile/workspace/action', { ...fields, requestId }, session.csrf); record(row, result); return result; }
       finally { state.busy = false; changed(); }
     }
     async function receipt(session, row) {
       if (!session || row.deviceId !== session.deviceId || state.busy) throw Error('MOBILE_RECEIPT_UNAVAILABLE');
       state.busy = true; changed();
-      try { const result = await request('/mobile/workspace/action', { action: 'receipt', requestId: row.requestId }, session.csrf); if (result.requestId !== row.requestId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); Object.assign(row, { status: result.status, itemId: result.itemId }); save(); return result; }
+      try { const result = await request('/mobile/workspace/action', { action: 'receipt', requestId: row.requestId }, session.csrf); record(row, result); return result; }
       finally { state.busy = false; changed(); }
     }
     function forget(row) { if (!terminal(row.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); state.pending = state.pending.filter(p => p !== row); save(); changed(); }
@@ -63,6 +73,8 @@
     'blocked-interrupt': 'It is interrupting or waiting for native terminal input; check on the Mac. Your draft is kept.', 'blocked-disconnected': 'It lost its native connection; check on the Mac. Your draft is kept.', 'blocked-readOnly': 'This phone was given read access only.', 'blocked-storage': 'NAW on this Mac cannot save records now, so a phone message cannot be recorded; handle it on the Mac. Your draft is kept.', 'blocked-notReady': 'It cannot take messages now (starting, stopping, in error or waiting to reconnect); check on the Mac. Your draft is kept.', 'blocked-ended': 'This session has ended; it cannot take messages.', queuedToast: 'Queued, waiting for Claude to receive it; nothing is resent before then.', ownUnconfirmed: 'The outcome of your last message is unconfirmed. Check this message\'s status or look on the Mac. Do not resend; your draft is kept.',
     phoneOffline: 'The phone\'s connection to NAW is unconfirmed. Refresh once online. Your draft is kept; nothing is resent automatically.', reading: 'Reading this session; you cannot send yet. Your draft is kept.', messageReceipt: 'Check this message\'s status', messageUnconfirmed: 'Outcome unconfirmed. Check this message\'s status; do not resend.' });
   Object.assign(words.en, { submitted: 'The session received it', 'reply-written': 'Answer written', 'awaiting-native': 'Not yet confirmed that the session received it', prepared: 'Prepared, not submitted', unknown: 'Unknown', ended: 'Ended', failed: 'Failed', removeReceipt: 'Remove confirmed receipt', invalidated: 'No longer valid · Not executed', replaced: 'Replaced by a new confirmation' });
+  Object.assign(words.zh, { sendReceipt: '发送消息', answerReceipt: '回答原生问题', inspectInput: '查看原输入' });
+  Object.assign(words.en, { sendReceipt: 'Send message', answerReceipt: 'Answer native question', inspectInput: 'View original input' });
   Object.assign(words.zh, { registerKey: '登记敏感确认凭证', registrationCode: 'Mac 显示的六位登记码', registerHelp: '先在 Mac 发起登记；完成后核对两边公钥指纹，再在 Mac 确认和启用。', registrationReady: '请在 Mac 核对指纹并确认；手机批准仍未启用。', verifyPhone: '每张卡片都需系统验证本人；配对本身不能批准。', verifyFailed: '未完成或结果未确认；请查询回执或回 Mac 核对，不会重发。' });
   Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
   Object.assign(words.zh, { receiptTitle: '回执', receiptSend: '发给', receiptAnswer: '回答', receiptTime: '发起', receiptTimeUnknown: '时间未记录', receiptMissing: '原任务内容未保存，请回 Mac 核对', receiptHidden: '关联内容已不在本次授权范围内，请回 Mac 核对', receiptFull: '查看完整原输入', receiptExcerpt: '查看已保存片段', receiptHelp: '移除回执不会撤回消息或任务。', removeReceipt: '移除此条回执', unsentDraft: '未发送的草稿', taskAdded: '任务已添加', taskCancelled: '任务已取消', taskHandled: '任务已标为处理', reminderAcknowledged: '提醒已确认', receiptOperations: '操作记录', receiptSteward: '大管家记录', answerPending: '回答已写入；原生处理仍待确认', messageNotSent: '未发送，草稿保留' });
@@ -132,18 +144,26 @@
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
-    function receipts(container) {
+    function receipts(container, scope = {}) {
       const native = (client.state.pending || []).map(p => ({ ...p, native: true }));
-      const rows = [...native, ...actions.state.pending];
+      const rows = [...native, ...actions.state.pending].filter(row => {
+        if (row.native) return scope.sessionId === row.sessionId && view?.sessions.some(s => s.id === row.sessionId);
+        if (row.action === 'recordAcknowledge') return scope.records === true;
+        const room = view?.rooms.find(r => r.id === row.roomId), task = room?.queue.find(i => i.id === row.itemId);
+        return room && scope.roomId === row.roomId && (task || row.action === 'queueAdd' && !row.itemId && row.status !== 'complete');
+      });
       if (!rows.length) return;
       const list = node('ol', undefined, 'receipt-list'); list.setAttribute('role', 'list');
       container.append(node('h2', t('receiptTitle') + ' · ' + rows.length, 'receipt-heading'), list);
       for (const row of rows) {
         const visible = receiptVisible(row, client.state.session, view), context = visible ? row.context : null;
         const item = node('li', undefined, 'receipt context-receipt'), top = node('div', undefined, 'receipt-top');
+        item.dataset.requestId = row.requestId;
         const target = context?.target || (visible && row.native ? client.state.session.sessions.find(s => s.id === row.sessionId)?.name || row.sessionId : '');
         const action = row.native ? t(row.action === 'answer' ? 'receiptAnswer' : 'receiptSend') : t(({ queueAdd: 'add', queueCancel: 'cancelTask', queueResolve: 'handled', recordAcknowledge: 'ack' })[row.action]);
-        top.append(node('strong', visible ? action + (target ? ' · ' + target : '') : t(row.deviceId !== client.state.session?.deviceId ? 'oldPair' : 'receiptHidden')));
+        const task = !row.native && view.rooms.find(r => r.id === row.roomId)?.queue.find(i => i.id === row.itemId);
+        const title = row.native ? action + (target ? ' · ' + target : '') : task ? task.text + ' · ' + action : action + (target ? ' · ' + target : '');
+        top.append(node('strong', visible ? title : t(row.deviceId !== client.state.session?.deviceId ? 'oldPair' : 'receiptHidden')));
         let time = t('receiptTimeUnknown');
         if (context) {
           const at = new Date(context.at), today = at.toDateString() === new Date().toDateString();
@@ -151,22 +171,23 @@
           const stamp = node('time', time); stamp.dateTime = at.toISOString(); top.append(stamp);
         } else if (visible) top.append(node('span', time, 'quiet'));
         item.append(top);
-        const original = visible ? row.native && row.action === 'send' ? row.text : context?.text || t('receiptMissing') : '';
-        const description = node('p', Array.from(original).slice(0, 85).join('') + (Array.from(original).length > 85 ? '…' : ''), 'receipt-original');
+        const original = visible ? row.native ? row.action === 'send' ? row.text : [row.question, row.answer].filter(v => typeof v === 'string' && v).join('\n') || context?.text || t('receiptMissing') : row.text || context?.text || t('receiptMissing') : '';
+        const description = node('p', Array.from(original).slice(0, 85).join('') + (Array.from(original).length > 85 ? '…' : ''), 'receipt-original receipt-input');
         description.id = 'receipt-' + row.requestId;
         if (visible) item.append(description);
         if (Array.from(original).length > 85) {
           const full = node('details', undefined, 'receipt-full'); full.append(node('summary', t(context?.clipped ? 'receiptExcerpt' : 'receiptFull')), node('p', original)); item.append(full);
         }
-        const bottom = node('div', undefined, 'receipt-bottom'), settled = ['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status);
+        const bottom = node('div', undefined, 'receipt-bottom receipt-actions'), settled = ['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status);
         const outcome = row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
           : row.status === 'complete' ? ({ queueAdd: 'taskAdded', queueCancel: 'taskCancelled', queueResolve: 'taskHandled', recordAcknowledge: 'reminderAcknowledged' })[row.action] : row.status;
-        if (visible) bottom.append(node('span', t(outcome), 'receipt-state' + (settled ? '' : ' uncertain')));
+        if (visible) bottom.append(node('span', t(outcome), 'receipt-state receipt-status' + (settled ? '' : ' uncertain')));
+        if (visible && original) bottom.append(button(t('inspectInput'), () => dialog(t('inspectInput'), original), 'receipt-inspect'));
         if (visible && !settled) {
           const query = button(t(row.native ? 'messageReceipt' : 'receipt'), async () => { if (row.native) await client.receipt(row.requestId); else await actions.receipt(client.state.session, row); await refresh(); }, 'receipt-control');
           query.setAttribute('aria-describedby', description.id); bottom.append(query);
         }
-        if (settled) {
+        if (visible && settled) {
           const remove = button(t('removeReceipt'), () => { if (row.native) client.forget(row.requestId); else actions.forget(row); paint(); }, 'receipt-control');
           remove.setAttribute('aria-label', [t('removeReceipt'), target, Array.from(original).slice(0, 85).join(''), visible ? time : '', row.requestId].filter(Boolean).join(' · ')); bottom.append(remove);
         }
@@ -285,7 +306,7 @@
       const rows = node('div', undefined, 'thread'); thread(s.messages, rows, s); el('content').append(rows);
       if (s.earlierMessagesOmitted) el('content').append(node('p', t('omit'), 'small-note'));
       if (client.state.row?.question && client.state.selected === s.id) el('content').append(link(t('question') + ' ›', 'confirm/native/' + encodeURIComponent(s.id), 'link-row'));
-      receipts(el('content'));
+      receipts(el('content'), { sessionId: s.id });
     }
     function space() {
       if (!route.id) { heading('space'); roomList(el('content')); return; }
@@ -294,6 +315,7 @@
       const members = node('div', r.members.map(s => s.name).join(' / '), 'callout'); members.id = 'room-members'; el('content').append(members);
       const rows = node('div', undefined, 'thread'); thread(r.messages, rows); el('content').append(rows);
       el('content').append(button('+ ' + t('add'), () => addTask(r), 'primary'));
+      receipts(el('content'), { roomId: r.id });
     }
     function addTask(room) {
       const form = node('form'); form.method = 'post'; form.action = '/mobile/workspace/action';
@@ -316,7 +338,7 @@
         card.append(bottom); list.append(card);
       } if (!list.childElementCount) list.append(node('p', t('noData'), 'quiet')); }
       for (const key of ['all', 'working', 'queued']) filters.append(button(t(key), () => show(key)));
-      el('content').append(filters, list, button('+ ' + t('add'), () => addTask(r), 'primary'), node('p', t('unchanged'), 'small-note')); show('all'); receipts(el('content'));
+      el('content').append(filters, list, button('+ ' + t('add'), () => addTask(r), 'primary'), node('p', t('unchanged'), 'small-note')); show('all'); receipts(el('content'), { roomId: r.id });
     }
     function nativeQuestion() {
       heading('confirm'); const row = client.state.row;
@@ -325,7 +347,7 @@
           answeredQuestion.deviceId === client.state.session?.deviceId && answeredQuestion.sessionId === route.nativeId &&
           client.state.selected === route.nativeId && client.state.pending.includes(answeredQuestion.receipt) && answeredQuestion.receipt.status === 'reply-written';
         el('content').append(node('p', t(written ? 'reply-written' : 'noNative'), written ? 'native-answer-status' : undefined));
-        if (written) receipts(el('content'));
+        if (written) receipts(el('content'), { sessionId: route.nativeId });
         return;
       }
       answeredQuestion = null;
@@ -351,7 +373,7 @@
             await refresh();
           } finally { submit.disabled = false; }
         });
-      }); el('content').append(form); receipts(el('content'));
+      }); el('content').append(form); receipts(el('content'), { sessionId: route.nativeId });
     }
     function confirmation() {
       if (route.nativeId) { nativeQuestion(); return; }
@@ -493,7 +515,7 @@
         : route?.page === 'space' && route.id ? view.rooms.find(r => r.id === route.id) : null;
       if (body?.conversationLoaded === false && !body.messages?.length) {
         el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
-        if (route.page === 'chat') receipts(el('content'));
+        if (route.page === 'chat') receipts(el('content'), { sessionId: route.id });
       }
       else ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)();
       if (body?.conversationLoaded === false && body.messages?.length) el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
