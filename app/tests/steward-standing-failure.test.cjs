@@ -131,3 +131,110 @@ test('PF07 follow-up boundary: a non-Error throw after handler entry remains unc
   assert.equal((await f.ask('join', 'after-handler')).state, 'unconfirmed');
   assert.deepEqual(f.effects, ['join']);
 });
+
+test('Q12/PF07: standing failures have bilingual summaries without changing refusal or replay', async t => {
+  const { StewardRecord, view } = require('../steward-record.cjs');
+  const { bind } = require('../renderer/steward-record.js');
+  const locale = require('../ui-locale.js');
+  const expected = {
+    zh: '已拦下：常设许可处理失败，本次没有执行',
+    en: 'Stopped: standing permission handling failed; nothing was executed.',
+  };
+  function element(tag) {
+    return {
+      tag,
+      children: [],
+      className: '',
+      textContent: '',
+      dataset: {},
+      open: false,
+      append(...children) {
+        this.children.push(...children);
+      },
+      replaceChildren(...children) {
+        this.children = children;
+      },
+      setAttribute() {},
+      addEventListener() {},
+      showModal() {
+        this.open = true;
+      },
+      close() {
+        this.open = false;
+      },
+    };
+  }
+  function descendants(node) {
+    const result = [node];
+    for (const child of node.children) {
+      result.push(...descendants(child));
+    }
+    return result;
+  }
+  for (const trigger of ['non-error', 'after-reservation']) {
+    for (const language of ['zh', 'en']) {
+      await t.test(`${trigger} / ${language}`, async child => {
+        const f = fixture(child);
+        const standing = f.controller.standing;
+        const diagnostic = `Synthetic ${trigger} failure`;
+        let originalDiagnostic = 'The operation did not execute.';
+        if (trigger === 'after-reservation') {
+          originalDiagnostic = diagnostic;
+        }
+        f.controller.standing = (...args) => {
+          if (trigger === 'after-reservation') {
+            standing(...args);
+            throw Error(diagnostic);
+          }
+          throw diagnostic;
+        };
+        const owner = { sessionId: 'butler', nativeId: 'native-butler' };
+        const sender = { id: owner.sessionId, nativeId: owner.nativeId, provider: 'codex', name: 'Butler' };
+        const record = new StewardRecord(f.dir, { steward: () => owner, selected: () => owner });
+        const id = `q12-${trigger}-${language}`;
+        const command = { action: 'invoke', method: 'join', operation_id: id, arguments: ['target', true] };
+        const receipt = await record.around(sender, command, () => f.ask('join', id));
+        assert.equal(receipt.state, 'not-executed');
+        assert.equal(receipt.reason, 'standing-authorization-unavailable');
+        assert.equal(receipt.retryWithNewOperationId, true);
+        assert.equal(receipt.retryHint, 'The operation did not execute. Retry with a new operation_id.');
+        assert.equal(receipt.error, originalDiagnostic);
+        assert.deepEqual(f.effects, []);
+        const used = f.policy.read().used.length;
+        assert.equal(used, Number(trigger === 'after-reservation'));
+        await f.reopen();
+        const duplicate = await f.ask('join', id);
+        assert.equal(duplicate.duplicate, true);
+        assert.equal(duplicate.state, 'not-executed');
+        assert.equal(duplicate.reason, receipt.reason);
+        assert.equal(duplicate.retryHint, receipt.retryHint);
+        assert.deepEqual(f.effects, []);
+        assert.equal(f.policy.read().used.length, used);
+
+        const original = JSON.stringify(receipt);
+        const shown = view(record, { sessions: [sender] });
+        const dialog = element('dialog');
+        const screen = bind({
+          dialog,
+          document: { createElement: element },
+          api: { stewardRecord: async () => shown },
+          text: (key, params) => locale.format(language, key, params),
+        });
+        await screen.open();
+        const nodes = descendants(dialog);
+        const summaries = nodes.filter(node => node.className === 'disclosure-end');
+        assert.ok(summaries.some(node => node.textContent === expected[language]));
+        for (const summary of summaries) {
+          assert.doesNotMatch(summary.textContent, /standing-authorization-unavailable/);
+        }
+        const details = nodes.find(node => node.tag === 'details' &&
+          descendants(node).some(value => value.className === 'steward-record-error'));
+        assert.ok(details);
+        details.open = true;
+        const error = descendants(details).find(node => node.className === 'steward-record-error');
+        assert.equal(error.textContent, originalDiagnostic);
+        assert.equal(JSON.stringify(receipt), original);
+      });
+    }
+  }
+});
