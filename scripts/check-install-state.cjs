@@ -96,6 +96,12 @@ function geometry(views, windows) {
   const used = new Set();
   return views.every(v => { const i = windows.findIndex((w, i) => !used.has(i) && (w.owner === undefined || w.owner === v.owner) && near(v.bounds, w.bounds)); if (i < 0) return false; used.add(i); return true; });
 }
+function liveViewBaseline(views, windows) {
+  const owners = new Map(windows.map(w => [w.owner, w]));
+  if (!views.length || views.length !== windows.length || owners.size !== windows.length ||
+      new Set(views.map(v => v.owner)).size !== views.length || views.some(v => !owners.has(v.owner))) throw refusal('Pre-install business window owners mismatch');
+  return views.map(v => ({ owner: v.owner, bounds: bounds(owners.get(v.owner).bounds) }));
+}
 function runtimeDigest(root) {
   const digest = createHash('sha256'), started = performance.now(); let entries = 0, bytes = 0;
   const tick = () => { if (performance.now() - started > 30000) throw refusal('Runtime inspection deadline'); };
@@ -316,8 +322,10 @@ async function main(argv = process.argv.slice(2)) {
     const collect = collector(options, helper, target), expected = { version: options.version, revision: options.revision };
     if (mode === 'pre') {
       const state = collect(); state.dsh = preDsh(options.profile, state.backend, target.app);
+      // Saved bounds can lag moves until quit; retain the actual pre-install frames.
+      const savedViews = state.views; state.views = liveViewBaseline(state.views, state.windows);
       if (!geometry(state.views, state.windows)) throw refusal('Pre-install views/native geometry mismatch');
-      fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), ...state }, null, 2), { flag: 'wx', mode: 0o600 });
+      fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), savedViews, ...state }, null, 2), { flag: 'wx', mode: 0o600 });
       print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['inferred menu windows (geometry only, not provenance)', JSON.stringify(state.inferredMenuWindows), 'recorded per display; max 4', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
       return preDshReady(state.dsh) ? 0 : 1;
     }
@@ -337,4 +345,4 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(error => { console.error('FAIL: ' + (error.installStateReason || 'Metadata unavailable; verify input files and OS metadata access without changing permissions') + '. No settings or permissions were changed.'); process.exitCode = 1; });
-module.exports = { windowFrames, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
+module.exports = { liveViewBaseline, windowFrames, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };

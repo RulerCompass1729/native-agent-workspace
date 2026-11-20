@@ -56,7 +56,7 @@ test('display metadata and excluded windows must stay stable across both samples
 });
 function pair() {
   const expected = { version: '0.1.0-alpha.999', revision: 'a'.repeat(40) };
-  const base = { profile: '/synthetic', gui: { pid: 100, started: 'before' }, views: [{ owner: 'owner', bounds: frame }], windows: [{ onScreen: true, bounds: frame }],
+  const base = { profile: '/synthetic', gui: { pid: 100, started: 'before' }, views: [{ owner: 'owner', bounds: { ...frame } }], windows: [{ onScreen: true, bounds: { ...frame } }],
     bundle: { ...expected, runtimeHash: 'b'.repeat(16) }, backend: { key: 'old', ...expected, runtimeHash: 'b'.repeat(16), evidence: 'active-key+live-lock+runtime-source' },
     dsh: { status: 'qualified', digest: 'same' }, inferredMenuWindows: [{ display: 9, count: 4, bounds: fixture().displays[0].bounds, menuBarHeight: 30 }] };
   return { before: base, after: { ...structuredClone(base), gui: { pid: 101, started: 'after' } }, expected };
@@ -84,4 +84,20 @@ test('NSScreen frame/visibleFrame supplies menu height without reading titles; u
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../scripts/fixtures/install-windows.js'), 'utf8'), c);
   const result = JSON.parse(c.run([String(pid), '--menu-metadata'])); assert.equal(result.displays[0].menuBarHeight, 30); assert.equal(titles, 0);
   api.NSScreen = undefined; assert.deepEqual(JSON.parse(c.run([String(pid), '--menu-metadata'])).displays, []);
+});
+test('pre captures live bounds of the same owner; post must retain that live position', async () => {
+  const { before, after, expected } = pair(), saved = structuredClone(before.views);
+  before.windows[0].owner = 'owner'; before.windows[0].bounds.y += 10;
+  before.views = gate.liveViewBaseline(before.views, before.windows);
+  assert.equal(saved[0].bounds.y, 40); assert.equal(before.views[0].bounds.y, 50);
+  after.views[0].bounds.y = 50; after.windows[0].bounds.y = 50;
+  assert.equal((await gate.post(before, () => after, expected, async () => {}, { minimumMs: 0, quietMs: 0 })).ok, true);
+  after.views[0].bounds.y = 40; after.windows[0].bounds.y = 40;
+  assert.equal((await gate.post(before, () => after, expected, async () => {}, { minimumMs: 0, quietMs: 0 })).ok, false);
+});
+test('live pre baseline refuses missing, extra, duplicate or unbound business owners', () => {
+  const views = [{ owner: 'owner', bounds: frame }], window = { owner: 'owner', bounds: frame };
+  for (const rows of [[], [window, window], [{ ...window, owner: 'other' }], [{ bounds: frame }]]) {
+    assert.throws(() => gate.liveViewBaseline(views, rows));
+  }
 });
