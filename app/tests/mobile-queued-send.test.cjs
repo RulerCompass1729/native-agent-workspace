@@ -246,6 +246,9 @@ test('queued receipt requires the same live slot, native identity and message; u
   const spec = f.spec(a, 'Synthetic queue witness');
   const result = await f.w.mobileSend(f.ticket('send', a), spec);
   assert.equal(result.queued, true);
+  a.r.transportDisconnected = true;
+  assert.notEqual(f.w.mobileReceipt(f.ticket('send', a), spec, 'send').queued, true);
+  a.r.transportDisconnected = false;
   a.r.pendingQueue = 'different-slot';
   assert.notEqual(f.w.mobileReceipt(f.ticket('send', a), spec, 'send').queued, true);
   a.r.pendingQueue = result.tag;

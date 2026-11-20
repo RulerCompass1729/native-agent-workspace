@@ -183,3 +183,11 @@ test('queue witness is recorded only for an awaiting receipt and clears on an un
   queued=false;await client.receipt(id); assert.notEqual(client.state.pending[0].queued,true);
   assert.equal(client.state.pending[0].status,'unconfirmed');assert.equal(client.state.draft,'Synthetic retained input');
 });
+
+
+test('route selection can defer input reading to the guarded refresh without an extra request',async()=>{
+ const f=fixture();await f.client.start();
+ await f.client.select('a',{read:false});assert.equal(f.client.state.selected,'a');assert.equal(f.client.state.row,null);
+ assert.equal(f.calls.filter(c=>c.route==='/mobile/read/a').length,0);
+ await f.client.refresh();assert.equal(f.client.state.row.id,'a');assert.equal(f.calls.filter(c=>c.route==='/mobile/read/a').length,1);
+});

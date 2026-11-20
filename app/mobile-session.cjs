@@ -108,12 +108,13 @@ function lookup(w, ticket, spec, action) {
   return row || null;
 }
 function receipt(w, row) {
-  const message = w.sessions.get(row.sessionId)?.messages.find(m => m.id === row.tag);
+  const session = w.sessions.get(row.sessionId), runtime = w.runtimes.get(row.sessionId);
+  const message = session?.messages.find(m => m.id === row.tag);
   const held = row.status === 'prepared' && [...(pending.get(w)?.values() || [])].find(d => d.row === row);
   const expired = held && !held.used && (held.connection.destroyed || clock() >= held.until);
   const status = expired ? 'not-sent' : row.action === 'send' && message?.status === 'submitted' ? 'submitted' : row.status;
-  const queued = row.action === 'send' && status === 'awaiting-native' && !row.error &&
-    w.runtimes.get(row.sessionId)?.pendingQueue === row.tag && message?.inputMode === 'queue' && message.status === 'awaiting-native';
+  const queued = row.action === 'send' && status === 'awaiting-native' && !row.error && !w.storageWarning && currentTarget(session, runtime) &&
+    runtime?.pendingQueue === row.tag && !runtime.transportDisconnected && message?.inputMode === 'queue' && message.status === 'awaiting-native';
   return { ...(queued ? { queued: true } : {}), requestId: row.requestId, tag: row.tag, sessionId: row.sessionId, nativeId: row.nativeId, action: row.action, status, error: expired ? '手机预备已过期或连接已断开，没有派发。' : row.error, storageWarning: w.storageWarning || null };
 }
 function reserve(w, ticket, spec, action, tag) {

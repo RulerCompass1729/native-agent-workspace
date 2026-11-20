@@ -87,10 +87,10 @@
       if (strict && readError) throw readError;
       return state;
     }
-    async function select(id) {
+    async function select(id, { read = true } = {}) {
       if (!state.session?.sessions.some(s => s.id === id && s.available !== false)) throw failure('MOBILE_SESSION_UNAVAILABLE');
       state.selected = id; state.row = null; const draft = currentDraft(); state.draft = draft?.text || ''; state.revision = draft?.revision || 0; changed();
-      return refresh(false);
+      if (read) return refresh(false);
     }
     async function refresh(receipts = true, { strict = false } = {}) {
       if (!state.session || !state.selected) return;

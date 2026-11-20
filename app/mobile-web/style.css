@@ -40,3 +40,12 @@
 #send-message{align-self:flex-end;flex:none;white-space:nowrap;overflow-wrap:normal;min-height:44px;max-width:100%}
 #send-message:disabled{background:#92a698;border-color:#92a698;opacity:1}
 @media (orientation:landscape) and (max-height:450px){.compose textarea{height:48px;min-height:48px}}
+
+/* Keep the composer and navigation on the same visual viewport edge. */
+.with-compose .compose{position:fixed;top:calc(var(--mobile-bottom) - var(--nav-height) - var(--compose-height));bottom:auto}
+.with-compose .nav{position:fixed;top:calc(var(--mobile-bottom) - var(--nav-height));bottom:auto}
+.with-compose .toast{position:fixed;top:calc(var(--mobile-bottom) - var(--nav-height) - var(--compose-height) - 8px);bottom:auto;transform:translateY(-100%)}
+.with-compose .proto{position:sticky;top:var(--mobile-header-height,64px);z-index:3}
+.message-time-unknown{font-size:11px;color:var(--muted);font-weight:400}
+.reading-position{font-size:11px;text-align:end}
+.old-receipts>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--muted)}

@@ -166,8 +166,8 @@
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
-    Object.assign(words.zh, { messageQueued: '已排队，等待会话读取；请勿重复发送。', oldReceiptGroup: '上次配对的记录', oldReceiptHelp: '仅保存在此浏览器，不是新消息，不会重发。已收起且未删除；未确认的结果需回 Mac 核对。' });
-    Object.assign(words.en, { messageQueued: 'Queued, waiting for the session to read it. Do not resend.', oldReceiptGroup: 'Previous pairing records', oldReceiptHelp: 'Stored only in this browser, not new messages; they will not be resent. Collapsed, not deleted. Check unresolved results on the Mac.' });
+    Object.assign(words.zh, { latestPosition: '最新消息', earlierPosition: '较早消息 · 最新在下方', messageQueued: '已排队，等待会话读取；请勿重复发送。', oldReceiptGroup: '上次配对的记录', oldReceiptHelp: '仅保存在此浏览器，不是新消息，不会重发。已收起且未删除；未确认的结果需回 Mac 核对。' });
+    Object.assign(words.en, { latestPosition: 'Latest messages', earlierPosition: 'Earlier messages · latest below', messageQueued: 'Queued, waiting for the session to read it. Do not resend.', oldReceiptGroup: 'Previous pairing records', oldReceiptHelp: 'Stored only in this browser, not new messages; they will not be resent. Collapsed, not deleted. Check unresolved results on the Mac.' });
     function receipts(container, scope = {}) {
       const native = (client.state.pending || []).map(p => ({ ...p, native: true }));
       const rows = [...native, ...actions.state.pending].filter(row => {
@@ -305,7 +305,9 @@
         const human = m.role === 'human' || m.role === 'user' && !m.name, article = node('article', undefined, 'message' + (human ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
         const s = (m.role === 'assistant' && owner) || view.sessions.find(s => s.name === m.name) || (m.role === 'assistant' ? { provider: 'codex' } : {});
         author.append(node('span', human ? (lang === 'zh' ? '你' : 'You') : m.name || s.name || 'NAW'));
-        if (m.time) { const time = node('time', new Date(m.time).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); author.append(time); }
+        const at = typeof m.time === 'number' || typeof m.time === 'string' ? new Date(m.time) : null;
+        if (at && Number.isFinite(at.getTime())) { const time = node('time', at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })); time.dateTime = at.toISOString(); author.append(time); }
+        else author.append(node('span', t('receiptTimeUnknown'), 'message-time-unknown'));
         const bubble = node('div', m.text || '', 'bubble');
         if (m.kind === 'background-operation') { const card = view.confirmations.find(c => c.id === m.confirmationId); if (card) { bubble.replaceChildren(node('strong', card.title), link(t('review') + ' ›', 'confirm/' + encodeURIComponent(card.id), 'text-link')); } }
         if (m.attachments || m.textOmitted) bubble.append(node('p', t('omit'), 'small-note'));
@@ -528,12 +530,29 @@
       if (!view.reminders.count) el('content').append(node('p', t('noData'), 'quiet'));
     }
     // The fixed compose box grows with its note, the textarea and the safe area; the list keeps that much room below it.
+    function readingPosition() {
+      const label = el('reading-position');
+      if (!label) return;
+      const last = latestMessage();
+      label.textContent = t(!last ? 'loadingBody' : last.getBoundingClientRect().bottom <= el('compose').getBoundingClientRect().top + 24 ? 'latestPosition' : 'earlierPosition');
+    }
     function composeSpace() {
-      const box = el('compose'), space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
-      d.documentElement.style.setProperty('--compose-space', Math.ceil(space) + 'px');
+      const nav = el('navigation').getBoundingClientRect().height, height = el('compose').getBoundingClientRect().height;
+      const viewport = global.visualViewport;
+      // Fixed UI uses the visible edge in layout-viewport coordinates, not document scroll.
+      const bottom = (viewport?.offsetTop || 0) + (viewport?.height ?? global.innerHeight);
+      d.documentElement.style.setProperty('--mobile-bottom', bottom + 'px');
+      d.documentElement.style.setProperty('--mobile-header-height', el('top').getBoundingClientRect().height + 'px');
+      d.documentElement.style.setProperty('--nav-height', nav + 'px');
+      d.documentElement.style.setProperty('--compose-height', height + 'px');
+      d.documentElement.style.setProperty('--compose-space', Math.ceil(height + nav) + 'px');
+      readingPosition();
     }
     if (global.ResizeObserver) new global.ResizeObserver(composeSpace).observe(el('compose'));
     global.addEventListener('resize', composeSpace);
+    global.addEventListener('scroll', readingPosition, { passive: true });
+    global.visualViewport?.addEventListener('resize', composeSpace);
+    global.visualViewport?.addEventListener('scroll', composeSpace);
     function updateCompose() {
       if (!client) return;
       const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
@@ -557,6 +576,7 @@
         : !row.canSend ? 'blocked-notReady' : 'draft';
       el('compose-note').textContent = t(note);
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
+      composeSpace();
     }
     let acknowledgedMessages = 0;
     el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId;
@@ -582,7 +602,12 @@
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
-      else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? (butlerSession()?.id === route.id ? t('butler') : view?.sessions.find(s => s.id === route.id)?.name) || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
+      else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? view?.sessions.find(s => s.id === route.id)?.name || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
+      if (route?.page === 'chat') {
+        const session = view?.sessions.find(s => s.id === route.id), title = el('top').querySelector('.top-title');
+        const spaces = view?.rooms.filter(r => session?.roomIds?.includes(r.id)).map(r => r.name) || [];
+        title?.append(node('small', [butlerSession()?.id === route.id ? t('butler') : '', providerName(session?.provider), ...spaces].filter(Boolean).join(' · ')));
+      }
       const pendingPair=client.state.session?.candidate===true;
       const bell = link('', 'reminders', 'icon bell'); bell.hidden=pendingPair;bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh));if(!pendingPair)menu.append(button(t('registerKey'), registerPasskey));menu.append(button(t(pendingPair?'cancelPair':'logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
@@ -600,6 +625,7 @@
       }
       else ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)();
       if (body?.conversationLoaded === false && body.messages?.length) el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
+      if (route?.page === 'chat') { const position = node('span', '', 'reading-position'); position.id = 'reading-position'; el('connection').append(position); }
       updateCompose();
       if (stick) scrollToLatest();
     }
@@ -659,7 +685,7 @@
         }
         composeKey = ''; answeredQuestion = null; dismissToast(); paint();
         const id = route.page === 'chat' ? route.id : route.nativeId;
-        if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
+        if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id, { read: false });
         if (ticket !== navigation) return;
         const reading = refresh();
         // A new grant must not keep the previous conversation visible while reading.
