@@ -54,7 +54,7 @@ test('the real renderer intake only passes task-board fields and a waiting flag'
   assert.equal(Object.hasOwn(input.confirmations[0], 'message'), false);
   const projected = input.rooms[0].queue[0];
   assert.notEqual(input.rooms[0].queue, r.queue); assert.notEqual(projected, q);
-  assert.deepEqual(Object.keys(projected).sort(), ['assignee', 'finishedAt', 'id', 'reason', 'sentTo', 'status', 'text', 'waiting']);
+  assert.deepEqual(Object.keys(projected).sort(), ['assignee', 'createdAt', 'finishedAt', 'id', 'ready', 'reason', 'sentAt', 'sentTo', 'status', 'text', 'waiting']);
   assert.equal(projected.waiting, true); assert.equal(Object.hasOwn(projected, 'reply'), false); assert.equal(Object.hasOwn(projected, 'wait'), false);
   const [p, missing] = board.project(input.rooms, input.sessions, now);
   assert.equal(p.current[0].waiting, true); assert.equal(p.current[0].memberName, 'Actual'); assert.equal(missing.available, false);

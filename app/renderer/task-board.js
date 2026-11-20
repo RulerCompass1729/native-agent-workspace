@@ -19,6 +19,7 @@
         return { key: JSON.stringify([room.id, q.id]), id: q.id, spaceId: room.id, spaceName: room.name || '', kind: k,
           memberKey, memberName: members.get(memberKey) || '', actualRecipient: typeof q.sentTo === 'string' && Boolean(q.sentTo), text: typeof q.text === 'string' ? q.text : '',
           reason: typeof q.reason === 'string' ? q.reason : '', waiting: q.waiting === true,
+          createdAt: q.createdAt ?? null, sentAt: q.sentAt ?? null, ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
           current: !['done', 'cancelled'].includes(k) || typeof q.finishedAt === 'number' && Number.isFinite(q.finishedAt) && q.finishedAt >= start && q.finishedAt < end };
       });
       const current = all.filter(q => q.current), counts = Object.fromEntries(KINDS.map(k => [k, current.filter(q => q.kind === k).length]));
@@ -217,7 +218,7 @@
       view.link.dataset.itemId = item.id; view.link.dataset.sessionId = item.memberKey || ''; view.link.dataset.spaceId = item.spaceId; view.link.dataset.kind = item.kind; view.link.dataset.source = item.source;
       view.link.disabled = item.source === 'confirmation' ? !item.target : !actor && !data.some(p => p.source === 'space' && p.id === item.spaceId);
       view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
-      set(view.title, item.source === 'confirmation' ? f('confirmation') : item.source === 'conversation' ? f(item.kind === 'sent' ? 'nativeWork' : 'status.' + item.kind) : item.text);
+      set(view.title, item.source === 'confirmation' ? f('confirmation') : item.source === 'conversation' ? actorName : item.text);
       set(view.status, !full && item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f((!full || item.source === 'conversation') && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
       set(view.member, actorName);
       set(view.note, !full ? origin + ' · ' + actorName : item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardDeadlineOne', { count: 1, time: remaining(item.expiresAt) }) : item.reason || item.waiting ? f('reasonInQueue') : mode !== 'space' ? origin : ''); view.note.hidden = !view.note.textContent;
