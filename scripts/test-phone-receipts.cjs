@@ -12,26 +12,27 @@ const results = [], errors = [], posts = [], deviceId = '10000000-0000-4000-8000
 const check = (name, pass) => { results.push({ name, pass: Boolean(pass) }); console.log(JSON.stringify(results.at(-1))); };
 const ids = [1, 2, 3].map(n => '20000000-0000-4000-8000-' + String(n).padStart(12, '0'));
 let browser;
-async function open(lang, { blocked = false, duplicate = false, long = false, uncertain = false, legacy = false, oldPair = false } = {}) {
+async function open(lang, { blocked = false, duplicate = false, long = false, uncertain = false, legacy = false, oldPair = false, edgeSource = 0, duplicateSource = 0 } = {}) {
   const zh = lang === 'zh', context = await browser.newContext({ ...devices['iPhone 13'], viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   const names = zh ? ['大管家', '代码复核', '手机页面'] : ['Butler', 'Code review', 'Phone pages'];
   const originals = zh ? ['汇总手机页面的问题', '检查英文按钮有没有换行', '添加一项手机回执检查'] : ['Summarize the phone page issues', 'Check whether the English button wraps', 'Add a phone receipt check'];
-  if (long) originals[0] = 'Literal <script>never executed</script> 😀 '.repeat(8);
+  if (long) originals[edgeSource] = 'Literal <script>never executed</script> 😀 '.repeat(8);
   const draft = zh ? '再帮我检查一下底部导航' : 'Please check the bottom navigation too';
   const sessions = ['butler', 'review'].map((id, i) => ({ id, nativeId: 'native-' + id, name: names[i], provider: 'claude', state: 'idle', available: true, actions: ['read', 'send', 'answer'] }));
-  const native = sessions.map((s, i) => ({ deviceId, sessionId: s.id, requestId: ids[i], action: 'send', text: originals[i], revision: 1, status: uncertain && i === 0 ? 'unconfirmed' : 'submitted',
+  const native = sessions.map((s, i) => ({ deviceId, sessionId: s.id, requestId: ids[i], action: 'send', text: originals[i], revision: 1, status: uncertain && i === edgeSource ? 'unconfirmed' : 'submitted',
     context: { ...receiptContext({ target: s.name, scope: 'session', targetId: s.id, nativeId: s.nativeId }), at: 1795113720000 + i * 60000 } }));
-  const action = { deviceId, requestId: ids[2], action: 'queueAdd', status: 'complete', roomId: 'room', itemId: 'task',
+  const action = { deviceId, requestId: ids[2], action: 'queueAdd', status: uncertain && edgeSource === 2 ? 'unconfirmed' : 'complete', roomId: 'room', itemId: 'task',
     context: { ...receiptContext({ target: names[2], text: originals[2], scope: 'room', targetId: 'room' }), at: 1795113840000 } };
-  if (duplicate) { native[1] = { ...native[0], requestId: ids[1] }; originals[1] = originals[0]; }
+  if (duplicate && duplicateSource < 2) { const other = 1 - duplicateSource; native[other] = { ...native[duplicateSource], requestId: ids[other] }; originals[other] = originals[duplicateSource]; }
+  const actions = duplicate && duplicateSource === 2 ? [action, { ...action, requestId: '20000000-0000-4000-8000-000000000004' }] : [action];
   if (legacy) { for (const row of native) delete row.context; delete action.context; }
   if (oldPair) { for (const row of native) row.deviceId = '10000000-0000-4000-8000-000000000099'; action.deviceId = native[0].deviceId; }
-  await context.addInitScript(({ KEY, ACTION_KEY, native, action, draft, deviceId }) => {
+  await context.addInitScript(({ KEY, ACTION_KEY, native, actions, draft, deviceId }) => {
     if (!localStorage.getItem(KEY)) {
       localStorage.setItem(KEY, JSON.stringify({ version: 1, drafts: [{ deviceId, sessionId: 'butler', text: draft, revision: 2 }], pending: native }));
-      localStorage.setItem(ACTION_KEY, JSON.stringify({ version: 1, pending: [action] }));
+      localStorage.setItem(ACTION_KEY, JSON.stringify({ version: 1, pending: actions }));
     }
-  }, { KEY, ACTION_KEY, native, action, draft, deviceId });
+  }, { KEY, ACTION_KEY, native, actions, draft, deviceId });
   let narrowed = false, confirmReceipt = !uncertain;
   const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', async route => {
@@ -41,7 +42,8 @@ async function open(lang, { blocked = false, duplicate = false, long = false, un
     if (req.method() === 'POST') posts.push({ route: url.pathname, value: req.postDataJSON() });
     if (url.pathname === '/mobile/session') data = { deviceId, csrf: (narrowed ? 'd' : 'c').repeat(43), workspace: !narrowed, sessions: narrowed ? sessions.slice(0, 1) : sessions };
     else if (url.pathname.startsWith('/mobile/read/')) data = { id: url.pathname.split('/').at(-1), contextId: 'x'.repeat(43), canSend: !blocked, sendBlocked: blocked ? 'noQueue' : null, messages: [], question: null };
-    else if (url.pathname === '/mobile/receipt') data = { requestId: req.postDataJSON().requestId, sessionId: 'butler', action: 'send', status: confirmReceipt ? 'submitted' : 'unconfirmed' };
+    else if (url.pathname === '/mobile/receipt') data = { requestId: req.postDataJSON().requestId, sessionId: native.find(p => p.requestId === req.postDataJSON().requestId).sessionId, action: 'send', status: confirmReceipt ? 'submitted' : 'unconfirmed' };
+    else if (url.pathname === '/mobile/workspace/action') data = { requestId: req.postDataJSON().requestId, status: confirmReceipt ? 'complete' : 'unconfirmed', itemId: 'task' };
     else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'butler' ? [{ id: 'reply', role: 'assistant', text: zh ? '我会分别检查回执和按钮。' : 'I will check the receipts and the button.', time: 1795113660000 }] : [] })),
       rooms: [{ id: 'room', name: names[2], members: [], messages: [], queue: [{ id: 'task', text: originals[2], status: 'queued' }] }], reminders: { count: 0, records: [] }, confirmations: [], syncedAt: 1795113660000,
       capabilities: { queue: true, records: false, push: false }, steward: { state: 'shared', sessionId: 'butler' } };
@@ -157,9 +159,40 @@ async function framed(page, file) {
     } finally { await legacy.context.close(); }
     const old = await open(lang, { oldPair: true });
     try {
-      const row = old.page.locator('.receipt');
-      check(lang + ' old pairing shows a masked source receipt without controls', await row.count() === 1 && (await row.innerText()).includes(lang === 'zh' ? '旧配对' : 'old pairing') && !(await row.innerText()).includes(old.originals[0]) && await row.getByRole('button').count() === 0);
+      for (const [i, target] of targets.entries()) {
+        await old.go(target); const row = old.page.locator('.receipt');
+        check(lang + ' source ' + i + ': old pairing shows a masked source receipt without controls', await row.count() === 1 && (await row.innerText()).includes(lang === 'zh' ? '旧配对' : 'old pairing') && !(await row.innerText()).includes(old.originals[i]) && await row.getByRole('button').count() === 0);
+      }
     } finally { await old.context.close(); }
+    for (const i of [1, 2]) {
+      const edge = await open(lang, { long: true, uncertain: true, edgeSource: i });
+      try {
+        await edge.go(targets[i]); const row = edge.page.locator('.receipt'), summary = row.locator('summary');
+        check(lang + ' source ' + i + ': long uncertain input belongs only to this source', await row.count() === 1 && await row.getAttribute('data-request-id') === ids[i] && await row.locator('time[datetime]').count() === 1);
+        check(lang + ' source ' + i + ': long original has a native disclosure', await summary.count() === 1);
+        await summary.focus(); await summary.press('Enter');
+        check(lang + ' source ' + i + ': disclosure is keyboard operable and exact literal text', await row.locator('details').getAttribute('open') !== null && await row.locator('details p').innerText() === edge.originals[i] && await row.locator('script').count() === 0);
+        check(lang + ' source ' + i + ': uncertain input cannot be removed', !(await row.getByRole('button').allTextContents()).some(t => /Remove|移除/.test(t)));
+        const before = posts.length; edge.confirmReceipt(); await row.locator('button.receipt-control').tap();
+        await edge.page.waitForFunction(({ KEY, ACTION_KEY, id, native }) => JSON.parse(localStorage.getItem(native ? KEY : ACTION_KEY)).pending.find(p => p.requestId === id).status === (native ? 'submitted' : 'complete'), { KEY, ACTION_KEY, id: ids[i], native: i < 2 });
+        check(lang + ' source ' + i + ': explicit check queries only the original request without resend', posts.length === before + 1 && posts.at(-1).route === (i < 2 ? '/mobile/receipt' : '/mobile/workspace/action') && JSON.stringify(posts.at(-1).value) === JSON.stringify(i < 2 ? { requestId: ids[i] } : { action: 'receipt', requestId: ids[i] }));
+      } finally { await edge.context.close(); }
+      const duplicate = await open(lang, { duplicate: true, duplicateSource: i });
+      try {
+        await duplicate.go(targets[i]); const rows = duplicate.page.locator('.receipt'), names = await rows.locator('button.receipt-control').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label')));
+        const expected = i < 2 ? ids.slice(0, 2) : [ids[2], '20000000-0000-4000-8000-000000000004'];
+        check(lang + ' source ' + i + ': duplicate originals retain exact distinct removal identities', names.length === 2 && new Set(names).size === 2 && expected.every(id => names.some(name => name.includes(id))));
+        const before = await drafts(duplicate.page); await rows.first().locator('button.receipt-control').tap();
+        check(lang + ' source ' + i + ': removing one duplicate changes two to one and preserves drafts', await rows.count() === 1 && JSON.stringify(await drafts(duplicate.page)) === JSON.stringify(before));
+      } finally { await duplicate.context.close(); }
+    }
+    const legacySources = await open(lang, { legacy: true });
+    try {
+      for (const [i, target] of targets.entries()) {
+        await legacySources.go(target); const row = legacySources.page.locator('.receipt');
+        check(lang + ' source ' + i + ': legacy time stays unknown without hiding recorded native input', await row.count() === 1 && (await row.innerText()).includes(lang === 'zh' ? '时间未记录' : 'Time not saved') && (i === 2 || (await row.innerText()).includes(legacySources.originals[i])));
+      }
+    } finally { await legacySources.context.close(); }
   }
   check('no script errors or external requests', errors.length === 0);
   const fail = results.filter(r => !r.pass).length; console.log(JSON.stringify({ pass: results.length - fail, fail, skipped: 0 }));
