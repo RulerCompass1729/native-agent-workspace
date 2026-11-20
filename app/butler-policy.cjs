@@ -11,7 +11,7 @@ const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'done', 'decision', 'fai
 const QUEUE_STATUSES = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
 const MAX_BUSINESS_INDEX_BYTES = 128 * 1024;
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
-  memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
+  memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200, resetsAt: 40 };
 function text(v, limit = 12000, code) {
   if (typeof v !== 'string' || !v.trim() || v.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(v)) fail(code);
   // No credential store or environment is read. These are only obvious secret
@@ -29,6 +29,10 @@ function validateEvent(value) {
   fields(value.payload, Object.keys(PAYLOAD_LIMITS));
   const payload = {};
   for (const key of Object.keys(value.payload)) payload[key] = text(value.payload[key], PAYLOAD_LIMITS[key]);
+  if (payload.resetsAt !== undefined) {
+    const at = Date.parse(payload.resetsAt);
+    if (!Number.isFinite(at) || at < 0 || new Date(at).toISOString() !== payload.resetsAt) fail();
+  }
   return { eventId: value.eventId, kind: value.kind, sourceRef, payload };
 }
 // The default model context is an index, not an implicit request for every

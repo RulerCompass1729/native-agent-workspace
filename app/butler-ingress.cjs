@@ -18,23 +18,30 @@ const sourceId = value => typeof value === 'string' && value.length > 0 && value
 const exactFields = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
   Object.keys(value).sort().join(',') === keys;
+const quotaResetAt = quota => Number.isSafeInteger(quota?.resetsAt) && quota.resetsAt >= 0 && quota.resetsAt <= 8640000000000
+  ? new Date(quota.resetsAt * 1000).toISOString() : null;
 function quotaSource(memberId, quota) {
+  const resetsAt = quotaResetAt(quota);
   return { eventId: `codex-quota:${hash([memberId, quota.nativeId, quota.turnId])}`,
-    sourceRef: `codex-quota:${memberId}`, kind: 'blocked', payload: { memberId, reason: 'codex-usage-limit-exceeded' } };
+    sourceRef: `codex-quota:${memberId}`, kind: 'blocked', payload: { memberId, reason: 'codex-usage-limit-exceeded',
+      ...(resetsAt ? { resetsAt } : {}) } };
 }
 function noReplyFact(roomId, eventId, item, session) {
   const quota = session?.id === item.sentTo && !session.archived && session.nativeId === item.sentNative ? codexQuotaBlock(session) : null;
   return { version: 1, roomId, eventId, itemId: item.id, memberId: item.sentTo,
     dispatch: { nativeId: item.sentNative ?? null, sentAt: item.sentAt, tag: item.tag ?? null, control: item.control ?? null },
     status: 'waiting', reason: 'no-reply', quota: quota && sourceId(quota.nativeId) && sourceId(quota.turnId) ? {
-      provider: 'codex', kind: quota.kind, nativeId: quota.nativeId, turnId: quota.turnId, observedAt: quota.observedAt } : null };
+      provider: 'codex', kind: quota.kind, nativeId: quota.nativeId, turnId: quota.turnId, observedAt: quota.observedAt,
+      ...(quotaResetAt(quota) ? { resetsAt: quota.resetsAt } : {}) } : null };
 }
 function noReplyContext(fact) {
   const d = fact.dispatch, q = fact.quota;
+  const quotaFields = q && [q.provider, q.kind, q.nativeId, q.turnId, q.observedAt];
+  if (q && Object.hasOwn(q, 'resetsAt')) quotaFields.push(q.resetsAt);
   return { version: 2, roomId: fact.roomId, eventId: fact.eventId, itemId: fact.itemId, memberId: fact.memberId,
     quota: q ? { nativeId: q.nativeId, turnId: q.turnId } : null,
     factHash: hash([fact.roomId, fact.eventId, fact.itemId, fact.memberId, [d.nativeId, d.sentAt, d.tag, d.control],
-      fact.status, fact.reason, q && [q.provider, q.kind, q.nativeId, q.turnId, q.observedAt]]) };
+      fact.status, fact.reason, quotaFields]) };
 }
 function checkedNoReplyFact(roomId, event) {
   const fact = event.queueSettlement, context = event.butlerNoReplySource, d = fact?.dispatch, q = fact?.quota;
@@ -47,8 +54,9 @@ function checkedNoReplyFact(roomId, event) {
       !exactFields(d, 'control,nativeId,sentAt,tag') || !Number.isFinite(d.sentAt) || d.sentAt < 0 ||
       d.nativeId !== null && !(typeof d.nativeId === 'string' && d.nativeId.length > 0 && d.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(d.nativeId)) ||
       d.tag !== null && !sourceId(d.tag) || d.control !== null && !(Number.isSafeInteger(d.control) && d.control >= 0) ||
-      q !== null && (!exactFields(q, 'kind,nativeId,observedAt,provider,turnId') || q.provider !== 'codex' || q.kind !== 'usage_limit_exceeded' ||
-        !sourceId(q.nativeId) || q.nativeId !== d.nativeId || !sourceId(q.turnId) || !Number.isSafeInteger(q.observedAt) || q.observedAt < 0)) throw unavailable();
+      q !== null && (!exactFields(q, q && Object.hasOwn(q, 'resetsAt') ? 'kind,nativeId,observedAt,provider,resetsAt,turnId' : 'kind,nativeId,observedAt,provider,turnId') || q.provider !== 'codex' || q.kind !== 'usage_limit_exceeded' ||
+        !sourceId(q.nativeId) || q.nativeId !== d.nativeId || !sourceId(q.turnId) || !Number.isSafeInteger(q.observedAt) || q.observedAt < 0 ||
+        Object.hasOwn(q, 'resetsAt') && !quotaResetAt(q))) throw unavailable();
   const expected = noReplyContext(fact);
   if (!exactFields(context, 'eventId,factHash,itemId,memberId,quota,roomId,version') || context.version !== expected.version ||
       context.roomId !== expected.roomId || context.eventId !== expected.eventId || context.itemId !== expected.itemId ||

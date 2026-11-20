@@ -12,7 +12,7 @@ const { agreementSummary } = require('./butler-review-policy.js');
 const EVENT_KINDS = ['request', 'queue-empty', 'ready', 'done', 'decision', 'failure', 'blocked', 'recovery'];
 const ACTION_KINDS = ['queue', 'open', 'archive', 'question', 'report'];
 const PAYLOAD_LIMITS = { text: 12000, title: 400, spaceId: 200, spaceName: 200, memberName: 200,
-  memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200 };
+  memberId: 200, itemId: 200, outcome: 200, reason: 2000, decisionKind: 200, questionKey: 600, supersedes: 200, resetsAt: 40 };
 const MAX_FILE_BYTES = 32 * 1024 * 1024, MAX_RECORD_BYTES = 2 * 1024 * 1024, MAX_BATCH = 100, READ_BYTES = 8 * 1024;
 const FILE_NAME = 'butler-ledger.jsonl';
 // An old controller records blocked facts without a model batch. Its separately
@@ -798,7 +798,16 @@ class ButlerLedger {
     if (existing) {
       const visible = eventView(existing);
       const original = { eventId: visible.eventId, kind: visible.kind, sourceRef: visible.sourceRef, payload: visible.payload };
-      requireValue(canonical(eventView(event)) === canonical(original), 'Event identity reused with different content', 'BUTLER_EVENT_CONFLICT');
+      let incoming = eventView(event);
+      // Replaying a legacy quota observation never rewrites its recorded payload.
+      if (/^codex-quota:[a-f0-9]{64}$/.test(event.eventId) && event.kind === 'blocked' &&
+          event.sourceRef === `codex-quota:${event.payload.memberId}` && event.payload.reason === 'codex-usage-limit-exceeded' &&
+          Object.keys(event.payload).sort().join(',') === 'memberId,reason,resetsAt' &&
+          visible.kind === event.kind && visible.sourceRef === event.sourceRef &&
+          Object.keys(visible.payload).sort().join(',') === 'memberId,reason' &&
+          visible.payload.memberId === event.payload.memberId && visible.payload.reason === event.payload.reason)
+        incoming = { ...incoming, payload: visible.payload };
+      requireValue(canonical(incoming) === canonical(original), 'Event identity reused with different content', 'BUTLER_EVENT_CONFLICT');
       return clone(visible);
     }
     this.#append('event', persistedEvent(event)); return clone(eventView(this.state.eventIndex.get(event.eventId)));

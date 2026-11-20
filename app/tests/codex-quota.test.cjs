@@ -44,7 +44,7 @@ test(`verified ${field} quota persists before idle, stops only this member, and 
   assert.equal(ready({ ...row, id: 'member-b', nativeId: 'native-b', nativeQuota: undefined }).ready, true);
   assert.equal(f.w.capacityRecoveries.size, 0); assert.equal(f.calls.length, 0);
   assert.equal(f.events().length, 1); assert.equal(f.events()[0].kind, 'blocked');
-  assert.deepEqual(f.events()[0].payload, { memberId: 'member-a', reason: 'codex-usage-limit-exceeded' });
+  assert.deepEqual(f.events()[0].payload, { memberId: 'member-a', reason: 'codex-usage-limit-exceeded', resetsAt: new Date(1_900_000_000 * 1000).toISOString() });
   assert.ok(!JSON.stringify(row.nativeQuota).includes('DO NOT COPY'));
   assert.ok(!JSON.stringify(f.events()).includes('NATIVE QUOTA BODY'));
   const ledgerBytes = fs.readFileSync(f.ingress.ledger.file);

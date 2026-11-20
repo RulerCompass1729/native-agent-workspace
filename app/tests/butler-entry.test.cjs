@@ -400,11 +400,12 @@ test('the sentence about what is sent was written for what the core can put befo
   const policy = fs.readFileSync(path.join(__dirname, '../butler-policy.cjs'), 'utf8');
   const list = pattern => [...policy.match(pattern)[1].matchAll(/'([^']+)'|(\w+):/g)].map(match => match[1] || match[2]);
   const kinds = ['request', 'queue-empty', 'ready', 'done', 'decision', 'failure', 'blocked', 'recovery'], statuses = ['queued', 'sent', 'waiting', 'done', 'failed', 'cancelled'];
-  const payload = ['text', 'title', 'spaceId', 'spaceName', 'memberName', 'memberId', 'itemId', 'outcome', 'reason', 'decisionKind', 'questionKey', 'supersedes'];
+  // The existing status/time disclosure also covers a verified quota reset time.
+  const payload = ['text', 'title', 'spaceId', 'spaceName', 'memberName', 'memberId', 'itemId', 'outcome', 'reason', 'decisionKind', 'questionKey', 'supersedes', 'resetsAt'];
   assert.deepEqual(list(/const EVENT_KINDS = \[([^\]]+)\]/), kinds); assert.deepEqual(list(/const PAYLOAD_LIMITS = \{([^}]+)\}/), payload);
   // Private-looking extras on the way in must not come out.
   const input = buildInput({ batchId: 'batch-1',
-    events: kinds.map((kind, index) => ({ eventId: `event-${index}`, kind, sourceRef: `source-${index}`, payload: Object.fromEntries(payload.map(key => [key, `${key}-value`])), sequence: index, time: 1, transcript: 'not sent' })),
+    events: kinds.map((kind, index) => ({ eventId: `event-${index}`, kind, sourceRef: `source-${index}`, payload: Object.fromEntries(payload.map(key => [key, key === 'resetsAt' ? '2026-11-22T00:00:00.000Z' : `${key}-value`])), sequence: index, time: 1, transcript: 'not sent' })),
     catalog: [{ id: 'space-1', name: 'Space', archived: false, writable: true, cwd: '/not/sent', notes: 'not sent',
       members: [{ id: 'member-1', name: 'Member', state: 'idle', conversation: 'not sent', nativeId: 'not-sent' }], queue: [{ id: 'item-1', text: 'not sent by default', status: 'queued', author: 'not sent' }] }],
     questions: [{ questionId: 'question-1', sourceRef: 'source-9', decisionKind: 'queue-decision', text: 'Question', decisionSource: 'source-8', status: 'open', answer: 'not sent' }] });
