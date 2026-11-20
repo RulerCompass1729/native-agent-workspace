@@ -5,7 +5,7 @@ let broker,auth,deadline,executions=0,nativeCalls=0,listenerStarts=0;
 const actor='synthetic-person',origin='https://demo.example.ts.net:10000',row={id:'synthetic',nativeId:'native',state:'idle',provider:'claude',name:'Synthetic',messages:[]};
 async function initialize(input){
  const root=path.join(input.root,'profile'),file=path.join(input.root,'fake-keychain.json');deadline=input.deadline;let failedReadback=false;
- const store=new PairingStore(root,{asynchronous:input.asynchronous===true,adapter:{get:()=>{if(input.getFails||failedReadback)throw Error('Synthetic read refusal');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;},put(_a,value){if(input.putFails)throw Error('Synthetic write refusal');fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});if(input.unknownActivePut&&value.authority.enabled){failedReadback=true;throw Error('Synthetic lost write and readback');}}}});
+ const store=new PairingStore(root,{asynchronous:input.asynchronous===true,adapter:{get:()=>{if(input.getFails||failedReadback)throw Error('Synthetic read refusal');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;},put(_a,value){const fault=path.join(input.root,'fail-put.json'),mode=fs.existsSync(fault)?JSON.parse(fs.readFileSync(fault)).mode:null;if(input.putFails||mode==='all'||mode==='enabled'&&value.authority.enabled)throw Error('Synthetic write refusal');fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});if(input.unknownActivePut&&value.authority.enabled){failedReadback=true;throw Error('Synthetic lost write and readback');}}}});
  const entries=[{key:'.',state:{capabilities:['humanMobileV1','humanMobilePreparedV1'],sessions:[row]}}];
  class Client extends EventEmitter{
   constructor(){super();this.scope=root;this.entries=entries;this.socket={destroyed:false};this.closing=false;}
@@ -53,6 +53,13 @@ process.on('message',async input=>{
   else if(input.command==='session')value=broker.session(auth);
   else if(input.command==='pairingStatus')value=broker.approvalStatus();
   else if(input.command==='revoke')value=await broker.revoke();
+  else if(input.command==='replace'){
+   const old=auth;let c;try{c=input.entry==='selected'?await broker.beginPairing({actor,origin,replace:true,selection:[{sessionId:row.id,actions:['read']}]}):await broker.beginCandidate({actor,origin,replace:true});}catch(error){value={activated:false,oldAccepted:Boolean(broker.session(old)),newAccepted:false,errorCode:error.code,temporaryPairing:broker.approvalStatus().temporaryPairing===true};process.send({id:input.id,ok:true,value});return;}const phone=await broker.pair({secret:c.secret,actor,origin});
+   const fresh={actor,origin,token:phone.cookieValue};fresh.csrf=broker.session(fresh).csrf;
+   let activated=false,errorCode=null;try{if(input.entry==='selected'){await broker.settlePersistence();activated=true;}else activated=(await broker.activateCandidate(fresh,{mode:'basic'})).activated===true;}catch(error){errorCode=error.code;}
+   let oldAccepted=false,newAccepted=false;try{broker.session(old);oldAccepted=true;}catch{}try{broker.session(fresh);newAccepted=true;}catch{}
+   auth=activated?fresh:old;value={activated,oldAccepted,newAccepted,errorCode,temporaryPairing:broker.approvalStatus().temporaryPairing===true};
+  }
   else if(input.command==='read')value=await broker.read(auth,row.id);
   else if(input.command==='send')value=await broker.send(auth,input.value);
   else if(input.command==='options')value=await broker.decisionOptions(input.csrf?{...auth,csrf:input.csrf}:auth,{id:'card',version:'exact',decision:'approve'});

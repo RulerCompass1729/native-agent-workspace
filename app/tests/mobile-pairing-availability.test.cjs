@@ -86,3 +86,24 @@ test('a FIFO recovery barrier is refused without blocking the caller',async t=>{
  const result=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>child.kill(),1000);child.once('error',e=>{clearTimeout(timer);reject(e);});child.once('exit',(code,signal)=>{clearTimeout(timer);resolve({code,signal});});});
  assert.equal(result.code,0,'Malformed barrier must reject, not wait for a FIFO writer');assert.equal(result.signal,null);
 });
+
+test('a pause while retiring a replacement invalidates its commit proof',async t=>{
+ const f=fixture(t),s=f.store();await s.ready();s.fresh();const a=f.access(s,900001),phone=pair(a);await s.flush();
+ f.hold();const pending=s.prepareReplacement();await new Promise(setImmediate);a.pause();f.release();
+ await assert.rejects(pending);await s.flush();assert.throws(()=>a.authenticate({token:phone.cookieValue,actor}));assert.equal(f.stored().authority.enabled,false);
+ const next=f.store();await next.ready();assert.throws(()=>next.checkpoint());
+});
+test('a changed mirror after retirement cannot reuse the replacement proof',async t=>{
+ const f=fixture(t),s=f.store();await s.ready();s.fresh();const a=f.access(s,900001);pair(a);await s.flush();
+ const commit=await s.prepareReplacement();a.save(a.load());assert.throws(commit);await s.flush();
+});
+test('lost retirement acknowledgement requires an exact disabled-anchor readback',async t=>{
+ const f=fixture(t),s=f.store();await s.ready();s.fresh();const a=f.access(s,900001);pair(a);await s.flush();f.mode('ack-lost');
+ const puts=f.actions.filter(x=>x==='put').length,commit=await s.prepareReplacement();
+ assert.equal(f.stored().authority.enabled,false);assert.equal(f.actions.filter(x=>x==='put').length,puts+1);assert.doesNotThrow(commit);assert.throws(commit);
+});
+test('a failed retirement cannot retry against a different authoritative anchor',async t=>{
+ const f=fixture(t),s=f.store();await s.ready();s.fresh();const a=f.access(s,900001);pair(a);await s.flush();
+ f.mode('put-fail');await assert.rejects(()=>s.prepareReplacement());f.mode('healthy');f.set(null);
+ const puts=f.actions.filter(x=>x==='put').length;await assert.rejects(()=>s.prepareReplacement());assert.equal(f.actions.filter(x=>x==='put').length,puts);
+});

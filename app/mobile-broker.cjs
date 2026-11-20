@@ -178,7 +178,7 @@ class MobileBroker {
     const serial=++this.#candidateSerial,client=await connect(this.#scope,'mobile-candidate-'+randomUUID());let result;
     try {
       if((refreshOf===undefined && serial!==this.#candidateSerial) || !(client instanceof WorkspaceClient) || client.scope!==this.#scope || fs.realpathSync(client.scope)!==this.#root || client.socket.destroyed)throw denied();
-      if(!this.#access.initialized){this.#persistence?.fresh?.();this.#access.initialize();}
+      if(!this.#access.initialized){try{await this.#persistence?.prepareFresh?.();}catch{throw denied('MOBILE_STORAGE');}if(serial!==this.#candidateSerial||client.closing||client.socket.destroyed)throw denied();this.#persistence?.fresh?.();this.#access.initialize();}
       const layout=this.#layout(),grant=this.#desktop?.grant(client,{allRooms:true,records:true});if(!grant)throw denied();
       if (refreshOf!==undefined && await validate()!==true) throw denied('MOBILE_SETUP_UNCONFIRMED');
       // Recheck after all awaits, then replace without yielding to a phone exchange.
@@ -212,6 +212,12 @@ class MobileBroker {
       // Keep uncertain receipt recovery and in-flight work on its original
       // generation. The person may explicitly revoke instead of replacing.
       if([...this.#requests.values(),...this.#workspaceRequests.values(),...this.#decisions.values()].some(r=>r.pending || ['unconfirmed','prepared','awaiting-native'].includes(r.result?.status) || r.status==='unconfirmed'))throw denied('MOBILE_REQUEST_CONFLICT');
+      if(this.#access.load().enabled&&this.#persistence?.prepareReplacement){
+        let commit;try{commit=await this.#persistence.prepareReplacement();}catch{try{this.#dropCandidate(c.id);}catch{}throw denied('MOBILE_STORAGE');}
+        if(await c.validate()!==true||this.#candidateFor(auth,true).c!==c||c.layout!==this.#layout())throw denied();
+        if([...this.#requests.values(),...this.#workspaceRequests.values(),...this.#decisions.values()].some(r=>r.pending||['unconfirmed','prepared','awaiting-native'].includes(r.result?.status)||r.status==='unconfirmed'))throw denied('MOBILE_REQUEST_CONFLICT');
+        try{commit();}catch{throw denied('MOBILE_STORAGE');}
+      }
       const scopes=this.#currentScopes(c.client);
       this.#push?.close();this.#push=null;
       this.#staging={endpoint:c.endpoint,all:true,workspace:c.grant,consent:value.mode==='verified'?c.consent.snapshot(state):null,consentView:false};
@@ -242,6 +248,9 @@ class MobileBroker {
     if (this.#access.initialized) {
       const old = this.#access.load();
       if (old.device && old.device.until > this.#access.time() && !replace) throw denied('MOBILE_REPLACE_REQUIRED');
+      if(old.enabled&&this.#persistence?.prepareReplacement){
+        try{const commit=await this.#persistence.prepareReplacement();commit();}catch{throw denied('MOBILE_STORAGE');}
+      }
       const revoked = this.#access.revoke(); this.#forget(); this.#disconnect();
       if (!revoked.confirmed) throw denied('MOBILE_REVOCATION_UNCONFIRMED');
     } else { this.#forget(); this.#disconnect(); }
@@ -261,7 +270,7 @@ class MobileBroker {
       const workspaceGrant = all ? this.#desktop?.grant(client, { allRooms: true, records: true }) : workspace === undefined ? null : this.#desktop?.grant(client, workspace);
       if (all && !workspaceGrant) throw denied();
       if (workspace !== undefined && !workspaceGrant) throw denied();
-      if (!this.#access.initialized) {this.#persistence?.fresh?.();this.#access.initialize();}
+      if (!this.#access.initialized) {try{await this.#persistence?.prepareFresh?.();}catch{throw denied('MOBILE_STORAGE');}if(epoch!==this.#epoch||this.#bound()!==client)throw denied();this.#persistence?.fresh?.();this.#access.initialize();}
       const layout = all ? this.#layout() : null;
       const result = this.#access.beginPairing({ actor, origin, scopes, replace, all });
       this.#fullLayout = layout;

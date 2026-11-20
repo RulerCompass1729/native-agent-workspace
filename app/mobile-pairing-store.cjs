@@ -126,6 +126,12 @@ class AsyncPairingStore{
    this.#core.verify(receipt);this.#notice('restore-check',null,start);
   }catch(error){this.#marker();this.#mode='temporary';this.#notice('restore-check',error,start);throw refuse();}
  }
+ async prepareFresh(){
+  await this.ready();await this.flush();
+  if(this.#value?.authority.enabled){const commit=await this.prepareReplacement();commit();}
+  else if(this.#mode!=='persistent'){try{fs.lstatSync(path.join(this.root,FILE));}catch(error){if(error.code==='ENOENT')return;throw refuse();}throw refuse();}
+  this.#value=null;
+ }
  fresh(){if(this.#mode==='loading')throw refuse();this.#value=null;}
  #enqueue(value){
   const own=this.#marker(),serial=++this.#serial;this.#value=structuredClone(value);
@@ -141,6 +147,24 @@ class AsyncPairingStore{
     }
    }catch(error){this.#mode='temporary';try{this.#marker();}catch{}this.#notice(value.authority.enabled?'persist-enabled':'persist-disabled',error,start);}
   });
+ }
+ async prepareReplacement(){
+  await this.ready();await this.flush();
+  const before=structuredClone(this.#value),serial=++this.#serial,start=performance.now();
+  if(!before?.authority.enabled)throw refuse();
+  this.#marker();
+  const check=()=>{if(serial!==this.#serial||!same(this.#value,before)||!same(readState(this.root,{allowDisabled:true}),before.mirror))throw refuse();};
+  const task=this.#tail.then(async()=>{
+   try{
+    check();if(this.#mode!=='persistent'&&!same(await this.#adapter.get(this.#core.profile),before))throw refuse();check();
+    const authority={...before.authority,generation:randomUUID(),enabled:false,pairing:null,device:null},value={...before,authority,mirror:authority,details:null};
+    try{await this.#adapter.put(this.#core.profile,value);}catch(error){let actual;try{actual=await this.#adapter.get(this.#core.profile);}catch{throw error;}if(!same(actual,value))throw error;}
+    check();this.#mode='persistent';this.#notice('persist-disabled',null,start);
+   }catch(error){this.#mode='temporary';this.#notice('persist-disabled',error,start);throw refuse();}
+  });
+  this.#tail=task.catch(()=>{});await task;let used=false;
+  // Retire the old external anchor before any process-only replacement can succeed.
+  return ()=>{if(used||this.#mode!=='persistent')throw refuse();check();used=true;};
  }
  sealRevocation(){
   this.#serial++;this.#mode='temporary';this.#marker();const start=performance.now();
