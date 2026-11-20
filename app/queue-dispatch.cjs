@@ -494,6 +494,7 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
     m.status === 'failed' && typeof m.turnId === 'string').map(m => m.turnId) : []);
   const failedReplies = new Set();
   const parts = [];
+  const partIndices = [];
   let humanAfter = false;
   let own = -1;
   for (let i = 0; i < messages.length; i += 1) {
@@ -521,6 +522,7 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
         failedReplies.add(message.turnId); continue;
       }
       parts.push(message.text);
+      partIndices.push(i);
     }
   }
   if (index < 0 && !parts.length) {
@@ -531,8 +533,15 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
   if (kept.length) {
     last = kept[kept.length - 1];
   }
+  const lastIndex = partIndices[kept.length - 1], lastMessage = messages[lastIndex], nativeId = lastMessage?.nativeId;
+  // Only this delivery's completed native turn can supersede earlier failures.
+  const recovered = failedReplies.size && typeof nativeId === 'string' && nativeId && nativeId === session.nativeId && lastMessage.status === 'complete' &&
+    typeof lastMessage.turnId === 'string' && messages.some((m, i) => i > lastIndex && m?.kind === 'turn' &&
+      m.nativeId === session.nativeId && m.turnId === lastMessage.turnId && m.status === 'complete' && (!m.inputTag || m.inputTag === tag)) &&
+    !messages.some((m, i) => i >= lastIndex && m?.kind === 'turn' && m.nativeId === session.nativeId &&
+      m.status === 'failed' && failedReplies.has(m.turnId));
   return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
-    ...(failedReplies.size ? { failedTurnIds: [...failedReplies] } : {}) };
+    ...(failedReplies.size && !recovered ? { failedTurnIds: [...failedReplies] } : {}) };
 }
 
 function memberIds(room, sessions) {
