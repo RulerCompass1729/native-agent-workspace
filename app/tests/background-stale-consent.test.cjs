@@ -566,7 +566,7 @@ function projectionFixture(controller) {
  const scope=vm.createContext({roomState:{apply:s=>s},sessionLabels:{apply:s=>s},submissionState:s=>s,
   confirmationInbox:require('../confirmation-inbox.cjs'),confirmationProjectionKey:'',confirmationProjectionKeys:new WeakMap(),recordsChanged:()=>events.push('changed'),
   confirmationSnapshot:(_client,snapshot)=>snapshot,backgroundControl:controller,backgroundUnavailable:false,outboxQuitFailed:false,outboxUnavailable:false,
-  queueSecretary:null,integratorRole:null,stewardRole:null,queueDispatcher:null,butlerIngress:null,localVendorIcons:()=>({}),
+  queueSecretary:null,integratorRole:null,stewardRole:null,stewardWake:null,queueDispatcher:null,butlerIngress:null,localVendorIcons:()=>({}),
   roomPeerIdentity:()=>null,endedByMove:()=>[],viewStorageWarning:'',viewStorageWarningUiMessage:null});
  vm.runInContext(source.slice(source.indexOf('function displayState('),source.indexOf('function reportViewStorage(')),scope);
  return {events,show:(snapshot,context={view:{},win:{}})=>scope.displayState(snapshot,context)};

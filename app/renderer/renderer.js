@@ -5217,8 +5217,20 @@ const nativeActivityClock = setInterval(() => {
   if (selected === 'panorama') panorama?.refresh();
   if (newlyStaleStatus(state.sessions)) render();
 }, 1000);
+function renderStewardWakeWarning(wakeBlock) {
+  const wakeWarning = $('steward-wake-warning');
+  if (wakeWarning) {
+    wakeWarning.hidden = !wakeBlock;
+    if (wakeBlock) {
+      wakeWarning.querySelector('p').textContent = uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason: uiText(`stewardWake.reason.${wakeBlock.reason}`) });
+      wakeWarning.querySelector('button').textContent = uiText('stewardWake.openRecord');
+      wakeWarning.querySelector('button').onclick = () => stewardSteps?.open();
+    }
+  }
+}
 function render() {
   if (!state || rendering) return;
+  renderStewardWakeWarning(state.stewardWakeStatus);
   // A saved full-page records view opens as the new sidebar beside the members.
   const restoreStream = selected === 'room' && roomSurface === 'records' && Boolean(window.nativeWorkspaceActivityStream);
   if (restoreStream) roomSurface = 'overview';
@@ -5857,6 +5869,7 @@ const disposers = [
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   // Waiters resume in a microtask, after this render has updated the buttons.
   api.onState(next => { updateState(next); stateArrived(); render(); }),
+  api.onStewardWake(status => { if (state) state.stewardWakeStatus = status; renderStewardWakeWarning(status); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }

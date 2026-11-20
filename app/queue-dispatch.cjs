@@ -2474,6 +2474,7 @@ class QueueDispatcher {
           await this.tick();
         } catch {
           // A failed pass leaves records as they were; the next pass reads fresh state.
+          this.stewardWake?.skip('source-unavailable');
         }
       } while (this.again && !this.closed);
     } finally {
@@ -2519,8 +2520,8 @@ class QueueDispatcher {
     if (this.integration && this.integration.hasWork(this.integrationRooms())) {
       return true;
     }
-    // Something new for the butler, with waking it on: passes go on until it can be woken.
-    if (this.stewardWake && this.stewardWake.due()) {
+    // Keep observing while enabled: the next queue event may not exist yet.
+    if (this.stewardWake && this.stewardWake.active()) {
       return true;
     }
     // An agent owed the person's answers: passes go on until it is told.
@@ -2784,18 +2785,22 @@ class QueueDispatcher {
   // left the butler at work, which the fresh read below sees.
   async wakeSteward(current, holding) {
     try {
-      if (!this.stewardWake.due()) return;
+      if (!this.stewardWake.due()) { this.stewardWake.clearBlocked(); return; }
+      const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
-      if (!steward || !settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return;
+      if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
+      if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(sessionReady(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy).reason || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
-      if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return;
-      const fresh = await this.freshReady(steward.sessionId);
-      if (!fresh || this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return;
+      if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
+      const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why);
+      if (!fresh) return skip(why.reason || 'state-unavailable');
+      if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
       await this.stewardWake.wake(fresh.session, model, (text, itemId) => this.send(fresh.session, text, itemId));
-    } catch {
+    } catch (error) {
       // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
+      this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable');
     }
   }
 

@@ -808,6 +808,11 @@ function recordsChanged(force = false) {
   operationsBlocks = count;
   for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
 }
+function stewardWakeChanged() {
+  const status = stewardWake?.view().blocked || null;
+  for (const context of windows.values()) sendToPage(context, 'workspace:steward-wake', status);
+  recordsChanged(true);
+}
 function sendToPage(context, channel, ...data) {
   if (context.background || context.win.isDestroyed()) {
     return;
@@ -935,6 +940,7 @@ function displayState(snapshot, context, read = null) {
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+    ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
@@ -1611,6 +1617,7 @@ async function boot() {
   // person's designation, which a rotation keeps.
   try {
     stewardWake ||= new StewardWake(dataDir, { ledger: () => butlerIngress?.ledger || null, selected: () => stewardRole.selected,
+      changed: stewardWakeChanged,
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');

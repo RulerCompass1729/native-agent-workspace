@@ -20,6 +20,11 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const FILE = 'steward-wake.json', RECORD_MAX = 4096, GAP_MS = 60 * 1000;
+const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
+const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
+  'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
+  'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
+  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold']);
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -68,9 +73,10 @@ class StewardWake {
   // `ledger()` gives the event record (butler-ledger.cjs) or null; `selected()` the designation as the person made it
   // ({ sessionId, nativeId } or null; a rotation keeps it); `record(line)` writes a line to 「大管家的记录」 and throws
   // when it cannot.
-  constructor(directory, { ledger, selected, record, now = Date.now, gapMs = GAP_MS }) {
+  constructor(directory, { ledger, selected, record, now = Date.now, gapMs = GAP_MS, changed = () => {} }) {
     this.file = path.join(directory, FILE);
-    Object.assign(this, { ledger, selected, record, now, gapMs });
+    Object.assign(this, { ledger, selected, record, now, gapMs, changed });
+    this.blocked = null;
     this.state = { version: 1, on: false, designation: null, woken: null, at: null };
     // A saved state that cannot be read is off, and says so, until the person or the butler sets it again.
     this.failed = false;
@@ -87,7 +93,32 @@ class StewardWake {
     return same(this.state.designation, designated);
   }
   // How it stands, for the person or the butler: whether it is on, and when NAW last tried to wake the butler.
-  view() { const on = this.active(); return { on, at: on ? this.state.at : null, failed: this.failed }; }
+  view() {
+    const on = this.active(), blocked = on && this.due() && this.blocked?.visible ? {
+      since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
+    } : null;
+    return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };
+  }
+  clearBlocked() {
+    const visible = this.blocked?.visible; this.blocked = null;
+    if (visible) try { this.changed(); } catch { /* Visibility never grants a send. */ }
+  }
+  skip(reason) {
+    if (!this.due()) { this.clearBlocked(); return; }
+    const now = this.now();
+    if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
+    const blocked = this.blocked, previous = blocked.reason;
+    blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable';
+    if (now - blocked.since < STALL_MS) return;
+    if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
+      blocked.recordedReason = blocked.reason; blocked.records++;
+      try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); }
+      catch { blocked.reason = 'record-unavailable'; }
+    }
+    const minute = Math.floor((now - blocked.since) / 60000), changed = !blocked.visible || previous !== blocked.reason || minute !== blocked.minute;
+    blocked.visible = true; blocked.minute = minute;
+    if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
+  }
   latest() {
     const ledger = this.ledger();
     if (!ledger) throw fault('The event record is unavailable', 'STEWARD_WAKE_UNAVAILABLE');
@@ -107,6 +138,7 @@ class StewardWake {
       next = { version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId }, woken: this.latest(), at: this.failed ? null : this.state.at };
     } else next = { version: 1, on: false, designation: null, woken: null, at: this.failed ? null : this.state.at };
     this.write(next);
+    if (!on) this.clearBlocked();
     return this.view();
   }
   write(next) {
@@ -140,10 +172,13 @@ class StewardWake {
   // tag. Gives what was done, or null when nothing was.
   async wake(session, model, send) {
     const now = this.now();
-    if (!this.due() || !this.rested(now)) return null;
-    if (typeof model !== 'string' || !model || /deepseek/iu.test(model)) return null;
+    if (!this.due()) { this.clearBlocked(); return null; }
+    if (!this.rested(now)) { this.skip('cooldown'); return null; }
+    if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
+    if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
     const latest = this.latest(), position = from(latest, this.state.woken), id = randomUUID();
-    this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position });
+    try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
+    catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
     let tag = null, outcome;
     try {
       tag = await send(wakeText(position), `steward-wake:${id}`);
@@ -159,8 +194,10 @@ class StewardWake {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a wake without an outcome. */ }
+    if (outcome.state === 'sent') this.clearBlocked();
+    else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
     return { state: outcome.state, position, through: latest };
   }
 }
 
-module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, wakeText, newer, from });
+module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, wakeText, newer, from });

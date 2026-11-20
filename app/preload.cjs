@@ -88,4 +88,5 @@ api.onState = callback => {
 for (const [name, channel] of [['onDiscoveries', 'workspace:discoveries'], ['onQuitStatus', 'workspace:quit-status'], ['onRevealRecord', 'workspace:reveal-record'], ['onLocale', 'workspace:locale'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onSwitchMode', 'workspace:switch-mode'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup'], ['onRecordsChanged', 'workspace:records-changed']]) {
   api[name] = callback => { const listener = (_event, ...data) => callback(...data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
+api.onStewardWake = callback => { const listener = (_event, status) => callback(status); ipcRenderer.on('workspace:steward-wake', listener); return () => ipcRenderer.removeListener('workspace:steward-wake', listener); };
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));
