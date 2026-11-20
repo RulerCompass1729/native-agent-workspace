@@ -15,7 +15,7 @@ test('a completed shared-host pairing survives an actual exit, invalidating old 
  assert.equal(next.code,0);assert.notEqual(first.value.issuer.pid,next.value.issuer.pid);assert.equal(next.value.device,first.value.device);assert.equal(next.value.until,first.value.until);
  assert.equal(next.value.oldTicketDenied,true);assert.equal(next.value.oldChallengeDenied,true);
 });
-for(const change of ['actor','origin','mapping','new-service','funnel','unknown','expiry'])test('a fresh process refuses changed or expired recovery: '+change,async t=>{
+for(const change of ['actor','user-id','origin','mapping','new-service','funnel','unknown','expiry'])test('a fresh process refuses changed or expired recovery: '+change,async t=>{
  const f=fixture(t),first=await f.run({mode:'pair'});assert.equal(first.code,0);
  const next=await f.run({mode:'resume',token:first.value.token,change,advance:change==='expiry'?12*3600000+1000:0});
  assert.equal(next.code,1);assert.equal(next.value.ok,false);

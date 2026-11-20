@@ -22,8 +22,9 @@ function fixture(t){
  const binding={sessionId:record.id,nativeId:record.nativeId,operationId:'card',version:'exact',decision:1,expiresAt:Date.now()+120000};
  const desktop={grant:(_c,g)=>structuredClone(g),records:{status:()=>({count:0})},read:async()=>({capabilities:{},confirmations:[]}),confirmationBinding:()=>binding,
   decision:async(_c,_s,_v,permit,valid)=>{permit.check(valid(),binding);return {state:'complete'};}};
- const create=()=>new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store});
- const first=create();first.setEndpoint({origin,actor,port:48765});
+ const endpoint={origin,actor,port:48765,binding:{version:1,origin,actor,port:48765,userId:'7',topologyHash:'0'.repeat(64)}};
+ const create=(current=endpoint)=>{const broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store});if(current)broker.setEndpoint(current);return broker;};
+ const first=create();
  const auth=d=>({token:d.cookieValue,actor,origin});
  async function selected(){const c=await first.beginPairing({actor,origin,selection:[{sessionId:record.id,actions:['read']}]});const a=auth(first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
  async function candidate(options={}){const c=await first.beginCandidate({actor,origin,...options}),a=auth(await first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
@@ -68,4 +69,9 @@ test('a changed carrier cannot rebind or alter the saved generation',async t=>{
 test('all policy recovery removes an ended native target instead of reviving its saved tuple',async t=>{
  const f=fixture(t),a=await f.candidate();await f.first.activateCandidate(a,{mode:'basic'});f.first.suspend();f.record.state='ended';
  const next=f.create();await next.resume(async()=>true);assert.equal(next.session(a).sessions.length,0);await assert.rejects(next.read(a,f.record.id));assert.equal(f.calls(),0);next.revoke();
+});
+
+test('a saved receipt alone cannot substitute for a freshly verified current endpoint',async t=>{
+ const f=fixture(t);await f.selected();f.first.suspend();const before=f.stored(),next=f.create(null);
+ await assert.rejects(next.resume(async()=>true));assert.deepEqual(f.stored(),before);assert.equal(f.calls(),0);
 });

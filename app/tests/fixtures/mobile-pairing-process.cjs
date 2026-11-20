@@ -20,6 +20,7 @@ process.once('message',input=>{
   }else if(store){
    const cp=store.checkpoint();
    if(input.change==='actor')status.User['7'].LoginName='another-person';
+   if(input.change==='user-id'){status.Self.UserID=8;status.User['8']={LoginName:actor};}
    if(input.change==='origin'){serve.Web[host+':10001']=serve.Web[host+':10000'];delete serve.Web[host+':10000'];serve.TCP[10001]=serve.TCP[10000];delete serve.TCP[10000];}
    if(input.change==='mapping')serve.Web[host+':10000'].Handlers['/'].Proxy='http://127.0.0.1:48766';
    if(input.change==='new-service'){serve.TCP[10443]={HTTPS:true};serve.Web[host+':10443']={Handlers:{'/':{Proxy:'http://127.0.0.1:9000'}}};}

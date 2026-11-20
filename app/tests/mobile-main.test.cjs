@@ -47,6 +47,7 @@ function fixture() {
     fs:{existsSync:()=>true},path:require('node:path'),applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, tempReminders: null, tempQuitWaiting: false,
     require(name) {
       if (name === './mobile-carrier.cjs') return {
+        sameBinding:require('../mobile-carrier.cjs').sameBinding,
         binding:value=>value.binding||{version:1,origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,userId:'7',topologyHash:'0'.repeat(64)},
         detectRestored:async value=>{calls.push({method:'detectRestored',value});if(context.recoveryFailure)throw Error('Synthetic changed topology');return {origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};},
         detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST',otherPorts:context.carrierPorts }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; }
@@ -279,7 +280,7 @@ test('quitting with an open listener pauses access and closes the listener befor
   assert.deepEqual(order, ['saveViews', 'pause', 'stopUI']);assert.equal(f.calls.some(c=>c.method==='revoke'),false);
 });
 test('saved pairing restores only after two fresh carrier checks and an exact endpoint match',async()=>{
- const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};
+ const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,binding:{version:1,origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,userId:'7',topologyHash:'0'.repeat(64)}};
  const result=await f.handlers.get('workspace:mobileResume')(f.event,{sharedHostConfirmed:false});
  assert.equal(result.ok,true);assert.equal(result.value.restored,true);assert.equal(f.calls.filter(c=>c.method==='detectCarrier').length,2);
  assert.equal(f.calls.some(c=>c.method==='pair'||c.method==='localQR'),false);assert.equal(f.servers[0].options.host,'127.0.0.1');

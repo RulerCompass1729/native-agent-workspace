@@ -79,8 +79,8 @@ class MobileBroker {
     const client=await connect(this.#scope,'mobile-resume-'+randomUUID());
     try{
       if(serial!==this.#candidateSerial||await validate()!==true||serial!==this.#candidateSerial||!(client instanceof WorkspaceClient)||client.closing||client.socket.destroyed||client.scope!==this.#scope||fs.realpathSync(client.scope)!==this.#root)throw denied();
-      const endpoint=this.#endpoint||details.endpoint;
-      if(!['origin','actor','port'].every(k=>endpoint[k]===details.endpoint[k]))throw denied();
+      const endpoint=this.#endpoint;
+      if(!endpoint||!['origin','actor','port'].every(k=>endpoint[k]===details.endpoint[k])||!require('./mobile-carrier.cjs').sameBinding(endpoint.binding,details.endpoint.binding))throw denied();
       const layout=details.all?this.#layout():null,grant=details.workspace===null?null:this.#desktop?.grant(client,details.workspace);
       if(details.workspace!==null&&!grant)throw denied();
       const result=this.#access.resume(checkpoint,{beforeSave:next=>{

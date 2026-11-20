@@ -288,7 +288,7 @@ async function resumeAppMobile(context,value){
     const carrier=context?await detectAppMobile({view:{mobileEndpoint:{port:endpoint.port}}},value):
       await require('./mobile-carrier.cjs').detectRestored(endpoint.binding);
     const binding=require('./mobile-carrier.cjs').binding(carrier);
-    if(!current()||!binding||carrier.origin!==endpoint.origin||carrier.actor!==endpoint.actor||carrier.port!==endpoint.port)return false;
+    if(!current()||!require('./mobile-carrier.cjs').sameBinding(binding,endpoint.binding)||carrier.origin!==endpoint.origin||carrier.actor!==endpoint.actor||carrier.port!==endpoint.port)return false;
     currentEndpoint={origin:carrier.origin,actor:carrier.actor,port:carrier.port,binding};broker.setEndpoint(currentEndpoint);return true;
   };
   try{

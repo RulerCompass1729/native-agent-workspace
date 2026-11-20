@@ -14,6 +14,9 @@ function validBinding(v) {
       !Number.isSafeInteger(v.port) || v.port < 1024 || v.port > 65535 || typeof v.topologyHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.topologyHash)) return false;
   try { const u = new URL(v.origin); return u.protocol === 'https:' && u.origin === v.origin && !u.username && !u.password; } catch { return false; }
 }
+function sameBinding(actual, expected) {
+  return validBinding(actual) && validBinding(expected) && Object.keys(expected).every(key => actual[key] === expected[key]);
+}
 function knownTopology(configs) {
   return configs.every(c => !Object.values(c.AllowFunnel || {}).some(Boolean) &&
     Object.entries(c.Web || {}).every(([endpoint, web]) => {
@@ -86,7 +89,7 @@ function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = 
 function inspectRestored(status, serve, expected) {
   if (!validBinding(expected)) throw fail();
   const carrier = inspect(status, serve, { port: expected.port, sharedHostConfirmed: true }), actual = binding(carrier);
-  if (!actual || JSON.stringify(ordered(actual)) !== JSON.stringify(ordered(expected))) throw fail();
+  if (!sameBinding(actual, expected)) throw fail();
   return carrier;
 }
 function binary(io = fs) {
@@ -111,4 +114,4 @@ async function detectRestored(expected, dependencies) {
   if (!validBinding(expected)) throw fail();
   const { status, serve } = await read(dependencies); return inspectRestored(status, serve, expected);
 }
-module.exports = { inspect, detect, binding, validBinding, inspectRestored, detectRestored, findExecutable: binary };
+module.exports = { inspect, detect, binding, validBinding, sameBinding, inspectRestored, detectRestored, findExecutable: binary };

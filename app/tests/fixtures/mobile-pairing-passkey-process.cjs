@@ -1,7 +1,7 @@
 // Real broker/crypto in an owned process; Keychain, carrier and native execution are fixtures.
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{createRequire}=require('node:module'),{EventEmitter}=require('node:events');
 const {MobileAccess,SESSION_MS,verifyTicket}=require('../../mobile-access.cjs'),{PairingStore}=require('../../mobile-pairing-store.cjs'),carrier=require('../../mobile-carrier.cjs');
-let broker,auth,deadline,executions=0,nativeCalls=0;
+let broker,auth,deadline,executions=0,nativeCalls=0,listenerStarts=0;
 const actor='synthetic-person',origin='https://demo.example.ts.net:10000',row={id:'synthetic',nativeId:'native',state:'idle',provider:'claude',name:'Synthetic',messages:[]};
 async function initialize(input){
  const root=path.join(input.root,'profile'),file=path.join(input.root,'fake-keychain.json');deadline=input.deadline;
@@ -26,11 +26,17 @@ async function initialize(input){
  const status={BackendState:'Running',Self:{DNSName:'demo.example.ts.net.',UserID:7},User:{'7':{LoginName:actor}}},serve={TCP:{'10000':{HTTPS:true},'443':{HTTPS:true}},Web:{
   'demo.example.ts.net:10000':{Handlers:{'/':{Proxy:'http://127.0.0.1:48765'}}},'demo.example.ts.net:443':{Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}}}};
  if(input.mode==='pair'){
-  const detected=carrier.inspect(status,serve,{sharedHostConfirmed:true});broker.setEndpoint({...detected,binding:carrier.binding(detected)});
+  if(input.change==='unknown-receipt')serve.Services={unknown:{}};
+  const detected=carrier.inspect(status,serve,{sharedHostConfirmed:true});broker.setEndpoint({...detected,binding:input.change==='null-receipt'?null:carrier.binding(detected)});
   const c=await broker.beginCandidate({actor,origin}),phone=await broker.pair({secret:c.secret,actor,origin});auth={actor,origin,token:phone.cookieValue};
  }else{
   const endpoint=broker.resumeInfo();if(!endpoint)throw Error('No recovery grant');
-  await broker.resume(async()=>{const detected=carrier.inspectRestored(status,serve,endpoint.binding);broker.setEndpoint({...detected,binding:carrier.binding(detected)});return true;});
+  if(input.change==='user-id'){status.Self.UserID=8;status.User['8']={LoginName:actor};}
+  if(input.change==='new-service'){serve.TCP['10443']={HTTPS:true};serve.Web['demo.example.ts.net:10443']={Handlers:{'/':{Proxy:'http://127.0.0.1:9000'}}};}
+  if(input.entry==='manual'||input.entry==='boot'){
+   const {resume}=require('./mobile-main-recovery.cjs');
+   listenerStarts=await resume(broker,{entry:input.entry,status,serve,root});
+  }else await broker.resume(async()=>{const detected=input.entry==='broker'?carrier.inspect(status,serve,{sharedHostConfirmed:true}):carrier.inspectRestored(status,serve,endpoint.binding);broker.setEndpoint({...detected,binding:carrier.binding(detected)});return true;});
   auth={actor,origin,token:input.token};
  }
  const session=broker.session(auth);auth.csrf=session.csrf;
@@ -43,14 +49,14 @@ process.on('message',async input=>{
   else if(input.command==='registration')value=broker.registrationOptions(auth,{});
   else if(input.command==='register')value=broker.registerPasskey(auth,input.value);
   else if(input.command==='proof')value=broker.registrationProof(auth,input.value);
-  else if(input.command==='activate'){value=await broker.activateCandidate(auth,{mode:'verified'});auth.csrf=broker.session(auth).csrf;}
+  else if(input.command==='activate'){value=await broker.activateCandidate(auth,{mode:input.mode||'verified'});auth.csrf=broker.session(auth).csrf;}
   else if(input.command==='session')value=broker.session(auth);
   else if(input.command==='read')value=await broker.read(auth,row.id);
   else if(input.command==='send')value=await broker.send(auth,input.value);
   else if(input.command==='options')value=await broker.decisionOptions(input.csrf?{...auth,csrf:input.csrf}:auth,{id:'card',version:'exact',decision:'approve'});
   else if(input.command==='decide')value=await broker.decide(auth,{id:'card',version:'exact',decision:'approve',...input.value});
-  else if(input.command==='quit'){value=broker.suspend();process.send({id:input.id,ok:true,value,executions,nativeCalls},()=>process.disconnect());return;}
+  else if(input.command==='quit'){value=broker.suspend();process.send({id:input.id,ok:true,value,executions,nativeCalls,listenerStarts},()=>process.disconnect());return;}
   else throw Error('Unknown fixture command');
-  process.send({id:input.id,ok:true,value,executions,nativeCalls});
- }catch{process.send({id:input.id,ok:false,executions,nativeCalls});}
+  process.send({id:input.id,ok:true,value,executions,nativeCalls,listenerStarts});
+ }catch{process.send({id:input.id,ok:false,executions,nativeCalls,listenerStarts});}
 });
