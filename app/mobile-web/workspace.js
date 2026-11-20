@@ -73,7 +73,7 @@
     if (pairSecret !== undefined) global.history.replaceState(null, '', global.location.pathname + '#zh/home');
     let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '', authorization = 0;
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
-    let answeredQuestion = null;
+    let answeredQuestion = null, currentToast = null;
     const t = key => words[lang][key] || key;
     words.zh.loadingBody = '正在读取对话内容…'; words.en.loadingBody = 'Loading this conversation…';
     const node = (tag, value, cls) => { const n = d.createElement(tag); if (value !== undefined) n.textContent = value; if (cls) n.className = cls; return n; };
@@ -81,7 +81,20 @@
     function icon(name) { const svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg'), p = d.createElementNS(svg.namespaceURI, 'path'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); p.setAttribute('d', paths[name] || paths.menu); svg.append(p); return svg; }
     function button(label, fn, cls) { const b = node('button', label, cls); b.type = 'button'; if (fn) b.addEventListener('click', () => run(fn)); return b; }
     function link(label, dest, cls) { const a = node('a', label, cls); a.href = '#' + lang + '/' + dest; return a; }
-    function toast(key) { el('toast').textContent = words[lang][key] || key; el('toast').hidden = false; }
+    function dismissToast() {
+      const restore = el('toast').contains(d.activeElement), previous = currentToast?.focus;
+      currentToast = null;
+      el('toast').hidden = true;
+      if (restore) (previous?.isConnected ? previous : el('content')).focus();
+    }
+    function toast(key) {
+      currentToast = { key, focus: d.activeElement };
+      const close = node('button', '×', 'toast-close');
+      close.type = 'button'; close.setAttribute('aria-label', lang === 'zh' ? '关闭提示' : 'Dismiss notification');
+      close.addEventListener('click', dismissToast);
+      el('toast').replaceChildren(node('span', t(key), 'toast-message'), close);
+      el('toast').hidden = false;
+    }
     function dialog(title, content) { el('dialog-title').textContent = title; el('dialog-body').replaceChildren(typeof content === 'string' ? node('p', content) : content); el('dialog-close').textContent = t('close'); if (!el('dialog').open) el('dialog').showModal(); }
     el('dialog-close').addEventListener('click', () => el('dialog').close());
     el('skip').addEventListener('click', event => { event.preventDefault(); el('content').focus(); });
@@ -485,6 +498,7 @@
       if (refreshRead?.key === key && refreshRead.authorization === client.state.authorization && refreshRead.acknowledged === acknowledged) { paint(); return refreshRead.promise; }
       const read = { key, authorization: client.state.authorization, acknowledged }, ticket = ++epoch;
       refreshRead = read; busy = true;
+      const offlineToast = currentToast?.key === 'offline' ? currentToast : null;
       read.promise = (async () => {
       let generation = client.state.authorization, deviceId;
       const current = () => ticket === epoch && key === routeKey();
@@ -500,6 +514,7 @@
         if (!current() || generation !== client.state.authorization || deviceId !== client.state.session?.deviceId || acknowledged !== acknowledgedMessages) return;
         view = next; lastReceived = global.performance.now();
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
+        if (current() && generation === client.state.authorization && offlineToast && currentToast === offlineToast) dismissToast();
       } catch { if (generation === client.state.authorization && current()) { disconnected = true; toast('offline'); } }
       finally { if (current()) { busy = false; paint(); } if (refreshRead === read) refreshRead = null; }
       })();
@@ -528,7 +543,7 @@
           const unloaded = ({ messages, earlierMessagesOmitted, ...row }) => ({ ...row, conversationLoaded: false });
           view = { ...view, sessions: view.sessions.map(unloaded), rooms: view.rooms.map(unloaded) };
         }
-        composeKey = ''; answeredQuestion = null; el('toast').hidden = true; paint();
+        composeKey = ''; answeredQuestion = null; dismissToast(); paint();
         const id = route.page === 'chat' ? route.id : route.nativeId;
         if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
         if (ticket !== navigation) return;
