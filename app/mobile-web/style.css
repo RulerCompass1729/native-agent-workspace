@@ -43,9 +43,9 @@
 .keyboard-compose .compose{bottom:calc(var(--keyboard-inset,0px) + 75px)}
 .keyboard-compose .nav{visibility:hidden}
 .compact-compose .compose{bottom:var(--keyboard-inset,0px)}
-.compact-compose .compose-inner{max-width:720px;padding:1px max(8px,env(safe-area-inset-right,0px)) 1px max(8px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"input send" "note note";gap:1px 8px}
+.compact-compose .compose-inner{max-width:720px;padding:1px max(8px,env(safe-area-inset-right,0px)) 1px max(8px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr) minmax(0,25%) auto;grid-template-areas:"input note send";gap:8px}
 .compact-compose .compose label{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden;white-space:nowrap}
 .compact-compose .compose textarea{grid-area:input;height:48px;min-height:48px;max-height:48px}
 .compact-compose .compose-tools{display:contents}
 .compact-compose #send-message{grid-area:send;align-self:stretch;min-height:48px}
-.compact-compose #compose-note{grid-area:note;font-size:11px;line-height:1.2;white-space:nowrap;overflow-x:auto}
+.compact-compose #compose-note{grid-area:note;align-self:center;max-height:48px;font-size:11px;line-height:1.2;white-space:normal;overflow:auto}

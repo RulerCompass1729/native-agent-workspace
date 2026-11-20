@@ -48,6 +48,11 @@ async function settled(page) { await page.evaluate(() => new Promise(r => reques
         const first = await geometry(); console.log(JSON.stringify({ label, first }));
         check(label + ' field and send fit the visual viewport', first.inside);
         check(label + ' focused draft and reason survive keyboard layout', first.focused && first.draft === 'Synthetic 中文 draft' && first.note === note);
+        if (landscape) {
+          await page.evaluate(() => syntheticViewport({ height: 52, offsetTop: 0 })); await settled(page);
+          check(label + ' 52px Safari Bottom viewport keeps full touch targets', (await geometry()).inside);
+          await page.evaluate(() => syntheticViewport({ height: 66 })); await settled(page);
+        }
         await page.evaluate(() => syntheticViewport({ offsetTop: 24 })); await settled(page);
         check(label + ' follows visual viewport scroll', (await geometry()).inside);
         await page.evaluate(() => { syntheticViewport({ height: innerHeight, offsetTop: 0 }); document.querySelector('#message').blur(); }); await settled(page);
