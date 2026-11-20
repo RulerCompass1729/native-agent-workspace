@@ -19,7 +19,7 @@
         return { key: JSON.stringify([room.id, q.id]), id: q.id, spaceId: room.id, spaceName: room.name || '', kind: k,
           memberKey, memberName: members.get(memberKey) || '', actualRecipient: typeof q.sentTo === 'string' && Boolean(q.sentTo), text: typeof q.text === 'string' ? q.text : '',
           reason: typeof q.reason === 'string' ? q.reason : '', waiting: q.waiting === true,
-          createdAt: q.createdAt ?? null, sentAt: q.sentAt ?? null, ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
+          createdAt: q.createdAt ?? null, sentAt: q.sentAt ?? null, finishedAt: q.finishedAt ?? null, ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
           current: !['done', 'cancelled'].includes(k) || typeof q.finishedAt === 'number' && Number.isFinite(q.finishedAt) && q.finishedAt >= start && q.finishedAt < end };
       });
       const current = all.filter(q => q.current), counts = Object.fromEntries(KINDS.map(k => [k, current.filter(q => q.kind === k).length]));
@@ -95,6 +95,32 @@
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
       nextExpiry: cardRows.reduce((value, c) => c.expiresAt !== null && (value === null || c.expiresAt < value) ? c.expiresAt : value, null), stale: input.connected === false };
   }
+  const TABS = ['active', 'waiting', 'sent', 'queued', 'review', 'unknown', 'failed', 'done', 'cancelled', 'all'];
+  const timestamp = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 8640000000000000 ? value : null;
+  function taskTime(item, sort) {
+    if (sort === 'create') return timestamp(item.createdAt);
+    if (sort === 'finish') return timestamp(item.finishedAt);
+    const times = [item.createdAt, item.sentAt, item.finishedAt].map(timestamp).filter(t => t !== null);
+    return times.length ? Math.max(...times) : null;
+  }
+  function selectTasks(items, { tab = 'active', search = '', sort = 'recent', descending = true, scope = 'all', space = 'all' } = {}, now = Date.now()) {
+    const day = new Date(now), start = new Date(day.getFullYear(), day.getMonth(), day.getDate() - (scope === 'week' ? 6 : 0)).getTime();
+    const end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime(), term = search.trim().toLowerCase();
+    const pool = items.filter(q => (space === 'all' || q.spaceId === space) &&
+      (scope === 'all' || !['done', 'cancelled'].includes(q.kind) || timestamp(q.finishedAt) !== null && q.finishedAt >= start && q.finishedAt < end) &&
+      (!term || [q.text, q.memberName, q.spaceName].some(v => typeof v === 'string' && v.toLowerCase().includes(term)) ||
+        typeof q.id === 'string' && q.id.toLowerCase().startsWith(term) || typeof q.ready?.commit === 'string' && q.ready.commit.toLowerCase().startsWith(term)));
+    const counts = Object.fromEntries(KINDS.map(k => [k, pool.filter(q => q.kind === k).length]));
+    counts.active = KINDS.filter(k => !['done', 'cancelled'].includes(k)).reduce((n, k) => n + counts[k], 0); counts.all = pool.length;
+    const matching = pool.filter(q => tab === 'all' || (tab === 'active' ? !['done', 'cancelled'].includes(q.kind) : q.kind === tab));
+    matching.sort((a, b) => {
+      const x = taskTime(a, sort), y = taskTime(b, sort);
+      const tie = a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+      if (x === null || y === null) return x === null && y === null ? tie : x === null ? 1 : -1;
+      return (descending ? y - x : x - y) || tie;
+    });
+    return { counts, items: matching };
+  }
   function bind({ host, document: doc, text, onQueue, onConfirmation, onSession, now = () => Date.now() }) {
     const win = doc.defaultView;
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
@@ -107,62 +133,92 @@
       } });
       for (const node of [...parent.children]) if (!nodes.includes(node)) node.remove();
     };
-    let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '', mode = 'space', scope = 'today', filter = 'all';
-    const groups = new Map(), rows = new Map(), placements = new Map();
-    let full = false, needsRegroup = false, waitingCount = null, status = overview(input, now()), day = new Date(now()).toDateString();
+    let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '';
+    let status = overview(input, now()), day = new Date(now()).toDateString(), waitingCount = null, limit = 10, order = [], orderPending = false;
+    const selection = { tab: 'active', search: '', sort: 'recent', descending: true, scope: 'all', space: 'all' };
+    let mode = 'flat';
+    const rows = new Map(), groups = new Map(), tabs = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
     const track = make('span', 'task-status-track'); attr(track, 'aria-hidden', 'true');
     const doing = make('span', 'task-status-doing'), waiting = make('span', 'task-status-waiting'), cardTime = make('span', 'task-status-card-time'), done = make('span', 'task-status-done'), warning = make('span', 'task-status-warning');
     const queued = make('span', 'task-status-queued'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
     toggle.append(track, doing, waiting, cardTime, queued, done, warning, chevron);
-    const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; attr(panel, 'popover', 'auto'); attr(toggle, 'popovertarget', panel.id);
-    attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'aria-controls', panel.id);
+    const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; panel.dataset.mode = 'full';
+    attr(panel, 'popover', 'auto'); attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'popovertarget', panel.id); attr(toggle, 'aria-controls', panel.id);
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
-    h2.id = 'task-board-title'; h2.tabIndex = -1;
-    const back = control(() => changeView(false), 'task-board-current'); heading.append(back, h2, caption, dismiss);
-    const summary = make('div', 'task-board-summary'), controls = make('div', 'task-board-controls'), scopeControls = make('div', 'task-board-options'), groupControls = make('div', 'task-board-options');
-    const scopeButtons = new Map(), groupButtons = new Map();
-    for (const value of ['today', 'all']) { const b = control(() => { scope = value; reset(); drawPanel(); }); scopeButtons.set(value, b); scopeControls.append(b); }
-    for (const value of ['space', 'status', 'member']) { const b = control(() => { mode = value; reset(); drawPanel(); }); groupButtons.set(value, b); groupControls.append(b); }
-    const select = make('select'); select.onchange = () => { filter = select.value; reset(); drawPanel(); };
-    for (const k of ['all', ...KINDS]) { const o = make('option'); o.value = k; select.append(o); }
-    const regroup = control(() => { if (needsRegroup) { groupButtons.get(mode).focus({ preventScroll: true }); reset(); drawPanel(); } }, 'task-board-regroup'); regroup.hidden = true;
-    regroup.onblur = () => { if (!needsRegroup) regroup.hidden = true; };
-    controls.append(scopeControls, groupControls, select, regroup);
-    const currentList = make('ul', 'task-board-current-list');
-    const list = make('div', 'task-board-list'), footer = make('div', 'task-board-footer'), hint = make('span'), queueSpace = make('select');
-    const queue = control(() => { if (data.some(p => p.source === 'space' && p.id === queueSpace.value)) { const id = queueSpace.value; close(); onQueue(id); } }, 'task-board-queue');
-    const fullButton = control(() => changeView(true), 'task-board-full');
-    footer.append(hint, queueSpace, queue, fullButton); panel.append(heading, summary, controls, currentList, list, footer);
-    host.classList.add('task-board'); host.append(toggle, panel);
+    h2.id = 'task-board-title'; h2.tabIndex = -1; heading.append(h2, caption, dismiss);
+    const tablist = make('div', 'task-board-tabs'); attr(tablist, 'role', 'tablist');
+    for (const value of TABS) {
+      const button = control(() => chooseTab(value), 'task-board-tab'); button.id = 'task-board-tab-' + value; button.dataset.boardTab = value;
+      attr(button, 'role', 'tab');
+      button.onkeydown = event => {
+        const i = TABS.indexOf(value), next = event.key === 'ArrowRight' ? (i + 1) % TABS.length : event.key === 'ArrowLeft' ? (i + TABS.length - 1) % TABS.length : event.key === 'Home' ? 0 : event.key === 'End' ? TABS.length - 1 : null;
+        if (next === null) return; event.preventDefault(); chooseTab(TABS[next]); tabs.get(TABS[next]).focus({ preventScroll: true });
+      };
+      tabs.set(value, button); tablist.append(button);
+    }
+    const controls = make('div', 'task-board-controls'), labels = new Map();
+    const search = make('input', 'task-board-search'); search.type = 'search'; search.autocomplete = 'off';
+    const sort = make('select', 'task-board-sort'), direction = control(() => { selection.descending = !selection.descending; resetView(); }, 'task-board-direction');
+    const sortWrap = make('div', 'task-board-sort-controls'); sortWrap.append(sort, direction);
+    const scope = make('select', 'task-board-scope'), space = make('select', 'task-board-space'), grouping = make('select', 'task-board-mode');
+    function label(key, target, content, cls = '') {
+      const e = make('label', 'task-board-field ' + cls), name = make('span'); name.id = 'task-board-label-' + key;
+      attr(target, 'aria-labelledby', name.id); e.append(name, content || target); labels.set(key, name); return e;
+    }
+    controls.append(label('search', search, null, 'task-board-search-field'), label('sort', sort, sortWrap), label('completionScope', scope), label('spaceFilter', space));
+    const results = make('div', 'task-board-results'), count = make('span'), regroup = control(() => { if (orderPending) resetView(); }, 'task-board-regroup');
+    attr(count, 'role', 'status'); attr(count, 'aria-live', 'polite');
+    results.append(count, regroup, label('view', grouping));
+    const hint = make('p', 'task-board-query-hint'), availability = make('p', 'task-board-availability'); attr(availability, 'role', 'status');
+    const list = make('div', 'task-board-list'), flat = make('ul', 'task-board-flat-list'), empty = make('p', 'task-board-empty');
+    attr(list, 'role', 'tabpanel'); list.tabIndex = 0;
+    const moreLine = make('div', 'task-board-more-line'), shown = make('span'), more = control(() => { if (!more.hasAttribute('aria-disabled')) { limit += 10; drawPanel(); } }, 'task-board-more');
+    moreLine.append(shown, more);
+    const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
+    panel.append(heading, tablist, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(toggle, panel);
+    function options(select, values, name) {
+      const previous = select.value;
+      move(select, values.map(value => { let o = [...select.options].find(o => o.value === value); if (!o) { o = make('option'); o.value = value; } set(o, name(value)); return o; }));
+      if (values.includes(previous)) select.value = previous;
+    }
     function translate() {
-      attr(host, 'aria-label', f('title'));
-      attr(toggle, 'aria-label', f(opened ? 'collapse' : 'expand')); attr(toggle, 'aria-expanded', String(opened));
-      set(h2, f(full ? 'full' : 'currentTasks')); set(caption, full ? f(scope === 'today' ? 'range' : 'historyRange') : f('currentItemCount', { count: currentItems().length }));
-      set(fullButton, f('fullView')); set(back, f('backCurrent')); back.hidden = !full; set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
-      attr(scopeControls, 'role', 'group'); attr(scopeControls, 'aria-label', f('scope')); attr(groupControls, 'role', 'group'); attr(groupControls, 'aria-label', f('group'));
-      for (const [value, b] of scopeButtons) { set(b, f(value)); attr(b, 'aria-pressed', String(scope === value)); }
-      for (const [value, b] of groupButtons) { set(b, f('by.' + value)); attr(b, 'aria-pressed', String(mode === value)); }
-      for (const o of select.options) set(o, f(o.value === 'all' ? 'allStates' : 'status.' + o.value));
-      attr(select, 'aria-label', f('filter')); attr(queueSpace, 'aria-label', f('chooseQueue')); set(queue, f('queue')); set(hint, f(input.connected === false ? 'stale' : full ? 'readOnly' : 'currentHint'));
-      set(regroup, f(needsRegroup ? 'regroup' : 'groupCurrent')); attr(regroup, 'aria-description', f('regroupHint')); regroup.title = f('regroupHint');
+      attr(host, 'aria-label', f('title')); attr(toggle, 'aria-expanded', String(opened));
+      set(h2, f('title')); set(caption, f('global')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
+      attr(tablist, 'aria-label', f('filter'));
+      for (const [key, e] of labels) set(e, f(key));
+      search.placeholder = f('searchPlaceholder');
+      options(sort, ['recent', 'create', 'finish'], value => f('sort.' + value));
+      options(scope, ['all', 'today', 'week'], value => f('completion.' + value));
+      options(grouping, ['flat', 'space', 'member'], value => f('view.' + value));
+      const spaces = ['all', ...data.map(p => p.id)];
+      options(space, spaces, value => value === 'all' ? f('allSpaces') : data.find(p => p.id === value).name);
+      if (!spaces.includes(selection.space)) selection.space = 'all';
+      space.value = selection.space; sort.value = selection.sort; scope.value = selection.scope; grouping.value = mode;
+      set(direction, selection.descending ? '↓' : '↑'); attr(direction, 'aria-label', f(selection.descending ? 'descending' : 'ascending'));
+      set(retention, f('retention')); attr(regroup, 'aria-description', f('orderHint'));
+    }
+    search.oninput = event => { if (!event.isComposing) { selection.search = search.value; resetView(); } };
+    search.oncompositionend = () => { selection.search = search.value; resetView(); };
+    for (const [element, field] of [[sort, 'sort'], [scope, 'scope'], [space, 'space']]) element.onchange = () => { selection[field] = element.value; resetView(); };
+    grouping.onchange = () => { mode = grouping.value; resetView(); };
+    function resetView() { order = []; limit = 10; drawPanel(); list.scrollTop = 0; }
+    function chooseTab(value) {
+      selection.tab = value; resetView();
+      tabs.get(value).scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
     function positionPanel() {
-      const rect = toggle.getBoundingClientRect(), top = Math.min(rect.bottom + 6, Math.max(12, win.innerHeight - 160));
-      const width = Math.max(1, Math.min(full ? 860 : win.innerWidth <= 1000 ? 530 : 600, win.innerWidth - 24));
-      Object.assign(panel.style, { left: Math.max(12, Math.min(rect.right - width, win.innerWidth - width - 12)) + 'px', top: top + 'px', width: width + 'px', maxHeight: Math.max(1, Math.min(560, win.innerHeight - top - 14)) + 'px' });
+      const rect = toggle.getBoundingClientRect(), top = Math.min(rect.bottom + 8, Math.max(0, win.innerHeight - 160));
+      const width = Math.max(1, Math.min(1120, win.innerWidth - (win.innerWidth <= 600 ? 0 : 32)));
+      Object.assign(panel.style, { left: Math.max(0, (win.innerWidth - width) / 2) + 'px', top: top + 'px', width: width + 'px', maxHeight: Math.max(1, Math.min(780, win.innerHeight - top - 12)) + 'px' });
     }
-    function currentItems() {
-      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
-      return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
-    }
-    function reset() { for (const g of groups.values()) g.element.remove(); groups.clear(); rows.clear(); placements.clear(); currentList.replaceChildren(); needsRegroup = false; list.scrollTop = 0; }
-    function changeView(value) { full = value; reset(); drawPanel(); positionPanel(); h2.focus({ preventScroll: true }); }
-    function open(id) {
+    function open() {
       if (disposed) return;
-      if (!opened) { reset(); full = Boolean(id); scope = 'today'; mode = 'space'; filter = 'all'; select.value = 'all'; }
-      opened = true; panel.hidden = false; translate(); drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
-      if (id) { queueSpace.value = id; const g = groups.get(id); if (g) { g.element.open = true; g.element.scrollIntoView({ block: 'nearest' }); } }
+      if (!opened) {
+        Object.assign(selection, { tab: 'active', search: '', sort: 'recent', descending: true, scope: 'all', space: 'all' });
+        mode = 'flat'; order = []; limit = 10; search.value = ''; list.scrollTop = 0;
+      }
+      opened = true; panel.hidden = false; drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
     }
     function closed(restore = false) {
       if (!opened) return;
@@ -172,6 +228,10 @@
     }
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
     panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
+    function currentItems() {
+      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
+      return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
+    }
     function remaining(expiresAt) {
       const seconds = Math.max(0, Math.ceil((expiresAt - now()) / 1000));
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -207,99 +267,84 @@
       if (session && onSession) onSession(session.id, session.nativeId);
       else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
     }
+
+    function title(item, actorName) {
+      if (item.source === 'confirmation') return f('confirmation');
+      if (item.source === 'conversation') return actorName;
+      return item.text.split(/\r?\n/).map(line => line.trim()).find(Boolean) || f('untitled', { id: item.id.slice(0, 8) });
+    }
     function row(item) {
       let view = rows.get(item.key);
       if (!view) {
-        const element = make('li', 'task-board-task'), link = control(() => activate(item.key), 'task-board-entry'), body = make('div'), title = make('span', 'task-board-task-title'), note = make('small'), status = make('span', 'task-board-status'), member = make('span', 'task-board-owner');
-        const arrow = make('span', 'task-board-entry-chevron'); set(arrow, '›'); attr(arrow, 'aria-hidden', 'true'); body.append(title, note); link.append(body, status, member, arrow); element.append(link); element.dataset.taskKey = item.key; view = { element, link, title, note, status, member }; rows.set(item.key, view);
+        const element = make('li', 'task-board-task'), link = control(() => activate(item.key), 'task-board-entry'), body = make('div'), name = make('span', 'task-board-task-title'), note = make('small'), state = make('span', 'task-board-status'), action = make('span', 'task-board-row-action');
+        body.append(name, note); link.append(body, state, action); element.append(link); element.dataset.taskKey = item.key;
+        view = { element, link, name, note, state, action }; rows.set(item.key, view);
       }
       const actor = input.sessions?.find(s => s.id === item.memberKey), actorName = item.memberName || actor?.name || f(item.memberKey ? 'memberMissing' : 'unassigned');
-      const origin = (item.source === 'confirmation' ? input.rooms?.find(p => actor?.roomIds?.includes(p.id))?.name : item.spaceName || data.find(p => p.id === item.spaceId)?.name) || f(item.source === 'confirmation' ? 'confirmations' : 'independent');
+      const origin = item.spaceName || data.find(p => p.id === item.spaceId)?.name || f('independent');
       view.link.dataset.itemId = item.id; view.link.dataset.sessionId = item.memberKey || ''; view.link.dataset.spaceId = item.spaceId; view.link.dataset.kind = item.kind; view.link.dataset.source = item.source;
       view.link.disabled = item.source === 'confirmation' ? !item.target : !actor && !data.some(p => p.source === 'space' && p.id === item.spaceId);
       view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
-      set(view.title, item.source === 'confirmation' ? f('confirmation') : item.source === 'conversation' ? actorName : item.text);
-      set(view.status, !full && item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f((!full || item.source === 'conversation') && item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind)); view.status.dataset.kind = item.kind;
-      set(view.member, actorName);
-      set(view.note, !full ? origin + ' · ' + actorName : item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardDeadlineOne', { count: 1, time: remaining(item.expiresAt) }) : item.reason || item.waiting ? f('reasonInQueue') : mode !== 'space' ? origin : ''); view.note.hidden = !view.note.textContent;
+      const name = title(item, actorName); set(view.name, name); view.name.title = name;
+      const value = taskTime(item, selection.sort), time = value === null ? '—' : new Intl.DateTimeFormat(doc.documentElement?.lang || undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);
+      set(view.note, [origin, actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].join(' · '));
+      set(view.state, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
+      view.state.dataset.kind = item.kind;
+      set(view.action, f(item.source === 'confirmation' ? 'openCard' : (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'openSession' : 'openQueue'));
       return view.element;
-    }
-    function drawCurrent() {
-      const scroll = currentList.scrollTop, focused = doc.activeElement;
-      const first = [...currentList.children].find(e => e.getBoundingClientRect().bottom > currentList.getBoundingClientRect().top), offset = first ? first.getBoundingClientRect().top - currentList.getBoundingClientRect().top : 0;
-      const items = currentItems(), keys = new Set(items.map(q => q.key));
-      for (const [key, view] of rows) if (!keys.has(key)) { view.element.remove(); rows.delete(key); }
-      move(currentList, items.map(row));
-      if (!items.length) currentList.append(make('li', 'task-board-empty')); if (!items.length) set(currentList.firstElementChild, f(status.unknown || status.stale ? 'unavailable' : 'noRecords'));
-      if (first?.isConnected && currentList.contains(first)) currentList.scrollTop += first.getBoundingClientRect().top - currentList.getBoundingClientRect().top - offset; else currentList.scrollTop = scroll;
-      if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
-    }
-    function group(key, name, index) {
-      let g = groups.get(key);
-      if (!g) {
-        const element = make('details', 'task-board-group'), summary = make('summary'), label = make('span'), count = make('small'), empty = make('p', 'task-board-empty'), tasks = make('ul'), moreLine = make('div', 'task-board-more-line'), shown = make('span');
-        const more = control(() => { if (!more.hasAttribute('aria-disabled')) { g.limit += g.batch; drawPanel(); } }, 'task-board-more');
-        summary.append(label, count); moreLine.append(shown, more); element.append(summary, empty, tasks, moreLine); element.open = index === 0; element.dataset.groupKey = key;
-        g = { element, label, count, empty, tasks, shown, more, order: [], limit: doc.defaultView.innerHeight <= 650 ? 3 : 5, batch: doc.defaultView.innerHeight <= 650 ? 3 : 5 }; groups.set(key, g);
-        summary.addEventListener('click', () => { if (mode === 'space' && data.some(p => p.id === key && p.source === 'space')) queueSpace.value = key; });
-      }
-      set(g.label, name); return g;
     }
     function drawPanel() {
       if (!opened) return;
-      panel.dataset.mode = full ? 'full' : 'current'; currentList.hidden = full; list.hidden = !full; summary.hidden = controls.hidden = queueSpace.hidden = queue.hidden = !full; fullButton.hidden = full;
-      if (!full) { translate(); drawCurrent(); return; }
-      const focused = doc.activeElement, scroll = list.scrollTop, first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
-      const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : null;
+      const focused = doc.activeElement, inside = list.contains(focused), scroll = list.scrollTop;
+      const first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
+      const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : 0;
       translate();
-      const panelData = data.filter(p => scope === 'all' || !p.statusExcluded);
-      const tasks = panelData.flatMap(p => scope === 'today' ? p.current : p.all), counts = KINDS.map(k => [k, tasks.filter(q => q.kind === k).length]);
-      if (!summary.children.length) { summary.append(make('strong')); for (const k of KINDS) { const label = make('span'); label.dataset.kind = k; const swatch = make('i'); swatch.style.backgroundColor = COLORS[k]; label.append(swatch, make('span')); summary.append(label); } }
-      set(summary.firstElementChild, f('transit', { count: tasks.filter(q => ['sent', 'queued', 'waiting', 'review'].includes(q.kind)).length }));
-      for (const [k, count] of counts) { const label = summary.querySelector('[data-kind="' + k + '"]'); label.hidden = count === 0; set(label.lastElementChild, f('count', { status: scope === 'today' && ['done', 'cancelled'].includes(k) ? f('todayStatus', { status: f('status.' + k) }) : f('status.' + k), count })); }
-      const wanted = new Map(); if (mode === 'space' && filter === 'all') for (const p of panelData) wanted.set(p.id, { name: p.name, items: [] });
-      const matching = new Set(tasks.filter(q => filter === 'all' || q.kind === filter).map(q => q.key));
-      const pool = panelData.flatMap(p => p.all), available = new Set(pool.map(q => q.key));
-      for (const key of placements.keys()) if (!available.has(key)) placements.delete(key);
+      const pool = data.flatMap(p => p.all.map(q => ({ ...q, spaceName: p.name, memberName: q.memberName || input.sessions?.find(s => s.id === q.memberKey)?.name || '' }))), result = selectTasks(pool, selection, now());
+      for (const [value, button] of tabs) {
+        set(button, f('count', { status: f(value === 'active' ? 'activeTab' : value === 'all' ? 'allTab' : ['sent', 'waiting', 'failed'].includes(value) ? 'tab.' + value : 'status.' + value), count: result.counts[value] }));
+        button.dataset.count = String(result.counts[value]); attr(button, 'aria-selected', String(value === selection.tab)); button.tabIndex = value === selection.tab ? 0 : -1;
+      }
+      attr(list, 'aria-labelledby', tabs.get(selection.tab).id);
+      const byKey = new Map(result.items.map(q => [q.key, q])), sorted = result.items.map(q => q.key);
+      order = order.filter(key => byKey.has(key)); const existing = new Set(order); order.push(...sorted.filter(key => !existing.has(key)));
+      orderPending = order.some((key, i) => key !== sorted[i]);
+      regroup.hidden = !orderPending && focused !== regroup; set(regroup, f(orderPending ? 'refreshOrder' : 'orderCurrent'));
+      if (orderPending) regroup.removeAttribute('aria-disabled'); else attr(regroup, 'aria-disabled', 'true');
+      const available = new Set(pool.map(q => q.key));
       for (const [key, view] of rows) if (!available.has(key)) { view.element.remove(); rows.delete(key); }
-      needsRegroup = false;
-      for (const item of pool.filter(q => matching.has(q.key) || placements.has(q.key))) {
-        const actual = mode === 'space' ? item.spaceId : mode === 'status' ? item.kind : item.memberKey;
-        const key = placements.has(item.key) ? placements.get(item.key) : actual;
-        placements.set(item.key, key);
-        if (key !== actual || !matching.has(item.key)) needsRegroup = true;
-        const memberName = mode === 'member' && input.sessions?.find(s => s.id === key)?.name;
-        if (!wanted.has(key)) wanted.set(key, { name: mode === 'space' ? item.spaceName : mode === 'status' ? f('status.' + key) : memberName || f(key ? 'memberMissing' : 'unassigned'), items: [] });
-        wanted.get(key).items.push(item);
+      const displayed = order.slice(0, limit).map(key => byKey.get(key));
+      if (mode === 'flat') { move(flat, displayed.map(row)); move(list, [flat]); }
+      else {
+        const wanted = new Map();
+        for (const item of displayed) { const key = mode === 'space' ? item.spaceId : item.memberKey; if (!wanted.has(key)) wanted.set(key, []); wanted.get(key).push(item); }
+        const nodes = [];
+        for (const [key, items] of wanted) {
+          const groupKey = mode + ':' + key; let g = groups.get(groupKey);
+          if (!g) { const element = make('section', 'task-board-group'), heading = make('h3'), tasks = make('ul'); element.dataset.groupKey = key; element.append(heading, tasks); g = { element, heading, tasks }; groups.set(groupKey, g); }
+          const name = mode === 'space' ? items[0].spaceName : items[0].memberName || f(key ? 'memberMissing' : 'unassigned');
+          const total = result.items.filter(q => (mode === 'space' ? q.spaceId : q.memberKey) === key).length;
+          set(g.heading, f('count', { status: name, count: total })); move(g.tasks, items.map(row)); nodes.push(g.element);
+        }
+        move(list, nodes);
       }
-      regroup.hidden = !needsRegroup && doc.activeElement !== regroup;
-      if (needsRegroup) regroup.removeAttribute('aria-disabled'); else attr(regroup, 'aria-disabled', 'true');
-      set(regroup, f(needsRegroup ? 'regroup' : 'groupCurrent'));
-      // Freeze the relative order while open; pushes append new items instead of reprioritizing the reader's rows.
-      const entries = [...wanted]; if (mode === 'status') entries.sort((a, b) => PRIORITY.indexOf(a[0]) - PRIORITY.indexOf(b[0]));
-      for (const [key, value] of entries) {
-        const g = group(key, value.name, groups.size), byId = new Map(value.items.map(q => [q.key, q]));
-        const fresh = value.items.filter(q => !g.order.includes(q.key)); if (!g.order.length) fresh.sort((a, b) => PRIORITY.indexOf(a.kind) - PRIORITY.indexOf(b.kind));
-        g.order = g.order.filter(id => byId.has(id)).concat(fresh.map(q => q.key));
-        move(g.tasks, g.order.slice(0, g.limit).map(id => row(byId.get(id))));
-        g.empty.hidden = value.items.length > 0;
-        const p = mode === 'space' && data.find(p => p.id === key);
-        set(g.empty, f(p && !p.available ? 'unavailable' : p && !p.all.length ? 'empty' : 'noRecords'));
-        set(g.count, f('items', { count: value.items.length })); set(g.shown, f('shown', { shown: Math.min(g.limit, value.items.length), total: value.items.length }));
-        const left = Math.max(0, value.items.length - g.limit); set(g.more, left ? f('more', { count: Math.min(g.batch, left), total: value.items.length }) : f('allShown'));
-        if (left) g.more.removeAttribute('aria-disabled'); else attr(g.more, 'aria-disabled', 'true');
-      }
-      for (const [key, g] of groups) if (!wanted.has(key)) { move(g.tasks, []); g.empty.hidden = false; set(g.empty, f('noRecords')); set(g.count, f('items', { count: 0 })); set(g.shown, f('shown', { shown: 0, total: 0 })); set(g.more, f('allShown')); attr(g.more, 'aria-disabled', 'true'); }
-      move(list, [...groups.values()].map(g => g.element));
-      const options = data.filter(p => p.source === 'space').map(p => { let o = [...queueSpace.options].find(o => o.value === p.id); if (!o) { o = make('option'); o.value = p.id; } set(o, p.name); return o; });
-      const chosen = queueSpace.value || input.activeSpace; move(queueSpace, options); if (data.some(p => p.source === 'space' && p.id === chosen)) queueSpace.value = chosen; queue.disabled = !data.some(p => p.source === 'space' && p.id === queueSpace.value);
+      if (!displayed.length) { set(empty, f('noMatches')); list.append(empty); }
+      set(count, f('resultCount', { count: result.items.length }));
+      set(hint, f(selection.scope !== 'all' ? 'scopeHint' : selection.sort === 'recent' ? 'recentHint' : 'missingTimeHint'));
+      availability.hidden = !status.stale && !status.unknown;
+      set(availability, f(status.stale ? 'stale' : 'partialCounts'));
+      set(shown, f('shown', { shown: displayed.length, total: result.items.length }));
+      const left = Math.max(0, result.items.length - limit);
+      set(more, left ? f(selection.sort === 'recent' && selection.descending ? 'earlier' : 'more', { count: Math.min(10, left), total: result.items.length }) : f('allShown'));
+      if (left) more.removeAttribute('aria-disabled'); else attr(more, 'aria-disabled', 'true');
       if (first?.isConnected && list.contains(first) && first.getBoundingClientRect().height) list.scrollTop += first.getBoundingClientRect().top - list.getBoundingClientRect().top - offset; else list.scrollTop = scroll;
       if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
+      else if (inside && !focused?.isConnected) tabs.get(selection.tab).focus({ preventScroll: true });
     }
     function update(next = input) {
       if (disposed) return;
-      input = next; status = overview(input, now()); day = new Date(now()).toDateString(); data = status.historyGroups.map(p => ({ ...p, name: p.source === 'conversation' ? f('independent') : p.source === 'confirmation' ? f('confirmations') : p.name }));
-      const nextSignature = JSON.stringify([data, status, input.connected, input.activeSpace, f('title')]);
+      input = next; status = overview(input, now()); day = new Date(now()).toDateString();
+      data = status.historyGroups.map(p => ({ ...p, name: p.source === 'conversation' ? f('independent') : p.source === 'confirmation' ? f('confirmations') : p.archived ? f('archivedName', { name: p.name }) : p.name }));
+      const nextSignature = JSON.stringify([data, status, input.connected, day, f('title')]);
       if (signature === nextSignature) return; signature = nextSignature; translate(); drawBar(); drawPanel();
     }
     function tick() {
@@ -307,13 +352,12 @@
       if (new Date(now()).toDateString() !== day || status.nextExpiry !== null && status.nextExpiry <= now()) { update(); return; }
       if (status.nextExpiry !== null) {
         drawBar();
-        for (const c of status.cards) { const view = rows.get(c.key); if (view && c.expiresAt !== null) row(c); }
+        for (const c of status.cards) if (rows.has(c.key) && c.expiresAt !== null) row(c);
       }
     }
     const visible = () => { if (!doc.hidden) update(); }, resize = () => { drawBar(); if (opened) positionPanel(); };
-    const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize);
-    doc.addEventListener('visibilitychange', visible);
-    return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); placements.clear(); } };
+    const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
+    return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); } };
   }
-  return { BAR_HEIGHT, COLORS, kind, project, overview, bind };
+  return { BAR_HEIGHT, COLORS, kind, project, overview, selectTasks, bind };
 });
