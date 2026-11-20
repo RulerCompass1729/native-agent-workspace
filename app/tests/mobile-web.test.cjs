@@ -71,6 +71,8 @@ test('local persistence failure keeps the human text and prevents a native-bound
 test('answer binds original question keys and reply-written never claims native handling complete', async () => {
   const f = fixture(); await f.client.start(); await f.client.select('a'); await f.client.answer({ 'native-choice': ['Choice'] });
   const call = f.calls.find(c => c.route === '/mobile/answer'); assert.deepEqual(call.value.answers, { 'native-choice': ['Choice'] }); assert.equal(f.client.state.pending[0].status, 'reply-written'); assert.match(f.client.state.notice, /待确认/);
+  assert.equal(f.client.state.pending[0].question, 'Original?'); assert.equal(f.client.state.pending[0].answer, 'Choice');
+  assert.ok(Number.isSafeInteger(f.client.state.pending[0].createdAt));
 });
 test('read-only device can read and explicitly log out, but cannot submit ordinary text', async () => {
   const f = fixture({ readonly: true }); await f.client.start(); await f.client.select('a'); f.client.setDraft('Retained only'); await assert.rejects(f.client.send());

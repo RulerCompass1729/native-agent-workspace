@@ -24,3 +24,19 @@ test('a lost workspace result and reload never resend or discard uncertain work'
 test('an unsaved workspace input never reaches HTTP', async () => {
   const f = fixture({ failStorage: true }); await assert.rejects(f.model.act(f.session, { action: 'queueAdd' })); assert.equal(f.calls.length, 0);
 });
+
+test('workspace receipts retain the original room and item before posting', async () => {
+  const f = fixture();
+  await f.model.act(f.session, { action: 'queueCancel', roomId: 'shared', itemId: 'task' });
+  const row = JSON.parse(f.disk.get(ACTION_KEY)).pending[0];
+  assert.equal(row.roomId, 'shared'); assert.equal(row.itemId, 'task');
+  assert.equal(row.action, 'queueCancel'); assert.equal(row.requestId, f.calls[0].value.requestId);
+});
+test('a receipt for a different task cannot reassign an uncertain operation', async () => {
+  const session = { deviceId: randomUUID(), csrf: 'not-stored' }, disk = new Map(); let query = false;
+  const model = createWorkspaceActions({ storage: { getItem: k => disk.get(k), setItem: (k, v) => disk.set(k, v) }, newId: randomUUID,
+    request: async (route, value) => ({ requestId: value.requestId, status: query ? 'complete' : 'unconfirmed', ...(query ? { itemId: 'other-task' } : {}) }) });
+  await model.act(session, { action: 'queueResolve', roomId: 'shared', itemId: 'original-task' });
+  query = true; await assert.rejects(model.receipt(session, model.state.pending[0]));
+  assert.equal(model.state.pending[0].status, 'unconfirmed'); assert.equal(model.state.pending[0].itemId, 'original-task');
+});
