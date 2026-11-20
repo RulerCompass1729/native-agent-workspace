@@ -154,6 +154,26 @@ test('proven GUI/mobile/terminal inputs update attention; unknown or automatic i
   f.w.operatorAction(f.id, 'close', { requestId: opened.requestId, reason: 'cancelled' }); assert.equal(view().state, 'closed'); assert.equal(view().question, null); assert.equal(view().closedReason, 'cancelled');
 });
 
+test('T53: marking an unanswered report as read preserves its pending question and attention', async t => {
+  const f = await fixture(t); f.enable(); f.grant(); const opened = await f.open(), op = f.w.operator;
+  await f.report(opened, { state: 'blocked', question: 'Synthetic unresolved decision' });
+  const request = () => op.data.requests[opened.requestId], view = () => op.view(request());
+  const before = view();
+  assert.equal(before.state, 'question'); assert.equal(before.attention, true); assert.equal(before.unread, 1);
+  const writes = f.writes.slice();
+  for (let i = 0; i < 2; i++) {
+    f.w.operatorAction(f.id, 'read', opened.requestId);
+    assert.deepEqual(view(), { ...before, unread: 0 });
+    assert.equal(request().closed, undefined);
+    const row = op.rows(f.id).find(row => row.operator?.requestId === opened.requestId);
+    assert.equal(row.operator.unread, false); assert.equal(row.operator.attention, true);
+    assert.equal(row.operator.question, before.question); assert.equal(row.operator.state, 'question');
+  }
+  assert.deepEqual(f.writes, writes, 'Reading does not send an answer or a new task');
+  f.w.operatorAction(f.id, 'close', { requestId: opened.requestId, reason: 'cancelled' });
+  assert.equal(view().state, 'closed'); assert.equal(view().attention, false);
+});
+
 test('late old dispatch reports keep their own immutable version and cannot clear the current question', async t => {
   const f = await fixture(t); f.enable(); f.grant(); const opened = await f.open(), op = f.w.operator;
   const newer = randomUUID(); op.commit(data => { const old = data.dispatches[opened.dispatchId]; data.dispatches[newer] = { ...old, id: newer, version: 2 }; Object.assign(data.requests[opened.requestId], { version: 2, currentDispatchId: newer }); });

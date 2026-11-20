@@ -181,11 +181,21 @@ async function run() {
       beforeMeta: before.viewState.panorama, afterMeta: after.viewState.panorama };
   });
   assert.equal(invalid.rejected, true); assert.deepEqual(invalid.after, invalid.before); assert.deepEqual(invalid.afterMeta, invalid.beforeMeta);
+  await fixture('native-permission', ids[2], { nativeOnly: true, requests: [{ id: 't53-unresolved', title: 'Synthetic permission', input: 'Allow this synthetic check?' }] });
+  const pendingBeforeViewing = (await snapshot()).sessions.find(s => s.id === ids[2]);
+  assert.equal(pendingBeforeViewing.nativeApproval.requests.length, 1);
   await member(ids[2]).locator('.panorama-member-heading > button').click();
   await settleDisplays();
   assert.equal((await snapshot()).viewState.selected, ids[2]); assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.owner]), ownersBefore);
   assert.equal(await page.locator('#message-input').getAttribute('readonly'), '');
-  await page.locator('#return-panorama').click(); await fixture('set-state', ids[2], 'idle');
+  await page.locator('#return-panorama').click();
+  const pendingAfterViewing = (await snapshot()).sessions.find(s => s.id === ids[2]);
+  assert.equal(pendingAfterViewing.state, 'approval');
+  for (const key of ['nativeId', 'approval', 'approvals', 'nativeApproval', 'claudeQuestion']) assert.deepEqual(pendingAfterViewing[key], pendingBeforeViewing[key]);
+  assert.match(await member(ids[2]).innerText(), /等待确认/);
+  await check('Opening, focusing and returning leaves the unresolved member visible and waiting for confirmation');
+  await fixture('native-permission', ids[2], null);
+  await fixture('set-state', ids[2], 'idle');
   await member(ids[2]).locator('.panorama-member-heading > button').click(); await page.locator('#take-control').click();
   await settleDisplays();
   await until(async () => (await snapshot()).sessions.find(s => s.id === ids[2]).owner === (await snapshot()).owner, 'One explicit control claim');
@@ -322,8 +332,9 @@ async function run() {
   const navIPC = ipc.slice(ipcNavigationStart);
   // Page-local IPC that calls nothing native or shared: the page reports which sessions it shows (shown-sessions.cjs) and
   // acknowledges each rendered state (state-push.cjs); at start it asks once whether to land on the butler record and
-  // reads the butler and records status (main.cjs: register 'landing', 'butler' 'status', 'records' 'status').
-  const pageLocal = c => ['shownSessions', 'state-rendered', 'landing'].includes(c.method) || (['butler', 'records'].includes(c.method) && c.id === 'status');
+  // reads butler, records and discoveries status (main.cjs: their exact 'status' routes).
+  const pageLocal = c => ['shownSessions', 'state-rendered', 'landing'].includes(c.method) || (['butler', 'records', 'discoveries'].includes(c.method) && c.id === 'status');
+  for (const action of ['configure', 'mark']) assert.equal(pageLocal({ method: 'discoveries', id: action }), false);
   assert.deepEqual(navIPC.filter(c => !allowed.has(c.method) && !pageLocal(c)), [], 'All main IPC routes, including local/shared handlers, are accounted separately from WCP');
   assert.equal(navIPC.filter(c => c.method === 'claim').length, 1);
   fs.writeFileSync(path.join(evidence, 'call-accounting.json'), JSON.stringify({ navigationStart, setup: calls.slice(0, navigationStart), navigation,
