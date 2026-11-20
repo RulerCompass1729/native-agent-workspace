@@ -1,16 +1,16 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {keychainAdapter}=require('../mobile-pairing-store.cjs');
-test('Keychain adapter uses only a fixed helper and bounded private pipes, not argv or inherited environment',()=>{
- const calls=[],adapter=keychainAdapter({platform:'darwin',run(bin,args,options){calls.push({bin,args,options});return JSON.stringify({value:null});}});
- const value={synthetic:'private fixture value'};adapter.put('a'.repeat(64),value);assert.equal(adapter.get('a'.repeat(64)),null);
+test('Keychain adapter uses only a fixed helper and bounded private pipes, not argv or inherited environment',async()=>{
+ const calls=[],adapter=keychainAdapter({platform:'darwin',run(bin,args,options,done){calls.push({bin,args,options});queueMicrotask(()=>done(null,JSON.stringify({value:null})));return {stdin:{end(){}}};}});
+ const value={synthetic:'private fixture value'};await adapter.put('a'.repeat(64),value);assert.equal(await adapter.get('a'.repeat(64)),null);
  assert.equal(calls.length,2);for(const c of calls){assert.equal(c.bin,'/usr/bin/osascript');assert.equal(c.args.length,3);assert.equal(c.args.at(-1),path.join(__dirname,'../mobile-pairing-keychain.jxa'));assert.equal(c.options.timeout,5000);assert.equal(c.options.maxBuffer,512*1024);assert.deepEqual(Object.keys(c.options.env).sort(),['LANG','PATH']);assert.equal(c.args.join(' ').includes(value.synthetic),false);}
  assert.deepEqual(JSON.parse(calls[0].options.input),{action:'put',account:'a'.repeat(64),value});
 });
-test('unsupported platforms, oversized input and unknown Keychain responses fail closed without fallback',()=>{
- let calls=0;const run=()=>{calls++;return JSON.stringify({value:null,extra:true});};
- assert.throws(()=>keychainAdapter({platform:'linux',run}).get('a'.repeat(64)));assert.equal(calls,0);
- const adapter=keychainAdapter({platform:'darwin',run});assert.throws(()=>adapter.get('Z'.repeat(64)));assert.throws(()=>adapter.put('a'.repeat(64),'x'.repeat(512*1024)));assert.equal(calls,0);
- assert.throws(()=>adapter.get('a'.repeat(64)));assert.equal(calls,1);
+test('unsupported platforms, oversized input and unknown Keychain responses fail closed without fallback',async()=>{
+ let calls=0;const run=(_b,_a,_o,done)=>{calls++;queueMicrotask(()=>done(null,JSON.stringify({value:null,extra:true})));return {stdin:{end(){}}};};
+ await assert.rejects(()=>keychainAdapter({platform:'linux',run}).get('a'.repeat(64)));assert.equal(calls,0);
+ const adapter=keychainAdapter({platform:'darwin',run});await assert.rejects(()=>adapter.get('Z'.repeat(64)));await assert.rejects(()=>adapter.put('a'.repeat(64),'x'.repeat(512*1024)));assert.equal(calls,0);
+ await assert.rejects(()=>adapter.get('a'.repeat(64)));assert.equal(calls,1);
 });
 function helper({mode='get',status=0,update=0,add=0}={}){
  const calls=[],source=fs.readFileSync(path.join(__dirname,'../mobile-pairing-keychain.jxa'),'utf8'),store=JSON.stringify({synthetic:true});

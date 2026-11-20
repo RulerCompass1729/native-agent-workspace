@@ -144,7 +144,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       if (request.url === '/mobile/logout') {
         if (!exact(value, [])) throw reject(400, 'MOBILE_BAD_REQUEST');
-        const result = broker.logout(credentials);
+        const result = await broker.logout(credentials);
         // Keep phone drafts and unresolved request IDs for checking on the Mac.
         // Revoke server-side authority and expire only this bearer cookie;
         // a browser-wide storage wipe would destroy recovery evidence.

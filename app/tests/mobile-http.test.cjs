@@ -172,3 +172,9 @@ test('port: packaged push and passkey scripts coexist with fixed authenticated r
   }
   assert.equal(push, 1); assert.equal(consent, 1);
 });
+
+test('logout awaits asynchronous persistence but never clears device drafts',async()=>{
+ for(const confirmed of [true,false]){const f=fixture();f.broker.logout=async()=>({authorizationRevoked:confirmed,connectionClosed:true,committedWorkMayContinue:true});
+  const result=await f.invoke({method:'POST',url:'/mobile/logout',value:{}});assert.equal(result.statusCode,confirmed?200:409);assert.equal(result.json().authorizationRevoked,confirmed);assert.equal(result.headers['clear-site-data'],undefined);assert.match(result.headers['set-cookie'],/Max-Age=0/);
+ }
+});

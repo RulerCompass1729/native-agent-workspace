@@ -51,6 +51,8 @@ class MobileBroker {
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
+  async preparePersistence(phase='load'){await this.#persistence?.ready?.(phase);}
+  async settlePersistence(quitting=false){return quitting&&this.#persistence?.finish?this.#persistence.finish():this.#persistence?.flush?.();}
   #details(state){
     if(this.#staging)return this.#staging;
     return {endpoint:this.#endpoint,all:this.#all(state),workspace:this.#workspaceGrant?.generation===state.generation?this.#workspaceGrant.value:null,
@@ -74,6 +76,7 @@ class MobileBroker {
   }
   async resume(validate){
     this.#access.owner();if(typeof validate!=='function'||!this.#persistence||this.#access.initialized)throw denied();
+    await this.preparePersistence('restore');
     const checkpoint=this.#persistence.checkpoint(),previous=checkpoint.authority,details=checkpoint.details,serial=++this.#candidateSerial;
     const consent=new MobileConsent();consent.restore(previous,previous,details.consent);
     const client=await connect(this.#scope,'mobile-resume-'+randomUUID());
@@ -83,6 +86,8 @@ class MobileBroker {
       if(!endpoint||!['origin','actor','port'].every(k=>endpoint[k]===details.endpoint[k])||!require('./mobile-carrier.cjs').sameBinding(endpoint.binding,details.endpoint.binding))throw denied();
       const layout=details.all?this.#layout():null,grant=details.workspace===null?null:this.#desktop?.grant(client,details.workspace);
       if(details.workspace!==null&&!grant)throw denied();
+      await this.#persistence.confirm?.(checkpoint);
+      if(serial!==this.#candidateSerial||await validate()!==true||serial!==this.#candidateSerial||client.closing||client.socket.destroyed)throw denied();
       const result=this.#access.resume(checkpoint,{beforeSave:next=>{
         consent.restore(previous,next,details.consent);this.#staging={...details,endpoint,consent:consent.snapshot(next)};
       }});
@@ -91,17 +96,23 @@ class MobileBroker {
       this.#csrf={generation:result.state.generation,deviceId:result.state.device.id,value:result.csrf};
       client.once('closed',()=>{if(this.#client===client){this.#forget();this.#disconnect();}});
       if(details.all)this.#access.syncAllScopes(this.#scopes(result.state));
+      await this.settlePersistence();if(!this.#liveGeneration(result.state.generation,client))throw denied();if(this.#persistence.status?.()==='temporary'){this.#access.revoke();this.#forget();this.#disconnect();throw denied('MOBILE_STORAGE');}
       this.#changed();return {restored:true};
     }catch(error){if(this.#client!==client)try{client.close();}catch{}throw error;}
     finally{this.#staging=null;}
   }
   suspend(){
-    this.#access.owner();const result=this.#access.pause();this.#candidateSerial++;let clean=true;
+    this.#access.owner();if(!this.#access.initialized)this.#persistence?.cancelRecovery?.();const result=this.#access.pause();this.#candidateSerial++;let clean=true;
     for(const close of [()=>this.#forget(),()=>this.#dropCandidate(),()=>this.#disconnect()])try{close();}catch{clean=false;}
     return {...result,connectionClosed:clean};
   }
   #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
+  #liveGeneration(generation,client){
+    try{if(this.#client!==client||client.closing||client.socket.destroyed||this.#access.closed||this.#access.disabledMarker())return false;
+      const state=this.#access.load();return state.enabled&&state.generation===generation&&state.device.until>this.#access.time();
+    }catch{return false;}
+  }
   #bound() {
     const client = this.#client;
     if (!(client instanceof WorkspaceClient) || client.closing || client.socket.destroyed ||
@@ -141,7 +152,7 @@ class MobileBroker {
       const current=this.#activatedCandidate;
       if(current?.id===id && !this.#access.closed) {
         const s=this.#access.load();
-        if(s.enabled && s.device?.until>this.#access.time() && s.generation===current.generation)return {setupId:id,state:'complete'};
+        if(s.enabled && s.device?.until>this.#access.time() && s.generation===current.generation)return current.pending?{...current.pending,state:'redeemed',redeemed:true}:{setupId:id,state:'complete'};
       }
     } catch {}
     return this.#access.candidateInfo(id);
@@ -161,13 +172,13 @@ class MobileBroker {
     return {c,state};
   }
   async beginCandidate({actor,origin,replace=false,validate=async()=>true,renew=false,refreshOf,automatic=false,endpoint=this.#endpoint}) {
-    this.#access.owner();if(typeof replace!=='boolean' || typeof validate!=='function')throw denied();
+    this.#access.owner();if(this.#persistence?.ready){const epoch=this.#epoch,serial=++this.#candidateSerial;await this.preparePersistence('pair');if(epoch!==this.#epoch||serial!==this.#candidateSerial)throw denied();}if(typeof replace!=='boolean' || typeof validate!=='function')throw denied();
     if (refreshOf!==undefined) this.#access.assertCandidateRefresh(refreshOf,automatic);
     else if (!renew) this.#dropCandidate();
     const serial=++this.#candidateSerial,client=await connect(this.#scope,'mobile-candidate-'+randomUUID());let result;
     try {
       if((refreshOf===undefined && serial!==this.#candidateSerial) || !(client instanceof WorkspaceClient) || client.scope!==this.#scope || fs.realpathSync(client.scope)!==this.#root || client.socket.destroyed)throw denied();
-      if(!this.#access.initialized)this.#access.initialize();
+      if(!this.#access.initialized){this.#persistence?.fresh?.();this.#access.initialize();}
       const layout=this.#layout(),grant=this.#desktop?.grant(client,{allRooms:true,records:true});if(!grant)throw denied();
       if (refreshOf!==undefined && await validate()!==true) throw denied('MOBILE_SETUP_UNCONFIRMED');
       // Recheck after all awaits, then replace without yielding to a phone exchange.
@@ -204,21 +215,22 @@ class MobileBroker {
       const scopes=this.#currentScopes(c.client);
       this.#push?.close();this.#push=null;
       this.#staging={endpoint:c.endpoint,all:true,workspace:c.grant,consent:value.mode==='verified'?c.consent.snapshot(state):null,consentView:false};
-      const next=this.#access.activateCandidate(c.id,scopes),old=this.#client;
-      this.#forget();this.#client=c.client;this.#endpoint=c.endpoint;this.#candidate=null;this.#candidateSerial++;this.#activatedCandidate={id:c.id,generation:next.generation};
+      const pendingInfo=this.#access.candidateInfo(c.id),next=this.#access.activateCandidate(c.id,scopes),old=this.#client;
+      this.#forget();this.#client=c.client;this.#endpoint=c.endpoint;this.#candidate=null;this.#candidateSerial++;this.#activatedCandidate={id:c.id,generation:next.generation,pending:pendingInfo};
       this.#fullLayout=c.layout;this.#fullGeneration=next.generation;this.#workspaceGrant={value:c.grant,generation:next.generation};
       this.#consent=c.consent;if(value.mode==='basic')this.#consent.revoke();
       this.#csrf={generation:next.generation,deviceId:next.device.id,value:auth.csrf};
       c.client.once('closed',()=>{if(this.#client===c.client){this.#forget();this.#disconnect();}});
       try{old?.close();if(old && (!old.closing || !old.socket.destroyed))throw denied();}
       catch{this.revoke();this.#changed();throw denied('MOBILE_CLEANUP_UNCONFIRMED');}
-      this.#changed();
+      await this.settlePersistence();if(!this.#liveGeneration(next.generation,c.client))throw denied();this.#activatedCandidate={id:c.id,generation:next.generation};this.#changed();
       return {activated:true,sensitiveDecisions:value.mode==='verified'};
     } finally {this.#staging=null;c.activating=false;}
   }
   // Only the local desktop owner may call this method. Never expose a generic
   // RPC dispatcher that lets a remote request choose this method or its scope.
   async beginPairing({ actor, origin, selection, replace = false, workspace, all = false }) {
+    if(this.#persistence?.ready){const epoch=this.#epoch,serial=++this.#candidateSerial;await this.preparePersistence('pair');if(epoch!==this.#epoch||serial!==this.#candidateSerial)throw denied();}
     this.#access.owner();
     this.#dropCandidate();
     if (typeof all !== 'boolean' || all && (selection !== undefined || workspace !== undefined)) throw denied();
@@ -249,7 +261,7 @@ class MobileBroker {
       const workspaceGrant = all ? this.#desktop?.grant(client, { allRooms: true, records: true }) : workspace === undefined ? null : this.#desktop?.grant(client, workspace);
       if (all && !workspaceGrant) throw denied();
       if (workspace !== undefined && !workspaceGrant) throw denied();
-      if (!this.#access.initialized) this.#access.initialize();
+      if (!this.#access.initialized) {this.#persistence?.fresh?.();this.#access.initialize();}
       const layout = all ? this.#layout() : null;
       const result = this.#access.beginPairing({ actor, origin, scopes, replace, all });
       this.#fullLayout = layout;
@@ -407,7 +419,7 @@ class MobileBroker {
     return s;
   }
   approvalStatus() {
-    try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s) }; }
+    try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s),...(this.#persistence?.status?.()==='temporary'?{temporaryPairing:true}:{}) }; }
     catch { return { paired: false, enabled: false, registered: false, pending: null,...(this.resumeInfo()?{resumeRequired:true}:{}) }; }
   }
   approvalBegin() { try{return this.#consent.beginRegistration(this.#desktopConsentState());}finally{this.#checkpoint();} }
@@ -576,6 +588,7 @@ class MobileBroker {
     } catch { return candidateUntil; }
   }
   revoke() {
+    const retryPersistence=this.#persistence?.status?.()==='temporary';
     this.#candidateSerial++;
     let result, cleanupFailed = false;
     // Authorization must fail closed before any transport/observer can throw.
@@ -596,7 +609,9 @@ class MobileBroker {
     if (cleanupFailed) throw denied('MOBILE_CLEANUP_UNCONFIRMED');
     // Closing only this broker's own connection invalidates its uncommitted
     // reservations. A commit already written may still be native work.
-    return { authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
+    const summary={ authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
+    if(this.#persistence?.flush){const confirmed=retryPersistence&&this.#persistence.sealRevocation?this.#persistence.sealRevocation():this.#persistence.flush().then(()=>this.#persistence.status()==='ready');return confirmed.then(ok=>({...summary,authorizationRevoked:summary.authorizationRevoked&&ok}),()=>({...summary,authorizationRevoked:false}));}
+    return summary;
   }
 }
 module.exports = { MobileBroker };

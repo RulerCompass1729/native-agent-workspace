@@ -4,8 +4,8 @@ const {MobileAccess,SESSION_MS,verifyTicket}=require('../../mobile-access.cjs'),
 let broker,auth,deadline,executions=0,nativeCalls=0,listenerStarts=0;
 const actor='synthetic-person',origin='https://demo.example.ts.net:10000',row={id:'synthetic',nativeId:'native',state:'idle',provider:'claude',name:'Synthetic',messages:[]};
 async function initialize(input){
- const root=path.join(input.root,'profile'),file=path.join(input.root,'fake-keychain.json');deadline=input.deadline;
- const store=new PairingStore(root,{adapter:{get:()=>fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null,put(_a,value){fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});}}});
+ const root=path.join(input.root,'profile'),file=path.join(input.root,'fake-keychain.json');deadline=input.deadline;let failedReadback=false;
+ const store=new PairingStore(root,{asynchronous:input.asynchronous===true,adapter:{get:()=>{if(input.getFails||failedReadback)throw Error('Synthetic read refusal');return fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;},put(_a,value){if(input.putFails)throw Error('Synthetic write refusal');fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});if(input.unknownActivePut&&value.authority.enabled){failedReadback=true;throw Error('Synthetic lost write and readback');}}}});
  const entries=[{key:'.',state:{capabilities:['humanMobileV1','humanMobilePreparedV1'],sessions:[row]}}];
  class Client extends EventEmitter{
   constructor(){super();this.scope=root;this.entries=entries;this.socket={destroyed:false};this.closing=false;}
@@ -22,7 +22,7 @@ async function initialize(input){
   if(name==='./mobile-access.cjs')return {MobileAccess,SESSION_MS};if(name==='./workspace-client.cjs')return {WorkspaceClient:Client};
   if(name==='./service-client.cjs')return {connect:async()=>new Client()};return localRequire(name);
  }});
- broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store});
+ broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store});await broker.preparePersistence?.();
  const status={BackendState:'Running',Self:{DNSName:'demo.example.ts.net.',UserID:7},User:{'7':{LoginName:actor}}},serve={TCP:{'10000':{HTTPS:true},'443':{HTTPS:true}},Web:{
   'demo.example.ts.net:10000':{Handlers:{'/':{Proxy:'http://127.0.0.1:48765'}}},'demo.example.ts.net:443':{Handlers:{'/':{Proxy:'http://127.0.0.1:8001'}}}}};
  if(input.mode==='pair'){
@@ -51,11 +51,14 @@ process.on('message',async input=>{
   else if(input.command==='proof')value=broker.registrationProof(auth,input.value);
   else if(input.command==='activate'){value=await broker.activateCandidate(auth,{mode:input.mode||'verified'});auth.csrf=broker.session(auth).csrf;}
   else if(input.command==='session')value=broker.session(auth);
+  else if(input.command==='pairingStatus')value=broker.approvalStatus();
+  else if(input.command==='revoke')value=await broker.revoke();
   else if(input.command==='read')value=await broker.read(auth,row.id);
   else if(input.command==='send')value=await broker.send(auth,input.value);
   else if(input.command==='options')value=await broker.decisionOptions(input.csrf?{...auth,csrf:input.csrf}:auth,{id:'card',version:'exact',decision:'approve'});
   else if(input.command==='decide')value=await broker.decide(auth,{id:'card',version:'exact',decision:'approve',...input.value});
-  else if(input.command==='quit'){value=broker.suspend();process.send({id:input.id,ok:true,value,executions,nativeCalls,listenerStarts},()=>process.disconnect());return;}
+  else if(input.command==='exitWithoutPause'){process.send({id:input.id,ok:true},()=>process.disconnect());return;}
+  else if(input.command==='quit'){value=broker.suspend();await broker.settlePersistence?.();process.send({id:input.id,ok:true,value,executions,nativeCalls,listenerStarts},()=>process.disconnect());return;}
   else throw Error('Unknown fixture command');
   process.send({id:input.id,ok:true,value,executions,nativeCalls,listenerStarts});
  }catch{process.send({id:input.id,ok:false,executions,nativeCalls,listenerStarts});}

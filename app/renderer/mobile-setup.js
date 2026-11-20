@@ -115,12 +115,12 @@
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
       updateAdvanced();showScope();
-      if(value?.resumeRequired)say(status,'mobile.resumeReady');
+      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(value?.resumeRequired)say(status,'mobile.resumeReady');
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;
       const ticket = revision;
-      try { await api[method](value); const next = await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
+      try { const result=await api[method](value); const next = method==='mobileApprovalStatus'?result:await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
       catch { if (opened && revision === ticket) { enabled.indeterminate = true; enabled.disabled = true; approvalConfirm.disabled = true; say(approvalInfo, 'mobile.approvalUnconfirmed'); updateAdvanced(); } }
     }
     approvalBegin.addEventListener('click', () => approvalAction('mobileApprovalBegin'));
@@ -173,7 +173,7 @@
       let value;try{value=await api.mobileApprovalStatus();}catch{}
       if(!opened || !section.open || revision!==ticket || setupId!==id)return;
       clearLink(false);enrollment=false;prepare.disabled=false;
-      if(value?.paired===true) {setupId=null;showApproval(value);renewalState('mobile.connected');}
+      if(value?.paired===true) {setupId=null;showApproval(value);renewalState(value.temporaryPairing?'mobile.temporaryPairing':'mobile.connected');}
       else renewalState('mobile.renewUnconfirmed');
     }
     async function enrollmentTick(ticket,id) {

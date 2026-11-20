@@ -54,7 +54,7 @@ function fixture() {
       };
       if (name === './mobile-qr.cjs') return { generate: async link => { assert.ok(link.startsWith('https://mobile.invalid/mobile/#pair=')); if (context.qrFailure) throw Error('Synthetic local image failure'); calls.push({ method: 'localQR' }); return 'data:image/png;base64,c3ludGhldGlj'; } };
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
-      if (name === './mobile-pairing-store.cjs') return {PairingStore:class{},keychainAdapter:()=>({get(){assert.fail('No real Keychain in Main fixture');}})};
+      if (name === './mobile-pairing-store.cjs') return {PairingStore:class{constructor(root,options){this.options=options;}},keychainAdapter:()=>({get(){assert.fail('No real Keychain in Main fixture');}})};
       if (name === './mobile-workspace.cjs') return require('../mobile-workspace.cjs');
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };
       if (name === 'node:http') return { createServer(options) { calls.push({ method: 'constructHTTP', options }); const server = new Server(); servers.push(server); return server; } };
@@ -311,3 +311,19 @@ test('a logout grace check that finds access open again keeps watching instead o
 test('closing an owning human window cancels only its candidate and clears the window-only identity',async()=>{const f=fixture(),connected=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(connected.ok,true);const c=f.context.windows.get(7);assert.equal(c.mobileSetupId,connected.value.setupId);f.context.closeAppMobileSetup(c);assert.equal(c.mobileSetupId,null);assert.equal(f.context.broker.setupId,null);assert.equal(f.calls.filter(x=>x.method==='revoke').length,0);});
 
 test('shared-host IPC exposes only bounded numeric ports, never raw carrier text',async()=>{const f=fixture();f.context.carrierFailure=true;f.context.carrierPorts=[443,8443,443,'PRIVATE_CARRIER_TEXT',-1,65536];const result=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(result.ok,false);assert.equal(result.uiMessage.key,'error.mobile.sharedHostPorts');assert.equal(result.uiMessage.params.ports,'443, 8443');assert.ok(!JSON.stringify(result).includes('PRIVATE_CARRIER_TEXT'));assert.equal(f.servers.length,0);});
+
+test('boot recovery failures log only a fixed phase, category and elapsed time',async()=>{
+ const f=fixture(),logs=[];f.context.console={warn:v=>logs.push(v)};await f.context.resumeAppMobileOnBoot();
+ assert.equal(logs.length,1);assert.match(logs[0],/^\[mobile-pairing\] boot unavailable [0-9]+ms$/);
+ assert.equal(logs[0].includes('/synthetic'),false);
+});
+test('quit drops live mobile authority before asynchronously settling persistence',async()=>{
+ const f=fixture();f.context.appMobileBroker();let release,quits=0,prevented=0;
+ f.context.broker.settlePersistence=()=>new Promise(r=>{release=r;});f.context.app.quit=()=>quits++;
+ f.quit({preventDefault(){prevented++;}});assert.equal(prevented,1);assert.equal(f.calls.filter(v=>v.method==='pause').length,1);assert.equal(quits,0);
+ await new Promise(setImmediate);release();await new Promise(setImmediate);assert.equal(quits,1);
+});
+
+test('the production Main factory selects asynchronous persistence without calling a helper at construction',()=>{
+ const f=fixture();f.context.appMobileBroker();assert.equal(f.context.broker.options.persistence.options.asynchronous,true);
+});

@@ -30,7 +30,7 @@ function fixture({ pending = false, fail = false, revoked = true, records: given
     el('mobile-origin').value = 'https://mobile.invalid'; el('mobile-actor').value = 'synthetic-human'; el('mobile-carrier').checked = true;
     tick(inputsOf(rowsOf(root)[0])[0]);
   }
-  return { root, calls, setup, el, valid, status, records, timers, remembered, rows: () => rowsOf(root), release: () => release(), advance: value => { at += value; } };
+  return { root, api, calls, setup, el, valid, status, records, timers, remembered, rows: () => rowsOf(root), release: () => release(), advance: value => { at += value; } };
 }
 test('opening and closing the existing setup subsection grants nothing and leaves all scopes unselected', () => {
   const f = fixture(); f.setup.open(); assert.equal(f.rows().length, 2);
@@ -271,4 +271,10 @@ test('B1 a bad remembered actor is not restored or summarized, and a rejected ed
   const f = fixture({ saved, fail: true }); f.setup.open(); f.valid(); f.el('mobile-actor').value = link;
   await f.el('mobile-prepare').listeners.click(); assert.deepEqual(f.remembered, []); assert.deepEqual(f.calls, []);
   f.setup.close(); f.setup.open(); assert.equal(f.el('mobile-endpoint-actor').textContent, saved.actor);
+});
+
+test('opening a temporary pairing reports restart limits and queries status only once',async()=>{
+ const f=fixture({approval:{paired:true,enabled:false,registered:false,temporaryPairing:true}});let calls=0;
+ const read=f.api.mobileApprovalStatus;f.api.mobileApprovalStatus=async()=>{calls++;return read();};f.setup.open();await new Promise(setImmediate);
+ assert.equal(calls,1);assert.match(f.status(),/钥匙串暂不可用/);assert.match(f.status(),/重新扫码/);
 });

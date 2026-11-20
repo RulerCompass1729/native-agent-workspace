@@ -29,7 +29,7 @@ function fixture(t){
  async function selected(){const c=await first.beginPairing({actor,origin,selection:[{sessionId:record.id,actions:['read']}]});const a=auth(first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
  async function candidate(options={}){const c=await first.beginCandidate({actor,origin,...options}),a=auth(await first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
  function prove(a){const key=signer(origin),o=first.registrationOptions(a,{}),p=first.registerPasskey(a,{registrationId:o.registrationId,credential:key.credential(o.publicKey)});first.registrationProof(a,{registrationId:o.registrationId,assertion:key.assertion(p.publicKey)});return key;}
- return {root,first,create,selected,candidate,prove,binding,record,fail:v=>{fail=v;},closeFail:v=>{closeFails=v;},calls:()=>calls,ticket:()=>lastTicket,stored:()=>structuredClone(item)};
+ return {root,persistence:store,first,create,selected,candidate,prove,binding,record,fail:v=>{fail=v;},closeFail:v=>{closeFails=v;},calls:()=>calls,ticket:()=>lastTicket,stored:()=>structuredClone(item)};
 }
 test('suspend closes backend authorization before the issuer exits',async t=>{
  const f=fixture(t),a=await f.selected();await f.first.read(a,f.record.id);const ticket=f.ticket();
@@ -74,4 +74,29 @@ test('all policy recovery removes an ended native target instead of reviving its
 test('a saved receipt alone cannot substitute for a freshly verified current endpoint',async t=>{
  const f=fixture(t);await f.selected();f.first.suspend();const before=f.stored(),next=f.create(null);
  await assert.rejects(next.resume(async()=>true));assert.deepEqual(f.stored(),before);assert.equal(f.calls(),0);
+});
+test('revocation during the final candidate durability wait cannot report activation',async t=>{
+ const f=fixture(t),a=await f.candidate();let release;f.first.settlePersistence=()=>new Promise(r=>{release=r;});
+ const pending=f.first.activateCandidate(a,{mode:'basic'});await new Promise(setImmediate);assert.equal(typeof release,'function');f.first.revoke();release();
+ await assert.rejects(pending);assert.throws(()=>f.first.session(a));
+});
+test('revocation during the final recovery durability wait cannot report restoration',async t=>{
+ const f=fixture(t),a=await f.selected();f.first.suspend();const next=f.create();let release;next.settlePersistence=()=>new Promise(r=>{release=r;});
+ const pending=next.resume(async()=>true);await new Promise(setImmediate);assert.equal(typeof release,'function');next.revoke();release();
+ await assert.rejects(pending);assert.throws(()=>next.session(a));assert.equal(f.stored().authority.enabled,false);
+});
+
+test('a late failed recovery never revokes a newer completed replacement',async t=>{
+ const f=fixture(t);await f.selected();f.first.suspend();const next=f.create();let release,waits=0;
+ next.settlePersistence=()=>++waits===1?new Promise(r=>{release=r;}):Promise.resolve();
+ const recovering=next.resume(async()=>true);await new Promise(setImmediate);assert.equal(typeof release,'function');
+ const c=await next.beginCandidate({actor,origin,replace:true}),phone=await next.pair({secret:c.secret,actor,origin}),auth={actor,origin,token:phone.cookieValue};auth.csrf=next.session(auth).csrf;
+ await next.activateCandidate(auth,{mode:'basic'});f.persistence.status=()=>'temporary';release();await assert.rejects(recovering);
+ assert.equal(next.session(auth).deviceId,phone.deviceId);assert.equal(f.stored().authority.enabled,true);
+});
+test('desktop enrollment stays pending until persistence has a known disposition',async t=>{
+ const f=fixture(t),c=await f.first.beginCandidate({actor,origin}),phone=await f.first.pair({secret:c.secret,actor,origin}),a={actor,origin,token:phone.cookieValue};a.csrf=f.first.session(a).csrf;
+ let release;f.first.settlePersistence=()=>new Promise(r=>{release=r;});const pending=f.first.activateCandidate(a,{mode:'basic'});await new Promise(setImmediate);
+ const info=f.first.candidateInfo(c.id);assert.equal(info.state,'redeemed');assert.equal(info.redeemed,true);assert.ok(info.expiresAt>Date.now());
+ release();await pending;assert.equal(f.first.candidateInfo(c.id).state,'complete');
 });
