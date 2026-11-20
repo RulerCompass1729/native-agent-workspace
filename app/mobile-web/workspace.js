@@ -524,6 +524,7 @@
       d.body.classList.toggle('keyboard-compose', editing);
       d.body.classList.toggle('compact-compose', editing && viewport.height < 200);
       d.documentElement.style.setProperty('--keyboard-inset', (editing ? Math.max(0, global.innerHeight - viewport.height - viewport.offsetTop) : 0) + 'px');
+      d.documentElement.style.setProperty('--keyboard-top', (editing ? Math.max(0, viewport.offsetTop) : 0) + 'px');
       const space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
       d.documentElement.style.setProperty('--compose-space', Math.ceil(space) + 'px');
     }

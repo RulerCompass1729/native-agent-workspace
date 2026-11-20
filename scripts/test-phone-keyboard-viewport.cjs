@@ -40,7 +40,7 @@ async function settled(page) { await page.evaluate(() => new Promise(r => reques
         const geometry = () => page.evaluate(() => {
           const v = visualViewport, field = document.querySelector('#message'), send = document.querySelector('#send-message');
           const rects = [field, send].map(e => e.getBoundingClientRect().toJSON());
-          return { rects, inside: rects.every(r => r.top >= v.offsetTop && r.bottom <= v.offsetTop + v.height && r.left >= 0 && r.right <= innerWidth && r.height >= 44), focused: document.activeElement === field, draft: field.value, note: document.querySelector('#compose-note').textContent, nav: getComputedStyle(document.querySelector('#navigation')).display, keyboard: document.body.classList.contains('keyboard-compose') };
+          return { rects, inside: rects.every(r => r.top >= v.offsetTop && r.bottom <= v.offsetTop + v.height && r.left >= 0 && r.right <= innerWidth && r.height >= 44), unobscured: [field, send].every(e => { const r = e.getBoundingClientRect(), at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return at === e || e.contains(at); }), focused: document.activeElement === field, draft: field.value, note: document.querySelector('#compose-note').textContent, nav: getComputedStyle(document.querySelector('#navigation')).display, keyboard: document.body.classList.contains('keyboard-compose') };
         });
         const note = (await geometry()).note;
         // Layout viewport stays unchanged, as on Safari with its software keyboard open.
@@ -51,6 +51,10 @@ async function settled(page) { await page.evaluate(() => new Promise(r => reques
         if (landscape) {
           await page.evaluate(() => syntheticViewport({ height: 52, offsetTop: 0 })); await settled(page);
           check(label + ' 52px Safari Bottom viewport keeps full touch targets', (await geometry()).inside);
+          await page.evaluate(() => { syntheticViewport({ height: 171, offsetTop: 0 }); const accessory = document.createElement('div'); accessory.id = 'synthetic-keyboard-accessory'; accessory.style.cssText = 'position:fixed;top:108px;left:0;right:0;height:44px;z-index:9999;background:#ddd'; document.body.append(accessory); }); await settled(page);
+          const accessory = await geometry();
+          check(label + ' collapsed toolbar accessory cannot cover input or Send', accessory.inside && accessory.unobscured);
+          await page.evaluate(() => document.querySelector('#synthetic-keyboard-accessory').remove());
           await page.evaluate(() => syntheticViewport({ height: 66 })); await settled(page);
         }
         await page.evaluate(() => syntheticViewport({ offsetTop: 24 })); await settled(page);

@@ -42,7 +42,7 @@
 @media (orientation:landscape) and (max-height:450px){.compose textarea{height:48px;min-height:48px}}
 .keyboard-compose .compose{bottom:calc(var(--keyboard-inset,0px) + 75px)}
 .keyboard-compose .nav{visibility:hidden}
-.compact-compose .compose{bottom:var(--keyboard-inset,0px)}
+.compact-compose .compose{top:var(--keyboard-top,0px);bottom:auto}
 .compact-compose .compose-inner{max-width:720px;padding:1px max(8px,env(safe-area-inset-right,0px)) 1px max(8px,env(safe-area-inset-left,0px));display:grid;grid-template-columns:minmax(0,1fr) minmax(0,25%) auto;grid-template-areas:"input note send";gap:8px}
 .compact-compose .compose label{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden;white-space:nowrap}
 .compact-compose .compose textarea{grid-area:input;height:48px;min-height:48px;max-height:48px}
