@@ -6406,6 +6406,8 @@ function queueMemberName(id) {
 }
 // Why NAW stopped on an item. Unmapped reasons are internal slugs, so no line is drawn for them.
 const QUEUE_REASONS = {
+  'usage-limit-exceeded': 'queue.reason.quotaFailed',
+  'native-turn-failed': 'queue.reason.turnFailed',
   'rotation-control-unresolved': 'queue.reason.rotationUnresolved',
   'waiting-provider': 'queue.reason.waitingProvider',
   'no-reply': 'queue.reason.noReply',

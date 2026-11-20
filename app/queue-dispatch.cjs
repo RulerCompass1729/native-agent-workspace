@@ -490,6 +490,9 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
   if (expected && index < 0) return null;
   if (expected && !queuePurposeValid(session, messages[index], expected.itemId, expected.nativeId, expected.claim))
     return { found: false, text: '', last: '', humanAfter: false, parts: [], purposeInvalid: true };
+  const failedTurns = new Set(expected ? messages.filter(m => m?.kind === 'turn' && m.nativeId === session.nativeId &&
+    m.status === 'failed' && typeof m.turnId === 'string').map(m => m.turnId) : []);
+  const failedReplies = new Set();
   const parts = [];
   let humanAfter = false;
   let own = -1;
@@ -514,6 +517,9 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
       humanAfter = true;
     }
     if (message.role === 'assistant' && (!expected || (!message.inputTag || message.inputTag === tag) && (!message.status || message.status === 'complete')) && typeof message.text === 'string' && message.text.trim()) {
+      if (message.nativeId === session.nativeId && failedTurns.has(message.turnId)) {
+        failedReplies.add(message.turnId); continue;
+      }
       parts.push(message.text);
     }
   }
@@ -525,7 +531,8 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
   if (kept.length) {
     last = kept[kept.length - 1];
   }
-  return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept };
+  return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
+    ...(failedReplies.size ? { failedTurnIds: [...failedReplies] } : {}) };
 }
 
 function memberIds(room, sessions) {
@@ -1074,6 +1081,10 @@ function planDispatch(input) {
       } else if (reply.humanAfter || controlChanged) {
         status = 'waiting';
         reason = 'person-intervened';
+      } else if (reply.failedTurnIds?.length) {
+        status = 'waiting';
+        const quota = codexQuotaBlock(member);
+        reason = quota && reply.failedTurnIds.includes(quota.turnId) ? 'usage-limit-exceeded' : 'native-turn-failed';
       } else if (!reply.last.trim()) {
         status = 'waiting';
         reason = 'no-reply';
@@ -1085,7 +1096,7 @@ function planDispatch(input) {
         action.reason = reason;
       }
       let line = '';
-      if (reply) {
+      if (reply && !reply.failedTurnIds?.length) {
         line = replyLine(reply.last);
         // Capture the question before replyLine flattens the remaining reply.
         if (status === 'waiting' && !reason) action.question = decisionLine(reply.last, item.text);
@@ -1093,7 +1104,7 @@ function planDispatch(input) {
       if (line) {
         action.reply = line;
       }
-      const ready = reply ? readyLine(reply.last) : null;
+      const ready = reply && !reply.failedTurnIds?.length ? readyLine(reply.last) : null;
       if (ready) {
         action.ready = ready;
       } else if (status === 'done' && item.addedBy === 'steward') {
