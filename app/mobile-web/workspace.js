@@ -73,6 +73,7 @@
     if (pairSecret !== undefined) global.history.replaceState(null, '', global.location.pathname + '#zh/home');
     let lang = global.location.hash.startsWith('#en/') ? 'en' : 'zh', view = null, locked = true, disconnected = false, busy = false, epoch = 0, route, client, lastReceived = 0, expiryTimer, composeKey = '', authorization = 0;
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
+    let answeredQuestion = null;
     const t = key => words[lang][key] || key;
     words.zh.loadingBody = '正在读取对话内容…'; words.en.loadingBody = 'Loading this conversation…';
     const node = (tag, value, cls) => { const n = d.createElement(tag); if (value !== undefined) n.textContent = value; if (cls) n.className = cls; return n; };
@@ -295,14 +296,38 @@
     }
     function nativeQuestion() {
       heading('confirm'); const row = client.state.row;
-      if (!row?.question || client.state.selected !== route.nativeId) { el('content').append(node('p', t('noNative'))); return; }
+      if (!row?.question || client.state.selected !== route.nativeId) {
+        const written = answeredQuestion && answeredQuestion.authorization === client.state.authorization &&
+          answeredQuestion.deviceId === client.state.session?.deviceId && answeredQuestion.sessionId === route.nativeId &&
+          client.state.selected === route.nativeId && client.state.pending.includes(answeredQuestion.receipt) && answeredQuestion.receipt.status === 'reply-written';
+        el('content').append(node('p', t(written ? 'reply-written' : 'noNative'), written ? 'native-answer-status' : undefined));
+        if (written) receipts(el('content'));
+        return;
+      }
+      answeredQuestion = null;
       const form = node('form', undefined, 'card-detail native-question'), fields = []; form.method = 'post'; form.action = '/mobile/answer';
       for (const [index, q] of row.question.questions.entries()) { const fieldset = node('fieldset'), inputs = []; fieldset.append(node('legend', q.question));
         for (const option of q.options) { const label = node('label'), input = node('input'); input.type = q.multiSelect ? 'checkbox' : 'radio'; input.name = 'question-' + index; input.value = option.label; if (!q.multiSelect) input.required = true; label.append(input, node('span', option.label + (option.description ? ' · ' + option.description : ''))); inputs.push(input); fieldset.append(label); }
         fields.push({ q, inputs }); form.append(fieldset);
       }
       const submit = node('button', t('answer'), 'primary'); submit.type = 'submit'; form.append(submit);
-      form.addEventListener('submit', event => { event.preventDefault(); run(async () => { submit.disabled = true; try { const answers = Object.fromEntries(fields.map(({ q, inputs }) => [q.id || q.question, inputs.filter(i => i.checked).map(i => i.value)])); await client.answer(answers); const result = client.state.pending.at(-1); toast(result?.status || 'unconfirmed'); await refresh(); } finally { submit.disabled = false; } }); }); el('content').append(form); receipts(el('content'));
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        run(async () => {
+          submit.disabled = true;
+          try {
+            const generation = client.state.authorization, deviceId = client.state.session?.deviceId, sessionId = row.id;
+            const previous = new Set(client.state.pending);
+            const answers = Object.fromEntries(fields.map(({ q, inputs }) => [q.id || q.question, inputs.filter(i => i.checked).map(i => i.value)]));
+            await client.answer(answers);
+            const result = client.state.pending.find(p => !previous.has(p) && p.action === 'answer' && p.deviceId === deviceId && p.sessionId === sessionId);
+            if (generation !== client.state.authorization || deviceId !== client.state.session?.deviceId || route.nativeId !== sessionId) return;
+            if (result?.status === 'reply-written') answeredQuestion = { authorization: generation, deviceId, sessionId, receipt: result };
+            toast(result?.status || 'unconfirmed');
+            await refresh();
+          } finally { submit.disabled = false; }
+        });
+      }); el('content').append(form); receipts(el('content'));
     }
     function confirmation() {
       if (route.nativeId) { nativeQuestion(); return; }
@@ -503,7 +528,7 @@
           const unloaded = ({ messages, earlierMessagesOmitted, ...row }) => ({ ...row, conversationLoaded: false });
           view = { ...view, sessions: view.sessions.map(unloaded), rooms: view.rooms.map(unloaded) };
         }
-        composeKey = ''; el('toast').hidden = true; paint();
+        composeKey = ''; answeredQuestion = null; el('toast').hidden = true; paint();
         const id = route.page === 'chat' ? route.id : route.nativeId;
         if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
         if (ticket !== navigation) return;
