@@ -2,8 +2,8 @@ const test=require('node:test'),assert=require('node:assert/strict'),path=requir
 const root=process.env.NAW_TEST_APP_ROOT||path.resolve(__dirname,'../..'), q=require(path.join(root,'app/queue-dispatch.cjs')), board=require(path.join(root,'app/renderer/task-board.js')), locale=require(path.join(root,'app/ui-locale.js')), {fixture}=require(path.join(root,'app/tests/fixtures/task-board-dom.cjs'));
 const now=1800000000000;
 function scenario(mode){
- const item={id:'task',text:'Synthetic bounded task',status:'sent',sentTo:'member',sentAt:now-30000,tag:'dispatch',control:0,createdAt:now-31000};
- const messages=[{id:'dispatch',role:'user',text:'Synthetic dispatch',origin:'naw-dispatch',time:now-30000}];
+ const item={id:'task',text:'Synthetic bounded task',status:'sent',sentTo:'member',sentNative:'synthetic-native',sentAt:now-30000,tag:'dispatch',control:0,createdAt:now-31000};
+ const messages=[{id:'dispatch',role:'user',text:'Synthetic dispatch',origin:'naw-dispatch',dispatchItem:item.id,dispatchPurpose:{kind:'queue',itemId:item.id,nativeId:item.sentNative,epoch:null},status:'submitted',time:now-30000}];
  if(mode==='human')messages.push({id:'human',role:'user',text:'Synthetic follow-up',origin:'human',time:now-20000});
  messages.push({id:'decision',role:'assistant',text:'需要你决定：是否继续这个合成任务？',time:now-10000});
  const s={id:'member',name:'Synthetic member',provider:'claude',nativeId:'synthetic-native',state:'idle',roomIds:['space'],roomId:'space',createdAt:now-100000,background:0,scheduled:0,backgroundStale:false,chatAvailable:true,liveDraft:'',controlRevision:mode==='control'?1:0,draftRevision:0,placementRevision:0,serviceCapabilities:[q.CAPABILITY],fleet:[],messages};
