@@ -8,6 +8,10 @@ function fixture() {
     constructor(root, options) { calls.push({ method: 'construct', root }); this.options = options; context.broker = this; }
     // Until when a pairing link or paired device is open (the real one reads mobile-access state).
     openUntil() { return context.openUntil === undefined ? context.now + 120000 : context.openUntil; }
+    resumeInfo(){return context.savedEndpoint||null;}
+    setEndpoint(value){this.endpoint=value;}
+    async resume(validate){if(!await validate())throw Error('Synthetic changed carrier');calls.push({method:'resume'});return {restored:true};}
+    suspend(){calls.push({method:'pause',quitting:context.quitting,exclusive:this.options.exclusive()});return {paused:true,connectionClosed:true};}
     async beginPairing(selection) {
       calls.push({ method: 'pair', selection });
       if (context.replaceRequired && !selection.replace) throw Error('Synthetic explicit replacement required');
@@ -40,11 +44,16 @@ function fixture() {
   }
   // Main state the current register() and before-quit read; no outbox broker in this fixture.
   const context = vm.createContext({ primary: true, quitting: false, dataDir: '/synthetic/profile', Error, AbortController, now: 1000, setTimeout(fn, ms) { const id = ++timerSeq; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); },
-    applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, tempReminders: null, tempQuitWaiting: false,
+    fs:{existsSync:()=>true},path:require('node:path'),applicationHandlers: new Map(), roomState: {}, sessionLabels: { labels: new Map() }, uiLocale: require('../ui-locale.js'), uiError: require('../ui-errors.cjs').uiError, butlerBackend: null, butlerClosing: false, butlerQuitAttempted: false, outboxClosing: false, outboxQuitFailed: false, outboxBroker: null, backgroundControl: null, tempReminders: null, tempQuitWaiting: false,
     require(name) {
-      if (name === './mobile-carrier.cjs') return { detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST',otherPorts:context.carrierPorts }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; } };
+      if (name === './mobile-carrier.cjs') return {
+        binding:value=>value.binding||{version:1,origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,userId:'7',topologyHash:'0'.repeat(64)},
+        detectRestored:async value=>{calls.push({method:'detectRestored',value});if(context.recoveryFailure)throw Error('Synthetic changed topology');return {origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};},
+        detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST',otherPorts:context.carrierPorts }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; }
+      };
       if (name === './mobile-qr.cjs') return { generate: async link => { assert.ok(link.startsWith('https://mobile.invalid/mobile/#pair=')); if (context.qrFailure) throw Error('Synthetic local image failure'); calls.push({ method: 'localQR' }); return 'data:image/png;base64,c3ludGhldGlj'; } };
       if (name === './mobile-broker.cjs') return { MobileBroker: Broker };
+      if (name === './mobile-pairing-store.cjs') return {PairingStore:class{},keychainAdapter:()=>({get(){assert.fail('No real Keychain in Main fixture');}})};
       if (name === './mobile-workspace.cjs') return require('../mobile-workspace.cjs');
       if (name === './mobile-http.cjs') return { createMobileHandler(value) { calls.push({ method: 'fixedHandler', origin: value.origin, actor: value.actor }); return () => {}; } };
       if (name === 'node:http') return { createServer(options) { calls.push({ method: 'constructHTTP', options }); const server = new Server(); servers.push(server); return server; } };
@@ -66,7 +75,7 @@ function fixture() {
   const fire = () => { const due = [...timers]; timers.clear(); for (const [, timer] of due) timer.fn(); };
   return { context, calls, handlers, servers, timers, fire, selection, releasePair: () => releasePair(), quit: event => quit(event), event: { sender, senderFrame: frame } };
 }
-for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
+for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileResume','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) test(`${method} refuses an agent context before any mobile authority or listener change`, async () => {
   const f = fixture(); f.context.windows.get(7).background = true;
   const result = await f.handlers.get('workspace:' + method)(f.event, f.selection);
   assert.equal(result.ok, false);
@@ -76,7 +85,7 @@ for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileCo
 test('mobile pairing and revocation are absent from the agent control catalog and invocation handlers', () => {
   const f = fixture(), { BackgroundControl } = require('../background-control.cjs');
   const methods = BackgroundControl.prototype.catalog.call({ handlers: f.context.applicationHandlers }).map(row => row.method);
-  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
+  for (const method of ['mobilePairing', 'mobileRevoke', 'mobileDetect', 'mobileConnect','mobileResume','mobileCancelSetup', 'mobileSetupStatus', 'mobileApprovalStatus', 'mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke']) {
     assert.equal(methods.includes(method), false);
     assert.equal(f.context.applicationHandlers.has(method), false);
   }
@@ -178,10 +187,10 @@ test('an owned HTTP close failure cannot skip durable authorization revocation o
   assert.equal(f.calls.filter(call => call.method === 'revoke').length, 1);
   const next = await f.handlers.get('workspace:mobilePairing')(f.event, { ...f.selection, replace: true }); assert.equal(next.ok, false); assert.equal(f.servers.length, 1);
 });
-test('quit first saves views, then revokes while exclusivity is still valid, and never calls native shutdown', () => {
+test('quit first saves views, then pauses while exclusivity is still valid, and never calls native shutdown', () => {
   const f = fixture(); f.context.appMobileBroker();
   f.quit({ preventDefault() { assert.fail('Valid view save must not cancel quit'); } });
-  assert.deepEqual(f.calls.map(call => call.method), ['construct', 'saveViews', 'revoke', 'stopUI']);
+  assert.deepEqual(f.calls.map(call => call.method), ['construct', 'saveViews', 'pause', 'stopUI']);
   assert.equal(f.calls[2].quitting, false); assert.equal(f.calls[2].exclusive, true); assert.equal(f.context.quitting, true);
 });
 test('a cancelled quit retains the mobile connection and existing app state', () => {
@@ -201,7 +210,7 @@ test('preload exposes explicit desktop-only mobile management methods', async ()
     contextBridge: { exposeInMainWorld(key, value) { assert.ok(['workspace', '__DSH_LOCALE__'].includes(key), key); if (key === 'workspace') api = value; } },
     ipcRenderer: { on() {}, invoke: async (...args) => { calls.push(args); return { ok: true, value: 'synthetic-result' }; } },
   }; } });
-  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus','mobileCancelSetup', 'mobileConnect', 'mobileDetect', 'mobilePairing', 'mobileRevoke', 'mobileSetupStatus']);
+  assert.deepEqual(Object.keys(api).filter(key => key.startsWith('mobile')).sort(), ['mobileApprovalBegin', 'mobileApprovalConfirm', 'mobileApprovalEnable', 'mobileApprovalRevoke', 'mobileApprovalStatus','mobileCancelSetup', 'mobileConnect', 'mobileDetect', 'mobilePairing','mobileResume', 'mobileRevoke', 'mobileSetupStatus']);
   assert.equal(await api.mobileRevoke(), 'synthetic-result'); assert.deepEqual(calls, [['workspace:mobileRevoke']]);
 });
 test('the existing GUI payload list includes the app-local broker and its existing authority modules without running a package build', () => {
@@ -209,7 +218,7 @@ test('the existing GUI payload list includes the app-local broker and its existi
   const start = recipe.indexOf('const sources = ['), end = recipe.indexOf('for (const name of sources)', start);
   assert.ok(start > 0 && end > start);
   const names = vm.runInNewContext(recipe.slice(start, end) + ';sources');
-  for (const name of ['mobile-broker.cjs', 'mobile-consent.cjs', 'mobile-web/passkeys.js', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
+  for (const name of ['mobile-broker.cjs', 'mobile-consent.cjs','mobile-pairing-store.cjs','mobile-pairing-keychain.jxa', 'mobile-web/passkeys.js', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
     assert.equal(names.filter(value => value === name).length, 1); assert.ok(fs.statSync(require.resolve('../' + name)).isFile());
   }
 });
@@ -263,11 +272,34 @@ test('a check left from an earlier pairing cannot cancel a newer pairing in prog
   await new Promise(resolve => setImmediate(resolve)); const before = revokes(); f.fire(); assert.equal(revokes(), before, 'The stale logout check is a no-op');
   f.context.holdPair = false; f.context.openUntil = f.context.now + 120000; f.releasePair(); assert.equal((await pending).ok, true);
 });
-test('quitting with an open listener revokes access and closes the listener before the frontend stops', async () => {
+test('quitting with an open listener pauses access and closes the listener before the frontend stops', async () => {
   const { f, server } = await opened(); f.quit({ preventDefault() { assert.fail('Valid view save must not cancel quit'); } });
   assert.equal(server.listening, false); assert.equal(f.timers.size, 0);
-  const order = f.calls.map(call => call.method).filter(m => ['saveViews', 'revoke', 'stopUI'].includes(m)).slice(-3);
-  assert.deepEqual(order, ['saveViews', 'revoke', 'stopUI']);
+  const order = f.calls.map(call => call.method).filter(m => ['saveViews', 'pause', 'stopUI'].includes(m)).slice(-3);
+  assert.deepEqual(order, ['saveViews', 'pause', 'stopUI']);assert.equal(f.calls.some(c=>c.method==='revoke'),false);
+});
+test('saved pairing restores only after two fresh carrier checks and an exact endpoint match',async()=>{
+ const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};
+ const result=await f.handlers.get('workspace:mobileResume')(f.event,{sharedHostConfirmed:false});
+ assert.equal(result.ok,true);assert.equal(result.value.restored,true);assert.equal(f.calls.filter(c=>c.method==='detectCarrier').length,2);
+ assert.equal(f.calls.some(c=>c.method==='pair'||c.method==='localQR'),false);assert.equal(f.servers[0].options.host,'127.0.0.1');
+});
+test('an approved saved shared-host binding restores on boot without issuing another QR or general confirmation',async()=>{
+ const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,binding:{version:1,origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,userId:'7',topologyHash:'0'.repeat(64)}};
+ f.context.carrierFailure=true;await f.context.resumeAppMobileOnBoot();
+ assert.equal(f.calls.filter(c=>c.method==='resume').length,1);assert.equal(f.calls.filter(c=>c.method==='detectRestored').length,2);
+ assert.equal(f.calls.some(c=>['detectCarrier','pair','localQR'].includes(c.method)),false);
+ assert.equal(f.servers[0].options.host,'127.0.0.1');
+});
+test('changed recovery topology never opens a listener or silently retries with sharedHostConfirmed',async()=>{
+ const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,binding:{}};f.context.recoveryFailure=true;
+ await f.context.resumeAppMobileOnBoot();assert.equal(f.servers.length,0);assert.equal(f.calls.some(c=>['resume','detectCarrier','pair','localQR'].includes(c.method)),false);
+});
+test('shared-host restore requires this call confirmation and cannot write trust or issue a QR',async()=>{
+ const f=fixture();f.context.savedEndpoint={origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};f.context.carrierFailure=true;
+ const result=await f.handlers.get('workspace:mobileResume')(f.event,{sharedHostConfirmed:false});assert.equal(result.ok,false);
+ assert.equal(f.calls.some(c=>c.method==='resume'||c.method==='pair'),false);assert.equal(f.servers.length,0);
+ assert.equal(f.calls.find(c=>c.method==='detectCarrier').value.sharedHostConfirmed,false);
 });
 test('a logout grace check that finds access open again keeps watching instead of stopping', async () => {
   const { f, server, revokes } = await opened(); f.context.openUntil = 0; f.context.broker.options.changed();

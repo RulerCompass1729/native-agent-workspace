@@ -2,8 +2,33 @@
 // Read existing Tailscale state only. No Serve/Funnel/ACL/DNS writer is exposed.
 const fs = require('node:fs');
 const { execFile } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { validActor } = require('./mobile-identity.js');
 const fail = (code = 'MOBILE_CARRIER_UNAVAILABLE') => Object.assign(Error('The private mobile entry could not be verified.'), { code });
+const bindings = new WeakMap();
+const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object' ?
+  Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+function validBinding(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).sort().join() !== 'actor,origin,port,topologyHash,userId,version' ||
+      v.version !== 1 || !validActor(v.actor) || typeof v.userId !== 'string' || !/^[1-9][0-9]{0,39}$/.test(v.userId) ||
+      !Number.isSafeInteger(v.port) || v.port < 1024 || v.port > 65535 || typeof v.topologyHash !== 'string' || !/^[a-f0-9]{64}$/.test(v.topologyHash)) return false;
+  try { const u = new URL(v.origin); return u.protocol === 'https:' && u.origin === v.origin && !u.username && !u.password; } catch { return false; }
+}
+function knownTopology(configs) {
+  return configs.every(c => !Object.values(c.AllowFunnel || {}).some(Boolean) &&
+    Object.entries(c.Web || {}).every(([endpoint, web]) => {
+      try {
+        const u = new URL('https://' + endpoint);
+        if (u.pathname !== '/' || u.username || u.password || !web || Object.keys(web).join() !== 'Handlers' ||
+            !web.Handlers || typeof web.Handlers !== 'object' || Array.isArray(web.Handlers)) return false;
+        return Object.entries(web.Handlers).every(([route, handler]) => route.startsWith('/') && handler &&
+          Object.keys(handler).length === 1 && ['Proxy', 'Path', 'Text'].includes(Object.keys(handler)[0]) && typeof Object.values(handler)[0] === 'string');
+      } catch { return false; }
+    }) && Object.entries(c.TCP || {}).every(([port, tcp]) =>
+      (tcp.ProxyProtocol === undefined || [1, 2].includes(tcp.ProxyProtocol)) &&
+      (!tcp.HTTPS || Object.keys(c.Web || {}).some(endpoint => Number(new URL('https://' + endpoint).port || 443) === Number(port)))));
+}
+function binding(carrier) { return structuredClone(bindings.get(carrier) || null); }
 function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535 || typeof sharedHostConfirmed !== 'boolean' || status?.BackendState !== 'Running') throw fail();
   const name = status.Self?.DNSName, actor = status.User?.[String(status.Self?.UserID)]?.LoginName;
@@ -49,7 +74,20 @@ function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = 
   }
   if (matches.length !== 1) throw fail();
   if ((peers.size !== 1 || unproven) && !sharedHostConfirmed) throw Object.assign(fail('MOBILE_SHARED_HOST'), { otherPorts: [...peers].filter(site => site !== matches[0]).map(site => Number(new URL(site).port || 443)).sort((a,b)=>a-b) });
-  return Object.freeze({ origin: matches[0], actor, port });
+  const result = Object.freeze({ origin: matches[0], actor, port });
+  if (!unproven && knownTopology(configs) && (typeof status.Self.UserID !== 'number' || Number.isSafeInteger(status.Self.UserID))) {
+    const topology = [serve, ...Object.keys(serve.Foreground || {}).sort().map(key => serve.Foreground[key])]
+      .map((c, index) => ({ scope: index ? Object.keys(serve.Foreground).sort()[index - 1] : null, TCP: c.TCP || {}, Web: c.Web || {} }));
+    bindings.set(result, Object.freeze({ version: 1, origin: result.origin, actor, port, userId: String(status.Self.UserID),
+      topologyHash: createHash('sha256').update(JSON.stringify(ordered(topology))).digest('hex') }));
+  }
+  return result;
+}
+function inspectRestored(status, serve, expected) {
+  if (!validBinding(expected)) throw fail();
+  const carrier = inspect(status, serve, { port: expected.port, sharedHostConfirmed: true }), actual = binding(carrier);
+  if (!actual || JSON.stringify(ordered(actual)) !== JSON.stringify(ordered(expected))) throw fail();
+  return carrier;
 }
 function binary(io = fs) {
   for (const name of ['/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale']) {
@@ -59,13 +97,18 @@ function binary(io = fs) {
   }
   throw fail();
 }
-async function detect(options = {}, { run = execFile, executable = binary } = {}) {
+async function read({ run = execFile, executable = binary } = {}) {
   const program = executable();
   const read = args => new Promise((resolve, reject) => run(program, args, { timeout: 4000, maxBuffer: 512 * 1024, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' } }, (error, stdout) => {
     if (error) return reject(fail());
     try { resolve(JSON.parse(stdout)); } catch { reject(fail()); }
   }));
   const status = await read(['status', '--json']), serve = await read(['serve', 'status', '--json']);
-  return inspect(status, serve, options);
+  return { status, serve };
 }
-module.exports = { inspect, detect, findExecutable: binary };
+async function detect(options = {}, dependencies) { const { status, serve } = await read(dependencies); return inspect(status, serve, options); }
+async function detectRestored(expected, dependencies) {
+  if (!validBinding(expected)) throw fail();
+  const { status, serve } = await read(dependencies); return inspectRestored(status, serve, expected);
+}
+module.exports = { inspect, detect, binding, validBinding, inspectRestored, detectRestored, findExecutable: binary };
