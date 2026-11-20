@@ -19,8 +19,8 @@ for (const lang of ['zh', 'en']) for (const kind of ['waiting', 'review', 'unkno
   const f = setup(kind, 'queue', lang);
   try {
     const help = f.host.querySelector('.task-board-state-help'); assert.ok(help); assert.equal(help.hidden, false);
-    const checks = lang === 'zh' ? { waiting: ['需要你答复或确认', '会话', '队列', '确认卡'], review: ['不要求你回复', '查看上轮结果', '判断是否继续'], unknown: ['是否需要你回应还不确定', '核实当前状态'] }
-      : { waiting: ['need your reply or confirmation', 'conversation', 'queue', 'confirmation card'], review: ['No reply is requested', 'last outcome', 'whether to continue'], unknown: ['reply is needed is not yet known', 'check its current state'] };
+    const checks = lang === 'zh' ? { waiting: ['需要你答复或确认', '会话', '队列', '确认卡'], review: ['空回复或人工介入暂停', '是否需要回应', '再决定是否继续'], unknown: ['是否需要你回应还不确定', '核实当前状态'] }
+      : { waiting: ['need your reply or confirmation', 'conversation', 'queue', 'confirmation card'], review: ['empty reply or manual intervention', 'whether you need to respond', 'before continuing'], unknown: ['reply is needed is not yet known', 'check its current state'] };
     for (const phrase of checks[kind]) assert.ok(help.textContent.includes(phrase), phrase);
     assert.equal(f.host.querySelector('.task-board-list').getAttribute('aria-describedby'), help.id);
   } finally { f.board.dispose(); }
