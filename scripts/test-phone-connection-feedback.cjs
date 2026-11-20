@@ -10,13 +10,13 @@ let browser;
 async function scene(lang) {
   const context = await browser.newContext({ ...devices['iPhone 13'], viewport: { width: 375, height: 667 }, serviceWorkers: 'block' });
   const page = await context.newPage(), writes = [];
-  let offline = false, failWorkspace = false, holdWorkspace = false, releaseWorkspace;
+  let offline = false, failRead = false, failSession = false, failWorkspace = false, holdWorkspace = false, releaseWorkspace;
   const sessions = [{ id: 'one', name: 'Synthetic session', provider: 'claude', available: true, state: 'idle', actions: ['read', 'send'] }];
   page.on('pageerror', error => errors.push(error.message));
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== 'https://phone.invalid') { errors.push('external-request'); return route.abort(); }
-    if (offline || failWorkspace && url.pathname === '/mobile/workspace') return route.abort('internetdisconnected');
+    if (offline || failRead && url.pathname === '/mobile/read/one' || failSession && url.pathname === '/mobile/session' || failWorkspace && url.pathname === '/mobile/workspace') return route.abort('internetdisconnected');
     let data;
     if (url.pathname === '/mobile/session') data = { deviceId: '00000000-0000-4000-8000-000000000001', csrf: 'C'.repeat(43), workspace: true, sessions };
     else if (url.pathname === '/mobile/read/one') data = { id: 'one', contextId: 'B'.repeat(43), canSend: true, sendMode: 'send', question: null, messages: [] };
@@ -33,7 +33,7 @@ async function scene(lang) {
   });
   await page.goto('https://phone.invalid/mobile/#' + lang + '/chat/one');
   await page.waitForFunction(() => document.documentElement.dataset.loading === 'false' && document.querySelector('#message'));
-  return { page, writes, setOffline(value) { offline = value; }, failWorkspace(value) { failWorkspace = value; },
+  return { page, writes, setOffline(value) { offline = value; }, failRead(value) { failRead = value; }, failSession(value) { failSession = value; }, failWorkspace(value) { failWorkspace = value; },
     async refresh() { await page.evaluate(() => nawPhone.refresh()); },
     async heldRefresh() { holdWorkspace = true; await page.evaluate(() => { globalThis.testRefresh = nawPhone.refresh(); }); for (let i = 0; !releaseWorkspace && i < 200; i++) await page.waitForTimeout(10); if (!releaseWorkspace) throw Error('Workspace read did not start'); },
     async release() { holdWorkspace = false; releaseWorkspace?.(); await page.evaluate(() => testRefresh); },
@@ -59,7 +59,12 @@ async function scene(lang) {
         }
         s.setOffline(false); s.failWorkspace(true); await s.refresh();
         check(lang + ' a partial failed refresh keeps offline feedback', await s.page.locator('#toast').isVisible());
-        s.failWorkspace(false); await s.refresh();
+        s.failWorkspace(false); s.failRead(true); await s.refresh();
+        check(lang + ' a failed native read keeps visible offline feedback', await s.page.locator('#toast').isVisible());
+        check(lang + ' an unconfirmed native read cannot enable sending', await s.page.locator('#send-message').isDisabled());
+        s.failRead(false); s.failSession(true); await s.refresh();
+        check(lang + ' a failed pairing read cannot be hidden by later successful reads', await s.page.locator('#toast').isVisible());
+        s.failSession(false); await s.refresh();
         check(lang + ' a successful full refresh clears old offline feedback', await s.page.locator('#toast').isHidden());
         check(lang + ' reconnect keeps draft and never sends', await s.page.locator('#message').inputValue() === 'SYNTHETIC_DRAFT' && s.writes.length === 0);
         s.setOffline(true); await s.refresh(); s.setOffline(false); await s.heldRefresh();
