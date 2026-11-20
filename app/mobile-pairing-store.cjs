@@ -104,7 +104,7 @@ class AsyncPairingStore{
   try{fd=fs.openSync(file,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_NOFOLLOW,0o600);fs.writeFileSync(fd,'pending\n');fs.fsyncSync(fd);const dir=fs.openSync(this.root,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);try{fs.fsyncSync(dir);}finally{fs.closeSync(dir);}}
   catch(e){if(e.code!=='EEXIST')throw e;}
   finally{if(fd!==undefined)fs.closeSync(fd);}
-  const read=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);let stat;
+  const read=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);let stat;
   try{stat=fs.fstatSync(read);if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid()||(stat.mode&0o077)||stat.size!==8||fs.readFileSync(read,'utf8')!=='pending\n')throw refuse();}finally{fs.closeSync(read);}
   return stat;
  }

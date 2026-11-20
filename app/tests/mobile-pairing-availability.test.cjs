@@ -79,3 +79,10 @@ test('a later explicit revoke retry seals an old anchor without re-enabling pers
  assert.equal(s.status(),'temporary');assert.equal(f.stored().authority.enabled,true);f.mode('healthy');assert.equal(await s.sealRevocation(),true);
  assert.equal(f.stored().authority.enabled,false);assert.equal(s.status(),'temporary');assert.throws(()=>a.authenticate({token:phone.cookieValue,actor}));const n=f.store();await n.ready();assert.throws(()=>n.checkpoint());
 });
+test('a FIFO recovery barrier is refused without blocking the caller',async t=>{
+ const f=fixture(t);execFileSync('/usr/bin/mkfifo',[path.join(f.root,'mobile-recovery-pending')]);
+ const code="const {PairingStore}=require(process.argv[2]);new PairingStore(process.argv[1],{asynchronous:true,adapter:{get:async()=>{throw Error('Synthetic refusal')},put:async()=>{}}}).ready().then(()=>process.exit(2),()=>process.exit(0));";
+ const child=require('node:child_process').spawn(process.execPath,['-e',code,f.root,require.resolve('../mobile-pairing-store.cjs')],{stdio:'ignore',env:process.env});
+ const result=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>child.kill(),1000);child.once('error',e=>{clearTimeout(timer);reject(e);});child.once('exit',(code,signal)=>{clearTimeout(timer);resolve({code,signal});});});
+ assert.equal(result.code,0,'Malformed barrier must reject, not wait for a FIFO writer');assert.equal(result.signal,null);
+});
