@@ -547,3 +547,62 @@ test('selected room rejects archive after its body was computed', async t => {
   const pending = f.broker.workspaceRead(auth, { kind: 'room', id: 'shared' }); await started; source.rooms[0].archived = true; release();
   await assert.rejects(pending); assert.equal(f.calls.length, 0);
 });
+
+async function waitingFixture(t) {
+  const desktop = {}, f = fixture(t, { desktop });
+  const { RoomState } = require('../room-state.cjs'), { MobileWorkspace } = require('../mobile-workspace.cjs');
+  const room = new RoomState(f.root), itemId = room.queueAdd('Synthetic waiting task', f.record.id);
+  f.record.roomIds = ['shared'];
+  room.queueMarkSent('shared', itemId, f.record.id, 'Original member', Date.now() - 100, false, f.record.nativeId);
+  room.queueSettle('shared', itemId, 'waiting', '', 'Original member', '', 'Choose the synthetic option?');
+  const adapter = new MobileWorkspace({ snapshot: () => ({ sessions: [f.record], rooms: [{ ...room.metadata('shared'), id: 'shared' }] }), roomState: room,
+    records: { status: () => ({ count: 0, records: [] }), acknowledge() {} } });
+  for (const name of ['grant', 'read', 'action', 'queueAnswerTarget']) if (typeof adapter[name] === 'function') desktop[name] = adapter[name].bind(adapter);
+  const paired = await f.pair(['read', 'send'], false, { roomIds: ['shared'], records: false });
+  for (const client of f.clients) client.refresh = async () => {};
+  const questionId = room.metadata('shared').events.at(-1).id;
+  const target = { roomId: 'shared', itemId, questionId };
+  const read = () => f.broker.read(paired.auth, f.record.id);
+  const send = async () => f.broker.send(paired.auth, { contextId: (await read()).contextId, requestId: randomUUID(), text: 'Synthetic explicit answer', queueTarget: target });
+  const resolve = answerRequestId => f.broker.workspaceAction(paired.auth, { requestId: randomUUID(), action: 'queueResolve', ...target, answerRequestId });
+  return { ...f, room, itemId, target, paired, read, send, resolve };
+}
+test('phone waiting answer is recorded only after the same bound native input is received', async t => {
+  const f = await waitingFixture(t), result = await f.send();
+  assert.equal(result.status, 'submitted'); assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting');
+  const done = await f.resolve(result.requestId); assert.equal(done.status, 'complete');
+  const item = f.room.queueFind('shared', f.itemId); assert.equal(item.status, 'done'); assert.equal(item.answer.text, 'Synthetic explicit answer');
+  assert.equal(f.sent.length, 1);
+});
+test('an unrelated normal send receipt cannot be reused as a waiting answer', async t => {
+  const f = await waitingFixture(t), contextId = (await f.read()).contextId;
+  const result = await f.broker.send(f.paired.auth, { contextId, requestId: randomUUID(), text: 'Unrelated ordinary input' });
+  const done = await f.resolve(result.requestId); assert.equal(done.status, 'not-sent');
+  assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting'); assert.equal(f.room.queueFind('shared', f.itemId).answer, undefined);
+});
+test('a waiting answer cannot use the in-turn steer mode', async t => {
+  const f = await waitingFixture(t); f.record.state = 'working'; f.record.sendMode = 'steer';
+  await assert.rejects(f.send()); assert.equal(f.sent.length, 0); assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting');
+});
+test('a lost waiting-answer acknowledgement remains waiting until its original receipt is explicitly checked', async t => {
+  const f = await waitingFixture(t); f.loseAck(true); const contextId = (await f.read()).contextId, requestId = randomUUID();
+  await assert.rejects(f.broker.send(f.paired.auth, { contextId, requestId, text: 'Synthetic explicit answer', queueTarget: f.target }));
+  let result = await f.resolve(requestId); assert.equal(result.status, 'not-sent'); assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting');
+  f.loseAck(false); assert.equal((await f.broker.receipt(f.paired.auth, requestId)).status, 'submitted');
+  result = await f.resolve(requestId); assert.equal(result.status, 'complete'); assert.equal(f.sent.length, 1);
+});
+test('independent handling before the late receipt never reopens or appends an answer', async t => {
+  const f = await waitingFixture(t), result = await f.send(); f.room.queueResolve(f.itemId, 'shared');
+  assert.equal((await f.resolve(result.requestId)).status, 'not-sent');
+  const item = f.room.queueFind('shared', f.itemId); assert.equal(item.status, 'done'); assert.equal(item.answer, undefined); assert.equal(f.sent.length, 1);
+});
+test('a changed waiting question or native context cannot consume an old received answer', async t => {
+  for (const change of ['question', 'native', 'revoke']) {
+    const f = await waitingFixture(t), result = await f.send();
+    if (change === 'question') f.target.questionId = randomUUID();
+    if (change === 'native') f.record.nativeId = 'successor';
+    if (change === 'revoke') f.broker.revoke();
+    try { assert.equal((await f.resolve(result.requestId)).status, 'not-sent'); } catch (error) { assert.equal(error.code, 'MOBILE_BROKER_DENIED'); }
+    assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting'); assert.equal(f.room.queueFind('shared', f.itemId).answer, undefined);
+  }
+});

@@ -5,6 +5,8 @@
   const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
   const text = value => typeof value === 'string' && value.length <= 16000 && value.isWellFormed();
+  const queueTarget = value => value && Object.keys(value).sort().join(',') === 'itemId,questionId,roomId' &&
+    Object.values(value).every(v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(v));
   const terminal = status => ['submitted', 'reply-written', 'not-sent'].includes(status);
   const labels = {
     prepared: '请求已保留，尚未确认发送', 'awaiting-native': '等待原生接收确认', submitted: '已提交给原生会话',
@@ -34,7 +36,7 @@
         if (saved.version !== 1 || !Array.isArray(saved.drafts) || saved.drafts.length > 8 || !Array.isArray(saved.pending) || saved.pending.length > 16 ||
             saved.drafts.some(d => !uuid(d.deviceId) || typeof d.sessionId !== 'string' || !text(d.text) || !Number.isSafeInteger(d.revision) || d.revision < 0) ||
             saved.pending.some(p => !uuid(p.deviceId) || typeof p.sessionId !== 'string' || !uuid(p.requestId) || !['send', 'answer'].includes(p.action) ||
-              !Number.isSafeInteger(p.revision) || p.revision < 0 || !text(p.text) || typeof p.status !== 'string' || !validReceiptContext(p.context)) ||
+              !Number.isSafeInteger(p.revision) || p.revision < 0 || !text(p.text) || typeof p.status !== 'string' || !validReceiptContext(p.context) || p.queueTarget !== undefined && !queueTarget(p.queueTarget)) ||
             new Set(saved.drafts.map(d => d.deviceId + '/' + d.sessionId)).size !== saved.drafts.length || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
         state.drafts = saved.drafts; state.pending = saved.pending;
       }
@@ -121,17 +123,19 @@
       if (result.requestId !== pending.requestId || result.sessionId !== pending.sessionId || result.action !== pending.action || !Object.hasOwn(labels, result.status)) throw failure('MOBILE_RECEIPT_UNKNOWN');
       pending.status = result.status;
       // A late ACK cannot clear edits or a draft in a different reading view.
-      if (authorization === state.authorization && pending.action === 'send' && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
+      if (authorization === state.authorization && pending.action === 'send' && !pending.queueTarget && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
           state.draft === pending.text && state.revision === pending.revision) {
         const draft = currentDraft();
         if (draft && draft.text === pending.text && draft.revision === pending.revision) { state.draft = ''; state.revision++; draft.text = ''; draft.revision = state.revision; }
       }
       if (persist() && authorization === state.authorization) state.notice = labels[result.status] + (result.storageWarning ? '；回执保存未确认，请回 Mac 核对。' : '');
     }
-    async function submit(action, answers) {
+    async function submit(action, answers, queueAnswer) {
+      const input = queueAnswer ? queueAnswer.text : state.draft;
+      if (queueAnswer && (!queueTarget(queueAnswer.target) || !text(input) || input.length > 6000)) throw failure('MOBILE_INPUT_UNAVAILABLE');
       if (state.busy || state.storageError || !state.session?.sessions.some(s => s.id === state.selected && s.available !== false) || !state.row || state.row.id !== state.selected || unresolved() ||
-          action === 'send' && (!state.row.canSend || !state.draft.trim()) || action === 'answer' && !state.row.question) throw failure('MOBILE_INPUT_UNAVAILABLE');
-      if (action === 'send' && nativePrefix(state.draft)) {
+          action === 'send' && (!state.row.canSend || !input.trim() || queueAnswer && state.row.sendMode === 'steer') || action === 'answer' && !state.row.question) throw failure('MOBILE_INPUT_UNAVAILABLE');
+      if (action === 'send' && nativePrefix(input)) {
         state.notice = '手机端不发送以 !、# 或 / 开头的文字：在原生终端里它们会被当成命令、记忆或斜杠命令。草稿已保留，请改写开头或回 Mac 输入。'; changed(); return;
       }
       const requestId = newId(); if (!uuid(requestId)) throw failure('MOBILE_BAD_REQUEST_ID');
@@ -139,18 +143,19 @@
       const target = state.session.sessions.find(s => s.id === state.selected);
       const context = receiptContext({ target: target.name || state.row.name || target.id, scope: 'session', targetId: state.selected, nativeId: target.nativeId,
         text: action === 'answer' ? state.row.question.questions.map(q => q.question).join('\n') + '\n' + Object.values(answers || {}).flat().join(', ') : '' });
-      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed', context, createdAt: Date.now() };
+      const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? input : '', revision: state.revision, status: 'unconfirmed', context, createdAt: Date.now(), ...(queueAnswer ? { queueTarget: { ...queueAnswer.target } } : {}) };
       if (action === 'answer' && Array.isArray(state.row.question.questions)) {
         pending.question = state.row.question.questions.map(q => typeof q.question === 'string' ? q.question : '').join('\n').slice(0, 4000);
         pending.answer = state.row.question.questions.map(q => Array.isArray(answers[q.id || q.question]) ? answers[q.id || q.question].filter(a => typeof a === 'string').join('、') : '').join('\n').slice(0, 4000);
       }
-      const value = { contextId, requestId, ...(action === 'send' ? { text: state.draft } : { answers }) };
+      const value = { contextId, requestId, ...(action === 'send' ? { text: input, ...(queueAnswer ? { queueTarget: { ...queueAnswer.target } } : {}) } : { answers }) };
       state.pending.push(pending);
       if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
       state.busy = true; changed();
       try { recordResult(pending, await request('/mobile/' + action, value, csrf), authorization); }
       catch (error) { if (authorization === state.authorization) state.notice = explain(error); }
       finally { if (authorization === state.authorization) state.busy = false; changed(); }
+      return pending;
     }
     async function receipt(requestId) {
       const pending = state.pending.find(p => p.requestId === requestId);
@@ -177,7 +182,8 @@
       } catch { if (authorization === state.authorization) state.notice = '撤销未获确认，请在 Mac 核对。'; }
       finally { if (authorization === state.authorization) { clearAuthorization(); changed(); } }
     }
-    return { state, start, select, refresh, invalidate: () => { clearAuthorization(); changed(); }, setDraft, send: () => submit('send'), answer: answers => submit('answer', answers), receipt, forget, logout, labels };
+    return { state, start, select, refresh, invalidate: () => { clearAuthorization(); changed(); }, setDraft, send: () => submit('send'),
+      sendQueueAnswer: (text, target) => submit('send', undefined, { text, target }), answer: answers => submit('answer', answers), receipt, forget, logout, labels };
   }
   function mount(document, location, history, storage, fetch, crypto) {
     // Consume a pairing fragment before any fetch, renderer callback or storage.

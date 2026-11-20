@@ -14,7 +14,7 @@
     return row.context.scope === 'record' && view.capabilities?.records === true && view.reminders?.records.some(r => r.record === row.context.targetId);
   }
   function createWorkspaceActions({ storage, request, newId, changed = () => {} }) {
-    const state = { pending: [], busy: false, storageError: false };
+    const state = { pending: [], drafts: [], busy: false, storageError: false };
     try {
       const raw = storage.getItem(ACTION_KEY);
       if (raw) {
@@ -22,10 +22,25 @@
         const saved = JSON.parse(raw);
         const uuid = v => typeof v === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
         if (saved.version !== 1 || !Array.isArray(saved.pending) || saved.pending.length > 64 || saved.pending.some(p => !p || !uuid(p.deviceId) || !uuid(p.requestId) || !['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge'].includes(p.action) || !['unconfirmed', 'complete', 'not-sent'].includes(p.status) || !validReceiptContext(p.context)) || new Set(saved.pending.map(p => p.requestId)).size !== saved.pending.length) throw Error('invalid');
+        state.drafts = saved.drafts || [];
+        if (!Array.isArray(state.drafts) || state.drafts.length > 16 || state.drafts.some(d => !d || !uuid(d.deviceId) ||
+            !['roomId', 'itemId', 'questionId'].every(k => typeof d[k] === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(d[k])) || typeof d.text !== 'string' || d.text.length > 6000)) throw Error('invalid');
         state.pending = saved.pending;
       }
     } catch { state.storageError = true; }
-    function save() { try { const raw = JSON.stringify({ version: 1, pending: state.pending }); if (raw.length > 256 * 1024) throw Error('limit'); storage.setItem(ACTION_KEY, raw); } catch { state.storageError = true; throw Error('MOBILE_STORAGE_UNAVAILABLE'); } }
+    function save() { try { const raw = JSON.stringify({ version: 1, pending: state.pending, drafts: state.drafts }); if (raw.length > 256 * 1024) throw Error('limit'); storage.setItem(ACTION_KEY, raw); } catch { state.storageError = true; throw Error('MOBILE_STORAGE_UNAVAILABLE'); } }
+    function answerDraft(session, target, value) {
+      if (!session || !['roomId', 'itemId', 'questionId'].every(k => typeof target[k] === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(target[k]))) throw Error('MOBILE_DRAFT_INVALID');
+      let draft = state.drafts.find(d => d.deviceId === session.deviceId && ['roomId', 'itemId', 'questionId'].every(k => d[k] === target[k]));
+      if (value === undefined) return draft?.text || '';
+      if (typeof value !== 'string' || value.length > 6000 || !value.isWellFormed() || !draft && state.drafts.length >= 16) throw Error('MOBILE_DRAFT_INVALID');
+      if (!draft) { draft = { deviceId: session.deviceId, ...target, text: '' }; state.drafts.push(draft); }
+      draft.text = value; save();
+    }
+    function clearAnswerDraft(session, target, original) {
+      state.drafts = state.drafts.filter(d => d.deviceId !== session.deviceId || d.text !== original || ['roomId', 'itemId', 'questionId'].some(k => d[k] !== target[k]));
+      save();
+    }
     function record(row, result) {
       if (result.requestId !== row.requestId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status) ||
           row.itemId && result.itemId && row.itemId !== result.itemId) throw Error('MOBILE_ACTION_UNCONFIRMED');
@@ -40,7 +55,8 @@
       const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action, context, createdAt: Date.now(),
         ...(typeof fields.roomId === 'string' ? { roomId: fields.roomId } : {}),
         ...(typeof fields.itemId === 'string' ? { itemId: fields.itemId } : {}),
-        ...(fields.action === 'queueAdd' ? { text: fields.text } : {}) };
+        ...(fields.action === 'queueAdd' ? { text: fields.text } : {}),
+        ...(fields.answerRequestId ? { answerRequestId: fields.answerRequestId, questionId: fields.questionId } : {}) };
       state.pending.push(row);
       try { save(); } catch (error) { state.pending.pop(); throw error; }
       state.busy = true; changed();
@@ -54,7 +70,7 @@
       finally { state.busy = false; changed(); }
     }
     function forget(row) { if (!terminal(row.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); state.pending = state.pending.filter(p => p !== row); save(); changed(); }
-    return { state, act, receipt, forget };
+    return { state, act, receipt, forget, answerDraft, clearAnswerDraft };
   }
   const words = {
     zh: { home: '工作台', chat: '对话', space: '空间', queue: '队列', confirm: '确认操作', reminders: '提醒', sessions: '会话', members: '成员', connected: '已连接 NAW', synced: '上次同步', refresh: '刷新', manage: '管理', close: '关闭', send: '发送 ↑', message: '输入消息…', draft: '草稿仅在此浏览器保存', idle: '空闲', working: '进行中', needs: '等你', queued: '待派发', done: '已完成', cancelled: '已取消', all: '全部', add: '添加任务', task: '任务', assignee: '指定成员', any: '任意空闲成员', cancelTask: '取消任务', handled: '标为已处理', openSession: '打开会话', review: '查看确认卡', noScope: '本次配对未授权此范围，请在 Mac 重新选择。', noData: '当前没有记录', terminal: '原生终端', interrupt: '中断', takeover: '接管', mac: '此操作目前请回 Mac 完成。不会新建或替换原生会话。', pair: '配对手机', pairLabel: 'Mac 显示的配对口令', pairHelp: '仅显示 Mac 明确授权的会话和空间。', logout: '撤销此手机并退出', locked: '尚未配对或授权已失效', offline: '连接未确认；保留草稿，刷新核对。不会自动重发。', complete: '操作已完成', 'not-sent': '未执行，输入已保留', unconfirmed: '结果未确认，请查原回执，勿重复发送', receipt: '查询原回执', oldPair: '旧配对的回执，请回 Mac 核对', pending: '待你批准', approve: '批准本次', deny: '拒绝', scope: '范围', action: '操作', from: '来源', duration: '有效期', expired: '已过期 · 未执行', verifyMac: '手机敏感批准尚未启用，请在 Mac 验证本人并确认。', verifyDeadline: '由 Mac 核验', back: '回原会话', terminalOnly: '原生终端目前仅在 Mac 可用。', answer: '提交回答', question: '当前原生问题', ack: '知道了', export: '导出', sameBell: '和桌面小铃铛同一份提醒。', bellNote: '数量包含有效待确认和等你处理的提醒；敏感批准仍在 Mac 上完成。', operations: '操作记录', steward: '大管家记录', age: '块记录早于 30 天', size: '记录总量超过提醒线', unreadable: '记录暂时无法读取', unavailable: '记录源当前不可用', source: '同一份 NAW 状态', omit: '较早消息未显示，请回 Mac 查看完整历史或附件。', unchanged: '取消保留任务历史。', skip: '跳到内容', butler: '大管家', butlerNotSelected: '这次手机访问没选它', butlerNotSelectedHelp: '这次是在 Mac 上挑了部分会话给手机，大管家不在其中。要在手机上和它对话，请在 Mac 的手机访问里选上它。', butlerUnavailable: '暂时打不开', butlerUnavailableHelp: '大管家会话现在不能在手机上打开，例如正在交接给新会话。请稍后刷新，或在 Mac 上查看。', butlerNone: 'Mac 上还没有指定', butlerNoneHelp: '在 Mac 上把一个会话指定为大管家后，这里就能打开它、和它对话。', command: '原生命令请回 Mac 输入；草稿已保留。', storage: '此浏览器未能保存输入，发送已暂停。', newSession: '新建会话', newSpace: '新建空间', noNative: '请在 Mac 处理此原生问题。' },
@@ -75,6 +91,12 @@
   Object.assign(words.en, { submitted: 'The session received it', 'reply-written': 'Answer written', 'awaiting-native': 'Not yet confirmed that the session received it', prepared: 'Prepared, not submitted', unknown: 'Unknown', ended: 'Ended', failed: 'Failed', removeReceipt: 'Remove confirmed receipt', invalidated: 'No longer valid · Not executed', replaced: 'Replaced by a new confirmation' });
   Object.assign(words.zh, { sendReceipt: '发送消息', answerReceipt: '回答原生问题', inspectInput: '查看原输入' });
   Object.assign(words.en, { sendReceipt: 'Send message', answerReceipt: 'Answer native question', inspectInput: 'View original input' });
+  Object.assign(words.zh, { queueAnswer: '你的答复 · 给', answerAndHandle: '答复并标为已处理', handleOnly: '仅标为已处理（不附答复）',
+    answerHelp: '确认原会话收到后才标为已处理；不会自动重发。', answerWaiting: '答复未确认，保留“等你”；不会自动重发。', answerCheck: '查看这条答复的状态', answerReceived: '答复已收到，等待处理回执。',
+    answerBusy: '原会话正在运行；此处不会插入或打断。请稍后重试。', answerUnavailable: '原会话身份或发送权限未确认，请打开原会话核对。', handledDone: '已处理' });
+  Object.assign(words.en, { queueAnswer: 'Your answer · To', answerAndHandle: 'Reply and mark handled', handleOnly: 'Mark handled without an answer',
+    answerHelp: 'Marked handled only after the original session receives it. Nothing is resent automatically.', answerWaiting: 'Answer unconfirmed; still waiting for you. Nothing is resent automatically.', answerCheck: 'Check this answer’s status', answerReceived: 'Answer received; awaiting the handling receipt.',
+    answerBusy: 'The original session is running. This action will not insert or interrupt; try again later.', answerUnavailable: 'The original session identity or send permission is unconfirmed. Check the original session.', handledDone: 'Handled' });
   Object.assign(words.zh, { registerKey: '登记敏感确认凭证', registrationCode: 'Mac 显示的六位登记码', registerHelp: '先在 Mac 发起登记；完成后核对两边公钥指纹，再在 Mac 确认和启用。', registrationReady: '请在 Mac 核对指纹并确认；手机批准仍未启用。', verifyPhone: '每张卡片都需系统验证本人；配对本身不能批准。', verifyFailed: '未完成或结果未确认；请查询回执或回 Mac 核对，不会重发。' });
   Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
   Object.assign(words.zh, { receiptTitle: '回执', receiptSend: '发给', receiptAnswer: '回答', receiptTime: '发起', receiptTimeUnknown: '时间未记录', receiptMissing: '原任务内容未保存，请回 Mac 核对', receiptHidden: '关联内容已不在本次授权范围内，请回 Mac 核对', receiptFull: '查看完整原输入', receiptExcerpt: '查看已保存片段', receiptHelp: '移除回执不会撤回消息或任务。', removeReceipt: '移除此条回执', unsentDraft: '未发送的草稿', taskAdded: '任务已添加', taskCancelled: '任务已取消', taskHandled: '任务已标为处理', reminderAcknowledged: '提醒已确认', receiptOperations: '操作记录', receiptSteward: '大管家记录', answerPending: '回答已写入；原生处理仍待确认', messageNotSent: '未发送，草稿保留' });
@@ -331,14 +353,61 @@
       if (!r) { el('content').append(node('p', t('noScope'))); return; }
       el('content').append(node('h2', r.name)); const filters = node('div', undefined, 'tabs'), list = node('div');
       function show(filter) { list.replaceChildren(); for (const i of r.queue.filter(i => filter === 'all' || (filter === 'working' ? i.status === 'sent' : i.status === 'queued'))) {
-        const card = node('article', undefined, 'queue-card'); card.dataset.itemId = i.id; const meta = node('div', undefined, 'queue-meta'); meta.append(node('span', stateText(i.status), 'tag ' + (i.status === 'sent' ? 'work' : 'neutral')), node('span', r.members.find(s => s.id === (i.sentTo || i.assignee))?.name || t('any'), 'small-author'));
+        const card = node('article', undefined, 'queue-card'); card.dataset.itemId = i.id; const meta = node('div', undefined, 'queue-meta'); meta.append(node('span', i.answer ? t('handledDone') : stateText(i.status), 'tag ' + (i.status === 'sent' ? 'work' : 'neutral')), node('span', r.members.find(s => s.id === (i.sentTo || i.assignee))?.name || t('any'), 'small-author'));
         card.append(meta, node('h3', i.text), node('p', i.reply || i.reason || '', 'quiet')); const bottom = node('div', undefined, 'queue-bottom');
+        if (i.question) card.append(node('p', i.question, 'queue-question'));
+        if (i.answer) card.append(node('blockquote', i.answer.text, 'queue-answer-recorded'));
+        if (i.status === 'waiting' && i.questionId) queueAnswer(r, i, card);
         if (view.sessions.some(s => s.id === (i.sentTo || i.assignee))) bottom.append(link(t('openSession'), 'chat/' + (i.sentTo || i.assignee)));
-        if (i.status === 'queued' || i.status === 'waiting') bottom.append(button(t(i.status === 'queued' ? 'cancelTask' : 'handled'), async () => { const result = await actions.act(client.state.session, { action: i.status === 'queued' ? 'queueCancel' : 'queueResolve', roomId: r.id, itemId: i.id }, { target: r.name, text: i.text }); toast(result.status); await refresh(); }));
+        if (i.status === 'queued' || i.status === 'waiting') bottom.append(button(t(i.status === 'queued' ? 'cancelTask' : i.questionId ? 'handleOnly' : 'handled'), async () => { const result = await actions.act(client.state.session, { action: i.status === 'queued' ? 'queueCancel' : 'queueResolve', roomId: r.id, itemId: i.id }, { target: r.name, text: i.text }); toast(result.status); await refresh(); }));
         card.append(bottom); list.append(card);
       } if (!list.childElementCount) list.append(node('p', t('noData'), 'quiet')); }
       for (const key of ['all', 'working', 'queued']) filters.append(button(t(key), () => show(key)));
       el('content').append(filters, list, button('+ ' + t('add'), () => addTask(r), 'primary'), node('p', t('unchanged'), 'small-note')); show('all'); receipts(el('content'), { roomId: r.id });
+    }
+    async function resolveQueueAnswer(row) {
+      if (!row || row.deviceId !== client.state.session?.deviceId || row.status !== 'submitted' || !row.queueTarget) return;
+      const result = await actions.act(client.state.session, { action: 'queueResolve', ...row.queueTarget, answerRequestId: row.requestId });
+      if (result.status === 'complete') actions.clearAnswerDraft(client.state.session, row.queueTarget, row.text);
+      toast(result.status); await refresh();
+    }
+    function queueAnswer(room, item, card) {
+      const target = { roomId: room.id, itemId: item.id, questionId: item.questionId }, session = client.state.session;
+      const previous = client.state.pending.findLast(p => p.deviceId === session.deviceId && p.sessionId === item.sentTo && p.queueTarget &&
+        ['roomId', 'itemId', 'questionId'].every(k => p.queueTarget[k] === target[k]));
+      const form = node('form', undefined, 'queue-answer'); form.method = 'post'; form.action = '/mobile/send';
+      const input = node('textarea'); input.id = 'queue-answer-' + item.id; input.name = 'answer'; input.required = true; input.maxLength = 6000;
+      input.value = actions.answerDraft(session, target) || previous?.text || '';
+      const label = node('label', t('queueAnswer') + ' ' + (room.members.find(s => s.id === item.sentTo)?.name || '')); label.htmlFor = input.id;
+      const note = node('p', !item.canAnswer ? t('answerUnavailable') : previous && previous.status !== 'not-sent' ? t(previous.status === 'submitted' ? 'answerReceived' : 'answerWaiting') : t('answerHelp'), 'small-note');
+      note.id = input.id + '-note'; note.setAttribute('role', 'status'); input.setAttribute('aria-describedby', note.id);
+      const submit = node('button', t('answerAndHandle'), 'primary'); submit.type = 'submit';
+      submit.disabled = !item.canAnswer || disconnected || actions.state.storageError || Boolean(previous && previous.status !== 'not-sent');
+      input.addEventListener('input', () => { try { actions.answerDraft(session, target, input.value); } catch { submit.disabled = true; note.textContent = t('storage'); } });
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        run(async () => {
+          const text = input.value, generation = client.state.authorization;
+          submit.disabled = true;
+          try {
+            actions.answerDraft(session, target, text);
+            if (actions.state.storageError || actions.state.busy || actions.state.pending.some(p => p.deviceId === session.deviceId && !terminal(p.status))) throw Error('MOBILE_ACTION_UNCONFIRMED');
+            await client.select(item.sentTo);
+            if (generation !== client.state.authorization || session.deviceId !== client.state.session?.deviceId || client.state.selected !== item.sentTo) return;
+            if (!client.state.row?.canSend || client.state.row.sendMode === 'steer') { note.textContent = t('answerBusy'); return; }
+            const row = await client.sendQueueAnswer(text, target);
+            if (!row) { note.textContent = client.state.notice; return; }
+            if (row.status === 'submitted') await resolveQueueAnswer(row);
+            else { note.textContent = t(row.status === 'not-sent' ? 'not-sent' : 'answerWaiting'); await refresh(); }
+          } finally { if (form.isConnected && (!previous || previous.status === 'not-sent')) submit.disabled = !item.canAnswer || disconnected || actions.state.storageError; }
+        });
+      });
+      form.append(label, input, submit, note);
+      if (previous && previous.status !== 'not-sent') form.append(button(t('answerCheck'), async () => {
+        if (previous.status !== 'submitted') await client.receipt(previous.requestId);
+        if (previous.status === 'submitted') await resolveQueueAnswer(previous); else { toast('answerWaiting'); await refresh(); }
+      }));
+      card.append(form);
     }
     function nativeQuestion() {
       heading('confirm'); const row = client.state.row;

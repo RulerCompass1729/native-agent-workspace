@@ -157,3 +157,13 @@ test('the actual phone mount clears the fragment before fetch, renders literal o
   form.listeners.submit({ preventDefault() {} }); await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.filter(c => c.route === '/mobile/answer').length, 1); assert.equal(client.state.pending[0].status, 'reply-written');
 });
+
+test('a queue-card answer keeps the original chat draft and binds its own input before posting', async () => {
+  const f = fixture(); await f.client.start(); await f.client.select('a'); f.client.setDraft('Existing unsent chat draft');
+  const target = { roomId: 'shared', itemId: 'task', questionId: 'question' };
+  const result = await f.client.sendQueueAnswer('Explicit queue answer', target);
+  assert.equal(result.status, 'submitted'); assert.equal(f.client.state.draft, 'Existing unsent chat draft');
+  const sent = f.calls.find(c => c.route === '/mobile/send');
+  assert.deepEqual(sent.value.queueTarget, target); assert.equal(sent.value.text, 'Explicit queue answer');
+  assert.deepEqual(JSON.parse(f.values.get(KEY)).pending[0].queueTarget, target);
+});

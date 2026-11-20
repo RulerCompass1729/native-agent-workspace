@@ -40,3 +40,15 @@ test('a receipt for a different task cannot reassign an uncertain operation', as
   query = true; await assert.rejects(model.receipt(session, model.state.pending[0]));
   assert.equal(model.state.pending[0].status, 'unconfirmed'); assert.equal(model.state.pending[0].itemId, 'original-task');
 });
+
+test('queue answer drafts stay with the original device, item and question across reload', () => {
+  const f = fixture(), target = { roomId: 'shared', itemId: 'task', questionId: 'question' };
+  f.model.answerDraft(f.session, target, 'Explicit original answer');
+  const reloaded = fixture({ disk: f.disk });
+  assert.equal(reloaded.model.answerDraft(f.session, target), 'Explicit original answer');
+  assert.equal(reloaded.model.answerDraft({ ...f.session, deviceId: randomUUID() }, target), '');
+  assert.equal(reloaded.model.answerDraft(f.session, { ...target, questionId: 'different' }), '');
+  reloaded.model.answerDraft(f.session, target, 'A newer draft');
+  reloaded.model.clearAnswerDraft(f.session, target, 'Explicit original answer');
+  assert.equal(reloaded.model.answerDraft(f.session, target), 'A newer draft');
+});
