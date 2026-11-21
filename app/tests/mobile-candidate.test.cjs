@@ -29,6 +29,15 @@ test('candidate activation atomically replaces one exact authority and never lea
  assert.equal(f.live(f.old),false);assert.ok(f.live(a));assert.throws(()=>verifyTicket(f.root,oldTicket,target,'read',{now:()=>1700000000000}));
  const ticket=f.access.authorize({...a,action:'read',target});assert.ok(verifyTicket(f.root,ticket,target,'read',{now:()=>1700000000000}));assert.throws(()=>f.access.activateCandidate(c.id,scopes));
 });
+test('a phone enrolled by QR lasts seven days, is refused after that, and a Mac revoke ends it at once',t=>{
+ const HOUR=3600000,DAY=24*HOUR,enroll=()=>{const f=fixture(t,{initial:true}),c=f.access.beginCandidate({actor,origin}),d=f.access.pairCandidate({secret:c.secret,actor,origin});f.access.activateCandidate(c.id,scopes);return {f,d,a:f.auth(d)};};
+ const one=enroll();assert.equal(one.d.expiresAt,1700000000000+7*DAY);
+ one.f.advance(12*HOUR+1);assert.ok(one.f.live(one.a),'Past the former twelve hours');one.f.advance(7*DAY-12*HOUR-2);assert.ok(one.f.live(one.a),'Last millisecond');
+ one.f.advance(1);assert.equal(one.f.live(one.a),false);assert.throws(()=>one.f.access.authorize({...one.a,action:'read',target}));
+ const two=enroll();two.f.advance(3*DAY);const ticket=two.f.access.authorize({...two.a,action:'read',target}),at=1700000000000+3*DAY;
+ assert.ok(verifyTicket(two.f.root,ticket,target,'read',{now:()=>at}));assert.deepEqual(two.f.access.revoke(),{confirmed:true});
+ assert.equal(two.f.live(two.a),false);assert.throws(()=>verifyTicket(two.f.root,ticket,target,'read',{now:()=>at}));
+});
 test('storage refusal before the atomic rename preserves the old device; an already committed rename is recognized',t=>{
  for(const phase of ['before','after']){const f=fixture(t),c=f.access.beginCandidate({actor,origin,replace:true}),a=f.auth(f.access.pairCandidate({secret:c.secret,actor,origin}));f.failure(phase);
   if(phase==='before'){assert.throws(()=>f.access.activateCandidate(c.id,scopes));assert.ok(f.live(f.old));assert.equal(f.live(a),false);}else{assert.doesNotThrow(()=>f.access.activateCandidate(c.id,scopes));assert.equal(f.live(f.old),false);assert.ok(f.live(a));}

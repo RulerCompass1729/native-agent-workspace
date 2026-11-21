@@ -107,6 +107,18 @@ reconnect instead.
 
 ## Device lifetime and offline behavior
 
+A paired device lasts seven days from pairing. It was twelve hours before; the
+person chose seven days so the phone does not need pairing again each day. The
+lifetime is absolute: use does not extend it, the phone cookie's Max-Age is
+capped to it, and the phone entry stays open for that time.
+Revoking on the Mac, or pairing again, still ends the device at once, so a lost
+phone is revoked on the Mac rather than left to expire.
+
+One pairing still accepts at most 256 sends or answers, 256 workspace actions
+and 256 confirmation decisions; none is evicted, so a repeated request never
+runs twice. A full record refuses further ones until the phone is paired again,
+which seven days makes easier to reach than twelve hours did.
+
 Subscription, VAPID keys and pending work are memory-only, tied to the current
 issuer/generation/device. Subscribing needs the explicit records permission,
 which pairing "all" includes. The broker closes them on logout, Mac revoke and
@@ -204,7 +216,7 @@ require experimental install APIs or an Apple Developer Program subscription.
 
 Not covered by this push: an app that has quit or cannot run its timers sends
 nothing, the subscription does not survive an app restart, and it ends when the
-paired device expires (twelve hours after pairing). None of these raises an
+paired device expires (seven days after pairing). None of these raises an
 alert on the phone. After a lost service has been reported, the push is off
 until the phone is paired and subscribed again.
 

@@ -103,7 +103,7 @@ test('local code generation failure revokes only the new candidate and closes it
   const f=fixture();f.context.qrFailure=true;const r=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false});assert.equal(r.ok,false);assert.ok(f.calls.some(x=>x.method==='cancelCandidate'));assert.equal(f.calls.some(x=>x.method==='revoke'),false);assert.equal(f.servers[0].listening,false);
 });
 test('replacement reuses the exact private listener and QR failure does not disconnect the existing phone',async()=>{
- const f=fixture();await f.handlers.get('workspace:mobilePairing')(f.event,f.selection);f.context.activeUntil=f.context.now+43200000;f.context.qrFailure=true;
+ const f=fixture();await f.handlers.get('workspace:mobilePairing')(f.event,f.selection);f.context.activeUntil=f.context.now+604800000;f.context.qrFailure=true;
  const result=await f.handlers.get('workspace:mobileConnect')(f.event,{sharedHostConfirmed:false,replace:true});assert.equal(result.ok,false);assert.equal(f.servers.length,1);assert.equal(f.servers[0].listening,true);assert.equal(f.calls.some(x=>x.method==='closeHTTP'),false);assert.equal(f.calls.some(x=>x.method==='revoke'),false);
 });
 test('only the matching current QR setup can be cancelled through the desktop-only method',async()=>{
@@ -232,8 +232,10 @@ test('an unpaired link closes the listener when it expires, checking at least on
 });
 test('a paired device keeps the listener until it expires, even when the Mac slept past that time', async () => {
   const { f, server, revokes } = await opened();
-  f.context.openUntil = f.context.now + 12 * 3600000; f.context.broker.options.changed(); assert.equal(only(f).ms, 60000);
-  f.context.now += 13 * 3600000; f.context.openUntil = 0; const before = revokes();
+  const week = 7 * 24 * 3600000, before = revokes();
+  f.context.openUntil = f.context.now + week; f.context.broker.options.changed(); assert.equal(only(f).ms, 60000);
+  f.context.now += 13 * 3600000; f.fire(); assert.equal(revokes(), before); assert.equal(server.listening, true, 'Still open past the former twelve hours');
+  assert.equal(only(f).ms, 60000); f.context.now += week; f.context.openUntil = 0;
   f.fire(); f.fire(); assert.equal(revokes(), before + 1); assert.equal(server.listening, false);
 });
 test('a phone logout closes the listener after the short response grace, not before', async () => {

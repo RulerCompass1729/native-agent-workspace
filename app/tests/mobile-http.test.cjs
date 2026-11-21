@@ -96,6 +96,14 @@ test('ambiguous duplicate headers/cookies, length plus encoding and malformed co
     assert.equal(response.statusCode, 401); assert.equal(f.calls.length, 0);
   }
 });
+test('the phone cookie lasts as long as a seven-day pairing and never longer', async () => {
+  const week = 7 * 24 * 60 * 60, age = async ms => {
+    const f = fixture(); f.broker.pair = () => ({ deviceId, expiresAt: Date.now() + ms, cookieValue: bearer });
+    return Number((await f.invoke({ method: 'POST', url: '/mobile/pair', value: { secret: pairing } })).headers['set-cookie'].match(/Max-Age=(\d+)$/)[1]);
+  };
+  const full = await age(week * 1000); assert.ok(full > week - 10 && full <= week, 'A browser must not drop the cookie after twelve hours: ' + full);
+  assert.equal(await age(30 * 24 * 60 * 60 * 1000), week); assert.equal(await age(-1), 0);
+});
 test('pair secret is accepted only in exact JSON at an explicit same-origin fixed endpoint, cookie never JSON', async () => {
   const f = fixture(), response = await f.invoke({ method: 'POST', url: '/mobile/pair', value: { secret: pairing } });
   assert.equal(response.statusCode, 200); assert.deepEqual(response.json().paired, true); assert.ok(!response.body.includes(bearer));
