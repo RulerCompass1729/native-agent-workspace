@@ -158,7 +158,8 @@ class MobileAccess {
   activateCandidate(id,scopes) {
     const c=this.#pending(id),before=this.load();if(!c.state.device || !validScopes(scopes))throw denied();
     const next={...c.state,version:scopes.length?1:2,scopes:JSON.parse(JSON.stringify(scopes))};if(scopes.length)delete next.sessionPolicy;
-    try { this.save(next); } catch {
+    try { this.save(next); } catch (error) {
+      if(error.persistenceUnconfirmed){this.invalidate();throw denied('MOBILE_STORAGE');}
       let actual;try {actual=readState(this.root,{io:this.io,allowDisabled:true});}catch{}
       if(!actual || hash(JSON.stringify(actual))!==hash(JSON.stringify(next))) {
         if(actual && hash(JSON.stringify(actual))===hash(JSON.stringify(before))) throw denied('MOBILE_STORAGE');
@@ -169,9 +170,10 @@ class MobileAccess {
     catch {this.invalidate();throw denied('MOBILE_STORAGE');}
     this.#candidate=null;this.#allGeneration=next.generation;this.closed=false;return next;
   }
-  constructor(root, { io = fs, now = Date.now, identity = processIdentity(process.pid), exclusive } = {}) {
+  constructor(root, { io = fs, now = Date.now, identity = processIdentity(process.pid), exclusive, transaction, pauseTransaction, recover } = {}) {
     if (!identity || !Number.isSafeInteger(identity.pid) || identity.pid < 2 || !text(identity.started) || typeof exclusive !== 'function') throw denied();
     this.io = io; this.now = now; this.root = rootPath(root, io); this.exclusive = exclusive;
+    this.transaction = transaction;this.pauseTransaction=pauseTransaction;this.recover=recover;
     this.issuer = { ...identity, instance: randomUUID() }; this.closed = true; this.initialized = false;
     this.failures = { since: 0, count: 0 };
   }
@@ -183,12 +185,18 @@ class MobileAccess {
   }
   save(s) {
     this.owner(); if (!validState(s)) throw denied();
+    if(this.transaction)return this.transaction(s,()=>this.#write(s));
+    return this.#write(s);
+  }
+  #write(s) {
     const data = JSON.stringify(s); if (Buffer.byteLength(data) > MAX_BYTES) throw denied('MOBILE_SCOPE_TOO_LARGE');
     const file = path.join(this.root, FILE), temp = file + '.' + randomUUID() + '.tmp'; let fd, own;
     try {
       try { if (!privateFile(this.io.lstatSync(file))) throw denied(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      fd = this.io.openSync(temp, 'wx', 0o600); own = this.io.fstatSync(fd); this.io.writeFileSync(fd, data, 'utf8');
+      fd = this.io.openSync(temp, 'wx', 0o600); own = this.io.fstatSync(fd); this.io.writeFileSync(fd, data, 'utf8');this.io.fsyncSync(fd);
       this.io.closeSync(fd); fd = undefined; this.io.renameSync(temp, file);
+      const directory=this.io.openSync(this.root,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+      try{this.io.fsyncSync(directory);}finally{this.io.closeSync(directory);}
     } finally {
       if (fd !== undefined) this.io.closeSync(fd);
       try { const stat = this.io.lstatSync(temp); if (own && stat.dev === own.dev && stat.ino === own.ino && privateFile(stat)) this.io.unlinkSync(temp); } catch { /* Only our temporary file is eligible for cleanup. */ }
@@ -227,6 +235,24 @@ class MobileAccess {
     } catch (e) { if (e.code !== 'ENOENT') throw e; }
     const s = { version: 1, issuer: this.issuer, generation: randomUUID(), enabled: false, actor: null, origin: null, scopes: [], pairing: null, device: null };
     this.store(s); this.initialized = true; this.closed = false;
+  }
+  pause(){
+    this.owner();if(!this.initialized||this.closed)return {paused:true};
+    this.closed=true;this.#allGeneration=null;this.#candidate=null;
+    try{
+      const state=this.load(),mirror={...state,generation:randomUUID(),enabled:false,pairing:null,device:null};
+      if(state.enabled&&typeof this.pauseTransaction==='function')this.pauseTransaction(state,mirror,()=>this.#write(mirror));
+      else this.save(mirror);
+      return {paused:true};
+    }catch{return {paused:false,authorizationPaused:this.invalidate()};}
+  }
+  resume(checkpoint,{alive=processMayBeAlive,beforeSave=()=>{}}={}){
+    this.owner();if(this.initialized||typeof this.recover!=='function')throw denied();
+    const {authority:s,details}=this.recover(checkpoint),time=this.time();
+    if(!s.enabled||!s.device||s.pairing||s.device.until<=time||s.device.until>time+SESSION_MS||alive(s.issuer)!==false)throw denied();
+    const csrf=secret(),next={...s,issuer:this.issuer,generation:randomUUID(),device:{...s.device,csrfHash:hash(csrf)}};
+    beforeSave(next);this.store(next);this.initialized=true;this.closed=false;this.#allGeneration=details.all?next.generation:null;
+    return {state:next,csrf};
   }
   beginPairing({ actor, origin: site, scopes, replace = false, all = false }) {
     const s = this.load(), time = this.time();
@@ -288,7 +314,7 @@ class MobileAccess {
     // else's grant. Stop this entry, and keep shared cancellation unconfirmed.
     try { s = this.load(); } catch { return { confirmed: false }; }
     try { this.save({ ...s, generation: randomUUID(), enabled: false, pairing: null, device: null }); return { confirmed: true }; }
-    catch { return { confirmed: this.invalidate() }; }
+    catch(error) { const shared=this.invalidate();return { confirmed: shared&&(!this.transaction||error.persistenceRevoked===true) }; }
   }
 }
-module.exports = { MobileAccess, verifyTicket, FILE, OFF, PAIR_MS, SESSION_MS, MAX_BYTES };
+module.exports = { MobileAccess, verifyTicket, readState, validState, FILE, OFF, PAIR_MS, SESSION_MS, MAX_BYTES };
