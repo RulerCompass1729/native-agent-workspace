@@ -336,7 +336,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
   const helpers = mainSource.slice(mainSource.indexOf('function sendToPage(context, channel, ...data)'), mainSource.indexOf('function bindClient(context)'));
   const binding = mainSource.slice(mainSource.indexOf('function bindClient(context)'), mainSource.indexOf('\nfunction displayState('));
   function wire(background) {
-    const sent = [];
+    const sent = [], reconnects = [];
     let displays = 0;
     const client = new EventEmitter();
     const context = {
@@ -357,6 +357,8 @@ test('the actual client wiring forwards state, terminal and progress to a page a
       // The state listener's record and placement steps have their own suites (stuck-records, open-placement).
       placeOpened: async () => {}, carryGrants: async () => {},
       uiError: () => ({ message: 'disconnected', uiMessage: null }),
+      // A closed connection goes to the reconnection (service-reconnect.test.cjs), which tells the page when it fails.
+      reconnectClosed: async (target, closed) => { reconnects.push(target === context && closed === client); },
     };
     vm.createContext(sandbox);
     vm.runInContext(helpers + '\n' + binding + '\nbindClient(context);', sandbox);
@@ -364,14 +366,16 @@ test('the actual client wiring forwards state, terminal and progress to a page a
     client.emit('terminal', { id: 's1', data: 'x' });
     client.emit('progress', { id: 's1' });
     client.emit('closed');
-    return { sent, displays: () => displays };
+    return { sent, reconnects, displays: () => displays };
   }
   const page = wire(false);
-  assert.deepEqual(page.sent.map(entry => entry[0]), ['workspace:state', 'workspace:terminal', 'workspace:progress', 'workspace:disconnected']);
+  assert.deepEqual(page.sent.map(entry => entry[0]), ['workspace:state', 'workspace:terminal', 'workspace:progress']);
+  assert.deepEqual(page.reconnects, [true]);
   assert.equal(page.displays(), 1);
 
   const hidden = wire(true);
   assert.deepEqual(hidden.sent, []);
+  assert.deepEqual(hidden.reconnects, [true]);
   assert.equal(hidden.displays(), 0, 'the display state of a background window is not even computed');
 });
 

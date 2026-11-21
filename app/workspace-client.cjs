@@ -22,6 +22,13 @@ const sharedDisplayMessage = (message, source) => message.id === 'shared-native-
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
 let creationQueue = Promise.resolve();
 const controls = new Map();
+// A state event can arrive with the reply to `initial`, before an entry listens to its client: the entry starts
+// from that event, not from the older reply.
+function newestState(entry) {
+  entry.stateOrder = entry.client.receivedOrder?.(entry.state) || 0;
+  const newer = entry.client.lastState, order = newer && entry.client.receivedOrder?.(newer);
+  if (order > entry.stateOrder) { entry.state = { ...entry.state, ...newer }; entry.stateOrder = order; }
+}
 
 // A flat routing layer, not a second agent runtime. Each service remains the
 // sole writer of its sessions, drafts and shared replies, even with no UI open.
@@ -33,14 +40,13 @@ class WorkspaceClient extends EventEmitter {
     this.control = controls.get(scope); this.control.clients++; this.control.views.add(this);
     this.control.spaceRevisions ||= new Map();
     this.control.legacyOwners ||= new Map();
-    for (const entry of entries) this.observeLegacyOwners(entry);
+    for (const entry of entries) { newestState(entry); this.observeLegacyOwners(entry); }
     if (typeof scope === 'string' && !this.control.legacyInput) {
       this.control.legacyInput = new LegacyInput(scope);
       this.control.legacyInput.on('change', () => { for (const view of this.control.views) if (!view.closing) view.emit('state', view.snapshot()); });
       this.control.legacyInput.on('progress', update => { for (const view of this.control.views) if (!view.closing) view.emit('progress', update); });
     }
     for (const entry of entries) {
-      entry.stateOrder = entry.client.receivedOrder?.(entry.state) || 0;
       entry.closed = false; entry.closing = false;
       entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
       if (backendRooms(entry.state).some(r => r?.run?.status === 'running') && !this.control.armed.has(entry.key)) this.control.armed.set(entry.key, { entry, roomId: backendRooms(entry.state).find(r => r?.run?.status === 'running').id || 'shared' });
@@ -73,14 +79,17 @@ class WorkspaceClient extends EventEmitter {
         this.socket.destroyed = true; if (!this.closing) this.emit('closed');
       });
   }
-  replaceService(key, client, state) {
+  // reconnected: this window's own transport to the same service came back (service-reconnect.cjs). The window's
+  // operations on the closed one have failed already; the generation every window's operations are checked
+  // against is for a backend that was replaced, and stays.
+  replaceService(key, client, state, { reconnected = false } = {}) {
     const entry = this.entries.find(e => e.key === key);
     if (!entry || this.closing) { client.close(); throw uiError("error.client.windowConnectionChanged"); }
     const old = entry.client;
     for (const s of entry.state.sessions) { this.legacyObservers.get(s.id)?.dispose(); this.legacyObservers.delete(s.id); }
-    this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1);
+    if (!reconnected) this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1);
     entry.client = client; entry.state = state; entry.closed = false; entry.closing = false;
-    entry.stateOrder = client.receivedOrder?.(state) || 0;
+    newestState(entry);
     this.observeLegacyOwners(entry);
     entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
     this.bindEntry(entry); old.close();

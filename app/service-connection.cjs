@@ -1,6 +1,6 @@
 const fs = require('node:fs'), net = require('node:net'), path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
+const { readFrames, RESPONSE_BYTES, SERVICE_CLOSE_REASONS } = require('./service-transport.cjs');
 const { rebuildState } = require('./state-delta.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
@@ -9,18 +9,24 @@ const background = require('./background-operation.cjs');
 class ServiceClient extends EventEmitter {
   constructor(socket) {
     super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let received = 0;
-    // The last whole state, which a delta frame builds on (state-delta.cjs).
+    // The last whole state, which a delta frame builds on (state-delta.cjs). lastState: the same, for whoever takes
+    // this client over after the `initial` it asked for (workspace-client.cjs newestState).
     let state = null;
     readFrames(socket, RESPONSE_BYTES, m => {
       if (m.event === 'state') {
         if (m.delta === 1) {
-          try { m = { ...m, data: rebuildState(state, m.data) }; } catch { socket.destroy(); return; }
+          try { m = { ...m, data: rebuildState(state, m.data) }; } catch { this.closeReason = 'state-rebuild'; socket.destroy(); return; }
         }
-        state = m.data;
+        state = this.lastState = m.data;
       }
       const value = m.event ? m.data : m.value;
       if (value && typeof value === 'object') this.receipts.set(value, ++received);
-      if (m.ready) this.emit('ready');
+      if (m.ready) {
+        // priorClose: why the service ended this owner's previous transport, when it did and said so (daemon.cjs).
+        const ended = m.ended;
+        if (ended && typeof ended === 'object' && SERVICE_CLOSE_REASONS.includes(ended.reason) && Number.isSafeInteger(ended.at) && ended.at > 0) this.priorClose = { reason: ended.reason, at: ended.at };
+        this.emit('ready');
+      }
       else if (m.event) this.emit(m.event, m.data);
       else if (this.pending.has(m.id)) {
         const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer);
@@ -32,8 +38,11 @@ class ServiceClient extends EventEmitter {
         }
       }
     });
-    socket.on('error', () => {});
-    socket.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(uiError('error.serviceClosed')); } this.pending.clear(); this.emit('closed'); });
+    // closeReason: who ended this transport, for the connection record (service-reconnect.cjs). 'peer' or an error
+    // code: the service's side; 'local-destroy': a frame this side refused (service-transport.cjs readFrames).
+    socket.on('error', error => { this.closeReason ||= error.code || 'error'; });
+    socket.on('end', () => { this.closeReason ||= 'peer'; });
+    socket.on('close', () => { this.closeReason ||= 'local-destroy'; for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(uiError('error.serviceClosed')); } this.pending.clear(); this.emit('closed'); });
   }
   receivedOrder(value) { return this.receipts.get(value); }
   call(method, ...args) {
@@ -54,7 +63,7 @@ class ServiceClient extends EventEmitter {
       this.socket.write(JSON.stringify({ id, method, args, ...(background.current() ? { backgroundActor: background.current() } : {}) }) + '\n');
     });
   }
-  close() { this.socket.end(); }
+  close() { this.closeReason ||= 'local-close'; this.socket.end(); }
 }
 // page: false for a connection no one sees, such as the hidden window an agent's request runs in. The service
 // does not count its owner as a window that holds a session (workspace.cjs viewConnected).

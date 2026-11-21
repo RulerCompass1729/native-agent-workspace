@@ -11,6 +11,7 @@ if (app.isPackaged === false && !fs.existsSync(path.join(__dirname, 'dsh', 'clie
 }
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
+const { createReconnector, createEventLog } = require('./service-reconnect.cjs');
 const { createStatePush } = require('./state-push.cjs');
 const backendSwitch = require('./backend-switch.cjs');
 const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
@@ -908,7 +909,7 @@ function bindClient(context) {
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
-  client.on('closed', () => { if (context.client === client) { const notice = uiError('error.warning.serviceDisconnected'); send('workspace:disconnected', notice.message, notice.uiMessage); } });
+  client.on('closed', () => { if (context.client === client) reconnectClosed(context, client).catch(() => { if (context.client === client) noticeDisconnected(context); }); });
 }
 function displayState(snapshot, context, read = null) {
   if (context?.client) snapshot = confirmationSnapshot(context.client, snapshot);
@@ -1388,6 +1389,30 @@ async function replaceBackendSockets(key) {
       sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));
     }
   }
+}
+let connectionEvents = null, reconnector = null;
+function noticeDisconnected(context) { const notice = uiError('error.warning.serviceDisconnected'); sendToPage(context, 'workspace:disconnected', notice.message, notice.uiMessage); }
+// A transport that closed is connected again without the person; the page hears of it only when that takes long
+// or fails, and its button still reconnects everything. Sessions of a restored backend redraw their terminals:
+// output sent while the transport was closed never reached this window.
+function reconnectClosed(context, client) {
+  reconnector ||= createReconnector({
+    connect: async (target, key) => {
+      const service = await connectService(path.join(dataDir, key), target.view.owner, { page: !target.background });
+      try { return { client: service, state: await service.call('initial') }; }
+      catch (error) { service.close(); throw error; }
+    },
+    restored: (target, restored, keys) => {
+      if (target.background || target.win.isDestroyed()) return;
+      const display = displayState(restored.snapshot(), target);
+      target.statePush?.discardWaiting();
+      const sessions = restored.entries.filter(e => keys.includes(e.key)).flatMap(e => e.state.sessions.map(s => s.id));
+      sendToPage(target, 'workspace:reconnected', omitHidden(display, target.shown), sessions);
+    },
+    lost: noticeDisconnected,
+    record: event => { connectionEvents ||= createEventLog(path.join(dataDir, 'connection-events.json')); connectionEvents.add(event); },
+  });
+  return reconnector(context, client);
 }
 let backendSwitching = null, switchRecords = {};
 const autoSwitchFailed = new Set();

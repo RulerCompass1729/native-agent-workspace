@@ -5723,6 +5723,8 @@ async function ensureTerminal(id, explicit = false) {
     } catch (error) {
       if (terminals.get(id) === entry) {
         entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
+        // Failed because this window's service transport was closed: loaded again once it is back (onReconnected).
+        entry.offline = ['error.serviceClosed', 'error.client.serviceNotConnected'].includes(error.uiMessage?.key);
         // Only this known local instruction may replace the generic failure.
         // Never persist a raw native error (which can contain private paths).
         const firstMessage = '请先在对话中发送第一条消息，再打开同一会话的原生终端。';
@@ -5877,7 +5879,14 @@ const disposers = [
   api.onDisconnected((message, uiMessage) => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toastError({ message, uiMessage }); }),
   api.onQuitStatus(key => { if (['os.butlerQuitWaiting', 'os.butlerQuitUnconfirmed'].includes(key)) toastMessage(key); }),
   api.onViewStorage((warning, uiMessage) => { latestViewStorage = warning; latestViewStorageUiMessage = uiMessage; if (state) { state.viewStorageWarning = warning; state.viewStorageWarningUiMessage = uiMessage; render(); } }),
-  api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
+  // redraw: sessions whose transport was closed for a while. Their terminals missed output and start again from a
+  // snapshot, as does any terminal that failed to load because the window was not connected. A failed terminal is
+  // never revived in place: it would show a first screen and drop the output after it.
+  api.onReconnected((next, redraw = []) => {
+    for (const s of state?.sessions || []) freezeLegacyProgress(s);
+    for (const [id, entry] of [...terminals]) if (redraw.includes(id) || entry.failed && entry.offline) { entry.term.dispose(); entry.element.remove(); terminals.delete(id); }
+    disconnected = false; updateState(next); render();
+  }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
   api.onSwitchMode(next => {
