@@ -1,7 +1,7 @@
 'use strict';
 // Real Claude CLI + production NativeHost/Workspace/PTY/bridge; fixed loopback responses, no GUI, no paid model.
 // Question (queue item 2026-11-20): the CLI compacts by itself in the middle of a root turn. Does that same
-// turn's next workspace tool call still reach NAW, as its call before the compaction did?
+// turn's next workspace read, control call and message still reach NAW, as its calls before the compaction did?
 // Bounded: 1 native session, 2 root turns (a warm-up, then the measured one), at most 8 fixed local responses, 210 s.
 // Usage: node scripts/test-native-compact-continuation.cjs [evidence-dir]
 // NAW_CLAUDE_BINARY names an exact CLI build; NAW_COMPACT_BRIDGE_DIR swaps in a diagnostic copy of the bridge.
@@ -22,7 +22,7 @@ for (const dir of [home, config, cwd, profile]) fs.mkdirSync(dir, { mode: 0o700 
 Object.assign(process.env, { HOME: home, TMPDIR: base, CLAUDE_CONFIG_DIR: config, NAW_DATA_DIR: profile, NAW_RUNTIME_CONFIG: path.join(base, 'locations.json') });
 const { NativeHost } = require('../app/adapters.cjs'), { Workspace } = require('../app/workspace.cjs');
 
-const SESSIONS = 'mcp__native_workspace__workspace_sessions', MESSAGE = 'mcp__native_workspace__workspace_message';
+const SESSIONS = 'mcp__native_workspace__workspace_sessions', MESSAGE = 'mcp__native_workspace__workspace_message', CONTROL = 'mcp__native_workspace__workspace_control';
 const BRIDGE_DENIALS = ['Operator calls require this confirmed native root turn', '没有本原生主会话的定向协作授权', 'Background control requires the actual native root call'];
 // Above the CLI's own compaction threshold (its debug log reported effectiveWindow=980000 for this model), so the next step compacts first.
 const FULL_CONTEXT_TOKENS = Number(process.env.NAW_COMPACT_FULL_TOKENS || 970000);
@@ -56,8 +56,10 @@ function toolResult(id) {
 const SCRIPT = [
   { kind: 'warmup-1', blocks: [{ type: 'tool_use', id: 'toolu_warmup', name: SESSIONS, input: {} }] },
   { kind: 'warmup-2', blocks: [{ type: 'text', text: 'COMPACT_WARMUP_DONE' }] },
-  { kind: 'step-1', full: true, blocks: [{ type: 'tool_use', id: 'toolu_before_compact', name: SESSIONS, input: {} }] },
+  { kind: 'step-1', full: true, blocks: [{ type: 'tool_use', id: 'toolu_before_compact', name: SESSIONS, input: {} },
+    { type: 'tool_use', id: 'toolu_control_before_compact', name: CONTROL, input: { action: 'catalog' } }] },
   { kind: 'step-2', blocks: [{ type: 'tool_use', id: 'toolu_after_compact', name: SESSIONS, input: {} },
+    { type: 'tool_use', id: 'toolu_control_after_compact', name: CONTROL, input: { action: 'catalog' } },
     { type: 'tool_use', id: 'toolu_message_after_compact', name: MESSAGE, input: { recipient_id: 'fixture-absent-recipient', message: 'Fixture message after the compaction.' } }] },
   { kind: 'step-3', blocks: [{ type: 'text', text: 'COMPACT_CONTINUATION_DONE' }] }
 ];
@@ -97,13 +99,15 @@ const cleanup = scratch.cleanup(async () => {
   }
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, customApiKeyResponses: { approved: [loopback.FIXTURE_KEY], rejected: [] }, theme: 'dark',
     projects: { [cwd]: { hasTrustDialogAccepted: true }, [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
+  // The daily session this was seen in runs without native permission prompts; workspace_control asks otherwise.
+  fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }), { mode: 0o600 });
   fs.writeFileSync(process.env.NAW_RUNTIME_CONFIG, JSON.stringify({ claude: shim }), { mode: 0o600 });
   const host = new NativeHost(base, profile);
   host.checkClaudeVersion = () => {}; // This fixture is not a version qualification.
   host.qualificationTrialVersion = version;
   host.resolvePrograms = () => (host.binaries = { claude: shim, codex: null, python: pythonExecutable() });
   await host.start(); workspace = new Workspace(host, profile);
-  const id = await workspace.create('claude', cwd, owner, 'Compaction continuation', 'terminal');
+  const id = await workspace.create('claude', cwd, owner, 'Compaction continuation', 'terminal', { skipPermissions: true });
   const read = () => workspace.snapshot().sessions.find(row => row.id === id), runtime = () => workspace.runtime(id);
   await until(() => read()?.chatAvailable && read()?.state === 'idle', 'Native startup', 60000);
   workspace.operator.settings(null, true); workspace.operator.settings(id, true);
@@ -118,8 +122,8 @@ const cleanup = scratch.cleanup(async () => {
     await workspace.send(id, 'Run the fixed local task.', owner);
     await until(() => steps >= 5 && read().state === 'idle' && read().messages.some(row => row.text?.includes('COMPACT_CONTINUATION_DONE')), 'The root turn completes', 150000);
     const first = toolResult('toolu_before_compact'), second = toolResult('toolu_after_compact'), message = toolResult('toolu_message_after_compact');
-    save('tool-results.json', { first, second, message });
-    assert.ok(first && second && message, 'Every call of the turn has a result the model read');
+    const controlFirst = toolResult('toolu_control_before_compact'), controlSecond = toolResult('toolu_control_after_compact');
+    assert.ok(first && second && message && controlFirst && controlSecond, 'Every call of the turn has a result the model read');
     assert.equal(compactions, 1, 'The CLI compacted exactly once, by itself');
     const order = requests.map(r => r.kind);
     assert.deepEqual(order, ['warmup-1', 'warmup-2', 'step-1', 'compaction', 'step-2', 'step-3'], 'One turn: a step, the compaction, then the same turn continues');
@@ -130,6 +134,14 @@ const cleanup = scratch.cleanup(async () => {
     assert.equal(second.isError, first.isError, 'The read after the compaction ends as the one before it did');
     assert.deepEqual(Object.keys(JSON.parse(second.text)).sort(), Object.keys(JSON.parse(first.text)).sort(), 'NAW answers both reads with the same kind of result');
     checks.push('After the compaction: the same turn\'s workspace read is answered by NAW again');
+    assert.ok(!BRIDGE_DENIALS.some(text => controlFirst.text.includes(text)), `Before the compaction the control call reaches NAW: ${controlFirst.text.slice(0, 160)}`);
+    assert.ok(!BRIDGE_DENIALS.some(text => controlSecond.text.includes(text)), `After the compaction the same turn's control call is not refused by the bridge: ${controlSecond.text.slice(0, 160)}`);
+    // NAW's own root proof names these when the turn's references are gone.
+    assert.ok(!/live-turn-missing|root-turn-missing|native-call-invalidated/.test(controlSecond.text), `After the compaction NAW's root proof holds: ${controlSecond.text.slice(0, 160)}`);
+    // Without a space transport in this fixture NAW stops both calls at the same later step, after its root proof.
+    const ending = result => { const answer = JSON.parse(result.text); return [result.isError, answer.state, answer.failureReason ?? null]; };
+    assert.deepEqual(ending(controlSecond), ending(controlFirst), 'The control call after the compaction ends as the one before it did');
+    checks.push(`After the compaction: the same turn's control call passes the bridge and NAW's root proof, and ends as before it (${ending(controlSecond).slice(1).join(', ')})`);
     assert.ok(!BRIDGE_DENIALS.some(text => message.text.includes(text)), `After the compaction the message call reaches NAW: ${message.text.slice(0, 160)}`);
     checks.push('After the compaction: the message call reaches NAW, which answers for its absent recipient');
     const idle = states.filter(s => s.row.state === 'idle' && s.row.steps > 2 && s.row.steps < 5);
@@ -144,7 +156,8 @@ const cleanup = scratch.cleanup(async () => {
     save('requests.json', requests.map(r => ({ number: r.number, kind: r.kind, messages: r.body.messages.length, tools: (r.body.tools || []).length, last: parts(r.body.messages.at(-1)).map(p => p.type === 'text' ? p.text.slice(0, 200) : p.type),
       results: r.body.messages.flatMap(m => m.role === 'user' ? parts(m).filter(p => p.type === 'tool_result').map(p => ({ id: p.tool_use_id, isError: p.is_error === true, text: resultText(p).slice(0, 400) })) : []) })));
     save('states.json', states);
-    save('tool-results.json', { first: toolResult('toolu_before_compact'), second: toolResult('toolu_after_compact'), message: toolResult('toolu_message_after_compact') });
+    save('tool-results.json', { first: toolResult('toolu_before_compact'), second: toolResult('toolu_after_compact'), message: toolResult('toolu_message_after_compact'),
+      controlFirst: toolResult('toolu_control_before_compact'), controlSecond: toolResult('toolu_control_after_compact') });
   }
   const summary = { passed: !failure, version, checks, localResponses: requests.length, compactions, paidModelCalls: 0, fixture: fixture.summary(), failure: failure?.message || null };
   save('result.json', summary);

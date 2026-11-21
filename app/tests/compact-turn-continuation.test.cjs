@@ -62,7 +62,7 @@ export function loseObservation() { markObservationGap(rootBinding); }
 export function drained() { return !observing && !observations.length; }
 //${randomUUID()}`;
   const mod = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-  const hooks = new Map(), observed = [], reached = [];
+  const hooks = new Map(), observed = [], reached = [], sent = [];
   mod.register((event, match, handler) => {
     hooks.set(typeof match === 'object' && match?.tool ? `${event}:${match.tool}` : event, typeof match === 'function' ? match : handler);
     return { catch() {} };
@@ -81,7 +81,7 @@ export function drained() { return !observing && !observations.length; }
         catch { return { ok: false, status: 409, text: '{}' }; }
       }
       if (!['/background-control', '/operator-call', '/addressed-message'].includes(route)) return reply({});
-      reached.push(route);
+      reached.push(route); sent.push({ route, tool: body.tool ?? null, arguments: body.arguments });
       if (route === '/background-control') {
         try { rootCall(f.r, body, new AbortController().signal, () => true); return reply({ state: 'complete' }); }
         catch (error) { return reply({ state: 'unconfirmed', error: error.message }); }
@@ -113,13 +113,19 @@ export function drained() { return !observing && !observations.length; }
     if (origin) next.origin = origin;
     return hooks.get(`tool.call:${TOOLS[kind]}`)($, { ...input, ...(agentId ? { agentId } : {}), ...(toolUseId === null ? {} : { tool_use_id: toolUseId }) }, next);
   };
+  // Any workspace tool by name, with the arguments the native MCP path approved.
+  const tool = (name, input, approval) => {
+    const next = async () => ({ text: JSON.stringify(approval) });
+    next.origin = ENGINE;
+    return hooks.get(`tool.call:mcp__native_workspace__${name}`)($, { ...input, tool_use_id: `toolu_${randomUUID()}` }, next);
+  };
   const allDenied = async (label, options) => {
     const before = reached.length;
     for (const kind of KINDS) assert.equal((await call(kind, options)).deny, DENY[kind], `${kind}: ${label}`);
     assert.equal(reached.length, before, `${label}: nothing reaches NAW`);
   };
   const allAllowed = async label => { for (const kind of KINDS) assert.equal(allowed(await call(kind)), true, `${kind}: ${label}`); };
-  return { mod, hooks, $, observed, reached, settle, compact, step, call, allDenied, allAllowed };
+  return { mod, hooks, $, observed, reached, sent, settle, compact, step, call, tool, allDenied, allAllowed };
 }
 const RESTORED = { promptId: 'owned-prompt', turnId: 'owned-turn', observationGap: false }, RETIRED = { promptId: null, turnId: null, observationGap: false };
 
@@ -147,6 +153,29 @@ test('the engine\'s next step of the compacted root turn gives it back control, 
   await b.settle();
   assert.deepEqual(f.ends, ['completed'], 'the continued turn ends as the turn that started');
   for (const kind of KINDS) assert.equal(allowed(await b.call(kind)), false, `${kind}: NAW refuses a call after the turn ended`);
+});
+
+// Seen in daily use on 2026-11-21 (CLI 2.1.329, automatic compaction): a turn whose queue calls NAW had
+// accepted compacted, and its next workspace_open and queueAdd got these two refusals until another turn began.
+test('the daily sequence: queue calls, an automatic compaction, then workspace_open and queueAdd of the same turn', async t => {
+  const f = await fixture(t), b = await bridge(f);
+  const space = (action, args) => ({ action: 'invoke', method: 'spaceAction', arguments: ['fixture-room', action, args], operation_id: `fixture-${action}-${randomUUID()}` });
+  const control = input => b.tool('workspace_control', input, { approved: true, background: input });
+  const open = { action_id: 'fixture-open-1', provider: 'claude', cwd: '/fixture/work', name: 'Fixture reviewer', view: 'terminal', task: 'SYNTHETIC TASK', permission: 'default', grant_id: 'fixture-grant' };
+  const opening = () => b.tool('workspace_open', open, { approved: true, operator: 'workspace_open', arguments: open });
+  assert.equal(allowed(await control(space('releaseRotation', ['fixture-native', 'fixture-epoch']))), true, 'before the compact NAW takes the turn\'s queue call');
+  await b.compact();
+  const before = b.sent.length;
+  assert.equal((await opening()).deny, DENY.operator); assert.equal((await control(space('queueAdd', ['SYNTHETIC ITEM', null]))).deny, DENY.control);
+  assert.equal(b.sent.length, before, 'until the turn\'s next step neither call reaches NAW');
+  await b.step(); await b.step(); // the turn goes on: its first step proves it, later ones change nothing
+  const queued = space('queueAdd', ['SYNTHETIC ITEM', null]), opened = await opening(), added = await control(queued);
+  assert.deepEqual([opened.deny, added.deny], [undefined, undefined], 'the bridge refuses neither call of the continued turn');
+  assert.equal(allowed(opened) && allowed(added), true, 'NAW answers both');
+  assert.deepEqual(b.sent.slice(before), [{ route: '/operator-call', tool: 'workspace_open', arguments: open }, { route: '/background-control', tool: null, arguments: queued }],
+    'NAW receives both calls with the arguments the turn gave');
+  assert.deepEqual(b.mod.bridgeState(), RESTORED);
+  assert.deepEqual(b.observed.filter(id => id !== 'control:activity'), ['control:compact', 'control:turn-continue']);
 });
 
 test('in the continued turn a sub-agent, another origin and a call without a tool use id are still refused', async t => {
