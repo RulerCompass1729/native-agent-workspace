@@ -44,7 +44,7 @@ function fixture(t, provider = 'codex', extra = {}) {
   const sandbox = { background: require('../background-control.cjs'), omitHidden: require('../shown-sessions.cjs').omitHidden, backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
     queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
     confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', windows: new Map(), operationsBlocks: -1, recordsChanged() {}, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(),
-    localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }),
+    localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }), stewardWake: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     displayText: (key, params) => locale.format('zh', key, params), uiError: require('../ui-errors.cjs').uiError, applicationBuild: {}, app: { getVersion: () => 'fixture' }, localeWarning: '', preflight: () => ({}), notifyCapacity() {},
     validViews: require('../view-store.cjs').validViews, saveViews() {}, structuredClone, register: (name, handler) => handlers.set(name, handler), roomIds: s => s.roomIds || [] };
@@ -244,15 +244,19 @@ for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'ini
 test('own snapshots and human windows keep their conversations; foreign unselected auxiliary fields are metadata-only', async t => {
   const f = fixture(t), facts = { intake: 'ready', activation: 'off', recordPeriod: 'off' };
   f.sandbox.butlerIngress = { status: () => facts };
+  const wakeBlock = { since: 1000, minutes: 12, reason: 'source-unavailable' };
+  f.sandbox.stewardWake = { view: () => ({ on: true, blocked: wakeBlock }) };
   const own = await f.controller.call(f.binding, { action: 'snapshot' });
   assert.equal(own.state, 'complete'); assert.ok(JSON.stringify(own.value).includes(f.own));
   assert.equal(JSON.stringify(own.value).includes(f.secret), false); assert.equal(JSON.stringify(own.value).includes(f.third), false);
   assert.equal(own.value.sessions.find(s => s.id === 'other').name, 'Other 中文');
   assert.ok(JSON.stringify(own.value).includes('SHARED_RECORD') && JSON.stringify(own.value).includes('QUEUE_RECORD'));
   assert.deepEqual(own.value.butler, facts);
+  assert.equal(own.value.stewardWakeStatus, undefined, 'a global warning is only shown in the person window');
   const human = f.sandbox.displayState(f.state, { background: false, view: { selected: 'other' } });
   assert.ok(JSON.stringify(human).includes(f.secret)); assert.ok(JSON.stringify(human).includes(f.third));
   assert.deepEqual(human.butler, facts);
+  assert.deepEqual(human.stewardWakeStatus, wakeBlock);
 });
 test('new hidden views and restored selections do not authorize a conversation read', async t => {
   const f = fixture(t), opened = await f.controller.call(f.binding, command('newWindow', ['other']));

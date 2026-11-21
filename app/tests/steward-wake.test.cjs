@@ -41,6 +41,38 @@ function fixture(t, options = {}) {
   env.session = { id: 'butler', nativeId: 'native-butler' };
   return env;
 }
+
+test('a continuous due episode becomes visible after ten minutes, records changes only, and is bounded', async t => {
+  const env = fixture(t); env.wake.set(true); env.ledger.ingest(failure(1));
+  env.wake.skip('person-typing'); env.clock.now += 599999; env.wake.skip('person-typing');
+  assert.equal(env.lines.length, 0); assert.equal(env.wake.view().blocked, undefined);
+  env.clock.now++; env.wake.skip('person-typing');
+  assert.equal(env.lines.length, 1); assert.equal(env.lines[0].kind, 'wakeBlocked');
+  assert.equal(env.wake.view().blocked.reason, 'person-typing'); assert.equal(env.wake.view().blocked.minutes, 10);
+  env.wake.skip('person-typing'); assert.equal(env.lines.length, 1);
+  for (let i=0;i<50;i++) env.wake.skip(i%2 ? 'person-recent' : 'backend-update-needed');
+  assert.equal(env.lines.length, 16); assert.equal(env.sends.length, 0);
+  await ready(env); assert.equal(env.wake.view().blocked, undefined);
+});
+
+test('every fixed skip cause has a durable metadata-only record and visible status', t => {
+  const reasons = ['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
+    'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
+    'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
+    'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold'];
+  for (const reason of reasons) {
+    const env = fixture(t); env.wake.set(true); env.ledger.ingest(failure(1)); env.wake.skip(reason); env.clock.now+=600000; env.wake.skip(reason);
+    assert.equal(env.wake.view().blocked.reason,reason); assert.equal(env.lines.length,1);
+    assert.deepEqual(Object.keys(env.lines[0]).sort(),['kind','reason','since']);
+    assert.equal(env.lines[0].since,NOW); assert.equal(env.sends.length,0);
+  }
+});
+
+test('blocked record write failure stays visible without throwing or authorizing a send', t => {
+  const env=fixture(t);env.wake.set(true);env.ledger.ingest(failure(1));env.wake.skip('not-idle');env.clock.now+=600000;env.broken=true;
+  assert.doesNotThrow(()=>env.wake.skip('not-idle'));assert.equal(env.wake.view().blocked.reason,'record-unavailable');assert.equal(env.sends.length,0);
+  env.wake.set(false);assert.equal(env.wake.view().blocked,undefined);
+});
 const ready = (env, model = 'claude-test-model') => env.wake.wake(env.session, model, env.send);
 
 test('a new done event uses the existing steward switch and position-only wake without resending', async t => {
@@ -291,6 +323,69 @@ function passes(t, session, options = {}) {
   return { ...env, client, record, dispatcher, pass: async () => { await dispatcher.schedule(); } };
 }
 
+test('an active wake observer sees an empty-queue event without a live page or a pre-existing due event', async t => {
+  let env, observed = 0;
+  env = passes(t, butler(), { observeQueueState: () => {
+    observed++;
+    if (env.wake.active() && !env.wake.due()) env.ledger.ingest(failure(1));
+  } });
+  await env.dispatcher.start();
+  assert.equal(observed, 0, 'off does not open a source just to watch');
+  env.wake.set(true);
+  assert.equal(env.wake.due(), false, 'there is no event yet');
+  await env.pass();
+  assert.ok(observed > 0, 'the active observer must not require its own future event');
+  env.clock.now += 8000; await env.pass();
+  assert.equal(env.client.dispatches().length, 1);
+});
+
+test('actual dispatcher skip branches become visible and recorded without sending', async t => {
+  const cases = [
+    ['identity-unavailable', { nativeId: 'other-native' }],
+    ['in-space', { roomIds: ['shared'], roomId: 'shared' }],
+    ['backend-update-needed', { serviceCapabilities: [] }],
+    ['person-typing', { liveDraft: 'SYNTHETIC PRIVATE DRAFT' }],
+    ['model-unknown', { model: null }],
+    ['model-excluded', { model: 'deepseek-v4-pro' }],
+    ['engaged', {}, env => { env.holding = ['butler']; }],
+    ['not-settled', {}, env => { env.dispatcher.settleMs = 3600000; }],
+    ['person-recent', {}, env => { env.dispatcher.humanQuietMs = 3600000; env.dispatcher.noteHuman('butler'); }],
+    ['source-unavailable', {}, env => { env.client.refresh = async () => { throw Error('SYNTHETIC PRIVATE ERROR'); }; }],
+    ['identity-changed', {}, env => { env.client.refresh = async () => { env.client.state.sessions[0].nativeId = 'other-native'; }; }],
+  ];
+  for (const [reason, extra, arrange] of cases) {
+    const env = passes(t, butler(extra));
+    env.wake.set(true); env.ledger.ingest(failure(1));
+    env.dispatcher.client = env.client;
+    env.dispatcher.idleSince.set('butler', env.clock.now - 9000);
+    arrange?.(env);
+    const current = () => ({ snapshot: env.client.snapshot(), now: env.clock.now });
+    const first = current();
+    await env.dispatcher.wakeSteward(first, env.holding || []);
+    env.clock.now += 600000;
+    await env.dispatcher.wakeSteward(reason === 'identity-changed' ? { ...first, now: env.clock.now } : current(), env.holding || []);
+    const blocked = env.record.entries().filter(e => e.kind === 'wakeBlocked');
+    assert.equal(blocked.length, 1, reason);
+    assert.equal(blocked[0].reason, reason);
+    assert.equal(env.wake.view().blocked.reason, reason);
+    assert.equal(env.client.dispatches().length, 0, reason);
+    assert.doesNotMatch(JSON.stringify(blocked), /SYNTHETIC PRIVATE/u);
+  }
+});
+
+test('a real wake record failure is visible as a record failure and sends nothing', async t => {
+  const env = passes(t, butler());
+  env.wake.set(true); env.ledger.ingest(failure(1)); env.dispatcher.client = env.client;
+  env.dispatcher.idleSince.set('butler', env.clock.now - 9000);
+  env.wake.record = () => { throw Error('PRIVATE RECORD ERROR'); };
+  for (let i = 0; i < 2; i++) {
+    await env.dispatcher.wakeSteward({ snapshot: env.client.snapshot(), now: env.clock.now }, []);
+    env.clock.now += 600000;
+  }
+  assert.equal(env.wake.view().blocked.reason, 'record-unavailable');
+  assert.equal(env.client.dispatches().length, 0);
+});
+
 test('the dispatcher wakes the butler only once it is idle and settled, through the same NAW send as a queue item', async t => {
   const env = passes(t, butler({ state: 'working' }));
   await env.dispatcher.start();
@@ -319,7 +414,9 @@ test('the dispatcher wakes the butler only once it is idle and settled, through 
   assert.deepEqual(entries.map(entry => [entry.position, entry.state]), [[null, 'sent']]);
   assert.match(entries[0].operationId, /^tag-\d+$/u);
   assert.deepEqual(stewardRecords.view(env.record, { sessions: [] }).entries, [{ at: entries[0].at, kind: 'wake', target: 'butler', state: 'sent', error: null, recorded: true }], 'the wake is the only line, and the dialog shows it');
-  assert.equal(env.dispatcher.hasOpenWork(), false);
+  assert.equal(env.dispatcher.hasOpenWork(), true, 'the active observer remains connected after a wake');
+  await env.pass();
+  assert.equal(env.client.dispatches().length, 1, 'observing without a new position does not wake it again');
 });
 
 test('the dispatcher does not wake a butler the person just used, one in a space, one on DeepSeek, or with automatic messages off', async t => {

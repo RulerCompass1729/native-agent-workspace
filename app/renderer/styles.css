@@ -1247,11 +1247,17 @@ dialog p.records-note { color: var(--ink); }
 .disclosure-more[hidden] { display: none; }
 .disclosure-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; margin: 0; }
 .steward-record-steps { margin: 4px 0 10px; }
+.steward-record-steps [data-kind=wakeBlocked] summary { flex-wrap: wrap; }
+.steward-record-steps [data-kind=wakeBlocked] .disclosure-end { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; color: var(--ink); }
 .steward-record-usage { display: grid; grid-template-columns: 5em minmax(0, 1fr); gap: 10px; font-size: 13px; margin: 8px 0; }
 .steward-record-usage p { margin: 0 0 4px; }
 .steward-record-error { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
 /* NAW's switch for waking the butler: on one line with how it stands. */
 .steward-record-wake { margin: 4px 0 14px; }
+.steward-wake-warning { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--approval-ink); border-radius: 8px; background: var(--raised); color: var(--ink); font-size: 13px; }
+.steward-wake-warning[hidden] { display: none; }
+.steward-wake-warning p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.steward-wake-warning button { flex-shrink: 0; font-size: 13px; }
 .steward-record-wake-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
 dialog .steward-record-wake label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 500; }
 dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
