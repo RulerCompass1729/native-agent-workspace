@@ -28,10 +28,10 @@ let app;
   const pid = app.process().pid;
   const timezoneSplit = JSON.parse(fs.readFileSync(path.join(profile, 'outbox-owner.json'))).issuer.started !== gate.processInfo(pid).started;
   assert.equal(timezoneSplit, true, 'local issuer time and UTC installer time are distinct proof formats');
-  let windows = [], expected;
+  let windows = [], inferredMenuWindows, expected;
   for (let n = 0; n < 20; n++) {
     expected = await app.evaluate(() => { const w = global.__testHumanWindow; return { bounds: w.getBounds(), focused: w.isFocused(), opacity: w.getOpacity(), visible: w.isVisible() }; });
-    windows = gate.windowFrames(gate.processInfo(pid), undefined, profile);
+    ({ windows, inferredMenuWindows } = gate.windowFrames(gate.processInfo(pid), undefined, profile));
     if (windows.length) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -47,7 +47,7 @@ let app;
     global.__testUnknownWindow = u; await u.loadURL('data:text/html,<p>Unclaimed synthetic human window</p>');
   });
   assert.throws(() => gate.windowFrames(gate.processInfo(pid), undefined, profile), /frame 口径待核实/);
-  console.log(JSON.stringify({ pass: 1, fail: 0, pid, windows, expected, background, unknownWindowRefused: true, timezoneSplit, target: 'owned isolated GUI only', screenshots: 0, modelCalls: 0 }));
+  console.log(JSON.stringify({ pass: 1, fail: 0, pid, windows, inferredMenuWindows, expected, background, unknownWindowRefused: true, timezoneSplit, target: 'owned isolated GUI only', screenshots: 0, modelCalls: 0 }));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   try { if (app) { try { await app.evaluate(async () => { await global.__testFrameBroker?.close(); }); } finally { await app.close(); } } } finally { try { await scratch.release(); } finally { release(); } }
 });
