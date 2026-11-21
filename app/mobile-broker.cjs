@@ -115,6 +115,9 @@ class MobileBroker {
       const state=this.#access.load();return state.enabled&&state.generation===generation&&state.device.until>this.#access.time();
     }catch{return false;}
   }
+  // A reader that cannot be reconnected ends this phone's session. Its push, while still bound to the paired
+  // device, says so once and then ends too. Kept here so that a revoke or a new pairing stops it first.
+  #lost() { const push = this.#push; this.#push = null; this.#forget(); this.#push = push; this.#disconnect(); push?.end(); }
   #bound() {
     const client = this.#client;
     if (!client && this.#reconnectState) throw unavailable();
@@ -138,11 +141,12 @@ class MobileBroker {
   #watch(client) { client.once('closed', () => {
     if (this.#client !== client) return;
     try { this.#reconnectState = this.#identity(this.#access.load()); }
-    catch { this.#forget(); }
+    catch { this.#lost(); return; }
     this.#epoch++; this.#contexts.clear(); this.#consent.revoke();
     this.#refreshing = null;
-    this.#push?.close(); this.#push = null;
+    // The subscription stays through a reconnect: it says the lost service once, and later that it cleared.
     this.#disconnect();
+    this.#push?.refresh();
   }); }
   // Only a same-authority session GET replaces this reader; pending writes are never replayed.
   async #recover(auth) {
@@ -459,25 +463,44 @@ class MobileBroker {
     }
     const consent = this.#consent.status(state);
     result.capabilities.sensitiveDecisions = consent.enabled;
-    result.capabilities.push = !this.#all(state) && this.#workspaceGrant?.value.records === true;
+    result.capabilities.push = this.#workspaceGrant?.value.records === true;
     for (const card of result.confirmations) card.canDecide = Boolean(consent.enabled && card.version && card.state === 'confirmation-required' && !card.disposition && card.expiresAt > Date.now());
     return result;
   }
+  // What a subscription lives by: the paired device alone, so that a lost service can still be reported.
+  #pushDevice() {
+    try {
+      if (this.#access.closed || this.#access.disabledMarker()) return null;
+      const s = this.#access.load();
+      if (!s.enabled || !s.device || s.device.until <= this.#access.time()) return null;
+      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+    } catch { return null; }
+  }
+  // Who may subscribe and read the count: that device, connected, holding the reminders permission.
   #pushAuthority() {
     try {
       this.#bound();
-      if (this.#access.closed || this.#access.disabledMarker()) return null;
-      const s = this.#access.load();
-      if (this.#all(s) || !s.enabled || !s.device || s.device.until <= this.#access.time() ||
-          this.#workspaceGrant?.generation !== s.generation || this.#workspaceGrant.value.records !== true) return null;
-      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+      if (this.#workspaceGrant?.generation !== this.#access.load().generation || this.#workspaceGrant.value.records !== true) return null;
+      return this.#pushDevice();
     } catch { return null; }
+  }
+  #pushAlerts() {
+    const alerts = []; let client = null, status = null;
+    try { client = this.#bound(); } catch { alerts.push({ code: 'service-disconnected' }); }
+    // The app judges waiting cards from the same reminder status the count comes from.
+    try { if (client && this.#pushAuthority()) status = this.#desktop.records.status(null, client); } catch { status = null; }
+    const source = this.#pushOptions.alerts;
+    if (!source) return { alerts, unknown: [] };
+    let more; try { more = source(status); } catch { more = null; }
+    // The lost service is known here. When the app cannot answer, every other code is unknown, never "no problems".
+    if (!more || !Array.isArray(more.alerts)) return { alerts, unknown: require('./mobile-push.cjs').ALERTS.filter(code => code !== 'service-disconnected') };
+    return { alerts: alerts.concat(more.alerts), unknown: Array.isArray(more.unknown) ? more.unknown : [] };
   }
   pushInfo(auth) {
     this.#workspaceState(auth);
     if (!this.#pushAuthority()) throw denied();
-    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions,
-      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status(null, this.#bound()).count });
+    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions, authority: () => this.#pushDevice(),
+      count: () => this.#pushAuthority() ? this.#desktop.records.status(null, this.#bound()).count : null, alerts: () => this.#pushAlerts() });
     return this.#push.configuration();
   }
   pushAction(auth, value) {

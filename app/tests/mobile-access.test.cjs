@@ -95,6 +95,33 @@ test('session expiry is absolute; reading does not extend it or rewrite authorit
   f.setTime(until - 1); const ticket = f.authorize(session); assert.equal(f.verify(ticket), true); assert.equal(f.read(), before);
   f.setTime(until); assert.throws(() => f.authorize(session), /手机授权/); assert.throws(() => f.verify(ticket), /手机授权/);
 });
+const HOUR = 60 * 60 * 1000, DAY = 24 * HOUR;
+test('a paired phone stays valid for seven days: past the former twelve hours and up to the last millisecond', t => {
+  const f = ready(t), start = f.getTime(), session = f.pair();
+  assert.equal(SESSION_MS, 7 * DAY); assert.equal(session.expiresAt, start + 7 * DAY);
+  assert.equal(JSON.parse(f.read()).device.until, start + 7 * DAY);
+  for (const at of [start + 12 * HOUR, start + 12 * HOUR + 1, start + 3 * DAY, start + 7 * DAY - 1]) {
+    f.setTime(at); assert.equal(f.verify(f.authorize(session)), true);
+  }
+});
+test('seven days after pairing the phone is refused by the Mac entry and by the backend, and stays refused', t => {
+  const f = ready(t), start = f.getTime(), session = f.pair();
+  f.setTime(start + 7 * DAY - 1); const ticket = f.authorize(session), before = f.read();
+  for (const at of [start + 7 * DAY, start + 7 * DAY + 1, start + 8 * DAY]) {
+    f.setTime(at); assert.throws(() => f.access.authenticate({ token: session.cookieValue, actor }), /手机授权/);
+    assert.throws(() => f.authorize(session), /手机授权/); assert.throws(() => f.verify(ticket), /手机授权/);
+  }
+  assert.equal(f.read(), before, 'A refused request does not renew or rewrite the pairing');
+});
+test('a Mac revoke ends a seven-day pairing at once, days before it would expire', t => {
+  const f = ready(t), start = f.getTime(), session = f.pair();
+  f.setTime(start + 3 * DAY); const ticket = f.authorize(session); assert.equal(f.verify(ticket), true);
+  assert.deepEqual(f.access.revoke(), { confirmed: true });
+  assert.throws(() => f.access.authenticate({ token: session.cookieValue, actor }), /手机授权/);
+  assert.throws(() => f.authorize(session), /手机授权/); assert.throws(() => f.verify(ticket), /手机授权/);
+  const stored = JSON.parse(f.read()); assert.equal(stored.enabled, false); assert.equal(stored.device, null);
+  f.setTime(start + 3 * DAY + 1); assert.throws(() => f.verify(ticket), /手机授权/);
+});
 test('replacement requires a Mac action and invalidates the original device before the next exchange', t => {
   const f = ready(t), old = f.pair(), ticket = f.authorize(old);
   assert.throws(() => f.begin(), e => e.code === 'MOBILE_REPLACE_REQUIRED'); assert.equal(f.verify(ticket), true);

@@ -47,7 +47,8 @@ test('a QR-verified key survives pause/recovery but each card still needs a new 
  await assert.rejects(next.decide(a,{...value,challengeId:old.challengeId,assertion:key.assertion(old.publicKey)}));
  const wrong=await next.decisionOptions(a,value);await assert.rejects(next.decide(a,{...value,challengeId:wrong.challengeId,assertion:key.assertion(wrong.publicKey,{flags:1})}));
  const good=await next.decisionOptions(a,value);assert.equal((await next.decide(a,{...value,challengeId:good.challengeId,assertion:key.assertion(good.publicKey)})).status,'complete');
- assert.throws(()=>next.pushInfo(a));next.revoke();
+ // An all-scope pairing may subscribe, so the restored one may too; no subscription itself outlives the process.
+ const push=next.pushInfo(a);assert.equal(push.enabled,false);assert.equal(push.state,'off');next.revoke();
 });
 test('explicit revoke before reconnecting the saved pairing is durable',async t=>{
  const f=fixture(t);await f.selected();f.first.suspend();const next=f.create();assert.equal(next.revoke().authorizationRevoked,true);

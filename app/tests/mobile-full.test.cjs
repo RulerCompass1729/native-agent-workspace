@@ -64,14 +64,14 @@ function brokerFixture(t, { legacy = false } = {}) {
   t.after(()=>broker.revoke());
   return {root,broker,entries,clients,calls,row,holdConnection(){holdOne=true;},connectionEntered,releaseConnection(){release();},holdRead(){holdRead=true;},reading,releaseRead(){releaseRead();}};
 }
-test('full broker discovers later sessions, retains exact native checks and forbids push despite records permission', async t => {
+test('full broker discovers later sessions, retains exact native checks and offers push with its records permission', async t => {
   const f=brokerFixture(t), c=await f.broker.beginPairing({actor,origin,all:true});
   const d=f.broker.pair({secret:c.secret,actor,origin}), auth={token:d.cookieValue,actor,origin};auth.csrf=f.broker.session(auth).csrf;
   f.entries[0].state.sessions.push(f.row('future'));
   const session=await f.broker.refreshSession(auth);assert.equal(session.sessions.length,2);
   const r=await f.broker.read(auth,'future');assert.equal(r.id,'future');
-  const w=await f.broker.workspaceRead(auth);assert.equal(w.g.allRooms,true);assert.equal(w.g.records,true);assert.equal(w.scopes.length,2);assert.equal(w.capabilities.push,false);
-  assert.throws(()=>f.broker.pushInfo(auth));assert.throws(()=>f.broker.pushAction(auth,{action:'subscribe',subscription:{}}));
+  const w=await f.broker.workspaceRead(auth);assert.equal(w.g.allRooms,true);assert.equal(w.g.records,true);assert.equal(w.scopes.length,2);assert.equal(w.capabilities.push,true);
+  assert.equal(f.broker.pushInfo(auth).publicKey.length,87);assert.throws(()=>f.broker.pushAction(auth,{action:'subscribe',subscription:{}}));
   f.entries[0].state.sessions[1].archived=true;await assert.rejects(f.broker.read(auth,'future'));
   assert.equal(f.broker.approvalStatus().enabled,false);
 });

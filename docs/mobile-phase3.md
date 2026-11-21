@@ -1,7 +1,9 @@
-# Count-only phone push
+# Phone push: a count and four fixed alerts
 
 This phase serves the single-entry vision by waking the person with a reminder
 count, then opening the existing private phone entry for the records themselves.
+Since 2026-11-20 the same push also carries four fixed alert codes, so that the
+person learns at once when NAW itself needs them (see "Alerts" below).
 Sensitive approvals remain disabled. This is an isolated implementation candidate;
 phone pictures, independent Codex review and real-device activation are separate gates.
 
@@ -25,7 +27,9 @@ extends this entry's final total. Phone and push keep reading `.count`; neither
 adds cards or temporary reminders itself. This repair does not import that
 candidate's UI or depend on its visual approval.
 
-The encrypted application payload has exactly one property: `{ "count": N }`.
+Without an alert the encrypted application payload has exactly one property:
+`{ "count": N }`. With alerts it is `{ "count": N, "alerts": [code, …] }`; the
+count is left out when it may not or cannot be read (see "Alerts").
 The service worker creates “NAW 有 N 条提醒” / “NAW has N reminders” locally. It
 never receives names, conversation text, local paths, screenshots, private-origin
 URLs, or approval tokens. Clicking always opens `/mobile/` on its own origin;
@@ -34,10 +38,13 @@ it does not approve an operation or use a URL from a notification.
 Standard Web Push metadata remains visible to the push service: its opaque
 subscription endpoint, timing, VAPID public key/JWT, TTL, topic and ciphertext
 length. VAPID's subject is the fixed public project URL, never the private
-Tailscale name or a personal contact. TTL is 60 seconds and topic/tag is
-`naw-count`. Identical counts are coalesced; changed counts, including zero,
-replace the notification. Accepted means accepted by the service, not delivered
-to the phone. JWTs are reused for one hour per push-service origin.
+Tailscale name or a personal contact. The topic is always `naw-count`. A
+count-only payload has TTL 60 seconds and normal urgency; a payload with an
+alert has TTL 3600 seconds and high urgency, so the push service can tell that
+an alert is being sent, though not which one. Identical states are coalesced;
+changed counts, including zero, replace the notification. Accepted means
+accepted by the service, not delivered to the phone. JWTs are reused for one
+hour per push-service origin.
 
 Only exact HTTPS hosts `web.push.apple.com`, `fcm.googleapis.com` and
 `updates.push.services.mozilla.com` are supported. Ports, credentials, queries,
@@ -47,12 +54,79 @@ are not followed, and requests/responses have finite time and size bounds.
 Other legitimate provider hosts currently fail closed; this is not a claim of
 support for every browser endpoint.
 
+## Alerts
+
+The codes, most urgent first, are `service-disconnected`,
+`steward-wake-stalled`, `token-anomaly` and `decision-waiting`. The Mac sends
+only codes from this list; the service worker holds the wording (“本机服务断开”,
+“大管家该叫醒没叫醒”, “token 异常”, “有事等你决定” and their English forms) and shows
+nothing for any other value. No name, text, reason, duration or number other
+than the reminder count is sent. An alert notification uses the tag `naw-alert`;
+its title is the most urgent alert, its body the remaining ones and a count
+above zero. When the last alert ends, one payload with an empty list lets the
+phone show “告警已解除”; after that the count-only payload returns.
+
+An alert payload outlasts a phone that is briefly unreachable; the shared
+topic lets a later state replace one the push service has not delivered. Alerts
+are reported by the same check as the count, about a minute after they begin: a
+60-second timer and then the send. Whether a locked Mac slows that timer is
+unverified. A lost service is the exception: it is said at once (see below).
+
+Main's `appHealth(status)` is the one source:
+`{ available, alerts: [{ code, at? }], unknown: [code] }`. `unknown` lists the
+codes whose source could not be read, and `available` is false when there is
+one: unknown is never "no problems". The push keeps a code it has already said
+for as long as that code is unknown, and keeps all of them when the answer
+itself cannot be read, so an unreadable source is never shown as “告警已解除”.
+It does not raise an alert it has not said. A reminder count that cannot be
+read holds back only itself: alerts still leave without it, and it alone sends
+nothing.
+
+The optional `at` is when the newest case of that alert began; it stays on the
+Mac, and an unchanged alert is sent again only when it grows, so a second
+question is announced while the first is still open.
+
+`appHealth` reports a waiting decision: a queue item that waits for the person
+(the rule of the desktop decision notification), or a confirmation card the
+person can act on, judged from the shared reminder status the caller passes in;
+without that status the cards were not judged and the code is unknown. It
+reports a stalled butler wake-up when the wake record's view has a `blocked`
+field. Nothing on this change sets that field, and token anomalies have no
+producer either: until their producers are merged, neither alert is ever sent.
+The phone banner is meant to read the same function.
+
+The broker adds `service-disconnected` itself when its connection to the local
+service is lost. On this change that loss ends the phone's session, as it did
+before, and nothing connects again by itself. The push therefore says the loss
+once, trying again each minute until the push service accepts it, and then ends
+with the session; it sends no "cleared" afterwards. To receive anything further
+the phone is paired again and reminders are enabled again. A Mac revoke or a
+new pairing stops an unfinished last send. When the phone page's reconnection
+(a separate change) is merged, the subscription is meant to stay through a
+reconnect instead.
+
 ## Device lifetime and offline behavior
 
+A paired device lasts seven days from pairing. It was twelve hours before; the
+person chose seven days so the phone does not need pairing again each day. The
+lifetime is absolute: use does not extend it, the phone cookie's Max-Age is
+capped to it, and the phone entry stays open for that time.
+Revoking on the Mac, or pairing again, still ends the device at once, so a lost
+phone is revoked on the Mac rather than left to expire.
+
+One pairing still accepts at most 256 sends or answers, 256 workspace actions
+and 256 confirmation decisions; none is evicted, so a repeated request never
+runs twice. A full record refuses further ones until the phone is paired again,
+which seven days makes easier to reach than twelve hours did.
+
 Subscription, VAPID keys and pending work are memory-only, tied to the current
-issuer/generation/device and explicit records permission. The broker closes them
-on logout, Mac revoke, re-pair or service disconnect. Each refresh rechecks
-authority, expiration and the disabled marker. A request rechecks after TLS and
+issuer/generation/device. Subscribing needs the explicit records permission,
+which pairing "all" includes. The broker closes them on logout, Mac revoke and
+re-pair. On a service disconnect it keeps the subscription only for the one
+last message that reports the disconnect: the count is no longer read or sent,
+the phone's private entry refuses every request, and a Mac revoke, a new
+pairing or the device's expiry ends that last send too. Each refresh rechecks
+the device, expiration and the disabled marker. A request rechecks after TLS and
 before writing HTTP headers/body; close also aborts its outstanding request.
 This extends the existing phone delegation, not a new proof of physical identity
 against arbitrary same-account local code.
@@ -140,12 +214,23 @@ checked 2026-11-15. This implementation uses feature detection, a stable manifes
 id/standalone display and the ordinary Share-menu installation path. It does not
 require experimental install APIs or an Apple Developer Program subscription.
 
+Not covered by this push: an app that has quit or cannot run its timers sends
+nothing, the subscription does not survive an app restart, and it ends when the
+paired device expires (seven days after pairing). None of these raises an
+alert on the phone. After a lost service has been reported, the push is off
+until the phone is paired and subscribed again.
+
 ## Verification boundary
 
 Unit/integration checks decrypt the real encrypted request at an owned loopback
 TLS receiver, test malformed endpoints, count equality, origin/CSRF/grant checks,
 revocation/re-pair/disconnect, delayed responses, expired subscriptions, JWT reuse
-and fixed notification clicks. Browser checks use the actual HTTP handlers and
+and fixed notification clicks. They also check that only listed alert codes
+leave, that a lost service is said once without a count and the push then ends,
+that an alert is said once, again for a newer case and cleared once, that an
+unreadable source keeps what was said and is never reported as cleared, that an
+unreadable count holds back only itself, and the worker's fixed titles.
+Browser checks use the actual HTTP handlers and
 service worker, with the permission/subscription APIs replaced by synthetic
 objects before interaction. They never contact a real push service. Neither an
 actual iPhone/Safari notification, APNs/FCM/Firefox delivery, real Tailscale

@@ -173,3 +173,94 @@ test('VAPID subject and generated JWT carry no account, contact address or appli
     assert.deepEqual(JSON.parse(plain), { count: 7 });
   }
 });
+const sent = (f, index = -1) => JSON.parse(require('http_ece').decrypt(f.messages.at(index).body, { version: 'aes128gcm', privateKey: f.key, authSecret: f.sub.keys.auth }).toString());
+test('alerts leave only as fixed codes; a cleared alert is said once, then the count contract returns', async t => {
+  let alerts = [{ code: 'token-anomaly' }, { code: 'PRIVATE_NAME' }, { code: 'service-disconnected', text: 'PRIVATE_BODY' }, { code: 'token-anomaly' }, 'decision-waiting', null];
+  const f = fixture(t, { alerts: () => ({ alerts }) }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: ['service-disconnected', 'token-anomaly'] });
+  assert.equal(f.messages[0].headers.TTL, 3600); assert.equal(f.messages[0].headers.Urgency, 'high'); assert.equal(f.messages[0].headers.Topic, 'naw-count');
+  await f.push.refresh(); assert.equal(f.messages.length, 1);
+  alerts = []; await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: [] }); assert.equal(f.messages[1].headers.TTL, 60); assert.equal(f.messages[1].headers.Urgency, 'normal');
+  await f.push.refresh(); assert.equal(f.messages.length, 2);
+  f.count(8); await f.push.refresh(); assert.deepEqual(sent(f), { count: 8 });
+});
+test('without a permitted count only the alert leaves, and nothing leaves when there is no alert', async t => {
+  let alerts = [];
+  const f = fixture(t, { count: () => null, alerts: () => ({ alerts }) }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); assert.equal(f.messages.length, 0);
+  alerts = [{ code: 'service-disconnected' }]; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: ['service-disconnected'] });
+  alerts = []; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: [] });
+  await f.push.refresh(); assert.equal(f.messages.length, 2);
+});
+test('an alert source that cannot be read keeps what was last said and never reports it cleared', async t => {
+  let source = () => { throw Error('PRIVATE_FAILURE'); };
+  const f = fixture(t, { alerts: () => source() }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); assert.deepEqual(sent(f), { count: 7 }); assert.equal(f.push.status().state, 'accepted');
+  source = () => ({ alerts: [{ code: 'steward-wake-stalled' }, { code: 'decision-waiting' }] }); await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: ['steward-wake-stalled', 'decision-waiting'] });
+  for (const broken of [() => { throw Error('PRIVATE_FAILURE'); }, () => null, () => ['decision-waiting'],
+    () => ({ alerts: [], unknown: ['steward-wake-stalled', 'decision-waiting', 'PRIVATE_NAME'] })]) {
+    source = broken; await f.push.refresh(); assert.equal(f.messages.length, 2);
+  }
+  // Only the wake source is unreadable now: the decision is known to be answered, the stall is still unknown.
+  source = () => ({ alerts: [], unknown: ['steward-wake-stalled'] }); await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: ['steward-wake-stalled'] });
+  // An unknown code that was never said is not invented.
+  source = () => ({ alerts: [], unknown: ['steward-wake-stalled', 'token-anomaly'] }); await f.push.refresh(); assert.equal(f.messages.length, 3);
+  source = () => ({ alerts: [] }); await f.push.refresh(); assert.deepEqual(sent(f), { count: 7, alerts: [] });
+});
+test('an unreadable count holds back only itself: alerts still leave, and it alone says nothing', async t => {
+  let alerts = [], read = () => { throw Error('PRIVATE_FAILURE'); };
+  const f = fixture(t, { count: () => read(), alerts: () => ({ alerts }) }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); assert.equal(f.messages.length, 0); assert.equal(f.push.status().state, 'delayed');
+  alerts = [{ code: 'decision-waiting' }]; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: ['decision-waiting'] });
+  await f.push.refresh(); assert.equal(f.messages.length, 1);
+  read = () => 7; await f.push.refresh(); assert.deepEqual(sent(f), { count: 7, alerts: ['decision-waiting'] });
+  // A count that fails later neither repeats the alert nor sends a stale number.
+  read = () => 1.5; await f.push.refresh(); read = () => { throw Error('PRIVATE_FAILURE'); }; await f.push.refresh(); assert.equal(f.messages.length, 2);
+  alerts = []; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: [] });
+  read = () => 7; await f.push.refresh(); assert.equal(f.messages.length, 3);
+});
+test('a push told to end says the current state once more, keeps trying until it is accepted, then is off', async t => {
+  let alerts = [], status = 201;
+  const f = fixture(t, { alerts: () => ({ alerts }), transport: async details => { f.messages.push(details); return status; } });
+  f.push.configuration(); f.push.subscribe(f.sub); await f.push.refresh(); assert.deepEqual(sent(f), { count: 7 });
+  alerts = [{ code: 'service-disconnected' }]; status = 500; await f.push.end();
+  assert.equal(f.messages.length, 2); assert.equal(f.push.status().enabled, true); assert.equal(f.push.status().state, 'delayed');
+  status = 201; await f.push.refresh(); assert.deepEqual(sent(f), { count: 7, alerts: ['service-disconnected'] });
+  assert.deepEqual(f.push.status(), { enabled: false, state: 'off', lastSubmittedAt: null });
+  alerts = [{ code: 'decision-waiting' }]; await f.push.refresh(); assert.equal(f.messages.length, 3);
+  // Nothing new to say also ends it, and so does ending before any subscription.
+  const g = fixture(t); g.push.configuration(); g.push.subscribe(g.sub); await g.push.refresh(); await g.push.end();
+  assert.equal(g.messages.length, 1); assert.equal(g.push.status().state, 'off');
+  const h = fixture(t); h.push.configuration(); h.push.end(); assert.equal(h.push.status().state, 'off');
+});
+test('a new subscription during an unfinished ending is a new start and stays on', async t => {
+  let status = 500;
+  const f = fixture(t, { transport: async details => { f.messages.push(details); return status; } });
+  f.push.configuration(); f.push.subscribe(f.sub); await f.push.end();
+  assert.equal(f.push.status().state, 'delayed');
+  status = 201; f.push.subscribe(f.sub); await f.push.refresh(); assert.deepEqual(sent(f), { count: 7 });
+  assert.equal(f.push.status().enabled, true); assert.equal(f.push.status().state, 'accepted');
+});
+test('ending during a pending send still says the final state after that send settles', async t => {
+  let alerts = [], release; const gate = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { alerts: () => ({ alerts }), transport: async details => { f.messages.push(details); if (f.messages.length === 1) await gate; return 201; } });
+  f.push.configuration(); f.push.subscribe(f.sub); const first = f.push.refresh();
+  alerts = [{ code: 'service-disconnected' }]; f.push.end(); release(); await first;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(sent(f), { count: 7, alerts: ['service-disconnected'] }); assert.equal(f.push.status().state, 'off');
+});
+test('an unchanged alert is said again only for a newer case, and its time never leaves', async t => {
+  let alerts = [{ code: 'decision-waiting', at: 1000 }];
+  const f = fixture(t, { alerts: () => ({ alerts }) }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); await f.push.refresh(); assert.equal(f.messages.length, 1);
+  alerts = [{ code: 'decision-waiting', at: 2000 }]; await f.push.refresh();
+  assert.equal(f.messages.length, 2); assert.deepEqual(sent(f), { count: 7, alerts: ['decision-waiting'] });
+  // The newer question was answered; the older one is still open and was already announced.
+  alerts = [{ code: 'decision-waiting', at: 1000 }]; await f.push.refresh(); assert.equal(f.messages.length, 2);
+  alerts = [{ code: 'decision-waiting', at: 'PRIVATE' }, { code: 'token-anomaly', at: 1.5 }]; await f.push.refresh();
+  assert.equal(f.messages.length, 3); assert.deepEqual(sent(f), { count: 7, alerts: ['token-anomaly', 'decision-waiting'] });
+});

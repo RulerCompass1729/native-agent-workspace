@@ -191,11 +191,31 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   catch { health = { available: false, alerts: [] }; }
   return { ...confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary)), health };
 }
+// The one list of fixed alert codes for the phone, shared by its push and its banner: no names, text, counts or
+// error messages. unknown lists the codes whose source could not be read; available false means some are unknown,
+// never "no problems". A lost service is added where it is seen.
+// at is when the newest case began, so that a second question is announced while the first is still open.
+// status is the shared reminder status when the caller may read it; without it the cards were not judged.
+function appHealth(status = null) {
+  const alerts = [], unknown = [];
+  try { if (stewardWake?.view().blocked) alerts.push({ code: 'steward-wake-stalled' }); } catch { unknown.push('steward-wake-stalled'); }
+  try {
+    const rooms = [roomState.value, ...roomState.spaces.rooms];
+    // The same rule as the desktop's decision notification: waiting with no reason asks the person.
+    const asked = rooms.filter(room => !room.archived).flatMap(room => (room.queue || []).filter(item => item.status === 'waiting' && !item.reason));
+    const cards = (status?.confirmations || []).filter(card => card.actionable === true);
+    if (asked.length || cards.length) alerts.push({ code: 'decision-waiting', at: Math.max(0,
+      ...asked.map(item => Number.isSafeInteger(item.finishedAt) ? item.finishedAt : 0), ...cards.map(card => Number.isSafeInteger(card.time) ? card.time : 0)) });
+    else if (!status) unknown.push('decision-waiting');
+  } catch { unknown.push('decision-waiting'); }
+  return { available: !unknown.length, alerts, unknown };
+}
 function appMobileBroker() {
   if (!primary || quitting || mobileQuitWaiting || !dataDir) throw Error('The local mobile entry is unavailable.');
   if (!mobileBroker) {
     const {PairingStore,keychainAdapter}=require('./mobile-pairing-store.cjs');
-    mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting && !mobileQuitWaiting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),persistence:new PairingStore(dataDir,{adapter:keychainAdapter(),asynchronous:true,log:({phase,category,elapsedMs})=>appMobileLog(phase,category,elapsedMs)}) });
+    mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting && !mobileQuitWaiting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),persistence:new PairingStore(dataDir,{adapter:keychainAdapter(),asynchronous:true,log:({phase,category,elapsedMs})=>appMobileLog(phase,category,elapsedMs)}),
+      pushOptions: { alerts: status => appHealth(status) } });
   }
   return mobileBroker;
 }

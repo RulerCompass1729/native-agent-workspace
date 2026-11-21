@@ -5,7 +5,8 @@ const { randomBytes, randomUUID, createHash, timingSafeEqual } = require('node:c
 const { TextDecoder } = require('node:util');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const FILE = 'mobile-authority.json', OFF = 'mobile-disabled';
-const PAIR_MS = 120000, SESSION_MS = 12 * 60 * 60 * 1000, MAX_BYTES = 256 * 1024;
+// Seven days, absolute from pairing; use never extends it. A Mac revoke ends it at once.
+const PAIR_MS = 120000, SESSION_MS = 7 * 24 * 60 * 60 * 1000, MAX_BYTES = 256 * 1024;
 const actions = new Set(['read', 'send', 'answer']);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
