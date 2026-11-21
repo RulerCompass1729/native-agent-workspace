@@ -44,8 +44,9 @@ async function fixture(t, { capability = true, retained = false } = {}) {
   w.bind(s, r);
   const states = [], ends = [];
   r.on('state', state => states.push(state)); r.on('nativeTurnEnd', end => ends.push(end.status));
-  const settingsCompact = () => r.hook({ hook_event_name: 'SessionStart', session_id: s.nativeId, source: 'compact' });
-  return { w, s, r, binding, check, issue, mint, row, states, ends, settingsCompact, sequence: () => sequence, skip: n => { sequence = n; } };
+  const stamp = sequence => `${r.observationEpoch}:${sequence}`;
+  const settingsCompact = naw_compaction => r.hook({ hook_event_name: 'SessionStart', session_id: s.nativeId, source: 'compact', naw_compaction });
+  return { w, s, r, binding, check, issue, mint, row, states, ends, settingsCompact, stamp, sequence: () => sequence, skip: n => { sequence = n; } };
 }
 
 // The real hook module with a seed seam (as in compact-control-retirement.test.cjs). Its requests reach
@@ -98,8 +99,14 @@ export function drained() { return !observing && !observations.length; }
     assert.equal(mod.drained(), true, 'the observation queue drains');
   };
   const compact = async ({ hookFirst = false } = {}) => {
-    await hooks.get('classic.SessionStart')($, { session_id: f.s.nativeId, source: 'compact' }, async () => { if (hookFirst) f.settingsCompact(); return {}; });
+    let settingsNotice;
+    await hooks.get('classic.SessionStart')($, { session_id: f.s.nativeId, source: 'compact' }, async event => {
+      settingsNotice = event;
+      if (hookFirst) f.settingsCompact(event.naw_compaction);
+      return {};
+    });
     await settle();
+    return settingsNotice;
   };
   const step = async (turnId = 'owned-turn', { agentId, origin = ENGINE } = {}) => {
     const next = async function* () { yield { kind: 'text' }; return 'done'; };
@@ -134,12 +141,15 @@ const RESTORED = { promptId: 'owned-prompt', turnId: 'owned-turn', observationGa
 test('the engine\'s next step of the compacted root turn gives it back control, operator and message calls', async t => {
   const f = await fixture(t), b = await bridge(f), liveBefore = f.r.liveTurn;
   await b.allAllowed('before the compact');
-  await b.compact();
+  const sequence = f.sequence() + 1;
+  const settings = await b.compact();
+  assert.equal(settings.source, 'compact');
+  assert.equal(settings.naw_compaction, f.stamp(sequence), 'bridge passes the exact ordered position to the settings hook');
   assert.deepEqual(b.mod.bridgeState(), RETIRED);
   assert.equal(f.r.liveTurn, null); assert.equal(f.r.rootTurn, null);
   await b.allDenied('between the compact and the turn\'s next step');
   assert.throws(() => f.mint(), 'NAW itself mints nothing for the compacted turn before the proof');
-  f.settingsCompact(); // measured order: the settings hook follows the ordered row
+  f.settingsCompact(settings.naw_compaction); // measured order: the settings hook follows the ordered row
   await b.step();
   assert.deepEqual(b.mod.bridgeState(), RESTORED);
   assert.deepEqual(b.observed.slice(0, 2), ['control:compact', 'control:turn-continue']);
@@ -381,8 +391,9 @@ for (const [order, events] of [
   const f = await fixture(t), before = f.r.liveTurn;
   assert.equal((await f.check()).ok, true);
   let fresh = null;
+  const stamp = f.stamp(f.sequence() + 1);
   for (const event of events) {
-    if (event === 'hook') f.settingsCompact(); else f.row(event === 'row' ? { id: 'control:compact' } : CONTINUE);
+    if (event === 'hook') f.settingsCompact(stamp); else f.row(event === 'row' ? { id: 'control:compact' } : CONTINUE);
     const label = `${order}, after ${event}`;
     await retired(f, label);
     assert.notEqual(f.r.liveTurn, before, `${label}: no reference from before the compaction is live`);
@@ -406,21 +417,24 @@ for (const [order, events] of [
 
 test('a late settings notice hurts no turn; the next compaction\'s first notice retires again, whichever path brings it', async t => {
   const next = await fixture(t);
+  const first = next.stamp(next.sequence() + 1);
   next.row({ id: 'control:compact' }); next.row(CONTINUE); next.row(END);
   next.row({ id: 'control:turn-start', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
   const mine = next.r.liveTurn;
-  next.settingsCompact();
+  next.settingsCompact(first);
   assert.equal(next.r.liveTurn, mine, 'the notice of the earlier compaction leaves the turn that started since');
   next.mint('next-turn', 'next-prompt');
 
   for (const second of ['hook', 'row']) {
     const f = await fixture(t);
-    f.row({ id: 'control:compact' }); f.row(CONTINUE); f.settingsCompact();
+    const first = f.stamp(f.sequence() + 1);
+    f.row({ id: 'control:compact' }); f.row(CONTINUE); f.settingsCompact(first);
     const fresh = await f.issue();
-    if (second === 'hook') f.settingsCompact(); else f.row({ id: 'control:compact' });
+    const stamp = f.stamp(f.sequence() + 1);
+    if (second === 'hook') f.settingsCompact(stamp); else f.row({ id: 'control:compact' });
     assert.equal((await fresh()).ok, false, `${second}: a second compaction retires the continued turn's scope at its first notice`);
     assert.equal(f.r.liveTurn, null, second); assert.throws(() => f.mint(), second);
-    if (second === 'hook') f.row({ id: 'control:compact' }); else f.settingsCompact();
+    if (second === 'hook') f.row({ id: 'control:compact' }); else f.settingsCompact(stamp);
     assert.equal(f.r.liveTurn, null, `${second}: its other notice restores nothing`);
     f.row(CONTINUE);
     assert.equal(f.r.liveTurn?.id, 'owned-turn', `${second}: its own proof continues the turn again`);
@@ -429,16 +443,65 @@ test('a late settings notice hurts no turn; the next compaction\'s first notice 
   }
 });
 
-test('a settings notice is its ordered row\'s only within the hook\'s own time; a later one is another compaction', async t => {
+test('a compact settings notice more than 10 seconds late preserves a different live turn', async t => {
   const f = await fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const first = f.stamp(f.sequence() + 1);
+  f.row({ id: 'control:compact' }); f.row(CONTINUE); f.row(END);
+  f.row({ id: 'control:turn-start', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
+  const next = f.r.liveTurn;
+  assert.ok(f.mint('next-turn', 'next-prompt'));
+  now += 10101;
+  f.settingsCompact(first);
+  assert.equal(f.r.liveTurn, next);
+  assert.ok(f.mint('next-turn', 'next-prompt'));
+  assert.deepEqual(f.states, [], 'the next turn never ended');
+});
+
+test('a distinct compact within 10 seconds retires at its settings notice even with an unpaired prior row', async t => {
+  const f = await fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const first = f.stamp(f.sequence() + 1);
+  f.row({ id: 'control:compact' }); f.row(CONTINUE);
+  const scope = await f.issue();
+  now += 8002;
+  const second = f.stamp(f.sequence() + 1);
+  f.settingsCompact(second);
+  assert.equal((await scope()).failureReason, 'grant-invalidated', 'settings is the first notice of the second boundary');
+  assert.throws(() => f.mint(), 'no scope until its own ordered continuation');
+  f.settingsCompact(first);
   f.row({ id: 'control:compact' }); f.row(CONTINUE);
   const fresh = await f.issue();
-  // The hook command is killed after 2 s; NAW allows 10 s. Past that the row waits for no notice.
-  f.r.compactNotice.at -= 10001;
-  f.settingsCompact();
-  assert.equal((await fresh()).ok, false, 'fail closed: the notice retires');
-  assert.equal(f.r.liveTurn, null); assert.throws(() => f.mint());
-  assert.deepEqual(f.states, [], 'the turn still runs');
+  f.settingsCompact(second);
+  assert.equal((await fresh()).ok, true, 'only the second proof authorizes the continued turn');
+  assert.equal((await scope()).ok, false);
+});
+
+test('an unmarked or mismatched settings notice still retires rather than presuming a duplicate', async t => {
+  for (const stamp of [undefined, 'invalid', `${'b'.repeat(32)}:2`, f => f.stamp(9007199254740992)]) {
+    const f = await fixture(t);
+    f.row({ id: 'control:compact' }); f.row(CONTINUE);
+    const scope = await f.issue();
+    f.settingsCompact(typeof stamp === 'function' ? stamp(f) : stamp);
+    assert.equal((await scope()).failureReason, 'grant-invalidated');
+    assert.throws(() => f.mint());
+  }
+});
+
+test('a settings compact after a live observation gap does not report idle', async t => {
+  const f = await fixture(t);
+  f.r.emit('state', 'working'); f.states.length = 0;
+  f.row({ id: 'control:heartbeat', gap: true });
+  f.settingsCompact(f.stamp(f.sequence() + 1));
+  f.row({ id: 'control:compact' }); f.row(CONTINUE);
+  assert.equal(f.r.liveTurn, null, 'a continuation never repairs an observation gap');
+  assert.deepEqual(f.states, []);
+  assert.deepEqual(f.ends, []);
+  await retired(f, 'a gap keeps the prior grant invalid');
+  f.r.hook({ hook_event_name: 'Stop', session_id: f.s.nativeId, prompt_id: 'owned-prompt' });
+  assert.deepEqual(f.states, ['idle']);
 });
 
 test('a settings notice that comes first keeps no more than its ordered row would', async t => {
@@ -468,7 +531,9 @@ test('a settings notice that comes first keeps no more than its ordered row woul
 
 test('through the bridge with the settings notice first, the turn is refused until its step and then continues', async t => {
   const f = await fixture(t), b = await bridge(f);
-  await b.compact({ hookFirst: true });
+  const sequence = f.sequence() + 1;
+  const settings = await b.compact({ hookFirst: true });
+  assert.equal(settings.naw_compaction, f.stamp(sequence));
   assert.deepEqual(b.observed, ['control:compact']);
   await retired(f, 'after both notices');
   await b.allDenied('between the compaction and the step');

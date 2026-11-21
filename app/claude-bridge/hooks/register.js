@@ -362,12 +362,14 @@ function enqueueBlock($, row, binding = rootBinding) {
   while (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
     observations.shift(); markObservationGap(binding);
   }
-  observations.push({ row: { ...row, block: true, sequence: ++binding.observationSequence, epoch: binding.observationEpoch }, binding });
+  const sequence = ++binding.observationSequence;
+  observations.push({ row: { ...row, block: true, sequence, epoch: binding.observationEpoch }, binding });
   if (row.kind !== 'control' && row.kind !== 'narration' && !row.mediaOnly && !emittedRows.has(row.id)) {
     emittedRows.add(row.id); if (emittedRows.size > 512) emittedRows.delete(emittedRows.values().next().value);
     rootRows.push({ seq: ++rootRowSeq, id: row.id }); if (rootRows.length > 64) rootRows.shift();
   }
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
+  return sequence;
 }
 
 function observeAppend($, e, result, binding, turnId, candidate, nativeApiError, nativeCreditError, nativeStandIn) {
@@ -1485,7 +1487,10 @@ export function register(on) {
       // NAW's issued scopes check its own turn references, not this module: retire
       // them in order on the observation channel. An older NAW refuses the row,
       // which is then a declared gap, also retiring them.
-      enqueueBlock($, { id: 'control:compact', kind: 'control', status: 'complete' });
+      const binding = rootBinding;
+      const sequence = enqueueBlock($, { id: 'control:compact', kind: 'control', status: 'complete' }, binding);
+      if (sequence && binding.nativeTurnContinue && e.session_id === binding.sessionId)
+        return next({ ...e, naw_compaction: `${binding.observationEpoch}:${sequence}` });
     }
     return next(e);
   });

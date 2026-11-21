@@ -382,10 +382,6 @@ class Terminal extends EventEmitter {
   }
 }
 
-// One compaction reaches NAW twice, in either order: the ordered control:compact row and the settings hook,
-// whose command is killed after 2 s (hook settings below). A notice by the other path within this long is
-// the same compaction; anything later, or a second notice by the same path, is another one.
-const COMPACT_TWIN_MS = 10000;
 // Native root transitions the GUI follows: SessionEnd reason -> SessionStart source
 // of the same process. /clear ends with 'clear'; /branch ends with 'resume' and
 // starts the branch as 'fork'. A plain /resume starts as 'resume' and is not followed.
@@ -927,7 +923,6 @@ class Claude extends EventEmitter {
         if (message.status !== 'complete') throw Error('Invalid native compact');
         // In order with the turn start that granted it, and also for a retained
         // reader, which has no settings hook. A replay retires too (fail closed).
-        if (this.nativeTurnContinue && !message.replayed) this.compactTwin('row');
         this.compactBoundary(message.replayed || message.gap);
       } else if (message.id === 'control:turn-continue') {
         if (!this.nativeTurnContinue || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn continuation');
@@ -1184,11 +1179,14 @@ class Claude extends EventEmitter {
       started: this.startedRootTurn?.id === live.id ? this.startedRootTurn : null };
     this.retireRootAuthority();
   }
-  // Whether the other path already reported this compaction (COMPACT_TWIN_MS).
-  compactTwin(via) {
-    const first = this.compactNotice, twin = Boolean(first && first.via !== via && Date.now() - first.at <= COMPACT_TWIN_MS);
-    this.compactNotice = twin ? null : { via, at: Date.now() };
-    return twin;
+  compactAlreadyObserved(stamp) {
+    if (!this.nativeTurnContinue || typeof stamp !== 'string' || !this.rootObservation) return false;
+    const marker = /^([a-f0-9]{32}):([1-9][0-9]{0,15})$/.exec(stamp);
+    const sequence = Number(marker?.[2]);
+    // The bridge assigns the sequence to this compact before running the settings hooks.
+    // A later ordered position has already applied that boundary or handled its observation gap.
+    return marker?.[1] === this.observationEpoch && Number.isSafeInteger(sequence) &&
+      sequence <= this.rootObservation.sequence;
   }
   // A native compaction keeps the session but ends the running turn's authority:
   // every issued root call, outbox proof and control scope checks these
@@ -1345,6 +1343,8 @@ class Claude extends EventEmitter {
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
     if (isChild) return;
+    const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
+    if (compact && this.compactAlreadyObserved(event.naw_compaction)) return;
     // Only an authenticated root settings event selects the journal. The
     // identity lookup route never accepts a caller-supplied filesystem path.
     if (event.session_id === this.record.nativeId && typeof event.transcript_path === 'string' &&
@@ -1400,13 +1400,12 @@ class Claude extends EventEmitter {
     switch (event.hook_event_name) {
       case 'SessionStart':
         if (this.rootEnding) break;
-        // A compaction restarts the context without ending the root. The ordered
-        // observation also carries it (control:compact); whichever arrives first retires.
-        // Only a settings notice whose ordered row already retired changes nothing: the rows may
-        // have continued the turn since (control:turn-continue).
-        if (event.source === 'compact' && !(this.nativeTurnContinue && this.compactTwin('hook'))) this.compactBoundary();
-        // A mid-turn compaction leaves a turn that can be continued running, not idle.
-        this.ready = true; if (!(event.source === 'compact' && this.nativeTurnContinue && (this.liveTurn || this.compactedTurn))) this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
+        if (compact) this.compactBoundary();
+        this.ready = true;
+        const gapWhileRunning = this.displayGap && ['working', 'approval'].includes(this.localApprovalState || this.record.state);
+        if (!(compact && this.nativeTurnContinue && (this.liveTurn || this.compactedTurn || gapWhileRunning))) this.emit('state', 'idle');
+        if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage);
+        break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
         // A settings hook observing a prompt is not its acceptance. The native
