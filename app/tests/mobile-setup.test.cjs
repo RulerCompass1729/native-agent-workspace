@@ -278,3 +278,11 @@ test('opening a temporary pairing reports restart limits and queries status only
  const read=f.api.mobileApprovalStatus;f.api.mobileApprovalStatus=async()=>{calls++;return read();};f.setup.open();await new Promise(setImmediate);
  assert.equal(calls,1);assert.match(f.status(),/钥匙串暂不可用/);assert.match(f.status(),/重新扫码/);
 });
+
+test('an old pairing without a recovery checkpoint visibly asks to reconnect without granting or preparing anything', async () => {
+  const f = fixture({ approval: { paired: false, enabled: false, registered: false, reconnectRequired: true } });
+  f.setup.open(); await new Promise(setImmediate);
+  assert.equal(f.status(), '手机连接未恢复，请重新连接手机。原有记录已保留。');
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.el('mobile-pair-link').value, '');
+});

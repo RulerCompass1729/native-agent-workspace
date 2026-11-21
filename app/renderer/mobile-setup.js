@@ -115,7 +115,7 @@
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
       updateAdvanced();showScope();
-      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(value?.resumeRequired)say(status,'mobile.resumeReady');
+      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(value?.resumeRequired)say(status,'mobile.resumeReady');else if(value?.reconnectRequired)say(status,'mobile.reconnectRequired');
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;

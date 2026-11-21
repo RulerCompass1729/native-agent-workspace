@@ -1,8 +1,8 @@
 // App-local mobile delegation. Importing or constructing starts no connection,
 // listener, native session or model work. Transport and desktop UI stay separate.
-const fs = require('node:fs');
+const fs = require('node:fs'), path = require('node:path');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
-const { MobileAccess, SESSION_MS } = require('./mobile-access.cjs');
+const { MobileAccess, SESSION_MS, FILE } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
 const { MAX_REQUESTS, currentTarget } = require('./mobile-session.cjs');
 const { readLayout } = require('./service-layout.cjs');
@@ -521,7 +521,11 @@ class MobileBroker {
   }
   approvalStatus() {
     try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s),...(this.#persistence?.status?.()==='temporary'?{temporaryPairing:true}:{}) }; }
-    catch { return { paired: false, enabled: false, registered: false, pending: null,...(this.resumeInfo()?{resumeRequired:true}:{}) }; }
+    catch {
+      const resumeRequired = Boolean(this.resumeInfo());
+      return { paired: false, enabled: false, registered: false, pending: null, ...(resumeRequired ? { resumeRequired: true } :
+        this.#persistence && !this.#access.initialized && fs.existsSync(path.join(this.#root, FILE)) ? { reconnectRequired: true } : {}) };
+    }
   }
   approvalBegin() { try{return this.#consent.beginRegistration(this.#desktopConsentState());}finally{this.#checkpoint();} }
   approvalConfirm(value) { const result=this.#consent.confirmRegistration(this.#desktopConsentState(), value);this.#checkpoint();return result; }
