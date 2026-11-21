@@ -98,6 +98,7 @@ function pointToMessage(element, key, id, query = '') {
   if (!readingEntry(view, id)) view.loadMessage?.(id);
   const entry = readingEntry(view, id);
   if (!entry) return false;
+  if (entry.operatorTask) entry.operatorTask.open = true;
   const position = { top: element.scrollTop, follow: false, anchor: id, offset: 16 };
   view.intent = { position, searchQuery: query }; saveReading(view, position); scheduleReading(view);
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);

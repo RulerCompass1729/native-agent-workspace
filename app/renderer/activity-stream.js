@@ -44,20 +44,23 @@
     const clock = time => validTime(time) ? new Date(time).toLocaleTimeString(host.language(), { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : '';
     const day = time => validTime(time) ? new Date(time).toLocaleDateString(host.language(), { year: 'numeric', month: 'long', day: 'numeric' }) : t('unknownDate');
     async function go(item) {
+      if (item.kind === 'operator-creation') { showCreation(item.sessionId, item.message.operator.actionKey); return; }
       waitingOpen = false; waitingKey = ''; drawWaiting();
       if (item.card) return host.confirmation({ sessionId: item.sessionId, nativeId: item.card.nativeId, messageId: item.card.id, operationId: item.card.operationId });
       if (item.sessionId || item.actorId) return host.original({ sessionId: item.sessionId || item.actorId, messageId: item.messageId || '', nativeId: '' });
       if (item.roomId) { await host.selectSpace(item.roomId); open(item.roomId); }
     }
     function drawWaiting() {
-      const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations,
+      const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations, operatorCreations: state()?.operatorCreations,
         butlerId: state()?.steward?.sessionId, roomOf, nameOf }).filter(item => !(item.card && host.cardHidden?.(item.card)));
       host.waitingChanged?.(waitingCount(items));
       const questionState = items.filter(i => i.kind === 'question').map(i => {
         const s = sessions().find(s => s.id === i.sessionId);
         return [s?.nativeId, s?.owner, s?.state, s?.approvalOverflow, s?.serviceCapabilities, state()?.capabilities];
       });
-      const key = JSON.stringify([host.language(), host.connected(), waitingOpen, items, questionState]);
+      const creationState = items.some(i => i.kind === 'operator-creation') ? [host.rooms().map(r => [r.id, r.name, r.archived]),
+        sessions().map(s => [s.id, s.nativeId, s.serviceCapabilities])] : null;
+      const key = JSON.stringify([host.language(), host.connected(), waitingOpen, items, questionState, creationState]);
       if (key === waitingKey) return;
       waitingKey = key;
       const label = waitingLabel(items, t);
@@ -79,11 +82,17 @@
       {
         const rows = [], retained = new Set();
         for (const item of items) {
-          const row = item.kind === 'question' && waitingRows.get(item.id) || el('div', 'stream-waiting-row'); row.dataset.waitingId = item.id; row.setAttribute('role', 'listitem');
-          const top = button('stream-waiting-link', '', () => go(item));
+          const retainedKind = ['question', 'operator-creation'].includes(item.kind);
+          const row = retainedKind && waitingRows.get(item.id) || el('div', 'stream-waiting-row'); row.dataset.waitingId = item.id; row.setAttribute('role', 'listitem');
+          const top = retainedKind && row.firstChild || button('stream-waiting-link', '', () => go(item));
+          top.onclick = () => host.attempt(() => go(item)); top.replaceChildren();
           top.append(el('span', 'stream-kind', t(item.kind)), el('strong', '', item.actorName), el('span', 'quiet', roomName(item.roomId)), el('time', 'quiet', clock(item.time)));
-          if (row.firstChild) row.replaceChild(top, row.firstChild); else row.append(top);
-          if (item.card) {
+          if (row.firstChild !== top) { if (row.firstChild) row.replaceChild(top, row.firstChild); else row.append(top); }
+          if (item.kind === 'operator-creation' && host.creation) {
+            if (!row.operatorEntry) { const actions = el('div'); row.append(actions); row.operatorEntry = { item: row, actions }; }
+            host.creation(row.operatorEntry, item.message);
+            waitingRows.set(item.id, row); retained.add(item.id);
+          } else if (item.card) {
             // The conversation renderer owns the full warning, stale/repeat
             // checks, buttons, disconnect state and backgroundDecision call.
             const actions = el('div'); row.append(actions);
@@ -102,6 +111,10 @@
         for (let i = 0; i < rows.length; i++) if (menu.children[i] !== rows[i]) menu.insertBefore(rows[i], menu.children[i] || null);
         for (const id of waitingRows.keys()) if (!retained.has(id)) waitingRows.delete(id);
       }
+    }
+    function showCreation(sessionId, actionKey) {
+      waitingOpen = true; waitingKey = ''; drawWaiting();
+      waitingRows.get(`operator-creation:${sessionId}:${actionKey}`)?.operatorEntry?.operatorHeading?.focus();
     }
     function drawFeed() {
       const room = host.rooms().find(r => r.id === openRoom);
@@ -184,7 +197,7 @@
     }
     doc.addEventListener('keydown', e => { if (e.key === 'Escape' && waitingOpen) { waitingOpen = false; drawWaiting(); doc.getElementById('stream-waiting-more')?.focus(); } });
     doc.addEventListener('pointerdown', e => { if (waitingOpen && !strip.contains(e.target)) { waitingOpen = false; drawWaiting(); } });
-    return { render, open, toggle(roomId) { if (openRoom === roomId) { openRoom = ''; render(); host.toggleChanged(); } else open(roomId); } };
+    return { render, open, showCreation, toggle(roomId) { if (openRoom === roomId) { openRoom = ''; render(); host.toggleChanged(); } else open(roomId); } };
   }
   root.nativeWorkspaceActivityStream = { bind, waitingLabel, waitingCount };
 })(globalThis);

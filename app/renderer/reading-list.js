@@ -373,6 +373,7 @@ function scheduleReading(view, intent = view.intent) {
     if (anchor && view.intent.searchQuery) {
       const entry = readingEntry(view, p.anchor);
       if (entry.disclosure && !entry.disclosure.open) { entry.expectedOpen = true; entry.disclosure.open = true; }
+      if (entry.operatorTask) entry.operatorTask.open = true;
       const range = entry.body && readingMatch(entry.body, view.intent.searchQuery);
       if (range) {
         const offset = 16 - (range.getBoundingClientRect().top - anchor.getBoundingClientRect().top);
@@ -783,6 +784,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       body.id = `reading-payload-${++readingPayloadId}`;
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
+      if (m.kind === 'operator-open' && m.operator) {
+        const details = node('details', undefined, 'operator-task-details');
+        details.append(uiNode('summary', 'operator.card.task'), body); heading.after(details);
+        entry.operatorTask = details;
+      }
       if ((wake || m.role === 'tool' || m.kind === 'summary') && (m.role === 'tool' || !(Array.isArray(m.images) && m.images.length))) {
         const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
         entry.wakeDisclosure = Boolean(wake); entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;

@@ -462,6 +462,14 @@ class OperatorControl {
     return domain && !domain.revokedAt && domain.expiresAt > Date.now() && domain.initiators.some(i => i.id === s.id && i.nativeId === s.nativeId) && domain.providers.includes(args.provider) &&
       domain.directories.some(dir => within(args.cwd, dir)) && permission(s) !== 'unknown' && (args.permission !== 'bypass' || domain.permission === 'bypass' && permission(s) === 'bypass') && data.enabled;
   }
+  coveringDomain(action) {
+    if (action.status !== 'pending-authorization') return null;
+    const s = this.w.sessions.get(action.initiatorId);
+    if (this.error || !s || s.nativeId !== action.initiatorNativeId) return null;
+    try { this.initiator(s); } catch { return null; }
+    const saved = this.data.domains[action.domainId];
+    return (this.covering(s, action.args, saved) ? saved : Object.values(this.data.domains).find(d => this.covering(s, action.args, d)))?.id || null;
+  }
   open(s, identity, args) {
     validate(names[1], args); this.initiator(s);
     const key = JSON.stringify([s.nativeId, args.action_id]), previous = this.data.actions[key];
@@ -572,7 +580,7 @@ class OperatorControl {
       rows.push({ id: `operator:open:${action.key}`, role: 'system', kind: 'operator-open', name: 'NAW', time: action.at, status: 'complete',
         ...uiNotice('notice.operator.open', { provider: action.args.provider, cwd: action.args.cwd, task: action.args.task }),
         operator: { ...(view || {}), requestId: request?.id || null, actionKey: action.key, initiatorId: action.initiatorId, initiatorNativeId: action.initiatorNativeId,
-          args: action.args, creation: action.status, actual: this.openResult(action), actionable: !request?.closed } });
+          args: action.args, creation: action.status, actual: this.openResult(action), coveredDomainId: this.coveringDomain(action), actionable: !request?.closed } });
     }
     return rows;
   }

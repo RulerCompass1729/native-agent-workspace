@@ -930,6 +930,28 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-grant input[type=number] { width:9em; }
 .operator-grant input[type=checkbox] { align-self:flex-start; }
 .operator-grant select { max-width:100%; }
+.operator-controls.operator-creation-card { display:grid; gap:12px; min-width:0; width:100%; box-sizing:border-box; }
+.operator-creation-card h3 { margin:0; font-size:15px; overflow-wrap:anywhere; }
+.operator-creation-card p { margin:0; }
+.operator-creation-facts { display:flex; flex-wrap:wrap; gap:6px 12px; line-height:1.6; }
+.operator-creation-facts code { overflow-wrap:anywhere; white-space:normal; }
+.operator-creation-facts .operator-bypass { color:var(--approval-ink); font-weight:700; }
+.operator-creation-card .operator-grant { display:grid; gap:12px; min-width:0; }
+.operator-grant-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.operator-creation-card .operator-grant label { min-width:0; }
+.operator-creation-card .operator-grant input:not([type=checkbox]), .operator-creation-card select { box-sizing:border-box; width:100%; min-width:0; min-height:34px; }
+.operator-creation-card .operator-grant label[hidden] { display:none; }
+.operator-creation-card .operator-grant-consent { flex-direction:row; align-items:flex-start; line-height:1.65; }
+.operator-grant-consent input { flex:none; margin-top:5px; }
+.operator-task-details > summary, .operator-new-grant > summary { cursor:pointer; min-height:28px; }
+.operator-task-body { max-height:200px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; background:var(--panel); }
+.operator-creation-buttons { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+.operator-creation-buttons button { min-height:34px; }
+.operator-coverage { display:grid; gap:8px; padding:12px; border:1px solid var(--border); border-radius:6px; line-height:1.6; }
+.operator-coverage button { justify-self:start; }
+.operator-card-error { color:var(--approval-ink); }
+.operator-new-grant { border-top:1px solid var(--border); padding-top:10px; }
+@media(max-width:600px) { .operator-grant-fields { grid-template-columns:1fr; } }
 .operator-cancel-warning { flex-basis:100%; }
 /* Compact setup dialog: preserve existing controls, labels and lifecycle. */
 #setup-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}

@@ -5,7 +5,7 @@
   const NEEDS_YOU = ['decide', 'look'];
   // 「等你」 order: a member's decision, the butler's question, confirmation cards, permission
   // requests, a question that does not block its turn, then things only left to look at.
-  const RANK = { decide: 0, 'butler-question': 1, 'background-confirmation': 2, approval: 3, question: 4, look: 5 };
+  const RANK = { decide: 0, 'butler-question': 1, 'background-confirmation': 2, 'operator-creation': 3, approval: 4, question: 5, look: 6 };
   const approvalPolicy = typeof module !== 'undefined' && module.exports ? require('./approval-policy.js') : root.nativeWorkspaceApproval;
   // The queue's own rules (app/queue-dispatch.cjs): the waiting items that ask nothing, and the
   // first-line markers of a decision.
@@ -133,9 +133,22 @@
   // Everything that waits for the person, across the spaces, in the order the strip shows it.
   // rooms: the spaces' records; sessions: display sessions; confirmations: main's pending cards;
   // butlerId: the designated butler's session; roomOf(sessionId): the space a member is in, or ''.
-  function waitingItems({ rooms = [], sessions = [], confirmations = [], butlerId = '', roomOf = () => '', nameOf = () => '', now = Date.now() } = {}) {
+  function waitingItems({ rooms = [], sessions = [], confirmations = [], operatorCreations, butlerId = '', roomOf = () => '', nameOf = () => '', now = Date.now() } = {}) {
     const live = new Map(sessions.filter(s => s && !s.archived).map(s => [s.id, s]));
     const list = [];
+    const creations = Array.isArray(operatorCreations) ? operatorCreations : sessions.flatMap(s =>
+      (s.messages || []).filter(message => message.kind === 'operator-open').map(message => ({ sessionId: s.id, nativeId: s.nativeId, message })));
+    const creationIds = new Set();
+    for (const row of creations) {
+      const s = live.get(row?.sessionId), message = row?.message, op = message?.operator;
+      if (!s || row.nativeId !== s.nativeId || message?.kind !== 'operator-open' || op?.creation !== 'pending-authorization' ||
+          op.actionable === false || op.initiatorId !== s.id || typeof op.actionKey !== 'string' || !op.actionKey) continue;
+      const id = `operator-creation:${s.id}:${op.actionKey}`;
+      if (creationIds.has(id)) continue;
+      creationIds.add(id);
+      list.push({ id, kind: 'operator-creation', title: shortText(op.args?.name || op.args?.task), actorId: s.id, actorName: plainName(s.name),
+        sessionId: s.id, nativeId: s.nativeId, messageId: message.id, roomId: roomOf(s.id), message, time: Number.isFinite(message.time) ? message.time : now });
+    }
     for (const room of rooms) {
       if (!room || room.archived) continue;
       for (const task of roomTasks(room, { nameOf }).tasks) {

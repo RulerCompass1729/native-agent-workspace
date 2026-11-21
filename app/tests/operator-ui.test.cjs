@@ -14,19 +14,19 @@ function fixture(message) {
  let language='zh';const locale=require(path.join(root,'app/ui-locale.js')),uiText=(key,params)=>locale.format(language,key,params),display=bind(uiText),node=(tag,text)=>new El(tag,text);
  const box=node('div'),entry={item:node('article'),actions:node('div')}; entry.actions.before=el=>box.append(el);
  const calls=[],rooms=[{id:'shared',untouched:true,name:'共同工作'},{id:'10000000-0000-4000-8000-000000000001',name:'Synthetic space'},{id:'20000000-0000-4000-8000-000000000002',name:'Archived space',archived:true}];
- const context=vm.createContext({Date,JSON,Number,node,uiText,uiError:locale.createError,ui:{display,language:{getSnapshot:()=>({active:language})}},button:(label,action)=>Object.assign(node('button',label),{onclick:action}),state:{sessions:[{id:'s',nativeId:'n',provider:'claude'}],capabilities:['operatorControl1a'],operatorPolicy:{domains:[]}},disconnected:false,
+ const context=vm.createContext({Date,JSON,Number,node,uiText,uiError:locale.createError,ui:{display,errorText:problem=>locale.errorText(language,problem),language:{getSnapshot:()=>({active:language})}},button:(label,action)=>Object.assign(node('button',label),{onclick:action}),state:{sessions:[{id:'s',nativeId:'n',provider:'claude'}],capabilities:['operatorControl1a'],operatorPolicy:{domains:[]}},disconnected:false,
   // The grant form lists the person's spaces (renderer.js allSpaces and spaceName); the attempt wrapper and the desktop call are recorded.
   allSpaces:()=>rooms,spaceName:room=>room.untouched?uiText('space.defaultName'):room.name,attempt:run=>{context.pending=run();},api:{operatorAction:async(...args)=>{calls.push(args);return 'domain-id';}}});
  vm.runInContext(renderer.slice(renderer.indexOf('const uiNode ='),renderer.indexOf('const states =')),context);
- vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorControls('),renderer.indexOf('const roomMenuKey =')),context);
- context.entry=entry;context.message={time:Date.now(),operator:message}; vm.runInContext('renderOperatorControls(entry,message)',context);
+ vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorCreation('),renderer.indexOf('const roomMenuKey =')),context);
+ context.entry=entry;context.message={time:Date.now(),operator:message}; context.state.sessions[0].messages=[context.message]; vm.runInContext('renderOperatorControls(entry,message,{inbox:true})',context);
  const walk=el=>el.children.flatMap(child=>[child,...walk(child)]);
- return {box,entry,calls,rooms,context,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};vm.runInContext('renderOperatorControls(entry,message)',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
+ return {box,entry,calls,rooms,context,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};context.state.sessions[0].messages=[context.message];vm.runInContext('renderOperatorControls(entry,message,{inbox:true})',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
 }
 test('actual grant card keeps fields and consent through the actual DSH language repaint',()=>{
  const f=fixture({initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',args:{provider:'claude',permission:'default'},actual:{actionId:'a',permission:'default',model:'unknown'}});
  const fields=f.walk().filter(el=>el.tagName==='input');assert.equal(fields.length,4);fields[0].value='7';fields[3].checked=true;
- assert.equal(f.walk().filter(el=>el.tagName==='select').length,2,'Permission, and the space new sessions join');
+ assert.equal(f.walk().filter(el=>el.tagName==='select').length,2,'Expiry preset, and the space new sessions join; permission cannot be widened');
  assert.doesNotThrow(()=>f.refresh());assert.equal(f.walk().filter(el=>el.tagName==='input')[0],fields[0]);assert.equal(fields[0].value,'7');assert.equal(fields[3].checked,true);
 });
 test('cancellation warning keeps its confirmation buttons through language repaint without cancelling on first click',()=>{
@@ -84,6 +84,63 @@ const pendingGrant={initiatorId:'s',initiatorNativeId:'n',creation:'pending-auth
 const grantForm=f=>{const all=f.walk(),selects=all.filter(el=>el.tagName==='select'),inputs=all.filter(el=>el.tagName==='input');
  return {space:selects[1],options:selects[1].children,daily:inputs[0],concurrent:inputs[1],expires:inputs[2],consent:inputs[3],consentText:inputs[3].parentNode.children[1],form:all.find(el=>el.tagName==='form'),problem:all.findLast(el=>el.tagName==='p')};};
 const fill=g=>{g.daily.value='1';g.concurrent.value='1';g.expires.value=new Date(Date.now()+3600000).toISOString();};
+test('defaults do not grant consent or allow changing the requested permission',()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);
+ assert.equal(g.daily.value,'1');assert.equal(g.concurrent.value,'1');assert.equal(g.space.value,'');assert.equal(g.consent.checked,false);
+ assert.ok(new Date(g.expires.value).getTime()>Date.now());assert.equal(g.expires.value.length,16);
+ assert.equal(f.walk().some(el=>el.tagName==='select'&&el.name==='permission'),false);
+ g.form.listeners.submit({preventDefault(){}});assert.equal(f.calls.length,0);
+});
+test('an inline pending record links to the single inbox form instead of making another form',()=>{
+ const f=fixture(pendingGrant);
+ f.context.inline={item:new El('article'),actions:new El('div')};f.context.inline.actions.before=el=>f.box.append(el);
+ vm.runInContext('renderOperatorControls(inline,message)',f.context);
+ assert.equal(f.walk().filter(el=>el.tagName==='form').length,1);
+});
+test('native replacement or authoritative request removal cannot save a grant from a retained form',async()=>{
+ for(const reason of ['native','removed']){
+  const f=fixture(pendingGrant),g=grantForm(f);fill(g);g.consent.checked=true;
+  if(reason==='native')f.context.state.sessions[0].nativeId='replacement';else f.context.state.operatorCreations=[];
+  g.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+ }
+});
+test('duplicate submission saves one exact grant and preserves the immutable permission',async()=>{
+ const f=fixture({...pendingGrant,args:{...pendingGrant.args,permission:'bypass'}}),g=grantForm(f);
+ fill(g);g.consent.checked=true;g.form.listeners.submit({preventDefault(){}});const pending=f.context.pending;
+ g.form.listeners.submit({preventDefault(){}});await pending;
+ assert.deepEqual(f.calls.map(c=>c[1]),['grant','authorize']);assert.equal(f.calls[0][2].permission,'bypass');
+ assert.equal(f.calls[0][2].expiresAt,new Date(g.expires.value).getTime());
+});
+test('a cleared custom expiry survives a redraw instead of being silently extended',()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);g.expires.value='';g.expires.listeners.input();
+ f.update({version:2});assert.equal(grantForm(f).expires.value,'');
+});
+test('existing coverage exposes its complete scope and reuses it without another grant',async()=>{
+ const f=fixture(pendingGrant),d={id:'covered',providers:['claude'],directories:['/synthetic'],daily:8,concurrent:6,permission:'bypass',expiresAt:Date.UTC(2027,0,1),space:'shared'};
+ f.context.state.operatorPolicy.domains.push(d);f.update({coveredDomainId:d.id});
+ const text=f.walk().map(el=>el.textContent).join('\n');assert.match(text,/每天（UTC）最多 8 个/);assert.match(text,/同时最多 6 个/);assert.match(text,/跳过确认/);assert.match(text,/共同工作.*队列任务/);
+ const other=f.walk().find(el=>el.tagName==='details'&&el.children.some(c=>c.textContent==='改用新的授权范围'));assert.ok(other);assert.ok(!other.open);
+ await f.walk().find(el=>el.tagName==='button'&&el.textContent==='使用已有授权').onclick();
+ assert.deepEqual(f.calls.map(c=>c[1]),['authorize']);assert.equal(f.calls[0][2].domainId,'covered');
+});
+test('a pending record returning to an ordinary creation receipt drops its card layout',()=>{
+ const f=fixture(pendingGrant);assert.match(f.entry.operatorControls.className,/operator-creation-card/);
+ f.update({creation:'created'});assert.equal(f.entry.operatorControls.className,'operator-controls');
+});
+test('an authorize failure stays visible when the grant response repaints the waiting card',async()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);fill(g);g.consent.checked=true;
+ f.context.api.operatorAction=async(_id,action)=>{
+  if(action==='grant'){
+   f.context.state.operatorPolicy.domains.push({id:'new-grant',providers:['claude'],directories:['/synthetic'],daily:1,concurrent:1,expiresAt:Date.UTC(2027,0,1),permission:'default'});
+   f.update({coveredDomainId:'new-grant'});return 'new-grant';
+  }
+  throw Error('Synthetic creation failure');
+ };
+ g.form.listeners.submit({preventDefault(){}});await f.context.pending;
+ assert.ok(f.walk().some(el=>el.textContent==='Synthetic creation failure'));
+ assert.equal(f.walk().find(el=>el.textContent==='使用已有授权').disabled,false);
+ f.refresh();assert.ok(f.walk().some(el=>el.textContent==='Synthetic creation failure'));
+});
 test('the grant form offers the person\'s open spaces and defaults to none; the consent sentence and a saved grant are then exactly as before',async()=>{
  const f=fixture(pendingGrant),g=grantForm(f);
  assert.deepEqual(g.options.map(o=>[o.value,o.textContent]),[['','不加入（只建会话，和以前一样）'],['shared','共同工作'],['10000000-0000-4000-8000-000000000001','Synthetic space']],'An archived space is not offered');
@@ -150,7 +207,7 @@ const earlier=/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/;
 const leftovers=f=>f.walk().flatMap(el=>[...(el.children.length?[]:[el.textContent]),el.getAttribute('aria-label')]).filter(text=>text&&earlier.test(text));
 for(const [label,message,expected] of [
  ['a pending grant',{initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',actionKey:'key',args:{provider:'claude',permission:'default',cwd:'/synthetic'},actual:{actionId:'a',permission:'default',model:'unknown'}},
-  ['Native provider default; observed model: Unknown','New session permission: Confirmations required (Claude default / Codex read-only + on-request)']],
+  ['New session permission: Confirmations required (Claude default / Codex read-only + on-request)']],
  ['a report that needs attention',{recipientId:'s',requestId:'request',version:1,state:'attention',reportState:'blocked',actionable:true},['Needs your attention: Blocked']],
  ['a cancelled request',{recipientId:'s',requestId:'request',version:1,state:'closed',closedReason:'cancelled',actionable:true},['Closed: Cancelled']],
 ]) test('after a language switch the card of '+label+' keeps nothing in the earlier language',()=>{
@@ -160,7 +217,7 @@ for(const [label,message,expected] of [
  assert.deepEqual(leftovers(f),[]);
  const texts=f.walk().map(el=>el.textContent);
  for(const text of expected)assert.ok(texts.includes(text),text);
- if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].getAttribute('aria-label'),'New session permission: ');
+ if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].name,'operator.card.duration');
 });
 // B5: a grant follows the session NAW replaced. The card of the grant then says which session holds it now.
 test('after NAW replaced its holder, the card of a grant says which session holds it now, and is drawn again when that changes',()=>{

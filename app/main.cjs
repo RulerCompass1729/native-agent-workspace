@@ -910,6 +910,9 @@ function displayState(snapshot, context, read = null) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
   display.sessions = display.sessions.map(s => ({ ...s }));
+  const operatorCreations = context?.background ? [] : display.sessions.filter(s => !s.archived).flatMap(s =>
+    (s.messages || []).filter(m => m.kind === 'operator-open' && m.operator?.creation === 'pending-authorization' && m.operator.actionable !== false && m.operator.initiatorId === s.id)
+      .map(message => ({ sessionId: s.id, nativeId: s.nativeId, message })));
   const backgroundConfirmations = context?.background ? [] : backgroundControl?.confirmations(display, snapshot) || [];
   if (!context?.background && context?.win) {
     const key = JSON.stringify(backgroundConfirmations.map(confirmationInbox.confirmationSummary));
@@ -934,7 +937,7 @@ function displayState(snapshot, context, read = null) {
   const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;

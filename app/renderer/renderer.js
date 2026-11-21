@@ -2964,10 +2964,145 @@ function renderBackgroundControls(entry, message) {
   }
   box.append(buttons);
 }
+function renderOperatorCreation(entry, message, { inbox = false } = {}) {
+  const op = message.operator, initiator = state.sessions.find(s => s.id === op.initiatorId);
+  const allowed = Boolean(!disconnected && initiator && !initiator.archived && (initiator.serviceCapabilities || state.capabilities || []).includes('operatorControl1a'));
+  const sameNative = initiator?.nativeId === op.initiatorNativeId;
+  const grant = state.operatorPolicy?.domains.find(d => d.id === op.coveredDomainId && !d.revokedAt && d.expiresAt > Date.now());
+  const rooms = allSpaces().filter(r => !r.archived);
+  const key = JSON.stringify(['creation', inbox, op, allowed, initiator?.nativeId, initiator?.name, grant, rooms.map(r => r.id)]);
+  if (entry.operatorKey === key) { ui.display.refresh(entry.operatorControls); return; }
+  entry.operatorKey = key;
+  const controls = entry.operatorControls || node('div');
+  controls.className = 'operator-controls operator-creation-card';
+  if (!entry.operatorControls) { entry.operatorControls = controls; entry.actions.before(controls); }
+  controls.replaceChildren();
+  const title = uiNode('h3', 'operator.card.title', () => ({ who: initiator?.name || op.initiatorId, name: op.args.name || uiText('operator.card.session', { provider: op.args.provider }) }));
+  title.tabIndex = -1; entry.operatorHeading = title; controls.append(title);
+  const facts = node('p', undefined, 'operator-creation-facts');
+  facts.append(node('span', op.args.provider === 'claude' ? 'Claude' : 'Codex'), node('code', op.args.cwd));
+  const permission = uiNode('span', 'operator.permission', () => ({ permission: uiText('operator.' + op.args.permission) }));
+  permission.classList.toggle('operator-bypass', op.args.permission === 'bypass'); facts.append(permission); controls.append(facts);
+  if (!inbox) {
+    controls.append(uiButton('operator.card.review', () => getActivityStream()?.showCreation(op.initiatorId, op.actionKey), 'small'));
+    return;
+  }
+  const currentRequest = () => {
+    if (Array.isArray(state.operatorCreations)) return state.operatorCreations.find(row => row.sessionId === op.initiatorId && row.message?.operator?.actionKey === op.actionKey)?.message;
+    return state.sessions.find(s => s.id === op.initiatorId)?.messages?.find(m => m.operator?.actionKey === op.actionKey);
+  };
+  const act = (action, value) => {
+    const current = state.sessions.find(s => s.id === op.initiatorId), latest = currentRequest()?.operator;
+    if (disconnected || !current || current.archived || current.nativeId !== initiator.nativeId || !latest || latest.creation !== 'pending-authorization' || latest.actionable === false ||
+        action !== 'dismiss' && current.nativeId !== op.initiatorNativeId) throw uiError('error.operator.stale');
+    return api.operatorAction(op.initiatorId, action, value);
+  };
+  const minute = value => new Date(value).toLocaleString(ui.language.getSnapshot().active, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const spaceNameFor = id => { const room = allSpaces().find(r => r.id === id); return room ? spaceName(room) : uiText('operator.spaceGone'); };
+  const error = node('p', undefined, 'operator-card-error'); error.setAttribute('role', 'alert');
+  entry.operatorErrorNode = error;
+  const showProblem = problem => {
+    entry.operatorProblem = problem;
+    ui.display.computed(entry.operatorErrorNode, 'text', () => entry.operatorProblem ? ui.errorText(entry.operatorProblem) : '');
+  };
+  showProblem(entry.operatorProblem);
+  const approvalNodes = [], actionNodes = [];
+  const disabled = () => {
+    for (const n of approvalNodes) n.disabled = !allowed || !sameNative || Boolean(entry.operatorBusy);
+    for (const n of actionNodes) n.disabled = !allowed || Boolean(entry.operatorBusy);
+  };
+  entry.operatorSetDisabled = disabled;
+  const perform = async operation => {
+    if (entry.operatorBusy) return;
+    showProblem(null);
+    entry.operatorBusy = true; entry.operatorSetDisabled();
+    try { await operation(); }
+    catch (problem) { showProblem(problem); }
+    finally { entry.operatorBusy = false; entry.operatorSetDisabled(); }
+  };
+  if (!sameNative) controls.append(uiNode('p', 'operator.card.stale', undefined, 'operator-card-error'));
+  if (grant) {
+    const coverage = node('div', undefined, 'operator-coverage');
+    coverage.append(uiNode('strong', 'operator.card.covered', { id: grant.id.slice(0, 8) }),
+      uiNode('p', 'operator.card.scope', () => ({ providers: grant.providers.join(' / '), directories: grant.directories.join(' / ') })),
+      uiNode('p', 'operator.card.limits', () => ({ daily: grant.daily, concurrent: grant.concurrent, expires: minute(grant.expiresAt) })),
+      uiNode('p', 'operator.card.ceiling', () => ({ permission: uiText('operator.' + grant.permission) })),
+      uiNode('p', grant.space ? 'operator.card.join' : 'operator.card.noJoin', () => grant.space ? { space: spaceNameFor(grant.space) } : undefined));
+    const reuse = uiButton('operator.card.reuse', () => perform(async () => {
+      const latest = state.operatorPolicy?.domains.find(d => d.id === grant.id && !d.revokedAt && d.expiresAt > Date.now());
+      if (!latest || currentRequest()?.operator?.coveredDomainId !== grant.id) throw uiError('error.operator.stale');
+      if (latest.space && !allSpaces().some(r => r.id === latest.space && !r.archived)) throw uiError('error.operator.stale');
+      await act('authorize', { key: op.actionKey, domainId: grant.id });
+    }), 'small primary');
+    approvalNodes.push(reuse); coverage.append(reuse); controls.append(coverage);
+  }
+  const localValue = ms => { const date = new Date(ms); return new Date(ms - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  const draft = entry.operatorGrantDraft ||= { daily: '1', concurrent: '1', duration: '1', expires: localValue(Date.now() + 3600000), space: '', consent: false };
+  const form = node('form', undefined, 'operator-grant'), fields = node('div', undefined, 'operator-grant-fields');
+  ui.display.attribute(form, 'aria-label', 'operator.card.form');
+  const field = (key, tag, type, parent = form) => {
+    const label = node('label'), input = node(tag); input.id = 'grant-' + op.actionKey + '-' + key; input.name = key;
+    if (type) input.type = type; label.htmlFor = input.id; label.append(uiNode('span', key), input); parent.append(label); return { label, input };
+  };
+  form.append(fields);
+  const daily = field('operator.daily', 'input', 'number', fields).input, concurrent = field('operator.concurrent', 'input', 'number', fields).input;
+  for (const input of [daily, concurrent]) { input.min = '1'; input.step = '1'; input.required = true; }
+  daily.value = draft.daily; concurrent.value = draft.concurrent;
+  const duration = field('operator.card.duration', 'select', null, fields).input;
+  for (const value of ['1', '8', '24', 'custom']) { const option = uiNode('option', 'operator.card.duration.' + value); option.value = value; duration.append(option); }
+  duration.value = draft.duration;
+  const expiry = field('operator.expires', 'input', 'datetime-local'), expires = expiry.input;
+  expires.required = true; expires.step = '60'; expires.value = draft.expires; expiry.label.hidden = duration.value !== 'custom';
+  const readout = node('p', undefined, 'quiet operator-expiry');
+  const paintExpiry = () => ui.display.text(readout, 'operator.card.expiry', () => ({ expires: Number.isFinite(new Date(expires.value).getTime()) ? minute(new Date(expires.value).getTime()) : uiText('operator.unknown') }));
+  paintExpiry(); form.append(readout);
+  const space = field('operator.space', 'select').input, none = uiNode('option', 'operator.spaceNone'); none.value = ''; space.append(none);
+  const preferred = room => initiator?.roomIds?.includes(room.id) || room.id === 'shared' && initiator?.inRoom;
+  for (const room of [...rooms.filter(preferred), ...rooms.filter(r => !preferred(r))]) {
+    const option = node('option'); option.value = room.id; ui.display.text(option, 'operator.spaceOption', () => ({ name: spaceName(room) })); space.append(option);
+  }
+  const validSpace = !draft.space || rooms.some(r => r.id === draft.space);
+  space.value = validSpace ? draft.space : '';
+  if (!validSpace) { draft.consent = false; ui.display.text(error, 'operator.spaceUnavailable'); }
+  const task = node('details', undefined, 'operator-task-details'), body = node('p', op.args.task, 'operator-task-body');
+  body.tabIndex = 0; body.setAttribute('role', 'region'); ui.display.attribute(body, 'aria-label', 'operator.card.task');
+  task.append(uiNode('summary', 'operator.card.task'), body); controls.append(task);
+  const consentLabel = node('label', undefined, 'operator-grant-consent'), consent = node('input'), consentText = node('span');
+  consent.type = 'checkbox'; consent.required = true; consent.checked = draft.consent; consent.name = 'consent';
+  consent.id = 'grant-' + op.actionKey + '-consent'; consentLabel.htmlFor = consent.id;
+  const chosen = () => allSpaces().find(r => r.id === space.value && !r.archived);
+  const paintConsent = () => ui.display.text(consentText, space.value ? 'operator.grantConsentSpace' : 'operator.grantConsent', () => ({ space: chosen() ? spaceName(chosen()) : uiText('operator.spaceGone') }));
+  paintConsent(); consentLabel.append(consent, consentText); form.append(consentLabel);
+  const remember = () => Object.assign(draft, { daily: daily.value, concurrent: concurrent.value, duration: duration.value, expires: expires.value, space: space.value, consent: consent.checked });
+  for (const input of [daily, concurrent, expires, consent]) input.addEventListener('input', () => { remember(); paintExpiry(); });
+  duration.addEventListener('change', () => { expiry.label.hidden = duration.value !== 'custom'; if (duration.value !== 'custom') expires.value = localValue(Date.now() + Number(duration.value) * 3600000); remember(); paintExpiry(); });
+  space.addEventListener('change', () => { consent.checked = false; remember(); paintConsent(); });
+  const buttons = node('div', undefined, 'operator-creation-buttons'), submit = uiNode('button', 'operator.card.authorize'); submit.type = 'submit';
+  const dismiss = uiButton('operator.card.dismiss', () => perform(() => act('dismiss', { key: op.actionKey })), 'small');
+  actionNodes.push(dismiss); approvalNodes.push(daily, concurrent, duration, expires, space, consent, submit);
+  buttons.append(dismiss, submit); form.append(buttons);
+  form.addEventListener('submit', event => {
+    event.preventDefault(); if (entry.operatorBusy) return; remember();
+    const count = Number(daily.value), live = Number(concurrent.value), until = new Date(expires.value).getTime();
+    if (!consent.checked || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(live) || live < 1 || !Number.isSafeInteger(until) || until <= Date.now()) { ui.display.text(error, 'operator.formInvalid'); return; }
+    if (space.value && !chosen()) { consent.checked = false; remember(); ui.display.text(error, 'operator.spaceUnavailable'); return; }
+    attempt(() => perform(async () => {
+      const current = state.sessions.find(s => s.id === op.initiatorId);
+      if (!allowed || !sameNative || current?.nativeId !== op.initiatorNativeId || currentRequest()?.operator?.creation !== 'pending-authorization') throw uiError('error.operator.stale');
+      const domainId = await act('grant', { providers: [op.args.provider], directories: [op.args.cwd], permission: op.args.permission,
+        daily: count, concurrent: live, expiresAt: until, ...(space.value ? { space: space.value } : {}) });
+      await act('authorize', { key: op.actionKey, domainId });
+    }));
+  });
+  if (grant) { const advanced = node('details', undefined, 'operator-new-grant'); advanced.append(uiNode('summary', 'operator.card.otherGrant'), form); controls.append(advanced); }
+  else controls.append(form);
+  controls.append(error); disabled();
+}
 function renderOperatorControls(entry, message, context = {}) {
   const clearCancel = () => { entry.operatorCancelWarning?.remove(); entry.operatorCancelWarning = null; entry.operatorCancelKey = ''; };
   const op = message.operator;
   if (!op) { clearCancel(); entry.operatorControls?.remove(); entry.operatorControls = null; entry.operatorKey = ''; entry.item.classList.toggle('operator-attention', false); return; }
+  if (op.creation === 'pending-authorization') { clearCancel(); renderOperatorCreation(entry, message, context); return; }
   entry.item.classList.toggle('operator-attention', Boolean(!op.old && op.actionable && op.attention));
   const initiatorId = op.initiatorId || op.recipientId;
   const initiator = state.sessions.find(s => s.id === initiatorId);
@@ -2982,6 +3117,7 @@ function renderOperatorControls(entry, message, context = {}) {
   entry.operatorKey = key;
   const controls = entry.operatorControls || node('div', undefined, 'operator-controls');
   if (!entry.operatorControls) { entry.operatorControls = controls; entry.actions.before(controls); }
+  controls.className = 'operator-controls';
   controls.replaceChildren();
   const clock = node('time'); clock.dateTime = new Date(message.time).toISOString();
   ui.display.computed(clock, 'text', () => new Date(message.time).toLocaleString(ui.language.getSnapshot().active, { hourCycle: 'h23' })); controls.append(clock);
@@ -3062,47 +3198,7 @@ function renderOperatorControls(entry, message, context = {}) {
       $('message-input').focus({ preventScroll: true });
     }, !executor || executor.archived);
   }
-  if (op.creation === 'pending-authorization') {
-    const form = node('form', undefined, 'operator-grant');
-    const field = (key, type) => { const label = node('label'), input = node('input'); input.type = type; input.required = true; label.append(uiNode('span', key), input); form.append(label); return input; };
-    const daily = field('operator.daily', 'number'), concurrent = field('operator.concurrent', 'number'), expires = field('operator.expires', 'datetime-local');
-    for (const input of [daily, concurrent]) { input.min = '1'; input.step = '1'; }
-    const permissions = node('select');
-    for (const mode of ['default', 'bypass']) { const option = uiNode('option', 'operator.' + mode); option.value = mode; permissions.append(option); }
-    permissions.value = op.args.permission; ui.display.attribute(permissions, 'aria-label', 'operator.permission', { permission: '' }); form.append(permissions);
-    // B5: the one space sessions created under this grant join, chosen here by the person and by nobody else.
-    // "None" is what a grant has always been. The consent sentence names the space, and a different choice is a
-    // different consent, so it clears the tick.
-    const spaceField = node('label'), space = node('select'), none = uiNode('option', 'operator.spaceNone'); none.value = ''; space.append(none);
-    for (const room of allSpaces().filter(room => !room.archived)) {
-      const option = node('option'); option.value = room.id; ui.display.text(option, 'operator.spaceOption', () => ({ name: spaceName(room) })); space.append(option);
-    }
-    space.value = ''; spaceField.append(uiNode('span', 'operator.space'), space); form.append(spaceField);
-    const chosen = () => allSpaces().find(room => room.id === space.value && !room.archived);
-    const consentLabel = node('label'), consent = node('input'), consentText = node('span'); consent.type = 'checkbox'; consent.required = true;
-    const paintConsent = () => ui.display.text(consentText, space.value ? 'operator.grantConsentSpace' : 'operator.grantConsent', () => ({ space: chosen() ? spaceName(chosen()) : uiText('operator.spaceGone') }));
-    paintConsent(); space.addEventListener('change', () => { consent.checked = false; paintConsent(); });
-    consentLabel.append(consent, consentText); form.append(consentLabel);
-    const submit = uiNode('button', 'operator.authorize'); submit.type = 'submit'; submit.disabled = !allowed; form.append(submit);
-    const problem = node('p'); problem.setAttribute('role', 'alert'); form.append(problem);
-    form.addEventListener('submit', event => {
-      event.preventDefault();
-      attempt(async () => {
-        const count = Number(daily.value), live = Number(concurrent.value), until = new Date(expires.value).getTime();
-        if (!consent.checked || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(live) || live < 1 || !Number.isSafeInteger(until) || until <= Date.now()) { ui.display.text(problem, 'operator.formInvalid'); return; }
-        // The space must still be there when the grant is saved; otherwise the person chooses again.
-        if (space.value && !chosen()) { consent.checked = false; ui.display.text(problem, 'operator.spaceUnavailable'); return; }
-        if (!allowed) throw uiError('error.operator.stale'); submit.disabled = true;
-        try {
-          const domainId = await act('grant', { providers: [op.args.provider], directories: [op.args.cwd], permission: permissions.value, daily: count, concurrent: live, expiresAt: until,
-            ...(space.value ? { space: space.value } : {}) });
-          await act('authorize', { key: op.actionKey, domainId });
-        } catch (error) { problem.textContent = ui.errorText(error); submit.disabled = false; }
-      });
-    });
-    controls.append(form);
-    add('operator.dismiss', () => act('dismiss', { key: op.actionKey }));
-  }
+
 }
 const roomMenuKey = (id = spaceId) => JSON.stringify([id, selectionRevision, disconnected, spaceRecord(id)?.name, spaceRecord(id)?.archived]);
 function openRoomMenu(point, anchor, id = spaceId) {
@@ -4286,6 +4382,7 @@ function getActivityStream() {
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
     waitingChanged: count => taskBoard.setWaitingCount(count),
     selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, cardHidden: confirmationCardHidden, question: renderWaitingQuestion,
+    creation: (entry, message) => renderOperatorCreation(entry, message, { inbox: true }),
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: async target => {

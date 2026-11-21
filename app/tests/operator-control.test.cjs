@@ -30,6 +30,32 @@ async function fixture(t, options = {}) {
   return { w, root, id, s, r, identity, call, enable, grant, open, report, runtimes, writes };
 }
 
+test('pending creation projects existing coverage without granting, creating or writing a record', async t => {
+  const f = await fixture(t); f.enable(); await f.open({ action_id: 'pending-card' });
+  const row = () => f.w.snapshot().sessions.find(s => s.id === f.id).messages.find(m => m.operator?.actionKey);
+  assert.equal(row().operator.coveredDomainId, null);
+  const grant = f.grant(), before = fs.readFileSync(f.w.operator.file, 'utf8');
+  assert.equal(row().operator.coveredDomainId, grant);
+  assert.equal(f.runtimes.length, 1); assert.deepEqual(f.writes, []);
+  assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+  f.w.operatorAction(f.id, 'revoke', grant);
+  assert.equal(row().operator.coveredDomainId, null);
+});
+for (const change of ['expired', 'native', 'provider', 'directory', 'permission', 'disabled']) test('creation coverage stays absent after ' + change, async t => {
+  const f = await fixture(t); f.enable(); await f.open({ action_id: 'pending-card' }); const id = f.grant();
+  const domain = f.w.operator.data.domains[id];
+  if (change === 'expired') domain.expiresAt = Date.now() - 1;
+  if (change === 'native') f.s.nativeId = 'replacement-native';
+  if (change === 'provider') domain.providers = ['codex'];
+  if (change === 'directory') domain.directories = [path.join(f.root, 'other')];
+  if (change === 'permission') f.s.nativePermissionMode = 'unknown';
+  if (change === 'disabled') f.w.operatorAction(f.id, 'enabled', false);
+  const before = fs.readFileSync(f.w.operator.file, 'utf8');
+  const row = f.w.snapshot().sessions.find(s => s.id === f.id).messages.find(m => m.operator?.actionKey);
+  assert.equal(row.operator.coveredDomainId, null);
+  assert.equal(f.runtimes.length, 1); assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+});
+
 test('workspace_open defaults Codex to terminal and preserves explicit chat without delivering its task', async t => {
   const f = await fixture(t); f.enable(); const grant_id = f.grant();
   for (const view of [undefined, 'chat']) {
