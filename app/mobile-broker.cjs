@@ -2,6 +2,7 @@
 // listener, native session or model work. Transport and desktop UI stay separate.
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 const { MobileAccess, SESSION_MS, FILE } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
 const { MAX_REQUESTS, currentTarget } = require('./mobile-session.cjs');
@@ -62,7 +63,13 @@ class MobileBroker {
     }
   }
   async settlePersistence(quitting=false){
-    const result = await (quitting&&this.#persistence?.finish?this.#persistence.finish():this.#persistence?.flush?.());
+    if(quitting){
+      const deadline=performance.now()+5000,remaining=()=>Math.max(0,deadline-performance.now());
+      const pairing=this.#persistence?.finish?this.#persistence.finish(remaining()):this.#persistence?.flush?.();
+      const push=this.#pushStore?.finish(remaining()).catch(()=>{});
+      const [result]=await Promise.all([pairing,push]);return result;
+    }
+    const result = await this.#persistence?.flush?.();
     await this.#pushStore?.flush().catch(()=>{}); return result;
   }
   #details(state){

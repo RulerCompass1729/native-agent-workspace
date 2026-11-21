@@ -195,7 +195,7 @@ class PushStore {
     this.root = fs.realpathSync(root); this.owner = fs.lstatSync(this.root);
     if (!this.owner.isDirectory() || this.owner.uid !== process.getuid() || this.owner.mode & 0o022 || typeof adapter?.get !== 'function' || typeof adapter?.put !== 'function') throw denied();
     this.file = path.join(this.root, 'mobile-push.json'); this.account = digest(['mobile-push-v1', process.getuid(), this.root]);
-    this.adapter = adapter; this.now = now; this.serial = 0; this.tail = Promise.resolve(); this.off = false; this.failed = false;
+    this.adapter = adapter; this.now = now; this.serial = 0; this.tail = Promise.resolve(); this.off = false; this.failed = false; this.closed = false;
   }
   checkRoot() {
     const s = fs.lstatSync(this.root);
@@ -226,7 +226,7 @@ class PushStore {
     }
   }
   syncDirectory() { const fd = fs.openSync(this.root, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
-  queue(work) { const task = this.tail.then(work); this.tail = task.catch(() => {}); return task; }
+  queue(work) { const task = this.tail.then(() => { if (this.closed) { this.failed = true; throw denied(); } return work(); }); this.tail = task.catch(() => {}); return task; }
   clear() {
     if (this.off && !this.failed) return this.flush();
     this.off = true; const serial = ++this.serial; this.failed = false;
@@ -249,7 +249,7 @@ class PushStore {
   retain(pairing) { try { const d = this.read(); if (d?.enabled && d.pairing !== pairing) return this.clear(); } catch { return this.clear(); } return Promise.resolve(); }
   save(pairing, until, value, valid) {
     const subscription = subscriptionValue(value.subscription, this.now()), vapid = vapidKeys(value.vapid);
-    if (!/^[a-f0-9]{64}$/.test(pairing) || !Number.isSafeInteger(until) || until <= this.now() || !valid()) throw denied();
+    if (this.closed || !/^[a-f0-9]{64}$/.test(pairing) || !Number.isSafeInteger(until) || until <= this.now() || !valid()) throw denied();
     const serial = ++this.serial; this.off = false; this.failed = false;
     const descriptor = { version: 1, enabled: true, pairing, until, id: crypto.randomUUID(), endpoint: subscription.endpoint, expirationTime: subscription.expirationTime };
     this.write({ version: 1, enabled: false });
@@ -272,6 +272,17 @@ class PushStore {
       if (!exact(v, ['version', 'descriptor', 'vapid', 'keys']) || v.version !== 1 || v.descriptor !== digest(d)) throw denied();
       return { vapid: vapidKeys(v.vapid), subscription: subscriptionValue({ endpoint: d.endpoint, expirationTime: d.expirationTime, keys: v.keys }, this.now()) };
     });
+  }
+  async finish(timeoutMs = 5000) {
+    let timer;
+    try {
+      await Promise.race([this.flush(), new Promise((_, reject) => { timer = setTimeout(() => {
+        this.closed = true; this.serial++; this.off = true; this.failed = true;
+        try { this.write({ version: 1, enabled: false }); } catch {}
+        try { this.adapter.cancel?.(); } catch {}
+        reject(denied());
+      }, timeoutMs); })]);
+    } finally { clearTimeout(timer); }
   }
   async flush() { await this.tail; if (this.failed) throw denied(); }
 }

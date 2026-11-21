@@ -5,7 +5,7 @@ const { MobileAccess, SESSION_MS } = require('../mobile-access.cjs'), { PairingS
 const { PushStore } = require('../mobile-push.cjs');
 const actor = 'synthetic-human', origin = 'https://phone.example.test';
 function fixture(t, asynchronous = false) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-b-push-')), owned = fs.statSync(root), values = new Map(), clients = [], brokers = [], stores = [], messages = [], expectedStoreFailures = new Set();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-b-push-')), owned = fs.statSync(root), values = new Map(), clients = [], brokers = [], stores = [], messages = [], expectedStoreFailures = new Set(), expectedRevokeFailures = new Set();
   const clock = { now: Date.now() }; let identity = 0, failure = false, code = 201;
   const memory = { get: a => structuredClone(values.get(a) ?? null), put(a, v) { if (failure) throw Error('Synthetic Keychain unavailable'); values.set(a, structuredClone(v)); } };
   const adapter = asynchronous ? require('../mobile-pairing-store.cjs').keychainAdapter({ platform: 'darwin', run(_bin, _args, options, done) {
@@ -36,8 +36,8 @@ function fixture(t, asynchronous = false) {
   function subscription() { const dh = crypto.createECDH('prime256v1'); dh.generateKeys(); return { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null, keys: { p256dh: dh.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') } }; }
   async function enable(b, a, sub = subscription()) { const info = b.pushInfo(a); await b.pushAction(a, { action: 'subscribe', subscription: sub }); await b.refreshPush(); return { info, sub }; }
   async function restart(b = first) { b.suspend(); await b.settlePersistence(true); const next = create(); await next.resume(async () => true); return next; }
-  t.after(async () => { failure = false; for (const b of brokers) await b.revoke(); for (const s of stores) { if (expectedStoreFailures.has(s)) await assert.rejects(s.flush()); else await s.flush(); } const end = fs.statSync(root); assert.deepEqual([end.uid,end.dev,end.ino],[owned.uid,owned.dev,owned.ino]); fs.rmSync(root, { recursive: true }); });
-  return { root, first, create, pair, enable, restart, clients, messages, values, stores, clock, adapter, expectedStoreFailures, status: v => { code = v; }, fail: v => { failure = v; } };
+  t.after(async () => { failure = false; for (const b of brokers) { if (expectedRevokeFailures.has(b)) await assert.rejects(() => b.revoke()); else await b.revoke(); } for (const s of stores) { if (expectedStoreFailures.has(s)) await assert.rejects(s.flush()); else await s.flush(); } const end = fs.statSync(root); assert.deepEqual([end.uid,end.dev,end.ino],[owned.uid,owned.dev,owned.ino]); fs.rmSync(root, { recursive: true }); });
+  return { root, first, create, pair, enable, restart, clients, messages, values, stores, clock, adapter, expectedStoreFailures, expectedRevokeFailures, status: v => { code = v; }, fail: v => { failure = v; } };
 }
 test('same pairing restores its subscription and the original public key after a process lifetime ends', async t => {
   const f = fixture(t), a = await f.pair(), { info } = await f.enable(f.first, a), before = f.messages.length;
@@ -147,4 +147,76 @@ test('disable stops locally even if the Keychain is unavailable; boot later remo
   const before = f.messages.length; await f.first.refreshPush(); assert.equal(f.messages.length, before);
   f.fail(false); const next = await f.restart(); a.csrf = next.session(a).csrf;
   assert.equal(next.pushInfo(a).enabled, false); assert.equal([...f.values.values()].some(v => v?.vapid), false);
+});
+
+test('C quitting keeps the existing five-second persistence deadline with slow bounded clears', async t => {
+  const f = fixture(t, true), a = await f.pair(), { sub } = await f.enable(f.first, a), put = f.adapter.put.bind(f.adapter); let clears = 0;
+  f.adapter.put = (account, value) => value === null ? new Promise((resolve, reject) => setTimeout(() => {
+    try { clears++; resolve(put(account, value)); } catch (e) { reject(e); }
+  }, 3000)) : put(account, value);
+  const one = f.first.pushAction(a, { action: 'unsubscribe' });
+  const middle = Promise.resolve(f.first.pushAction(a, { action: 'subscribe', subscription: sub })); middle.catch(() => {});
+  const two = f.first.pushAction(a, { action: 'unsubscribe' });
+  f.first.suspend(); const start = performance.now(); await f.first.settlePersistence(true); const elapsed = performance.now() - start;
+  await Promise.allSettled([one, middle, two]);
+  if (f.stores[0].failed) { f.expectedStoreFailures.add(f.stores[0]); f.expectedRevokeFailures.add(f.first); }
+  t.diagnostic(JSON.stringify({ elapsedMs: elapsed, clears, pairingDeadlineMs: 5000, eachClearDelayMs: 3000 }));
+  assert.ok(elapsed < 5200, 'quitting must retain the existing bounded persistence deadline');
+});
+
+test('pairing and push start within one common quit budget, rather than consecutive budgets', async t => {
+  const f = fixture(t), { MobileBroker } = require('../mobile-broker.cjs'); let release, pairBudget, pushBudget;
+  const pending = new Promise(resolve => { release = resolve; });
+  const broker = new MobileBroker(f.root, { exclusive: () => true,
+    persistence: { finish(ms) { pairBudget = ms; return pending; } },
+    pushOptions: { persistence: { finish(ms) { pushBudget = ms; return Promise.resolve(); }, flush: () => Promise.resolve() } } });
+  const finished = broker.settlePersistence(true);
+  try {
+    assert.ok(pairBudget > 0 && pairBudget <= 5000);
+    assert.ok(pushBudget > 0 && pushBudget <= pairBudget, 'push starts before pairing finishes with only the remaining budget');
+  } finally { release('ready'); }
+  assert.equal(await finished, 'ready');
+});
+
+test('a quit deadline cancels owned helpers and prevents late saves or queued clears from restoring push', async t => {
+  const f = fixture(t, true), a = await f.pair(); f.first.pushInfo(a);
+  const put = f.adapter.put.bind(f.adapter); let release, entered, cancelled = 0, clears = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  f.adapter.put = async (account, value) => {
+    if (value?.vapid) { entered(); await new Promise(resolve => { release = resolve; }); }
+    if (value === null) clears++;
+    return put(account, value);
+  };
+  f.adapter.cancel = () => { cancelled++; };
+  const curve = crypto.createECDH('prime256v1'); curve.generateKeys();
+  const pending = f.first.pushAction(a, { action: 'subscribe', subscription: { endpoint: 'https://web.push.apple.com/quit', expirationTime: null,
+    keys: { p256dh: curve.getPublicKey().toString('base64url'), auth: crypto.randomBytes(16).toString('base64url') } } });
+  const rejected = assert.rejects(pending); await started;
+  const disabled = f.first.pushAction(a, { action: 'unsubscribe' }); f.first.suspend();
+  try {
+    await assert.rejects(() => f.stores[0].finish(20));
+    assert.equal(cancelled, 1); assert.equal(clears, 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, 'mobile-push.json'))), { version: 1, enabled: false });
+  } finally { release(); }
+  await rejected; await disabled; f.expectedStoreFailures.add(f.stores[0]);
+  assert.equal(clears, 0, 'expired queued work cannot start another helper');
+  f.adapter.put = put;
+  const next = f.create(); await next.resume(async () => true); a.csrf = next.session(a).csrf;
+  assert.equal(next.pushInfo(a).enabled, false); assert.equal(f.messages.length, 0);
+  assert.equal([...f.values.values()].some(v => v?.vapid), false, 'boot retries the disabled cleanup');
+});
+
+test('the existing Keychain adapter kills its own fake helper at the push quit deadline', async t => {
+  const f = fixture(t), { keychainAdapter } = require('../mobile-pairing-store.cjs'); let started, killed = 0, active = 0;
+  const entered = new Promise(resolve => { started = resolve; }), stop = new Set();
+  const adapter = keychainAdapter({ platform: 'darwin', run(_bin, _args, _options, done) {
+    active++; const kill = () => { if (!stop.delete(kill)) return; killed++; active--; done(Object.assign(Error('Synthetic helper cancelled'), { killed: true })); };
+    stop.add(kill); started(); return { kill, stdin: { end() {} } };
+  } });
+  const store = new PushStore(f.root, { adapter }), clear = store.clear(), rejected = assert.rejects(clear);
+  try {
+    await entered; await assert.rejects(() => store.finish(20)); await rejected;
+    assert.equal(killed, 1); assert.equal(active, 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, 'mobile-push.json'))), { version: 1, enabled: false });
+  } finally { for (const kill of stop) kill(); await rejected; }
 });
