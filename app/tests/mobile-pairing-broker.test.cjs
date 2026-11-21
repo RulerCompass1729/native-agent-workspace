@@ -4,14 +4,14 @@ const {MobileAccess,verifyTicket,SESSION_MS}=require('../mobile-access.cjs'),{Pa
 const {signer}=require('./fixtures/mobile-passkey.cjs');
 const actor='synthetic-person',origin='https://phone.example.test';
 function fixture(t){
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-persistent-broker-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true}));
- let item=null,identity=0,fail=false,closeFails=false,calls=0,lastTicket=null;
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-persistent-broker-')),clients=[],brokers=[],messages=[];fs.chmodSync(root,0o700);t.after(()=>{for(const b of brokers)try{b.revoke();}catch{}fs.rmSync(root,{recursive:true});});
+ let item=null,identity=0,fail=false,closeFails=false,calls=0,lastTicket=null,decisions=0;
  const store=new PairingStore(root,{adapter:{get:()=>structuredClone(item),put(_a,v){if(fail)throw Error('Synthetic locked Keychain');item=structuredClone(v);}}});
  const record={id:'synthetic',nativeId:'native',state:'idle',provider:'claude',name:'Synthetic',messages:[]};
  const entries=[{key:'.',state:{capabilities:['humanMobileV1','humanMobilePreparedV1'],sessions:[record]}}];
  class Access extends MobileAccess{constructor(r,o){super(r,{...o,identity:{pid:process.pid,started:'synthetic-lifetime-'+(++identity)}});}}
  class Client extends EventEmitter{
-  constructor(){super();this.scope=root;this.entries=entries;this.socket={destroyed:false};this.closing=false;}
+  constructor(){super();this.scope=root;this.entries=entries;this.socket={destroyed:false};this.closing=false;clients.push(this);}
   route(id){if(id!==record.id)throw Error('Unknown target');return entries[0];}async refresh(){}
   close(){if(closeFails)throw Error('Synthetic transport close fault');this.closing=true;this.socket.destroyed=true;this.emit('closed');}
   async call(method,ticket){calls++;lastTicket=structuredClone(ticket);verifyTicket(root,ticket,{serviceKey:'.',sessionId:record.id,nativeId:record.nativeId},'read',{alive:()=>true});assert.equal(method,'mobileRead');
@@ -21,16 +21,49 @@ function fixture(t){
  vm.runInNewContext(fs.readFileSync(file,'utf8'),{module,process,Buffer,URL,structuredClone,require(n){if(n==='./mobile-access.cjs')return {MobileAccess:Access,SESSION_MS};if(n==='./workspace-client.cjs')return {WorkspaceClient:Client};if(n==='./service-client.cjs')return {connect:async()=>new Client()};return req(n);}});
  const binding={sessionId:record.id,nativeId:record.nativeId,operationId:'card',version:'exact',decision:1,expiresAt:Date.now()+120000};
  const desktop={grant:(_c,g)=>structuredClone(g),records:{status:()=>({count:0})},read:async()=>({capabilities:{},confirmations:[]}),confirmationBinding:()=>binding,
-  decision:async(_c,_s,_v,permit,valid)=>{permit.check(valid(),binding);return {state:'complete'};}};
+  decision:async(_c,_s,_v,permit,valid)=>{decisions++;permit.check(valid(),binding);return {state:'complete'};}};
  const endpoint={origin,actor,port:48765,binding:{version:1,origin,actor,port:48765,userId:'7',topologyHash:'0'.repeat(64)}};
- const create=(current=endpoint)=>{const broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store});if(current)broker.setEndpoint(current);return broker;};
+ const create=(current=endpoint)=>{const broker=new module.exports.MobileBroker(root,{exclusive:()=>true,desktop,persistence:store,pushOptions:{transport:async d=>{messages.push(d);return 201;}}});brokers.push(broker);if(current)broker.setEndpoint(current);return broker;};
  const first=create();
  const auth=d=>({token:d.cookieValue,actor,origin});
  async function selected(){const c=await first.beginPairing({actor,origin,selection:[{sessionId:record.id,actions:['read']}]});const a=auth(first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
  async function candidate(options={}){const c=await first.beginCandidate({actor,origin,...options}),a=auth(await first.pair({secret:c.secret,actor,origin}));a.csrf=first.session(a).csrf;return a;}
  function prove(a){const key=signer(origin),o=first.registrationOptions(a,{}),p=first.registerPasskey(a,{registrationId:o.registrationId,credential:key.credential(o.publicKey)});first.registrationProof(a,{registrationId:o.registrationId,assertion:key.assertion(p.publicKey)});return key;}
- return {root,persistence:store,first,create,selected,candidate,prove,binding,record,fail:v=>{fail=v;},closeFail:v=>{closeFails=v;},calls:()=>calls,ticket:()=>lastTicket,stored:()=>structuredClone(item)};
+ return {root,persistence:store,first,create,selected,candidate,prove,binding,record,clients,messages,decisions:()=>decisions,fail:v=>{fail=v;},closeFail:v=>{closeFails=v;},calls:()=>calls,ticket:()=>lastTicket,stored:()=>structuredClone(item)};
 }
+test('a restored selected pairing reconnects once for simultaneous GETs and watches the replacement reader too',async t=>{
+ const f=fixture(t),a=await f.selected();f.first.suspend();const next=f.create();await next.resume(async()=>true);a.csrf=next.session(a).csrf;
+ let count=f.clients.length;f.clients.at(-1).close();
+ await assert.rejects(next.read(a,f.record.id),{code:'MOBILE_SOURCE_UNAVAILABLE'});
+ for(const bad of [{...a,actor:'another-person'},{...a,origin:'https://other.example.test'},{...a,token:'x'.repeat(43)}])await assert.rejects(next.refreshSession(bad));
+ assert.equal(f.clients.length,count);const rows=await Promise.all([next.refreshSession(a),next.refreshSession(a)]);
+ assert.equal(f.clients.length,count+1);assert.deepEqual(structuredClone(rows[0].sessions.map(s=>s.actions)),[['read']]);
+ assert.equal((await next.read(a,f.record.id)).id,f.record.id);
+ count=f.clients.length;f.clients.at(-1).close();await next.refreshSession(a);assert.equal(f.clients.length,count+1);
+ f.clients.at(-1).close();count=f.clients.length;assert.equal(next.logout(a).authorizationRevoked,true);
+ await assert.rejects(next.refreshSession(a));assert.equal(f.clients.length,count);
+});
+test('a restored subscribed pairing reports source loss once and clears it after the original phone reconnects',async t=>{
+ const f=fixture(t),a=await f.candidate();await f.first.activateCandidate(a,{mode:'basic'});f.first.suspend();const next=f.create();await next.resume(async()=>true);a.csrf=next.session(a).csrf;
+ const key=require('node:crypto').createECDH('prime256v1');key.generateKeys();
+ const subscription={endpoint:'https://web.push.apple.com/synthetic',expirationTime:null,keys:{p256dh:key.getPublicKey().toString('base64url'),auth:Buffer.alloc(16,7).toString('base64url')}};
+ const said=()=>JSON.parse(require('http_ece').decrypt(f.messages.at(-1).body,{version:'aes128gcm',privateKey:key,authSecret:subscription.keys.auth}));
+ next.pushAction(a,{action:'subscribe',subscription});await next.refreshPush();const before=f.messages.length;assert.equal(before,1);
+ f.clients.at(-1).close();await next.refreshPush();assert.equal(f.messages.length,before+1);assert.deepEqual(said().alerts,['service-disconnected']);
+ await next.refreshPush();assert.equal(f.messages.length,before+1);
+ await next.refreshSession(a);await next.refreshPush();assert.deepEqual(said().alerts,[]);assert.equal(next.pushInfo(a).enabled,true);
+ const count=f.messages.length;next.logout(a);await next.refreshPush();assert.equal(f.messages.length,count);
+});
+test('checkpoint consent restores before a later source loss revokes it and its outstanding proof',async t=>{
+ const f=fixture(t),a=await f.candidate(),key=f.prove(a);await f.first.activateCandidate(a,{mode:'verified'});f.first.suspend();const next=f.create();await next.resume(async()=>true);
+ let status=next.session(a);assert.equal(status.consent.enabled,true);assert.equal(status.consent.registered,true);a.csrf=status.csrf;
+ const value={id:'card',version:'exact',decision:'approve'},proof=await next.decisionOptions(a,value);f.clients.at(-1).close();
+ await assert.rejects(next.decide(a,{...value,challengeId:proof.challengeId,assertion:key.assertion(proof.publicKey)}));
+ status=await next.refreshSession(a);assert.equal(status.consent.enabled,false);assert.equal(status.consent.registered,false);
+ await assert.rejects(next.decide(a,{...value,challengeId:proof.challengeId,assertion:key.assertion(proof.publicKey)}));assert.equal(f.decisions(),0);
+ next.suspend();assert.equal(f.stored().details.consent,null);const later=f.create();await later.resume(async()=>true);
+ assert.equal(later.session(a).consent.enabled,false);assert.equal(later.session(a).consent.registered,false);
+});
 test('suspend closes backend authorization before the issuer exits',async t=>{
  const f=fixture(t),a=await f.selected();await f.first.read(a,f.record.id);const ticket=f.ticket();
  f.first.suspend();assert.throws(()=>verifyTicket(f.root,ticket,{serviceKey:'.',sessionId:f.record.id,nativeId:f.record.nativeId},'read',{alive:()=>true}));

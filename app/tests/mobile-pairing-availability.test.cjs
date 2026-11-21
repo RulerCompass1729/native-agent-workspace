@@ -5,26 +5,31 @@ const {MobileAccess}=require('../mobile-access.cjs');
 const actor='synthetic-person',origin='https://phone.example.test';
 function fixture(t,mode='healthy'){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-pairing-availability-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- let item=null,current=mode,calls=0,hold=false,release,inflight=0,maxInflight=0;const logs=[],actions=[];
+ let item=null,current=mode,calls=0,hold=false,release,inflight=0,maxInflight=0,holdFailure=false,releaseFailure,signalFailure;const logs=[],actions=[],failureStarted=new Promise(r=>signalFailure=r);
  const adapter=keychainAdapter({platform:'darwin',run(_bin,_args,options,done){
   calls++;const input=JSON.parse(options.input);actions.push(input.action);const active=['put-fail','ack-lost'].includes(current)?(input.action==='put'?current==='put-fail'?'nonzero':'ack-lost':'healthy'):current;
   if(active==='healthy'&&input.action==='put'&&hold&&done){hold=false;inflight++;maxInflight=Math.max(maxInflight,inflight);release=()=>{item=structuredClone(input.value);inflight--;done(null,JSON.stringify({value:null}));};return {stdin:{end(){}}};}
   if(active==='ack-lost'){item=structuredClone(input.value);if(done){queueMicrotask(()=>done(Object.assign(Error('Synthetic lost acknowledgement'),{code:7})));return {stdin:{end(){}}};}throw Error('Synthetic lost acknowledgement');}
   if(active==='healthy'){if(input.action==='put')item=structuredClone(input.value);const out=JSON.stringify({value:input.action==='get'?item:null});if(done){queueMicrotask(()=>done(null,out));return {stdin:{end(){}}};}return out;}
   const code={nonzero:'process.exit(7)',timeout:'setTimeout(()=>{},60000)',invalid:'process.stdout.write("not-json")',overflow:'process.stdout.write(Buffer.alloc(524289,120))',interaction:'process.stderr.write("User interaction is not allowed");process.exit(1)'}[active];
-  return done?execFile(process.execPath,['-e',code],options,done):execFileSync(process.execPath,['-e',code],options);
+  const start=()=>done?execFile(process.execPath,['-e',code],options,done):execFileSync(process.execPath,['-e',code],options);
+  if(holdFailure&&done){holdFailure=false;let child;releaseFailure=()=>{child=start();};signalFailure();return {stdin:{end(){}},kill:()=>child?.kill()};}
+  return start();
  }});
  const store=()=>new PairingStore(root,{adapter,asynchronous:true,log:v=>logs.push(v)});
  const details={endpoint:{origin,actor,port:48765,binding:null},all:false,workspace:null,consent:null,consentView:false};
  const access=(s,pid)=>new MobileAccess(root,{exclusive:()=>true,identity:{pid,started:'synthetic-'+pid},transaction:(a,save)=>s.commit(a,details,save),pauseTransaction:(a,m,save)=>s.pause(a,details,m,save),recover:r=>s.take(r)});
- return {root,adapter,store,access,logs,actions,calls:()=>calls,mode:v=>current=v,hold:()=>hold=true,release:()=>release(),maxInflight:()=>maxInflight,stored:()=>structuredClone(item),set:v=>item=structuredClone(v)};
+ return {root,adapter,store,access,logs,actions,calls:()=>calls,mode:v=>current=v,hold:()=>hold=true,release:()=>release(),holdFailure:()=>holdFailure=true,failureStarted,releaseFailure:()=>releaseFailure(),maxInflight:()=>maxInflight,stored:()=>structuredClone(item),set:v=>item=structuredClone(v)};
+}
+async function assertYieldBeforeFailure(f,pending){
+ let settled=false;pending.then(()=>{settled=true;},()=>{settled=true;});await f.failureStarted;
+ try{await new Promise(setImmediate);assert.equal(settled,false,'Event loop progresses while the helper completion is held');}finally{f.releaseFailure();}
 }
 function pair(a){a.initialize({alive:()=>false});const c=a.beginPairing({actor,origin,scopes:[{serviceKey:'.',sessionId:'synthetic',nativeId:'native',actions:['read']}]});return a.pair({secret:c.secret,actor,origin});}
-for(const mode of ['nonzero','timeout','invalid','overflow','interaction','put-fail'])test('helper '+mode+' leaves process-only pairing usable without blocking the event loop',async t=>{
- const f=fixture(t,mode),store=f.store(),start=performance.now();let observed;
- const tick=new Promise(r=>setTimeout(()=>{observed=performance.now()-start;r();},5));
- await store.ready?.();store.fresh?.();const a=f.access(store,900001),phone=pair(a);await store.flush?.();await tick;
- t.diagnostic('sentinelMs='+observed.toFixed(1));assert.ok(observed<100,'Main-thread sentinel under 100ms: '+observed);assert.equal(store.status?.(),'temporary');
+for(const mode of ['nonzero','timeout','invalid','overflow','interaction','put-fail'])test('helper '+mode+' leaves process-only pairing usable without blocking the event loop',{timeout:20000},async t=>{
+ const f=fixture(t,mode);f.holdFailure();const store=f.store();
+ const pending=(async()=>{await store.ready?.();store.fresh?.();const a=f.access(store,900001),phone=pair(a);await store.flush?.();return {a,phone};})();
+ await assertYieldBeforeFailure(f,pending);const {a,phone}=await pending;assert.equal(store.status?.(),'temporary');
  assert.ok(a.authenticate({token:phone.cookieValue,actor}));assert.equal(a.load().scopes[0].actions.join(','),'read');
  assert.ok(f.logs.some(v=>v.category!=='ok'));assert.ok(f.logs.every(v=>Object.keys(v).sort().join(',')==='category,elapsedMs,phase'));
  a.pause();await store.flush?.();const next=f.store();await next.ready?.();assert.throws(()=>next.checkpoint());
@@ -37,10 +42,9 @@ test('a late helper write cannot erase a later revocation or pending-recovery ga
  const f=fixture(t),s=f.store();await s.ready();s.fresh();const a=f.access(s,900001),phone=pair(a);a.revoke();await s.flush();
  assert.throws(()=>a.authenticate({token:phone.cookieValue,actor}));const n=f.store();await n.ready();assert.throws(()=>n.checkpoint());
 });
-test('the actual bounded helper timeout never blocks a Main-thread timer',async t=>{
- const f=fixture(t,'timeout'),start=performance.now();let elapsed;
- const tick=new Promise(r=>setTimeout(()=>{elapsed=performance.now()-start;r();},5));
- await assert.rejects(async()=>f.adapter.get('a'.repeat(64)));await tick;t.diagnostic('timeoutSentinelMs='+elapsed.toFixed(1));assert.ok(elapsed<100);
+test('the actual bounded helper timeout yields before its completion',{timeout:20000},async t=>{
+ const f=fixture(t,'timeout');f.holdFailure();const pending=f.adapter.get('a'.repeat(64));
+ await assertYieldBeforeFailure(f,pending);await assert.rejects(pending);
 });
 test('shutdown bounds a stalled adapter and a late read cannot reopen recovery',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-pairing-late-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

@@ -96,7 +96,7 @@ class MobileBroker {
       this.#client=client;this.#endpoint=endpoint;this.#fullLayout=layout;this.#fullGeneration=details.all?result.state.generation:null;
       this.#workspaceGrant=grant&&{value:grant,generation:result.state.generation};this.#consent=consent;this.#consentView=details.consentView;
       this.#csrf={generation:result.state.generation,deviceId:result.state.device.id,value:result.csrf};
-      client.once('closed',()=>{if(this.#client===client){this.#forget();this.#disconnect();}});
+      this.#watch(client);
       if(details.all)this.#access.syncAllScopes(this.#scopes(result.state));
       await this.settlePersistence();if(!this.#liveGeneration(result.state.generation,client))throw denied();if(this.#persistence.status?.()==='temporary'){this.#access.revoke();this.#forget();this.#disconnect();throw denied('MOBILE_STORAGE');}
       this.#changed();return {restored:true};
