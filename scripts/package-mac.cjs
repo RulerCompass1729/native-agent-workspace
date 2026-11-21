@@ -236,6 +236,7 @@ async function build() {
       'service-connection.cjs',
       'service-layout.cjs',
       'service-lock.cjs',
+      'service-reconnect.cjs',
       'service-transport.cjs',
       'session-labels.cjs',
       'session-wake.cjs',

@@ -5864,7 +5864,12 @@ const disposers = [
   api.onDisconnected((message, uiMessage) => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toastError({ message, uiMessage }); }),
   api.onQuitStatus(key => { if (['os.butlerQuitWaiting', 'os.butlerQuitUnconfirmed'].includes(key)) toastMessage(key); }),
   api.onViewStorage((warning, uiMessage) => { latestViewStorage = warning; latestViewStorageUiMessage = uiMessage; if (state) { state.viewStorageWarning = warning; state.viewStorageWarningUiMessage = uiMessage; render(); } }),
-  api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
+  // redraw: sessions whose transport was closed for a while. Their terminals missed output and start again from a snapshot.
+  api.onReconnected((next, redraw = []) => {
+    for (const s of state?.sessions || []) freezeLegacyProgress(s);
+    for (const id of redraw) { const entry = terminals.get(id); if (entry) { entry.term.dispose(); entry.element.remove(); terminals.delete(id); } }
+    disconnected = false; updateState(next); render();
+  }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
   api.onSwitchMode(next => {
