@@ -873,8 +873,8 @@ class BackgroundControl {
         }
         else if (standingFailure && Object.is(e, standingFailure.value) && !handlerEntered) {
           refusal = { ...refusalDetails('standing-authorization-unavailable'), retryWithNewOperationId: true,
-            retryHint: 'The operation did not execute. Retry with a new operation_id.' };
-          state = refusal.state; error = typeof e?.message === 'string' ? e.message.slice(0, 2048) : 'The operation did not execute.';
+            retryHint: '本次未执行。如需再试，请用新的操作编号（operation_id）重新发起。' };
+          state = refusal.state; error = typeof e?.message === 'string' ? e.message.slice(0, 2048) : '本次操作未执行。';
         }
         else if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {

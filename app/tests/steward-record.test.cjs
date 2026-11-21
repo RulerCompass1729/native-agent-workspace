@@ -5,6 +5,21 @@ const { StewardRecord, view, argumentsOf, cachedSteward } = require('../steward-
 const history = require('../record-history.cjs');
 
 const steward = { sessionId: 'butler', nativeId: 'native-butler' };
+test('blocked wake records contain only a bounded reason and time, survive reopening and have human words', t => {
+  const f = fixture(t);
+  f.record.append({ kind: 'wakeBlocked', since: 0, reason: 'source-unavailable' });
+  const rows = view(f.open(), { sessions: [] }).entries;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reason, 'source-unavailable');
+  assert.equal(rows[0].minutes, Math.floor(rows[0].at / 60000));
+  const ui = require('../renderer/steward-record.js').bind({ dialog: { addEventListener() {} }, document: {}, api: {} });
+  assert.deepEqual(ui.what(rows[0]), ['stewardRecord.step.wakeBlocked', {}]);
+  assert.deepEqual(ui.result(rows[0]), ['stewardWake.reason.source-unavailable', {}]);
+  for (const extra of [{ text: 'PRIVATE BODY' }, { reason: 'PRIVATE BODY' }, { since: -1 }]) {
+    assert.throws(() => f.record.append({ kind: 'wakeBlocked', since: 0, reason: 'source-unavailable', ...extra }));
+  }
+  assert.doesNotMatch(f.disk(), /PRIVATE BODY/u);
+});
 const sender = (provider = 'claude', over = {}) => ({ id: 'butler', nativeId: 'native-butler', provider, name: 'Claude manager', ...over });
 const invoke = (method, args = [], id = 'op-1') => ({ action: 'invoke', method, arguments: args, operation_id: id });
 function fixture(t, { current = () => steward, selected = () => steward, now } = {}) {

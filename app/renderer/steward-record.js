@@ -32,6 +32,7 @@
     };
     // What it did, in a sentence: the few things a butler does most by name, anything else as its command.
     function what(entry, now = Date.now()) {
+      if (entry.kind === 'wakeBlocked') return ['stewardRecord.step.wakeBlocked', {}];
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
       // NAW's own step: it woke the butler of that time to read what it recorded.
       if (entry.kind === 'wake') return ['stewardRecord.step.wake', { target: dash(entry.target) }];
@@ -56,6 +57,7 @@
     }
     // How it ended, as far as NAW knows now.
     function result(entry) {
+      if (entry.kind === 'wakeBlocked') return [`stewardWake.reason.${entry.reason}`, {}];
       if (entry.kind === 'role' || entry.kind === 'wakeSwitch') return null;
       if (entry.kind === 'message') return MESSAGES.includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}] : ['stewardRecord.result.other', { state: dash(entry.state) }];
       if (entry.kind === 'wake') return entry.state === 'sent' ? ['stewardRecord.wake.sent', {}] : ['not-sent', 'unconfirmed'].includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}]
@@ -75,6 +77,7 @@
       if (outcome) say(end, ...outcome);
       // Opened: the whole sentence, and NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
       body.append(say(make('p'), key, marked(entry, params)));
+      if (entry.kind === 'wakeBlocked') body.append(say(make('p'), 'stewardWake.stalled', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
       if (entry.error) { const why = make('p', 'steward-record-error'); why.textContent = entry.error; body.append(why); }
     }
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;

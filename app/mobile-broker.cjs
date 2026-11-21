@@ -26,7 +26,7 @@ const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
       !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(value.status)) throw denied('MOBILE_RECEIPT_UNKNOWN');
   return { requestId: value.requestId, sessionId: value.sessionId, action: value.action,
-    status: value.status, error: value.error, storageWarning: value.storageWarning };
+    status: value.status, ...(value.status === 'awaiting-native' && value.queued === true ? { queued: true } : {}), error: value.error, storageWarning: value.storageWarning };
 };
 
 class MobileBroker {

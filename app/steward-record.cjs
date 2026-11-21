@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const history = require('./record-history.cjs');
+const { BLOCK_REASONS } = require('./steward-wake.cjs');
 const { validate } = require('./background-control.cjs');
 const { uiError } = require('./ui-errors.cjs');
 
@@ -46,6 +47,7 @@ function check(value) {
       token(value.session.id) && token(value.session.nativeId) && (value.position === null || typeof value.position === 'string' && POSITION.test(value.position))
     // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake); the butler's own calls are steps.
     : value?.kind === 'wakeSwitch' ? exact(value, ['kind', 'at', 'on']) && value.on === false
+    : value?.kind === 'wakeBlocked' ? exact(value, ['kind', 'at', 'since', 'reason']) && Number.isSafeInteger(value.since) && value.since >= 0 && value.since <= value.at && BLOCK_REASONS.includes(value.reason)
     : false;
   if (!ok) throw Error('Invalid steward record line');
 }
@@ -159,6 +161,7 @@ class StewardRecord {
     return this.lines.filter(value => value.kind !== 'outcome').map(value => {
       if (value.kind === 'role') return { at: value.at, kind: 'role', event: value.event, session: value.session };
       if (value.kind === 'wakeSwitch') return { at: value.at, kind: 'wakeSwitch', on: value.on };
+      if (value.kind === 'wakeBlocked') return { ...value };
       if (value.kind === 'wake') {
         const outcome = outcomes.get(value.id) || null;
         return { at: value.at, kind: 'wake', id: value.id, session: value.session, position: value.position, state: outcome?.state ?? null, error: outcome?.error ?? null,
@@ -227,6 +230,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     // NAW woke the butler of that time: whom, and whether the message went out. Not the position it named.
     if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id), state: entry.state, error: cut(entry.error), recorded: entry.recorded };
     if (entry.kind === 'wakeSwitch') return { at: entry.at, kind: 'wakeSwitch', on: entry.on };
+    if (entry.kind === 'wakeBlocked') return { at: entry.at, kind: 'wakeBlocked', reason: entry.reason, since: entry.since, minutes: Math.floor((entry.at - entry.since) / 60000) };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
     if (entry.method === 'spaceAction' && Array.isArray(args)) {

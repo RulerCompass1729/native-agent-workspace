@@ -12,7 +12,7 @@ const results = [], errors = [], posts = [], deviceId = '10000000-0000-4000-8000
 const check = (name, pass) => { results.push({ name, pass: Boolean(pass) }); console.log(JSON.stringify(results.at(-1))); };
 const ids = [1, 2, 3].map(n => '20000000-0000-4000-8000-' + String(n).padStart(12, '0'));
 let browser;
-async function open(lang, { blocked = false, duplicate = false, long = false, uncertain = false, legacy = false, oldPair = false, edgeSource = 0, duplicateSource = 0 } = {}) {
+async function open(lang, { blocked = false, duplicate = false, long = false, uncertain = false, legacy = false, oldPair = false, edgeSource = 0, duplicateSource = 0, queued = false, mixedOld = false } = {}) {
   const zh = lang === 'zh', context = await browser.newContext({ ...devices['iPhone 13'], viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
   const names = zh ? ['大管家', '代码复核', '手机页面'] : ['Butler', 'Code review', 'Phone pages'];
   const originals = zh ? ['汇总手机页面的问题', '检查英文按钮有没有换行', '添加一项手机回执检查'] : ['Summarize the phone page issues', 'Check whether the English button wraps', 'Add a phone receipt check'];
@@ -25,6 +25,8 @@ async function open(lang, { blocked = false, duplicate = false, long = false, un
     context: { ...receiptContext({ target: names[2], text: originals[2], scope: 'room', targetId: 'room' }), at: 1795113840000 } };
   if (duplicate && duplicateSource < 2) { const other = 1 - duplicateSource; native[other] = { ...native[duplicateSource], requestId: ids[other] }; originals[other] = originals[duplicateSource]; }
   const actions = duplicate && duplicateSource === 2 ? [action, { ...action, requestId: '20000000-0000-4000-8000-000000000004' }] : [action];
+  if (queued) Object.assign(native[0], { status: 'awaiting-native', queued: true });
+  if (mixedOld) native.push(...[7, 8].map(n => ({ ...native[0], deviceId: '10000000-0000-4000-8000-000000000099', requestId: '20000000-0000-4000-8000-' + String(n).padStart(12, '0'), status: 'unconfirmed' })));
   if (legacy) { for (const row of native) delete row.context; delete action.context; }
   if (oldPair) { for (const row of native) row.deviceId = '10000000-0000-4000-8000-000000000099'; action.deviceId = native[0].deviceId; }
   await context.addInitScript(({ KEY, ACTION_KEY, native, actions, draft, deviceId }) => {
@@ -42,7 +44,7 @@ async function open(lang, { blocked = false, duplicate = false, long = false, un
     if (req.method() === 'POST') posts.push({ route: url.pathname, value: req.postDataJSON() });
     if (url.pathname === '/mobile/session') data = { deviceId, csrf: (narrowed ? 'd' : 'c').repeat(43), workspace: !narrowed, sessions: narrowed ? sessions.slice(0, 1) : sessions };
     else if (url.pathname.startsWith('/mobile/read/')) data = { id: url.pathname.split('/').at(-1), contextId: 'x'.repeat(43), canSend: !blocked, sendBlocked: blocked ? 'noQueue' : null, messages: [], question: null };
-    else if (url.pathname === '/mobile/receipt') data = { requestId: req.postDataJSON().requestId, sessionId: native.find(p => p.requestId === req.postDataJSON().requestId).sessionId, action: 'send', status: confirmReceipt ? 'submitted' : 'unconfirmed' };
+    else if (url.pathname === '/mobile/receipt') data = { requestId: req.postDataJSON().requestId, sessionId: native.find(p => p.requestId === req.postDataJSON().requestId).sessionId, action: 'send', status: queued ? 'awaiting-native' : confirmReceipt ? 'submitted' : 'unconfirmed', ...(queued ? { queued:true } : {}) };
     else if (url.pathname === '/mobile/workspace/action') data = { requestId: req.postDataJSON().requestId, status: confirmReceipt ? 'complete' : 'unconfirmed', itemId: 'task' };
     else if ((url.pathname === '/mobile/workspace' || /^\/mobile\/workspace\/(summary|session\/[^/]+|room\/[^/]+)$/.test(url.pathname))) data = { sessions: sessions.map(s => ({ ...s, messages: s.id === 'butler' ? [{ id: 'reply', role: 'assistant', text: zh ? '我会分别检查回执和按钮。' : 'I will check the receipts and the button.', time: 1795113660000 }] : [] })),
       rooms: [{ id: 'room', name: names[2], members: [], messages: [], queue: [{ id: 'task', text: originals[2], status: 'queued' }] }], reminders: { count: 0, records: [] }, confirmations: [], syncedAt: 1795113660000,
@@ -69,6 +71,22 @@ async function framed(page, file) {
   const targets = ['chat/butler', 'chat/review', 'queue/room'];
   const drafts = page => page.evaluate(KEY => JSON.parse(localStorage.getItem(KEY)).drafts, KEY);
   for (const lang of ['zh', 'en']) {
+    for (const options of [{ queued: true }, { uncertain: true, mixedOld: true }]) {
+      const current = await open(lang, options);
+      try {
+        if (options.queued) {
+          check(lang + ' proven queue is readable and never reported received or unknown', (await current.page.locator('.receipt-status').first().innerText()).includes(lang === 'zh' ? '已排队' : 'Queued'));
+          check(lang + ' pending queue cannot be removed or sent twice', await current.page.locator('#send-message').isDisabled() && await current.page.locator('.receipt-control').first().innerText() === (lang === 'zh' ? '查看这条消息的状态' : "Check this message's status"));
+        } else {
+          const group = current.page.locator('details.old-receipts');
+          check(lang + ' old pairing records occupy one collapsed group without losing either result', await group.count() === 1 && !await group.evaluate(e => e.open) && await group.locator('.receipt').count() === 2);
+          check(lang + ' current unknown result remains visible and queryable outside the group', await current.page.locator('.receipt-status').first().isVisible() && await current.page.locator('ol.receipt-list > .receipt').filter({ has: current.page.locator('.receipt-control') }).count() === 1);
+          const saved = await current.page.evaluate(KEY => JSON.parse(localStorage.getItem(KEY)).pending, KEY);
+          check(lang + ' folding old records preserves all persisted originals', saved.length === 4 && saved.filter(p => p.status === 'unconfirmed').length >= 3);
+        }
+        await current.page.screenshot({ path: path.join(pictures, lang + (options.queued ? '-queued' : '-old-group') + '.png'), scale: 'css' });
+      } finally { await current.context.close(); }
+    }
     const s = await open(lang), rows = s.page.locator('.receipt'), labels = [];
     try {
       for (const [i, target] of targets.entries()) {
@@ -160,7 +178,7 @@ async function framed(page, file) {
     const old = await open(lang, { oldPair: true });
     try {
       for (const [i, target] of targets.entries()) {
-        await old.go(target); const row = old.page.locator('.receipt');
+        await old.go(target); const group = old.page.locator('details.old-receipts'); if (await group.count()) await group.locator('summary').tap(); const row = old.page.locator('.receipt');
         check(lang + ' source ' + i + ': old pairing shows a masked source receipt without controls', await row.count() === 1 && (await row.innerText()).includes(lang === 'zh' ? '旧配对' : 'old pairing') && !(await row.innerText()).includes(old.originals[i]) && await row.getByRole('button').count() === 0);
       }
     } finally { await old.context.close(); }

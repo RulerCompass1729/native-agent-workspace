@@ -48,9 +48,52 @@ def windows(values, pid):
 
 def observe(pid):
     helper = Path(__file__).parent / 'fixtures/install-windows.js'
-    data = subprocess.check_output(['/usr/bin/osascript', '-l', 'JavaScript', str(helper), str(pid)], timeout=1.5)
+    data = subprocess.check_output(['/usr/bin/osascript', '-l', 'JavaScript', str(helper), str(pid), '--menu-metadata'], timeout=1.5)
     require(len(data) <= 1024 * 1024)
     return json.loads(data)
+
+
+def observation(value, pid):
+    if isinstance(value, list):
+        return windows(value, pid), [], {}
+    require(isinstance(value, dict) and set(value) == {'windows', 'displays'})
+    require(isinstance(value['windows'], list))
+    layers, records = {}, []
+    for row in value['windows']:
+        require(isinstance(row, dict) and set(row) == {'pid', 'id', 'onScreen', 'bounds', 'layer'})
+        require(type(row['layer']) is int)
+        records.append({key: row[key] for key in ['pid', 'id', 'onScreen', 'bounds']})
+        layers[row['id']] = row['layer']
+    records = windows(records, pid)
+    require(isinstance(value['displays'], list) and len(value['displays']) <= 64)
+    displays, ids = [], set()
+    for display in value['displays']:
+        require(isinstance(display, dict) and set(display) == {'id', 'bounds', 'menuBarHeight'})
+        number, height = display['id'], display['menuBarHeight']
+        require(type(number) is int and 0 < number <= 0xffffffff and number not in ids)
+        box = rectangle(display['bounds'])
+        require(height is None or type(height) in (int, float) and math.isfinite(height) and 0 < height < box['height'])
+        ids.add(number)
+        displays.append(dict(id=number, bounds=box, menuBarHeight=height))
+    return records, sorted(displays, key=lambda row: row['id']), layers
+
+
+def infer_menu_windows(records, displays, layers, managed):
+    # Authorized geometry inference, not proof of an AppKit class or creator.
+    counts = {}
+    for row in records:
+        if row['id'] in managed:
+            continue
+        box = row['bounds']
+        matches = [d for d in displays if layers.get(row['id']) == 0 and d['menuBarHeight'] is not None and
+                   box['x'] == d['bounds']['x'] and box['y'] == d['bounds']['y'] and
+                   box['width'] == d['bounds']['width'] and box['height'] <= d['menuBarHeight']]
+        require(len(matches) == 1)
+        number = matches[0]['id']
+        counts[number] = counts.get(number, 0) + 1
+        require(counts[number] <= 4)
+    return [dict(display=d['id'], count=counts[d['id']], bounds=d['bounds'], menuBarHeight=d['menuBarHeight'])
+            for d in displays if d['id'] in counts]
 
 
 def descriptor(profile, pid):
@@ -130,14 +173,16 @@ def validate(value, pid, started, nonce, now, identity):
 
 def collect(pid, profile, started, sample=observe, frames=request):
     require(type(pid) is int and 1 < pid < 0x80000000 and isinstance(started, str) and 0 < len(started) <= 200)
-    before = windows(sample(pid), pid)
+    before, displays, layers = observation(sample(pid), pid)
     proof = frames(profile, pid, started)
     live, background = proof['windows'], proof['hiddenBackgroundWindows']
-    require(not set(live).intersection(background) and set(live).union(background) == {row['id'] for row in before})
+    managed = set(live).union(background)
+    require(not set(live).intersection(background) and managed.issubset({row['id'] for row in before}))
+    inferred = infer_menu_windows(before, displays, layers, managed)
     require(all(row['onScreen'] is False for row in before if row['id'] in background))
     result = [dict(row, frame=live[row['id']]['frame'], owner=live[row['id']]['owner'], frameBasis=BASIS) for row in before if row['id'] in live]
-    require(windows(sample(pid), pid) == before)
-    return dict(pid=pid, windows=result)
+    require(observation(sample(pid), pid) == (before, displays, layers))
+    return dict(pid=pid, windows=result, inferredMenuWindows=inferred)
 
 
 if __name__ == '__main__':

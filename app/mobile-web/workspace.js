@@ -166,6 +166,8 @@
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
+    Object.assign(words.zh, { latestPosition: '最新消息', earlierPosition: '较早消息 · 最新在下方', messageQueued: '已排队，等待会话读取；请勿重复发送。', oldReceiptGroup: '上次配对的记录', oldReceiptHelp: '仅保存在此浏览器，不是新消息，不会重发。已收起且未删除；未确认的结果需回 Mac 核对。' });
+    Object.assign(words.en, { latestPosition: 'Latest messages', earlierPosition: 'Earlier messages · latest below', messageQueued: 'Queued, waiting for the session to read it. Do not resend.', oldReceiptGroup: 'Previous pairing records', oldReceiptHelp: 'Stored only in this browser, not new messages; they will not be resent. Collapsed, not deleted. Check unresolved results on the Mac.' });
     function receipts(container, scope = {}) {
       const native = (client.state.pending || []).map(p => ({ ...p, native: true }));
       const rows = [...native, ...actions.state.pending].filter(row => {
@@ -175,8 +177,16 @@
         return room && scope.roomId === row.roomId && (task || row.action === 'queueAdd' && !row.itemId && row.status !== 'complete');
       });
       if (!rows.length) return;
-      const list = node('ol', undefined, 'receipt-list'); list.setAttribute('role', 'list');
-      container.append(node('h2', t('receiptTitle') + ' · ' + rows.length, 'receipt-heading'), list);
+      const oldRows = rows.filter(row => row.deviceId !== client.state.session?.deviceId);
+      const currentRows = rows.filter(row => !oldRows.includes(row));
+      const list = node('ol', undefined, 'receipt-list');
+      let oldList;
+      if (oldRows.length) {
+        const group = node('details', undefined, 'old-receipts');
+        group.append(node('summary', t('oldReceiptGroup') + ' · ' + oldRows.length), node('p', t('oldReceiptHelp'), 'quiet'));
+        oldList = node('ol', undefined, 'receipt-list'); group.append(oldList); container.append(group);
+      } list.setAttribute('role', 'list');
+      if (currentRows.length) container.append(node('h2', t('receiptTitle') + ' · ' + currentRows.length, 'receipt-heading'), list);
       for (const row of rows) {
         const visible = receiptVisible(row, client.state.session, view), context = visible ? row.context : null;
         const item = node('li', undefined, 'receipt context-receipt'), top = node('div', undefined, 'receipt-top');
@@ -202,7 +212,7 @@
           const full = node('details', undefined, 'receipt-full'); full.append(node('summary', t(context?.clipped ? 'receiptExcerpt' : 'receiptFull')), node('p', original)); item.append(full);
         }
         const bottom = node('div', undefined, 'receipt-bottom receipt-actions'), settled = ['complete', 'submitted', 'reply-written', 'not-sent'].includes(row.status);
-        const outcome = row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
+        const outcome = row.native && row.queued === true && row.status === 'awaiting-native' ? 'messageQueued' : row.native ? ({ unconfirmed: 'messageUnconfirmed', 'reply-written': 'answerPending', 'not-sent': 'messageNotSent' })[row.status] || row.status
           : row.status === 'complete' ? ({ queueAdd: 'taskAdded', queueCancel: 'taskCancelled', queueResolve: 'taskHandled', recordAcknowledge: 'reminderAcknowledged' })[row.action] : row.status;
         if (visible) bottom.append(node('span', t(outcome), 'receipt-state receipt-status' + (settled ? '' : ' uncertain')));
         if (visible && original) bottom.append(button(t('inspectInput'), () => dialog(t('inspectInput'), original), 'receipt-inspect'));
@@ -218,7 +228,7 @@
           const suffix = row.requestId.slice(-8), short = rows.some(other => other !== row && other.requestId.endsWith(suffix)) ? row.requestId : '…' + suffix;
           item.append(node('p', short, 'quiet'));
         }
-        item.append(bottom); list.append(item);
+        item.append(bottom); (oldRows.includes(row) ? oldList : list).append(item);
       }
       container.append(node('p', t('receiptHelp'), 'receipt-help'));
     }
@@ -295,7 +305,9 @@
         const human = m.role === 'human' || m.role === 'user' && !m.name, article = node('article', undefined, 'message' + (human ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
         const s = (m.role === 'assistant' && owner) || view.sessions.find(s => s.name === m.name) || (m.role === 'assistant' ? { provider: 'codex' } : {});
         author.append(node('span', human ? (lang === 'zh' ? '你' : 'You') : m.name || s.name || 'NAW'));
-        if (m.time) { const time = node('time', new Date(m.time).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); author.append(time); }
+        const at = typeof m.time === 'number' || typeof m.time === 'string' ? new Date(m.time) : null;
+        if (at && Number.isFinite(at.getTime())) { const time = node('time', at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })); time.dateTime = at.toISOString(); author.append(time); }
+        else author.append(node('span', t('receiptTimeUnknown'), 'message-time-unknown'));
         const bubble = node('div', m.text || '', 'bubble');
         if (m.kind === 'background-operation') { const card = view.confirmations.find(c => c.id === m.confirmationId); if (card) { bubble.replaceChildren(node('strong', card.title), link(t('review') + ' ›', 'confirm/' + encodeURIComponent(card.id), 'text-link')); } }
         if (m.attachments || m.textOmitted) bubble.append(node('p', t('omit'), 'small-note'));
@@ -518,19 +530,54 @@
       if (!view.reminders.count) el('content').append(node('p', t('noData'), 'quiet'));
     }
     // The fixed compose box grows with its note, the textarea and the safe area; the list keeps that much room below it.
+    function readingPosition() {
+      const label = el('reading-position');
+      if (!label) return;
+      const last = latestMessage();
+      label.textContent = t(!last ? 'loadingBody' : last.getBoundingClientRect().bottom <= el('compose').getBoundingClientRect().top + 24 ? 'latestPosition' : 'earlierPosition');
+    }
     function composeSpace() {
-      const box = el('compose'), space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
+      const box = el('compose'), viewport = global.visualViewport;
+      const editing = !box.hidden && (d.activeElement === el('message') || d.body.classList.contains('keyboard-compose')) && viewport?.scale === 1 && global.innerHeight - viewport.height > 100;
+      d.body.classList.toggle('keyboard-compose', editing);
+      const shortLandscape = global.innerWidth > global.innerHeight && global.innerHeight <= 450;
+      d.body.classList.toggle('compact-compose', !box.hidden && (editing ? viewport.height < 200 : shortLandscape));
+      d.documentElement.style.setProperty('--keyboard-inset', (editing ? Math.max(0, global.innerHeight - viewport.height - viewport.offsetTop) : 0) + 'px');
+      d.documentElement.style.setProperty('--keyboard-top', (editing ? Math.max(0, viewport.offsetTop) : 0) + 'px');
+      const nav = el('navigation').getBoundingClientRect().height, height = box.getBoundingClientRect().height;
+      const bottom = (viewport?.offsetTop || 0) + (viewport?.height ?? global.innerHeight);
+      d.documentElement.style.setProperty('--mobile-bottom', bottom + 'px');
+      d.documentElement.style.setProperty('--mobile-header-height', el('top').getBoundingClientRect().height + 'px');
+      d.documentElement.style.setProperty('--nav-height', nav + 'px');
+      d.documentElement.style.setProperty('--compose-height', height + 'px');
+      const space = box.hidden ? 0 : Math.max(0, global.innerHeight - box.getBoundingClientRect().top);
       d.documentElement.style.setProperty('--compose-space', Math.ceil(space) + 'px');
+      readingPosition();
     }
     if (global.ResizeObserver) new global.ResizeObserver(composeSpace).observe(el('compose'));
     global.addEventListener('resize', composeSpace);
+    global.addEventListener('scroll', readingPosition, { passive: true });
+    global.visualViewport?.addEventListener('resize', composeSpace);
+    global.visualViewport?.addEventListener('scroll', composeSpace);
+    d.addEventListener('focusin', composeSpace);
+    d.addEventListener('focusout', composeSpace);
     function updateCompose() {
       if (!client) return;
       const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
       if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
       if (composeKey !== route.id) {
         composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('unsentDraft'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
-        input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit'; const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
+        input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit';
+        // Retain editing focus for a touch; Safari otherwise moves Send before click.
+        let touchSend = false;
+        send.addEventListener('touchstart', event => { touchSend = d.activeElement === input && event.touches.length === 1; if (touchSend) event.preventDefault(); }, { passive: false });
+        send.addEventListener('touchend', event => {
+          if (!touchSend) return; touchSend = false; event.preventDefault();
+          const touch = event.changedTouches[0], rect = send.getBoundingClientRect();
+          if (touch && touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom) send.click();
+        }, { passive: false });
+        send.addEventListener('touchcancel', () => { touchSend = false; });
+        const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
       }
       const input = el('message'), state = client.state; if (input.value !== state.draft) input.value = state.draft;
       // Mode and refusal reason come from mobile-session.cjs read(); the phone does not guess them.
@@ -541,20 +588,21 @@
       el('send-message').textContent = t(mode === 'queue' ? 'queueSend' : mode === 'queueMidturn' ? 'queueMidturn' : mode === 'steer' ? 'steer' : 'send');
       // Every reason the button is disabled has its own note, local ones first (B's review, C2).
       const note = disconnected ? 'phoneOffline' : state.storageError ? 'storage' : !row || state.selected !== route.id ? 'reading'
-        : waiting ? (mine.some(p => p.status === 'unconfirmed') ? 'ownUnconfirmed' : 'ownPending')
+        : waiting ? (mine.some(p => p.queued === true && p.status === 'awaiting-native') ? 'messageQueued' : mine.some(p => p.status === 'unconfirmed') ? 'ownUnconfirmed' : 'ownPending')
         : mode === 'queue' ? 'queueNote' : mode === 'queueMidturn' ? 'queueMidturnNote' : mode === 'steer' ? 'steerNote'
         : reason === 'question' && !row.question ? 'blocked-questionMac' : reason ? 'blocked-' + reason
         : !row.canSend ? 'blocked-notReady' : 'draft';
       el('compose-note').textContent = t(note);
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
+      composeSpace();
     }
     let acknowledgedMessages = 0;
-    el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId, queued = ['queue', 'queueMidturn'].includes(client.state.row?.sendMode);
+    el('compose').addEventListener('submit', event => { event.preventDefault(); run(async () => { const text = client.state.draft; if (/^[!#/]/.test(text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) { toast('command'); return; } const sessionId = route.id, name = view.sessions.find(s => s.id === sessionId)?.name || sessionId;
       const generation = client.state.authorization, deviceId = client.state.session?.deviceId, scroll = global.scrollY;
       const before = new Set(client.state.pending.map(p => p.requestId)); await client.send();
       if (generation !== client.state.authorization || deviceId !== client.state.session?.deviceId) return;
       // The result of this click only, found by its own request id, not the last row or the current page.
-      const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = queued && status === 'awaiting-native' ? 'queuedToast' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
+      const mine = client.state.pending.find(p => p.deviceId === deviceId && p.sessionId === sessionId && !before.has(p.requestId)), status = mine?.status || 'unconfirmed', key = mine?.queued === true && status === 'awaiting-native' ? 'messageQueued' : status === 'unconfirmed' ? 'messageUnconfirmed' : status;
       if (status === 'submitted' && view?.sessions.some(s => s.id === sessionId) && route?.page === 'chat' && route.id === sessionId && client.state.selected === sessionId) {
         // Render only a confirmed receipt; the next workspace snapshot replaces this transient row.
         acknowledgedMessages++;
@@ -572,7 +620,12 @@
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
-      else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? (butlerSession()?.id === route.id ? t('butler') : view?.sessions.find(s => s.id === route.id)?.name) || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
+      else { const back = link('', 'home', 'icon'); back.setAttribute('aria-label', t('home')); back.append(icon('back')); const title = node('div', route.page === 'chat' ? view?.sessions.find(s => s.id === route.id)?.name || t('chat') : route.page === 'space' ? view?.rooms.find(r => r.id === route.id)?.name || t('space') : t(route.page), 'top-title'); el('top').append(back, title); }
+      if (route?.page === 'chat') {
+        const session = view?.sessions.find(s => s.id === route.id), title = el('top').querySelector('.top-title');
+        const spaces = view?.rooms.filter(r => session?.roomIds?.includes(r.id)).map(r => r.name) || [];
+        title?.append(node('small', [butlerSession()?.id === route.id ? t('butler') : '', providerName(session?.provider), ...spaces].filter(Boolean).join(' · ')));
+      }
       const pendingPair=client.state.session?.candidate===true;
       const bell = link('', 'reminders', 'icon bell'); bell.hidden=pendingPair;bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh));if(!pendingPair)menu.append(button(t('registerKey'), registerPasskey));menu.append(button(t(pendingPair?'cancelPair':'logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
@@ -590,6 +643,7 @@
       }
       else ({ home, chat, space, queue, confirm: confirmation, reminders }[route?.page] || home)();
       if (body?.conversationLoaded === false && body.messages?.length) el('content').append(node('p', t(disconnected ? 'offline' : 'loadingBody'), 'quiet'));
+      if (route?.page === 'chat') { const position = node('span', '', 'reading-position'); position.id = 'reading-position'; el('connection').append(position); }
       updateCompose();
       if (stick) scrollToLatest();
     }
@@ -649,7 +703,7 @@
         }
         composeKey = ''; answeredQuestion = null; dismissToast(); paint();
         const id = route.page === 'chat' ? route.id : route.nativeId;
-        if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id);
+        if (id && client.state.session?.sessions.some(s => s.id === id)) await client.select(id, { read: false });
         if (ticket !== navigation) return;
         const reading = refresh();
         // A new grant must not keep the previous conversation visible while reading.

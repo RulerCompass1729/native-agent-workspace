@@ -350,7 +350,8 @@ test('every sentence exists in both languages, and the words say what the design
     // Waking the butler on events; its refusals are checked in steward-wake.test.cjs.
     'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable',
     // The sender of a wake in the butler's conversation; checked in steward-wake.test.cjs.
-    'reading.stewardWake'];
+    'reading.stewardWake', 'stewardWake.openRecord', 'stewardWake.stalled',
+    ...require('../steward-wake.cjs').BLOCK_REASONS.map(reason => `stewardWake.reason.${reason}`)];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);
   // What it gives and the one thing it takes away: the person is told both before they confirm.

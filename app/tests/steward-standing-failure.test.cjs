@@ -45,7 +45,7 @@ for (const method of ['join', 'create', 'archiveSession']) test(`PF07: ${method}
   const result = await f.ask(method, 'before-handler');
   assert.equal(result.state, 'not-executed');
   assert.equal(result.reason, 'standing-authorization-unavailable');
-  assert.equal(result.retryWithNewOperationId, true); assert.match(result.retryHint, /new operation_id/);
+  assert.equal(result.retryWithNewOperationId, true); assert.match(result.retryHint, /新的操作编号（operation_id）/);
   assert.deepEqual(f.effects, []); assert.equal(f.policy.read().used.length, 0);
   assert.equal(result.confirmation, undefined);
   const saved = JSON.parse(fs.readFileSync(f.controller.file, 'utf8')).records.find(r => r.id === 'before-handler');
@@ -114,7 +114,7 @@ test('PF07 follow-up: display preparation failure after take has a cause-neutral
   const result = await f.ask('join', 'display-failed');
   assert.equal(result.state, 'not-executed'); assert.deepEqual(f.effects, []);
   assert.equal(f.policy.read().used.length, 1, 'Storage succeeded before display preparation failed');
-  assert.equal(result.retryHint, 'The operation did not execute. Retry with a new operation_id.');
+  assert.equal(result.retryHint, '本次未执行。如需再试，请用新的操作编号（operation_id）重新发起。');
   await f.reopen();
   const duplicate = await f.ask('join', 'display-failed');
   assert.equal(duplicate.duplicate, true); assert.equal(duplicate.retryHint, result.retryHint);
@@ -137,8 +137,8 @@ test('Q12/PF07: standing failures have bilingual summaries without changing refu
   const { bind } = require('../renderer/steward-record.js');
   const locale = require('../ui-locale.js');
   const expected = {
-    zh: '已拦下：常设许可处理失败，本次没有执行',
-    en: 'Stopped: standing permission handling failed; nothing was executed.',
+    zh: '未能按已有许可办理，本次未执行。',
+    en: 'The saved permission could not be applied. Nothing was executed.',
   };
   function element(tag) {
     return {
@@ -177,7 +177,7 @@ test('Q12/PF07: standing failures have bilingual summaries without changing refu
         const f = fixture(child);
         const standing = f.controller.standing;
         const diagnostic = `Synthetic ${trigger} failure`;
-        let originalDiagnostic = 'The operation did not execute.';
+        let originalDiagnostic = '本次操作未执行。';
         if (trigger === 'after-reservation') {
           originalDiagnostic = diagnostic;
         }
@@ -197,7 +197,7 @@ test('Q12/PF07: standing failures have bilingual summaries without changing refu
         assert.equal(receipt.state, 'not-executed');
         assert.equal(receipt.reason, 'standing-authorization-unavailable');
         assert.equal(receipt.retryWithNewOperationId, true);
-        assert.equal(receipt.retryHint, 'The operation did not execute. Retry with a new operation_id.');
+        assert.equal(receipt.retryHint, '本次未执行。如需再试，请用新的操作编号（operation_id）重新发起。');
         assert.equal(receipt.error, originalDiagnostic);
         assert.deepEqual(f.effects, []);
         const used = f.policy.read().used.length;
