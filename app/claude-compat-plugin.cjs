@@ -33,6 +33,8 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set([
+    // Exact main bbbd56fe compatibility copy before a compacted turn's own next step restored its authorization.
+    '7233253cb5c7adcfafef8d9d7ea3ae6ff48afc26840e3a800f18d828a9ef93b6',
     // Exact main 907f10a0 output from 92f2067a (workspace_open view), before automatic qualification integration.
     'c41614cb3c81aa10d7a7b7efe2068ce73aa1546edb1a72fac5ce03d352b1b0ca',
     // Exact main 8fa2b39e compatibility copy before optional workspace_open view.
