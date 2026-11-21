@@ -79,15 +79,19 @@ function sendRequest(details, { signal, valid }, request = https.request) {
   });
 }
 class MobilePush {
-  constructor({ authority, count, alerts = () => [], transport = sendRequest, now = Date.now }) {
+  constructor({ authority, count, alerts = () => ({ alerts: [] }), transport = sendRequest, now = Date.now }) {
     if (typeof authority !== 'function' || typeof count !== 'function' || typeof alerts !== 'function') throw denied();
     Object.assign(this, { authority, count, alerts, transport, now }); this.close();
   }
   // The listed codes in fixed order, and the latest moment one of them began. That moment is never sent.
+  // The source answers { alerts, unknown }. Unknown is never "no problems": a code already said stays while its
+  // source cannot be read, and all of them stay when the answer itself cannot be read.
   read() {
-    let values; try { values = this.alerts(); } catch { values = []; }
-    const found = Array.isArray(values) ? values.filter(v => v && typeof v === 'object' && ALERTS.includes(v.code)) : [];
-    return { codes: ALERTS.filter(code => found.some(v => v.code === code)), at: Math.max(0, ...found.map(v => Number.isSafeInteger(v.at) ? v.at : 0)) };
+    let value; try { value = this.alerts(); } catch { value = null; }
+    const ok = Boolean(value) && Array.isArray(value.alerts);
+    const found = ok ? value.alerts.filter(v => v && typeof v === 'object' && ALERTS.includes(v.code)) : [];
+    const held = !ok ? this.said : Array.isArray(value.unknown) ? this.said.filter(code => value.unknown.includes(code)) : [];
+    return { codes: ALERTS.filter(code => held.includes(code) || found.some(v => v.code === code)), at: Math.max(0, ...found.map(v => Number.isSafeInteger(v.at) ? v.at : 0)) };
   }
   current() { try { return this.authority() || null; } catch { return null; } }
   configuration() {
@@ -105,13 +109,15 @@ class MobilePush {
     const sub = subscriptionValue(value, this.now());
     // Replacing a browser subscription also cancels any old in-flight request.
     this.abort?.abort(); clearTimeout(this.timer); this.timer = null;
-    this.subscription = sub; this.lastSent = null; this.alerted = false; this.at = 0; this.lastSubmittedAt = null; this.state = 'subscribed';
+    this.subscription = sub; this.lastCount = undefined; this.said = []; this.at = 0; this.ending = false; this.lastSubmittedAt = null; this.state = 'subscribed';
   }
+  // Says the current state once more, retrying until it is accepted, and then ends: for a source that will not return.
+  end() { this.ending = true; return this.subscription ? this.refresh() : this.close(); }
   async refresh() {
     if (this.current() !== this.stamp) { this.close(); return; }
     if (!this.subscription || this.running) return;
     clearTimeout(this.timer); this.timer = null;
-    const stamp = this.stamp, sub = this.subscription, abort = new AbortController();
+    const stamp = this.stamp, sub = this.subscription, abort = new AbortController(), last = this.ending;
     const valid = () => {
       if (abort.signal.aborted || this.current() !== stamp || this.subscription !== sub) return false;
       if (sub.expirationTime !== null && sub.expirationTime <= this.now()) {
@@ -122,14 +128,20 @@ class MobilePush {
     this.abort = abort; this.running = true;
     try {
       if (!valid()) return;
-      // A null count means it may not be read now (no reminders permission, or the source is lost).
-      const count = this.count(), { codes, at } = this.read();
-      if (count !== null && (!Number.isSafeInteger(count) || count < 0)) throw denied();
-      const state = JSON.stringify([count, codes]);
+      // A null count may not be read now (no reminders permission, or the source is lost). One that fails or is
+      // malformed holds back only itself: alerts still leave, and it alone is no reason to speak.
+      let count = null, failed = false;
+      try { count = this.count(); } catch { failed = true; }
+      if (count !== null && (!Number.isSafeInteger(count) || count < 0)) { count = null; failed = true; }
+      const { codes, at } = this.read();
+      const same = String(codes) === String(this.said) && (failed || count === this.lastCount);
       // An unchanged alert is said again only when a newer case of it began, such as a second question.
-      if (state === this.lastSent && at <= this.at || count === null && !codes.length && !this.alerted) return;
+      if (same && at <= this.at || count === null && !codes.length && !this.said.length) {
+        if (last) this.close(); else if (failed) this.state = 'delayed';
+        return;
+      }
       // An empty list is sent once after an alert, so the phone can say it has cleared.
-      const payload = { ...(count === null ? {} : { count }), ...(codes.length || this.alerted ? { alerts: codes } : {}) };
+      const payload = { ...(count === null ? {} : { count }), ...(codes.length || this.said.length ? { alerts: codes } : {}) };
       // An alert must outlast a phone that is briefly unreachable; the shared topic lets a later state replace it.
       const details = library().generateRequestDetails(sub, JSON.stringify(payload), {
         TTL: codes.length ? 3600 : 60, topic: 'naw-count', urgency: codes.length ? 'high' : 'normal', contentEncoding: 'aes128gcm',
@@ -144,20 +156,24 @@ class MobilePush {
       const status = await this.transport(details, { signal: abort.signal, valid });
       if (!valid()) return;
       if (status === 404 || status === 410) { this.subscription = null; this.state = 'expired'; }
-      else if (status === 201 || status === 202) { this.lastSent = state; this.at = Math.max(this.at, at); this.alerted = codes.length > 0; this.lastSubmittedAt = this.now(); this.state = 'accepted'; }
+      else if (status === 201 || status === 202) {
+        if (!failed) this.lastCount = count;
+        this.said = codes; this.at = Math.max(this.at, at); this.lastSubmittedAt = this.now(); this.state = 'accepted';
+        if (last) this.close();
+      }
       else this.state = 'delayed';
     } catch { if (valid()) this.state = 'delayed'; }
     finally {
       this.running = false;
       if (this.abort === abort) this.abort = null;
       if (this.subscription && this.current() === this.stamp) {
-        this.timer = setTimeout(() => this.refresh(), this.subscription === sub ? 60000 : 0); this.timer.unref();
+        this.timer = setTimeout(() => this.refresh(), this.subscription === sub && last === this.ending ? 60000 : 0); this.timer.unref();
       }
     }
   }
   close() {
     clearTimeout(this.timer); this.abort?.abort(); this.abort = null; this.timer = null;
-    this.subscription = null; this.keys = null; this.stamp = null; this.lastSent = null; this.alerted = false; this.at = 0;
+    this.subscription = null; this.keys = null; this.stamp = null; this.lastCount = undefined; this.said = []; this.at = 0; this.ending = false;
     this.authorization = new Map();
     this.lastSubmittedAt = null; this.state = 'off';
   }

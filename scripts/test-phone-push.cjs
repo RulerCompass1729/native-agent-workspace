@@ -41,7 +41,7 @@ function worded(name, actual, expected) {
   else { unshown.push(name); console.log(`NOT CHECKED ${name} (worker ${worker})`); }
 }
 async function main() {
-  push = new MobilePush({ authority: () => active ? 'synthetic-device-generation' : null, count: () => count, alerts: () => alerts,
+  push = new MobilePush({ authority: () => active ? 'synthetic-device-generation' : null, count: () => count, alerts: () => ({ alerts }),
     transport: (details, guard) => new Promise((resolve, reject) => {
       if (offline || !guard.valid()) return reject(Error('Local offline fixture'));
       const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/fake-push', method: 'POST', headers: details.headers, signal: guard.signal }, res => { res.resume(); res.once('end', () => resolve(res.statusCode)); });

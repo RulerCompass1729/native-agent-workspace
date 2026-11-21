@@ -189,12 +189,13 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   return confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary));
 }
 // The one list of fixed alert codes for the phone, shared by its push and its banner: no names, text, counts or
-// error messages. available false means unknown, never "no problems". A lost service is added where it is seen.
+// error messages. unknown lists the codes whose source could not be read; available false means some are unknown,
+// never "no problems". A lost service is added where it is seen.
 // at is when the newest case began, so that a second question is announced while the first is still open.
-// status is the shared reminder status when the caller may read it; without it, cards are not judged.
+// status is the shared reminder status when the caller may read it; without it the cards were not judged.
 function appHealth(status = null) {
-  const alerts = []; let available = true;
-  try { if (stewardWake?.view().blocked) alerts.push({ code: 'steward-wake-stalled' }); } catch { available = false; }
+  const alerts = [], unknown = [];
+  try { if (stewardWake?.view().blocked) alerts.push({ code: 'steward-wake-stalled' }); } catch { unknown.push('steward-wake-stalled'); }
   try {
     const rooms = [roomState.value, ...roomState.spaces.rooms];
     // The same rule as the desktop's decision notification: waiting with no reason asks the person.
@@ -202,13 +203,14 @@ function appHealth(status = null) {
     const cards = (status?.confirmations || []).filter(card => card.actionable === true);
     if (asked.length || cards.length) alerts.push({ code: 'decision-waiting', at: Math.max(0,
       ...asked.map(item => Number.isSafeInteger(item.finishedAt) ? item.finishedAt : 0), ...cards.map(card => Number.isSafeInteger(card.time) ? card.time : 0)) });
-  } catch { available = false; }
-  return { available, alerts };
+    else if (!status) unknown.push('decision-waiting');
+  } catch { unknown.push('decision-waiting'); }
+  return { available: !unknown.length, alerts, unknown };
 }
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
   if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),
-    pushOptions: { alerts: status => appHealth(status).alerts } });
+    pushOptions: { alerts: status => appHealth(status) } });
   return mobileBroker;
 }
 function appMobileWorkspace() {

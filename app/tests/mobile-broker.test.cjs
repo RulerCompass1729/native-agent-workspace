@@ -80,11 +80,11 @@ test('construction is disabled and makes no connection, grant or native call', t
   const f = fixture(t); assert.deepEqual(fs.readdirSync(f.root), []); assert.equal(f.clients.length, 0); assert.deepEqual(f.calls, []);
   assert.throws(() => f.broker.session({ token: 'x', actor }), { code: 'MOBILE_BROKER_DENIED' });
 });
-test('push uses the same desktop count and dies on logout, revoke or re-pair; a lost source leaves only its alert', async t => {
+test('push uses the same desktop count and dies on logout, revoke or re-pair; a lost service is said once and the push ends', async t => {
   for (const end of ['logout', 'revoke', 'repair', 'disconnect']) {
-    const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys();
+    const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys(); let health = { alerts: [] };
     const desktop = { grant: (_c, g) => g, records: { status: () => ({ count: 19, private: 'PRIVATE_SOURCE' }) } };
-    const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; } } });
+    const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; }, alerts: () => health } });
     const { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
     assert.equal(f.broker.pushInfo(auth).publicKey.length, 87);
     const value = { action: 'subscribe', subscription: { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null,
@@ -97,31 +97,47 @@ test('push uses the same desktop count and dies on logout, revoke or re-pair; a 
     else if (end === 'revoke') f.broker.revoke();
     else if (end === 'repair') await f.pair(undefined, true, { roomIds: [], records: true });
     else f.clients.at(-1).emit('closed');
+    await new Promise(resolve => setImmediate(resolve));
     desktop.records.status = () => ({ count: 999 }); await f.broker.refreshPush();
     assert.throws(() => f.broker.pushAction(auth, value));
     if (end !== 'disconnect') { assert.equal(messages.length, 1); continue; }
     assert.equal(messages.length, 2);
     const alert = require('http_ece').decrypt(messages[1].body, { version: 'aes128gcm', privateKey: key, authSecret: value.subscription.keys.auth });
     assert.deepEqual(JSON.parse(alert), { alerts: ['service-disconnected'] });
-    f.broker.revoke(); desktop.records.status = () => ({ count: 1000 }); await f.broker.refreshPush(); assert.equal(messages.length, 2);
+    // Said and accepted, so it is over: not even a new alert leaves, with or without a revoke.
+    health = { alerts: [{ code: 'token-anomaly' }] }; desktop.records.status = () => ({ count: 1000 }); await f.broker.refreshPush(); await new Promise(resolve => setImmediate(resolve)); assert.equal(messages.length, 2);
+    f.broker.revoke(); await f.broker.refreshPush(); assert.equal(messages.length, 2);
   }
 });
-test('the app\'s alert codes join the same push, before and after the source is lost', async t => {
-  const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys(); let codes = [{ code: 'steward-wake-stalled' }]; const seen = [];
+test('the app\'s alert codes join the same push; an unreadable source keeps what was said; a lost service is the last word', async t => {
+  const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys(); let health = { alerts: [{ code: 'steward-wake-stalled' }] }, code = 201; const seen = [];
   const desktop = { grant: (_c, g) => g, records: { status: () => ({ count: 19 }) } };
-  const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; },
-    alerts: status => { seen.push(status); if (!codes) throw Error('PRIVATE_FAILURE'); return codes; } } });
+  const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return code; },
+    alerts: status => { seen.push(status); if (!health) throw Error('PRIVATE_FAILURE'); return health; } } });
   const { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
   const subscription = { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null,
     keys: { p256dh: key.getPublicKey().toString('base64url'), auth: Buffer.alloc(16, 7).toString('base64url') } };
   const last = () => JSON.parse(require('http_ece').decrypt(messages.at(-1).body, { version: 'aes128gcm', privateKey: key, authSecret: subscription.keys.auth }));
+  const settle = () => new Promise(resolve => setImmediate(resolve));
   f.broker.pushAction(auth, { action: 'subscribe', subscription }); await f.broker.refreshPush();
   assert.deepEqual(last(), { count: 19, alerts: ['steward-wake-stalled'] }); assert.deepEqual(seen.at(-1), { count: 19 });
-  f.clients.at(-1).emit('closed'); codes = [{ code: 'steward-wake-stalled' }, { code: 'decision-waiting', at: 5 }]; await f.broker.refreshPush();
-  assert.deepEqual(last(), { alerts: ['service-disconnected', 'steward-wake-stalled', 'decision-waiting'] }); assert.equal(seen.at(-1), null);
-  codes = null; await f.broker.refreshPush(); assert.deepEqual(last(), { alerts: ['service-disconnected'] });
-  codes = [{ code: 'token-anomaly' }]; f.exclusive(false); await f.broker.refreshPush(); assert.equal(messages.length, 3);
-  f.exclusive(true);
+  // The app cannot answer, then answers that the wake source is unreadable: the stall is not reported cleared.
+  health = null; await f.broker.refreshPush(); assert.equal(messages.length, 1);
+  health = { alerts: [], unknown: ['steward-wake-stalled'] }; await f.broker.refreshPush(); assert.equal(messages.length, 1);
+  // An unreadable reminder status holds back the count, not the alerts; the app is then asked without a status.
+  desktop.records.status = () => { throw Error('PRIVATE_FAILURE'); };
+  health = { alerts: [{ code: 'steward-wake-stalled' }, { code: 'decision-waiting', at: 5 }], unknown: [] }; await f.broker.refreshPush();
+  assert.deepEqual(last(), { alerts: ['steward-wake-stalled', 'decision-waiting'] }); assert.equal(seen.at(-1), null);
+  desktop.records.status = () => ({ count: 19 }); health = { alerts: [] }; await f.broker.refreshPush();
+  assert.deepEqual(last(), { count: 19, alerts: [] });
+  // The service is lost while the push service refuses: the last word is tried, and waits to be tried again.
+  health = { alerts: [{ code: 'decision-waiting', at: 9 }], unknown: ['steward-wake-stalled'] }; code = 500;
+  f.clients.at(-1).emit('closed'); await settle();
+  assert.deepEqual(last(), { alerts: ['service-disconnected', 'decision-waiting'] }); assert.equal(seen.at(-1), null);
+  const attempts = messages.length; assert.equal(attempts, 4);
+  // Another owner of the scope ends it before that second try.
+  f.exclusive(false); code = 201; await f.broker.refreshPush(); await settle(); assert.equal(messages.length, attempts);
+  f.exclusive(true); await f.broker.refreshPush(); await settle(); assert.equal(messages.length, attempts);
 });
 test('native read/send authority never implies reminder push permission', async t => {
   const f = fixture(t, { desktop: { grant: (_c, g) => g, records: { status: () => ({ count: 3 }) } } });

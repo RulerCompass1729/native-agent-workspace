@@ -51,9 +51,9 @@ class MobileBroker {
   }
   #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
-  // A lost service is itself an alert: only the push outlives it, still bound to the paired device, so the phone can
-  // be told. Nothing is sent here; the push's own minute check reports it, so a brief drop says nothing.
-  #lost() { const push = this.#push; this.#push = null; this.#forget(); this.#push = push; this.#disconnect(); }
+  // A lost service ends this phone's session, as it always did; nothing here connects again. Its push, still bound
+  // to the paired device, says so once and then ends too. Kept here so that a revoke or a new pairing stops it first.
+  #lost() { const push = this.#push; this.#push = null; this.#forget(); this.#push = push; this.#disconnect(); push?.end(); }
   #bound() {
     const client = this.#client;
     if (!(client instanceof WorkspaceClient) || client.closing || client.socket.destroyed ||
@@ -359,8 +359,12 @@ class MobileBroker {
     try { client = this.#bound(); } catch { alerts.push({ code: 'service-disconnected' }); }
     // The app judges waiting cards from the same reminder status the count comes from.
     try { if (client && this.#pushAuthority()) status = this.#desktop.records.status(null, client); } catch { status = null; }
-    let more; try { more = this.#pushOptions.alerts?.(status); } catch { more = null; }
-    return Array.isArray(more) ? alerts.concat(more) : alerts;
+    const source = this.#pushOptions.alerts;
+    if (!source) return { alerts, unknown: [] };
+    let more; try { more = source(status); } catch { more = null; }
+    // The lost service is known here. When the app cannot answer, every other code is unknown, never "no problems".
+    if (!more || !Array.isArray(more.alerts)) return { alerts, unknown: require('./mobile-push.cjs').ALERTS.filter(code => code !== 'service-disconnected') };
+    return { alerts: alerts.concat(more.alerts), unknown: Array.isArray(more.unknown) ? more.unknown : [] };
   }
   pushInfo(auth) {
     this.#workspaceState(auth);
