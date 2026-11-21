@@ -382,6 +382,10 @@ class Terminal extends EventEmitter {
   }
 }
 
+// One compaction reaches NAW twice, in either order: the ordered control:compact row and the settings hook,
+// whose command is killed after 2 s (hook settings below). A notice by the other path within this long is
+// the same compaction; anything later, or a second notice by the same path, is another one.
+const COMPACT_TWIN_MS = 10000;
 // Native root transitions the GUI follows: SessionEnd reason -> SessionStart source
 // of the same process. /clear ends with 'clear'; /branch ends with 'resume' and
 // starts the branch as 'fork'. A plain /resume starts as 'resume' and is not followed.
@@ -923,13 +927,8 @@ class Claude extends EventEmitter {
         if (message.status !== 'complete') throw Error('Invalid native compact');
         // In order with the turn start that granted it, and also for a retained
         // reader, which has no settings hook. A replay retires too (fail closed).
-        const live = this.liveTurn;
-        if (message.replayed || message.gap || !this.nativeTurnContinue) this.compactedTurn = null;
-        // What this turn held at the compact, for control:turn-continue only. A repeated compact keeps it.
-        else if (live) this.compactedTurn = { id: live.id, promptId: live.promptId, epoch: this.observationEpoch, toolPhaseSerial: live.toolPhaseSerial,
-          sharing: this.rootTurn?.id === live.id && this.rootTurn.status === 'working' && !this.rootTurn.completed,
-          started: this.startedRootTurn?.id === live.id ? this.startedRootTurn : null };
-        this.retireRootAuthority();
+        if (this.nativeTurnContinue && !message.replayed) this.compactTwin('row');
+        this.compactBoundary(message.replayed || message.gap);
       } else if (message.id === 'control:turn-continue') {
         if (!this.nativeTurnContinue || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn continuation');
         const kept = this.compactedTurn; this.compactedTurn = null;
@@ -1174,6 +1173,23 @@ class Claude extends EventEmitter {
     this.nativeAbortRequest = null; clearTimeout(request.timer);
     this.nativeInputRequired = false; this.emit('inputRequired', false); request.resolve({ interrupted: true });
   }
+  // A compaction, by whichever notice comes first. With a bridge that proves continuations the turn's
+  // identity is kept, apart from the retired references and for control:turn-continue only; a repeated
+  // compact keeps the first one.
+  compactBoundary(drop = false) {
+    const live = this.liveTurn;
+    if (drop || !this.nativeTurnContinue) this.compactedTurn = null;
+    else if (live) this.compactedTurn = { id: live.id, promptId: live.promptId, epoch: this.observationEpoch, toolPhaseSerial: live.toolPhaseSerial,
+      sharing: this.rootTurn?.id === live.id && this.rootTurn.status === 'working' && !this.rootTurn.completed,
+      started: this.startedRootTurn?.id === live.id ? this.startedRootTurn : null };
+    this.retireRootAuthority();
+  }
+  // Whether the other path already reported this compaction (COMPACT_TWIN_MS).
+  compactTwin(via) {
+    const first = this.compactNotice, twin = Boolean(first && first.via !== via && Date.now() - first.at <= COMPACT_TWIN_MS);
+    this.compactNotice = twin ? null : { via, at: Date.now() };
+    return twin;
+  }
   // A native compaction keeps the session but ends the running turn's authority:
   // every issued root call, outbox proof and control scope checks these
   // references (native-root-proof.cjs). The next person or NAW turn re-authorizes;
@@ -1385,11 +1401,11 @@ class Claude extends EventEmitter {
       case 'SessionStart':
         if (this.rootEnding) break;
         // A compaction restarts the context without ending the root. The ordered
-        // observation also carries it (control:compact); this settings hook is the
-        // second path, for a bridge copy that does not send it yet.
-        if (event.source === 'compact' && !this.nativeTurnContinue) this.retireRootAuthority();
-        // With a bridge that proves continuations the ordered rows decide alone: this hook can arrive
-        // after control:turn-continue, and a mid-turn compaction leaves the turn running, not idle.
+        // observation also carries it (control:compact); whichever arrives first retires.
+        // Only a settings notice whose ordered row already retired changes nothing: the rows may
+        // have continued the turn since (control:turn-continue).
+        if (event.source === 'compact' && !(this.nativeTurnContinue && this.compactTwin('hook'))) this.compactBoundary();
+        // A mid-turn compaction leaves a turn that can be continued running, not idle.
         this.ready = true; if (!(event.source === 'compact' && this.nativeTurnContinue && (this.liveTurn || this.compactedTurn))) this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;

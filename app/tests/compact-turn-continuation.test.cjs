@@ -365,23 +365,129 @@ test('a prompt that arrived mid-turn before the compact is not given the turn\'s
   assert.equal(f.r.rootTurn, null, 'sharing was already withdrawn and stays so');
 });
 
-test('the settings hook neither retires nor reports idle for a turn whose rows decide', async t => {
-  for (const order of ['before the compact row', 'after it', 'after the continuation']) {
-    const f = await fixture(t);
-    if (order === 'before the compact row') f.settingsCompact();
-    f.row({ id: 'control:compact' });
-    if (order === 'after it') f.settingsCompact();
-    f.row(CONTINUE);
-    if (order === 'after the continuation') f.settingsCompact();
-    assert.equal(f.r.liveTurn?.id, 'owned-turn', order);
-    assert.equal(f.states.includes('idle'), false, order);
-    f.mint();
+// One compaction reaches NAW twice, by the ordered row and by the settings hook, and not together: the bridge
+// flushes its row later, and the hook can even follow the continuation. Independent review of 7db73712 found a
+// scope from before the compaction still valid between a settings notice and its ordered row.
+const END = { id: 'turn:owned-turn', kind: 'turn', turnId: 'owned-turn', text: '' };
+const retired = async (f, label) => {
+  const old = await f.check();
+  assert.equal(old.ok, false, `${label}: the scope from before the compaction is retired`); assert.equal(old.failureReason, 'grant-invalidated', label);
+};
+for (const [order, events] of [
+  ['the settings notice first', ['hook', 'row', 'continue']],
+  ['the ordered row first', ['row', 'hook', 'continue']],
+  ['the settings notice after the continuation', ['row', 'continue', 'hook']],
+]) test(`${order}: the first notice of a compaction retires, and only the proven turn holds a new scope`, async t => {
+  const f = await fixture(t), before = f.r.liveTurn;
+  assert.equal((await f.check()).ok, true);
+  let fresh = null;
+  for (const event of events) {
+    if (event === 'hook') f.settingsCompact(); else f.row(event === 'row' ? { id: 'control:compact' } : CONTINUE);
+    const label = `${order}, after ${event}`;
+    await retired(f, label);
+    assert.notEqual(f.r.liveTurn, before, `${label}: no reference from before the compaction is live`);
+    if (event === 'continue') {
+      assert.deepEqual({ id: f.r.liveTurn?.id, promptId: f.r.liveTurn?.promptId, sharing: f.r.rootTurn?.id }, { id: 'owned-turn', promptId: 'owned-prompt', sharing: 'owned-turn' }, label);
+      fresh = await f.issue();
+    } else if (!fresh) {
+      assert.equal(f.r.liveTurn, null, label); assert.equal(f.r.rootTurn, null, label);
+      assert.throws(() => f.mint(), `${label}: nothing is minted before the proof`);
+    }
+    if (fresh) assert.equal((await fresh()).ok, true, `${label}: the continued turn's own scope holds`);
+    assert.deepEqual(f.states, [], `${label}: a turn that goes on is not reported idle`);
   }
-  const idle = await fixture(t);
-  idle.row({ id: 'turn:owned-turn', kind: 'turn', turnId: 'owned-turn', text: '' });
-  idle.states.length = 0;
-  idle.settingsCompact();
-  assert.deepEqual(idle.states, ['idle'], 'an idle session\'s compaction is reported as before');
+  assert.deepEqual(f.ends, []);
+  f.row(END);
+  assert.deepEqual(f.ends, ['completed'], 'its end is reported once, when it ends');
+  f.r.hook({ hook_event_name: 'Stop', session_id: f.s.nativeId, prompt_id: 'owned-prompt' });
+  assert.deepEqual(f.states, ['idle'], 'and idle only then');
+  assert.equal((await fresh()).ok, false, 'the turn\'s scope ends with it'); await retired(f, 'after the end');
+});
+
+test('a late settings notice hurts no turn; the next compaction\'s first notice retires again, whichever path brings it', async t => {
+  const next = await fixture(t);
+  next.row({ id: 'control:compact' }); next.row(CONTINUE); next.row(END);
+  next.row({ id: 'control:turn-start', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
+  const mine = next.r.liveTurn;
+  next.settingsCompact();
+  assert.equal(next.r.liveTurn, mine, 'the notice of the earlier compaction leaves the turn that started since');
+  next.mint('next-turn', 'next-prompt');
+
+  for (const second of ['hook', 'row']) {
+    const f = await fixture(t);
+    f.row({ id: 'control:compact' }); f.row(CONTINUE); f.settingsCompact();
+    const fresh = await f.issue();
+    if (second === 'hook') f.settingsCompact(); else f.row({ id: 'control:compact' });
+    assert.equal((await fresh()).ok, false, `${second}: a second compaction retires the continued turn's scope at its first notice`);
+    assert.equal(f.r.liveTurn, null, second); assert.throws(() => f.mint(), second);
+    if (second === 'hook') f.row({ id: 'control:compact' }); else f.settingsCompact();
+    assert.equal(f.r.liveTurn, null, `${second}: its other notice restores nothing`);
+    f.row(CONTINUE);
+    assert.equal(f.r.liveTurn?.id, 'owned-turn', `${second}: its own proof continues the turn again`);
+    assert.equal((await fresh()).ok, false, second); await retired(f, second);
+    assert.deepEqual(f.states, [], second);
+  }
+});
+
+test('a settings notice is its ordered row\'s only within the hook\'s own time; a later one is another compaction', async t => {
+  const f = await fixture(t);
+  f.row({ id: 'control:compact' }); f.row(CONTINUE);
+  const fresh = await f.issue();
+  // The hook command is killed after 2 s; NAW allows 10 s. Past that the row waits for no notice.
+  f.r.compactNotice.at -= 10001;
+  f.settingsCompact();
+  assert.equal((await fresh()).ok, false, 'fail closed: the notice retires');
+  assert.equal(f.r.liveTurn, null); assert.throws(() => f.mint());
+  assert.deepEqual(f.states, [], 'the turn still runs');
+});
+
+test('a settings notice that comes first keeps no more than its ordered row would', async t => {
+  for (const [name, between] of [
+    ['a permission boundary', f => f.row({ id: 'control:permission' })],
+    ['the turn\'s end', f => f.row(END)],
+    ['a compact row that carries a gap', null],
+  ]) {
+    const f = await fixture(t);
+    f.settingsCompact();
+    if (between) between(f);
+    f.row({ id: 'control:compact', ...(between ? {} : { gap: true }) }); f.row(CONTINUE);
+    assert.equal(f.r.liveTurn, null, name); assert.throws(() => f.mint(), name);
+    await retired(f, name);
+  }
+  // A turn start the rows deliver after the notice was granted before the compaction: its row retires it.
+  const f = await fixture(t);
+  f.row(END);
+  f.settingsCompact();
+  f.row({ id: 'control:turn-start', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
+  f.mint('next-turn', 'next-prompt');
+  f.row({ id: 'control:compact' });
+  assert.equal(f.r.liveTurn, null); assert.throws(() => f.mint('next-turn', 'next-prompt'));
+  f.row({ ...CONTINUE, turnId: 'next-turn', promptId: 'next-prompt' });
+  assert.equal(f.r.liveTurn?.id, 'next-turn', 'and its own proof continues it');
+});
+
+test('through the bridge with the settings notice first, the turn is refused until its step and then continues', async t => {
+  const f = await fixture(t), b = await bridge(f);
+  await b.compact({ hookFirst: true });
+  assert.deepEqual(b.observed, ['control:compact']);
+  await retired(f, 'after both notices');
+  await b.allDenied('between the compaction and the step');
+  await b.step();
+  assert.deepEqual(b.mod.bridgeState(), RESTORED);
+  await b.allAllowed('in the continued turn');
+  await retired(f, 'after the continuation');
+  assert.deepEqual(f.states, []);
+});
+
+test('an idle session\'s compaction is reported idle as before', async t => {
+  for (const order of [['hook', 'row'], ['row', 'hook']]) {
+    const idle = await fixture(t);
+    idle.row(END);
+    idle.states.length = 0;
+    for (const event of order) if (event === 'hook') idle.settingsCompact(); else idle.row({ id: 'control:compact' });
+    assert.deepEqual(idle.states, ['idle'], order.join(' then '));
+    assert.equal(idle.r.compactedTurn, null);
+  }
 });
 
 // The offer as the module's own bindRoot makes it (as in claude-native-queue-versions.test.cjs).
