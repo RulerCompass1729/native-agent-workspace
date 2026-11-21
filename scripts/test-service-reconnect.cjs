@@ -6,9 +6,10 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { fork, execFileSync } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-service-reconnect-'));
+// The workspace is inside the profile, so the folders the service makes for new sessions are removed with it.
 const child = fork(path.join(root, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/connection-drop.cjs')],
-  env: { ...process.env, NAW_APP_VERSION: require(path.join(root, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: root },
+  env: { ...process.env, NAW_APP_VERSION: require(path.join(root, 'package.json')).version, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_TEST_APP_ROOT: root },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), checks = [], errors = [], draft = '草稿：断开后保留';
