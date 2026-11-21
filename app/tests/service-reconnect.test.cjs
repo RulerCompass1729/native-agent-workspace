@@ -14,15 +14,15 @@ const reconnectModule = (() => { try { return require('../service-reconnect.cjs'
 const settled = async (check, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end;) { if (check()) return true; await new Promise(resolve => setTimeout(resolve, 10)); } return check(); };
 const channels = context => context.page.map(([channel]) => channel);
 
-async function backend(dataDir, key, session) {
+async function backend(dataDir, key, session, capabilities = []) {
   const dir = path.join(dataDir, key); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-')); fs.chmodSync(socketDir, 0o700);
   const endpoint = path.join(socketDir, 's.sock');
   fs.writeFileSync(path.join(dir, 'connection.json'), JSON.stringify({ protocol: 1, endpoint, token: 'synthetic' }), { mode: 0o600 });
-  const state = { owner: 'view', runtimeVersion: 'synthetic', capabilities: [], diagnostics: { dispatches: 0, shellModelCalls: 0 },
+  const state = { owner: 'view', runtimeVersion: 'synthetic', capabilities, diagnostics: { dispatches: 0, shellModelCalls: 0 },
     sessions: [{ id: session, nativeId: 'native-' + session, provider: 'codex', state: 'idle', owner: 'view' }], room: { revision: 0, messages: [], run: null } };
   // Each accepted connection, in order, with its handshake and the methods it was asked.
-  const accepted = [], told = { ready: null };
+  const accepted = [], told = { ready: null, initial: null };
   const serve = socket => {
     const connection = { socket, hello: null, methods: [] }; accepted.push(connection); let buffer = '';
     socket.setEncoding('utf8'); socket.on('error', () => {});
@@ -32,7 +32,9 @@ async function backend(dataDir, key, session) {
         const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
         if (!connection.hello) { connection.hello = request; socket.write(JSON.stringify(told.ready || { ready: true }) + '\n'); told.ready = null; continue; }
         connection.methods.push(request.method);
-        if (request.method !== 'hold') socket.write(JSON.stringify({ id: request.id, ok: true, value: request.method === 'initial' ? structuredClone(state) : true }) + '\n');
+        const respond = () => socket.write(JSON.stringify({ id: request.id, ok: true, value: request.method === 'initial' ? structuredClone(state) : true }) + '\n');
+        if (request.method === 'initial' && told.initial) told.initial({ connection, socket, state, request, respond });
+        else if (request.method !== 'hold') respond();
       }
     });
   };
@@ -40,11 +42,11 @@ async function backend(dataDir, key, session) {
   const listen = async () => { server = net.createServer(serve); await new Promise(resolve => server.listen(endpoint, resolve)); };
   const stop = async () => { const old = server; server = null; for (const c of accepted) c.socket.destroy(); if (old) await new Promise(resolve => old.close(resolve)); };
   await listen();
-  // tell: the ready frame of the next connection only.
-  return { key, accepted, listen, stop, tell: ready => { told.ready = ready; }, remove: () => fs.rmSync(socketDir, { recursive: true, force: true }) };
+  // tell: the ready frame of the next connection only. onInitial: the test answers every `initial` from then on.
+  return { key, accepted, listen, stop, tell: ready => { told.ready = ready; }, onInitial: answer => { told.initial = answer; }, remove: () => fs.rmSync(socketDir, { recursive: true, force: true }) };
 }
 
-async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa']) {
+async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa'], { capabilities = [] } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-data-')); fs.chmodSync(dataDir, 0o700);
   const backends = [], scope = Symbol('synthetic workspace'), opened = [];
   // Windows first: a window still open when its service stops would start reconnecting.
@@ -53,7 +55,7 @@ async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa']) {
     for (const b of backends) { await b.stop(); b.remove(); }
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
-  for (const [index, key] of keys.entries()) backends.push(await backend(dataDir, key, 'session-' + index));
+  for (const [index, key] of keys.entries()) backends.push(await backend(dataDir, key, 'session-' + index, capabilities));
   // As main.cjs connects a window: one service client per backend, under the window's owner.
   const open = async ({ background = false } = {}) => {
     const view = { owner: 'owner-' + opened.length }, entries = [];
@@ -116,6 +118,132 @@ test('an agent\'s hidden window reconnects the same way and sends its missing pa
   assert.ok(await settled(() => f.backends[1].accepted.length === 3 && !hidden.client.socket.destroyed), 'the hidden window is still disconnected');
   assert.equal(f.backends[1].accepted[2].hello.page, false);
   assert.deepEqual([hidden.page, person.page, person.client.socket.destroyed], [[], [], false]);
+});
+
+// The independent review of 8e00056b (2026-11-21, BLOCK): each case below went wrong in the first version.
+const history = f => JSON.parse(fs.readFileSync(path.join(f.dataDir, 'connection-events.json'), 'utf8'));
+const told = context => context.page.filter(([channel]) => channel === 'workspace:reconnected');
+// The reply to `initial` and a newer state in one write: both arrive before anything listens to the connection.
+const answersThenWorks = ({ socket, request, state }) => {
+  const initial = JSON.stringify({ id: request.id, ok: true, value: state });
+  state.sessions[0].state = 'working';
+  socket.write(initial + '\n' + JSON.stringify({ event: 'state', data: state }) + '\n');
+};
+
+test('a backend that stays unreachable does not keep a reachable one from its own reconnection', async t => {
+  const f = await fixture(t), wire = mainWiring(f.dataDir), window = await f.open(), [a, b] = f.backends;
+  wire(window);
+  await a.stop();
+  assert.ok(await settled(() => window.client.entries[0].closed));
+  b.accepted[0].socket.destroy();
+  assert.ok(await settled(() => b.accepted.length === 2 && !window.client.entries[1].closed), 'the reachable backend was not connected again while the other one stayed unreachable');
+  // The window works again only with both: its page hears of that once, for both.
+  assert.deepEqual([window.client.entries[0].closed, window.client.socket.destroyed, told(window).length], [true, true, 0]);
+  await a.listen();
+  assert.ok(await settled(() => told(window).length > 0, 10000), 'the window stayed disconnected after its other backend came back');
+  assert.deepEqual([told(window).length, [...told(window)[0][2]].sort(), window.client.socket.destroyed], [1, ['session-0', 'session-1'], false]);
+  const events = history(f);
+  assert.deepEqual(events.filter(e => e.event === 'closed').map(e => e.backends).sort(), [[a.key], [b.key]].sort());
+  assert.deepEqual(events.filter(e => e.event === 'restored').map(e => e.backends), [[b.key], [a.key]]);
+  assert.ok(events.find(e => e.event === 'restored' && e.backends[0] === b.key).attempts === 1 && events.find(e => e.event === 'restored' && e.backends[0] === a.key).attempts > 1);
+});
+
+test('each connection that closes has its own attempts and its own record', async t => {
+  const f = await fixture(t), wire = mainWiring(f.dataDir), window = await f.open(), [a, b] = f.backends;
+  wire(window);
+  // The first one's new connection is still waiting for its `initial` when the second one closes.
+  let answer = null;
+  a.onInitial(({ respond }) => { answer = respond; });
+  a.accepted[0].socket.destroy();
+  assert.ok(await settled(() => answer));
+  b.accepted[0].socket.destroy();
+  assert.ok(await settled(() => window.client.entries[1].closed || b.accepted.length === 2));
+  answer();
+  assert.ok(await settled(() => told(window).length > 0));
+  const events = history(f);
+  assert.deepEqual(events.filter(e => e.event === 'closed').map(e => [e.backends, e.reasons]).sort(), [[[a.key], ['peer']], [[b.key], ['peer']]].sort());
+  assert.deepEqual(events.filter(e => e.event === 'restored').map(e => [e.backends, e.attempts]).sort(), [[[a.key], 1], [[b.key], 1]].sort());
+  assert.deepEqual([a.accepted.length, b.accepted.length, told(window).length, [...told(window)[0][2]].sort()], [2, 2, 1, ['session-0', 'session-1']]);
+});
+
+test('the page is told the newest state the new connection has received', async t => {
+  const f = await fixture(t), wire = mainWiring(f.dataDir), window = await f.open(), b = f.backends[1];
+  wire(window);
+  b.onInitial(answersThenWorks);
+  b.accepted[0].socket.destroy();
+  assert.ok(await settled(() => told(window).length > 0));
+  assert.deepEqual([told(window)[0][1].sessions.find(s => s.id === 'session-1').state, window.client.entries[1].state.sessions[0].state], ['working', 'working']);
+});
+
+test('a window that opens starts from the newest state each connection has received', async t => {
+  const f = await fixture(t);
+  f.backends[0].onInitial(answersThenWorks);
+  const window = await f.open();
+  assert.equal(window.client.snapshot().sessions.find(s => s.id === 'session-0').state, 'working');
+});
+
+test('a reconnection answered late leaves alone the connection a backend update installed meanwhile', async t => {
+  const f = await fixture(t, ['.']), wire = mainWiring(f.dataDir), window = await f.open(), a = f.backends[0];
+  wire(window);
+  // The reconnection's `initial` is answered late, with the state as it was when it asked.
+  let late = null;
+  a.onInitial(({ connection, socket, state, request, respond }) => {
+    if (connection !== a.accepted[1]) return respond();
+    const frame = JSON.stringify({ id: request.id, ok: true, value: { ...state, runtimeVersion: 'early-snapshot' } });
+    late = () => socket.write(frame + '\n');
+  });
+  a.accepted[0].socket.destroy();
+  assert.ok(await settled(() => late));
+  // As a backend update does it (runBackendSwitch): main.cjs's own replaceBackendSockets inside maintainService.
+  const from = main.indexOf('async function replaceBackendSockets('), to = main.indexOf('let connectionEvents = null', from);
+  assert.ok(from >= 0 && to > from, 'main.cjs replaces a backend\'s sockets in replaceBackendSockets');
+  const replace = vm.runInNewContext(`${main.slice(from, to)}\nreplaceBackendSockets`, { windows: new Map([[1, window]]), connectService, dataDir: f.dataDir, path,
+    displayState: state => state, omitHidden: display => display, sendToPage() {} });
+  const finish = window.client.maintainService(a.key);
+  try { await replace(a.key); } finally { finish(); }
+  const entry = window.client.entries[0], installed = entry.client;
+  assert.deepEqual([a.accepted.length, entry.state.runtimeVersion], [3, 'synthetic']);
+  late();
+  assert.ok(await settled(() => history(f).some(e => e.event !== 'closed')), 'the late reconnection never ended');
+  // Only the socket the late reconnection made itself is closed.
+  assert.ok(await settled(() => a.accepted[1].socket.destroyed), 'the late reconnection left its own socket open');
+  assert.deepEqual([entry.client === installed, installed.socket.destroyed, a.accepted[2].socket.destroyed, entry.state.runtimeVersion, window.client.socket.destroyed],
+    [true, false, false, 'synthetic', false]);
+  assert.deepEqual(history(f).map(e => [e.event, e.backends]), [['closed', [a.key]], ['replaced', [a.key]]]);
+  assert.equal(await entry.client.call('ping'), true);
+});
+
+test('one window\'s reconnection leaves another window\'s operation on its own live connection alone', async t => {
+  const f = await fixture(t, ['.'], { capabilities: ['gitWorktreeV1'] }), wire = mainWiring(f.dataDir), a = f.backends[0];
+  const page = await f.open(), hidden = await f.open({ background: true });
+  wire(page); wire(hidden);
+  const live = page.client.entries[0].client, preview = () => page.client.call('gitWorktreePreview', '/synthetic', 'synthetic-job', '');
+  assert.equal(await preview(), true);
+  // The page's operation is waiting for its own `initial` while the hidden window's connection closes and comes back.
+  let answer = null;
+  a.onInitial(({ connection, respond }) => { if (connection === a.accepted[0]) answer = respond; else respond(); });
+  const pending = preview().then(result => ({ result }), error => ({ error: error.uiMessage?.key || error.message }));
+  assert.ok(await settled(() => answer));
+  a.accepted[1].socket.destroy();
+  assert.ok(await settled(() => a.accepted.length === 3 && !hidden.client.socket.destroyed), 'the hidden window is still disconnected');
+  a.onInitial(null); answer();
+  assert.deepEqual([await pending, page.client.entries[0].client === live, live.socket.destroyed], [{ result: true }, true, false]);
+  assert.equal(await preview(), true);
+});
+
+test('a reconnection refuses a service that is kept for another purpose, as the first connection does', async t => {
+  const f = await fixture(t), wire = mainWiring(f.dataDir), window = await f.open(), b = f.backends[1];
+  wire(window);
+  // What a butler's service reports about itself (daemon.cjs `initial`).
+  let bound = true;
+  b.onInitial(({ socket, state, request, respond }) => bound ? socket.write(JSON.stringify({ id: request.id, ok: true, value: { ...state, serviceBinding: { runtimeVersion: 'synthetic', purpose: 'butler' } } }) + '\n') : respond());
+  b.accepted[0].socket.destroy();
+  assert.ok(await settled(() => b.accepted.length >= 2 && b.accepted[1].socket.destroyed), 'the connection to the other purpose\'s service was kept');
+  assert.deepEqual([window.client.entries[1].closed, window.client.socket.destroyed, told(window).length, 'serviceBinding' in window.client.entries[1].state], [true, true, 0, false]);
+  // The ordinary service at that place again: the next attempt takes it.
+  bound = false;
+  assert.ok(await settled(() => told(window).length > 0, 10000));
+  assert.equal(window.client.socket.destroyed, false);
 });
 
 // The retry rules, on stand-in windows: no sockets and no real time.
@@ -189,6 +317,16 @@ test('a second connection that closes during a reconnection is reconnected too',
   await both.run(context, context.client);
   assert.ok(await settled(() => both.log.restored.length === 2));
   assert.deepEqual([both.log.connects, both.log.restored, context.client.socket.destroyed, both.log.lost], [['b', 'c'], [['b'], ['c']], false, 0]);
+});
+
+test('a connection that never comes back leaves the other closed one its own attempts, and the window to the person', { skip: !reconnectModule }, async () => {
+  const context = standIn({ keys: ['.', 'b', 'c'], closed: ['b', 'c'] }), events = [];
+  const one = rules({ record: event => { events.push([event.event, event.backends, event.attempts]); },
+    connect: async (c, key) => { one.log.connects.push(key); if (key === 'b') throw Error('not listening'); return { client: { close() {} }, state: {} }; } });
+  assert.equal(await one.run(context, context.client), 'lost');
+  assert.deepEqual([one.log.connects.filter(key => key === 'c'), one.log.connects.filter(key => key === 'b'), context.client.replaced, one.log.restored, one.log.lost],
+    [['c'], ['b', 'b', 'b'], ['c'], [], 1]);
+  assert.deepEqual(events, [['closed', ['b'], undefined], ['closed', ['c'], undefined], ['restored', ['c'], 1], ['lost', ['b'], 3]]);
 });
 
 test('the connection record keeps the newest events in a private file', { skip: !reconnectModule }, t => {
@@ -284,8 +422,8 @@ test('the writer and the reader say why they end a transport, once, before endin
   assert.deepEqual(await read('[1]\n'), [['unreadable', false]]);
 });
 
-// The real service process and two real transports of one owner. Synthetic native host, no session and no model.
-test('the real service tells an owner\'s next transport why it ended the previous one, and only then', { timeout: 30000 }, async t => {
+// The real service process, owned by the test. Synthetic native host, no session and no model.
+async function ownedService(t) {
   const root = path.resolve(__dirname, '../..'), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-service-')));
   const child = fork(path.join(root, 'app/daemon.cjs'), [directory], { execArgv: ['--require', path.join(root, 'scripts/fixtures/connection-drop.cjs')],
     env: { PATH: process.env.PATH, HOME: directory, TMPDIR: os.tmpdir(), NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: directory }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
@@ -296,7 +434,12 @@ test('the real service tells an owner\'s next transport why it ended the previou
     fs.rmSync(directory, { recursive: true, force: true });
   });
   assert.ok(await settled(() => fs.existsSync(path.join(directory, 'connection.json')) || child.exitCode !== null, 10000) && child.exitCode === null, 'the owned synthetic service starts');
-  const connect = async owner => { const client = await connectService(directory, owner); open.push(client); return client; };
+  return { child, connect: async owner => { const client = await connectService(directory, owner); open.push(client); return client; } };
+}
+
+// Two real transports of one owner.
+test('the real service tells an owner\'s next transport why it ended the previous one, and only then', { timeout: 30000 }, async t => {
+  const { child, connect } = await ownedService(t);
   const closed = client => client.socket.destroyed ? Promise.resolve() : once(client, 'closed');
   const reason = async owner => { const client = await connect(owner), prior = client.priorClose; client.close(); await closed(client); return prior?.reason; };
 

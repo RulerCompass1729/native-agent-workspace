@@ -9,14 +9,15 @@ const background = require('./background-operation.cjs');
 class ServiceClient extends EventEmitter {
   constructor(socket) {
     super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let received = 0;
-    // The last whole state, which a delta frame builds on (state-delta.cjs).
+    // The last whole state, which a delta frame builds on (state-delta.cjs). lastState: the same, for whoever takes
+    // this client over after the `initial` it asked for (workspace-client.cjs newestState).
     let state = null;
     readFrames(socket, RESPONSE_BYTES, m => {
       if (m.event === 'state') {
         if (m.delta === 1) {
           try { m = { ...m, data: rebuildState(state, m.data) }; } catch { this.closeReason = 'state-rebuild'; socket.destroy(); return; }
         }
-        state = m.data;
+        state = this.lastState = m.data;
       }
       const value = m.event ? m.data : m.value;
       if (value && typeof value === 'object') this.receipts.set(value, ++received);
