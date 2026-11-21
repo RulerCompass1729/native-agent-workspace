@@ -83,6 +83,8 @@ function validateJournal(data) {
       !Array.isArray(domain.providers) || !domain.providers.length || domain.providers.some(p => !['claude', 'codex'].includes(p)) ||
       !Array.isArray(domain.directories) || !domain.directories.length || domain.directories.some(d => typeof d !== 'string' || !path.isAbsolute(d)) ||
       !['default', 'bypass'].includes(domain.permission) || !Number.isSafeInteger(domain.daily) || domain.daily < 1 || !Number.isSafeInteger(domain.concurrent) || domain.concurrent < 1 || !Number.isSafeInteger(domain.expiresAt) ||
+      Object.hasOwn(domain, 'quotaRevision') && (!Number.isSafeInteger(domain.quotaRevision) || domain.quotaRevision < 0) ||
+      Object.hasOwn(domain, 'quotaUpdatedAt') && !Number.isSafeInteger(domain.quotaUpdatedAt) ||
       // B5: the space a grant names is saved only as a space id; anything else in its place disables the interface.
       Object.hasOwn(domain, 'space') && !spaces.roomId(domain.space)) fail('Invalid operator grant');
   }
@@ -146,7 +148,12 @@ class OperatorControl {
     this.data = next; this.w.emit('change'); return result;
   }
   policy() { return { enabled: !this.error && this.data.enabled, error: this.error,
-    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy), placements: this.placements(), successions: this.successions() }; }
+    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(d => ({ ...copy(d), usage: this.quotaUsage(d.id) })), placements: this.placements(), successions: this.successions() }; }
+  quotaUsage(domainId) {
+    const today = day(Date.now()), reservations = Object.values(this.data.actions).filter(a => a.domainId === domainId && ['creating', 'created', 'unconfirmed'].includes(a.status));
+    return { day: today, usedToday: reservations.filter(a => !Number.isSafeInteger(a.startedAt) || !Number.isFinite(new Date(a.startedAt).getTime()) || day(a.startedAt) === today).length,
+      concurrent: reservations.filter(a => !a.sessionId || this.w.sessions.get(a.sessionId)?.state !== 'ended').length };
+  }
   // B5: a grant may name one space, chosen by the person. A session created under such a grant is
   // listed here until the desktop, which alone owns spaces, has placed it and written the result
   // back. Only while the grant is still in force: revoking it, its expiry, turning the interface
@@ -354,6 +361,22 @@ class OperatorControl {
   revoke(id) {
     return this.commit(data => { const domain = data.domains[id]; if (!domain) fail('Authorization domain no longer exists'); domain.revokedAt = Date.now(); return true; });
   }
+  quota(initiatorId, spec) {
+    if (require('./background-operation.cjs').current()) fail('Only the person can adjust creation quotas');
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec) || Object.keys(spec).sort().join() !== 'concurrent,consent,daily,domainId,nativeId,revision' || spec.consent !== true ||
+        typeof spec.domainId !== 'string' || typeof spec.nativeId !== 'string' || !Number.isSafeInteger(spec.daily) || spec.daily < 1 || !Number.isSafeInteger(spec.concurrent) || spec.concurrent < 1 ||
+        !Number.isSafeInteger(spec.revision) || spec.revision < 0 || spec.revision === Number.MAX_SAFE_INTEGER) fail('Explicit consent and positive safe integer quota limits are required');
+    const s = this.w.get(initiatorId), domain = Object.hasOwn(this.data.domains, spec.domainId) && this.data.domains[spec.domainId];
+    if (!domain || domain.revokedAt || domain.expiresAt <= Date.now() || (domain.quotaRevision || 0) !== spec.revision ||
+        s.nativeId !== spec.nativeId || s.nativeContextPending || s.archived || ['ended', 'recoverable'].includes(s.state) ||
+        !domain.initiators.some(i => i.id === s.id && i.nativeId === spec.nativeId)) fail('The grant or its current holder changed; reopen the quota card');
+    return this.commit(data => {
+      const d = data.domains[spec.domainId], previous = { daily: d.daily, concurrent: d.concurrent };
+      d.daily = spec.daily; d.concurrent = spec.concurrent; d.quotaRevision = spec.revision + 1; d.quotaUpdatedAt = Date.now();
+      this.audit(data, s, null, 'operator_quota', 'changed', { domainId: d.id, previous, daily: d.daily, concurrent: d.concurrent, by: 'human' });
+      return copy(d);
+    });
+  }
   view(request, data = this.data) {
     const dispatch = data.dispatches[request.currentDispatchId], report = Object.values(data.reports).filter(r => r.dispatchId === dispatch?.id).at(-1);
     const question = request.closed ? null : request.question ?? null;
@@ -518,8 +541,8 @@ class OperatorControl {
     if (action.status !== 'authorized') return this.openResult(action);
     const domain = this.data.domains[action.domainId];
     if (!this.covering(s, action.args, domain)) fail('The creation grant was revoked or expired');
-    const all = Object.values(this.data.actions).filter(a => a.domainId === domain.id && ['creating', 'created', 'unconfirmed'].includes(a.status));
-    if (all.filter(a => day(a.startedAt) === day(Date.now())).length >= domain.daily || all.filter(a => !a.sessionId || !['ended'].includes(this.w.sessions.get(a.sessionId)?.state)).length >= domain.concurrent) fail('The authorization domain daily or concurrent creation quota is exhausted');
+    const usage = this.quotaUsage(domain.id);
+    if (usage.usedToday >= domain.daily || usage.concurrent >= domain.concurrent) fail('The authorization domain daily or concurrent creation quota is exhausted');
     const requestId = randomUUID();
     this.commit(data => {
       const a = data.actions[key]; a.status = 'creating'; a.startedAt = Date.now(); a.requestId = requestId;

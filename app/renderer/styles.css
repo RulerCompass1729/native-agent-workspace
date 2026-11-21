@@ -950,6 +950,12 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-coverage { display:grid; gap:8px; padding:12px; border:1px solid var(--border); border-radius:6px; line-height:1.6; }
 .operator-coverage button { justify-self:start; }
 .operator-card-error { color:var(--approval-ink); }
+.operator-quota-card .operator-bypass { color:var(--approval-ink); font-weight:700; }
+.operator-quota-fields, .operator-quota-usage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.operator-quota-usage { padding-block:8px; font-weight:600; }
+.operator-grants-toggle { margin-left:auto; white-space:nowrap; }
+.operator-quota-card .operator-quota-form { display:grid; gap:12px; }
+.operator-quota-card { padding-top:8px; overflow-wrap:anywhere; }
 .operator-new-grant { border-top:1px solid var(--border); padding-top:10px; }
 @media(max-width:600px) { .operator-grant-fields { grid-template-columns:1fr; } }
 .operator-cancel-warning { flex-basis:100%; }

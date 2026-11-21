@@ -80,6 +80,20 @@ async function fixture(t) {
 const text = (event, language = 'zh') => locale.format(language, event.uiMessage.key, event.uiMessage.params);
 const listed = f => f.w.snapshot().operatorPolicy.successions;
 const pair = (f, old, next, loggedAt = Date.now() + 1) => ({ step: 'carry', nativeId: f.w.get(old).nativeId, to: { id: next, nativeId: f.w.get(next).nativeId }, loggedAt });
+test('a human quota change follows the same grant and reservation counts to the confirmed successor', async t => {
+  const f = await fixture(t), id = f.grant({ daily: 8, concurrent: 6 }); await f.open(f.id);
+  const original = structuredClone(f.w.operator.data.domains[id]);
+  f.w.operatorAction(f.id, 'quota', { domainId: id, daily: 16, concurrent: 6, revision: 0, nativeId: f.w.get(f.id).nativeId, consent: true });
+  const next = await f.replace(); await f.carry();
+  const domain = f.w.operator.policy().domains.find(d => d.id === id);
+  assert.deepEqual(domain.initiators, [{ id: next, nativeId: f.w.get(next).nativeId }]);
+  assert.deepEqual([domain.daily, domain.concurrent, domain.quotaRevision, domain.expiresAt, domain.createdAt, domain.usage.usedToday, domain.usage.concurrent],
+    [16, 6, 1, original.expiresAt, original.createdAt, 1, 1]);
+  assert.throws(() => f.w.operatorAction(f.id, 'quota', { domainId: id, daily: 32, concurrent: 6, revision: 1, nativeId: f.w.get(f.id).nativeId, consent: true }), /changed|holder/);
+  f.w.operatorAction(next, 'quota', { domainId: id, daily: 4, concurrent: 2, revision: 1, nativeId: f.w.get(next).nativeId, consent: true });
+  assert.equal((await f.open(next)).status, 'created'); await assert.rejects(f.open(next), /quota/);
+  assert.equal(f.w.operator.policy().domains.find(d => d.id === id).usage.concurrent, 2);
+});
 
 test('a holder NAW replaced: its successor opens under the same grant with no new approval, and what the old session opened still counts', async t => {
   const f = await fixture(t), grantId = f.grant();

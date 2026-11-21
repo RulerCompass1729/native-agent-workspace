@@ -2964,13 +2964,92 @@ function renderBackgroundControls(entry, message) {
   }
   box.append(buttons);
 }
+function renderOperatorQuota(entry, domain) {
+  const current = () => state.operatorPolicy?.domains.find(d => d.id === domain.id);
+  const scopeOf = d => JSON.stringify([d.id, d.initiators, d.daily, d.concurrent, d.quotaRevision || 0, d.providers, d.directories, d.permission, d.expiresAt, d.revokedAt, d.space]);
+  const scope = scopeOf(domain), holder = domain.initiators.map(i => state.sessions.find(s => s.id === i.id && s.nativeId === i.nativeId)).find(s => s && !s.archived && !s.nativeContextPending && !['ended', 'recoverable'].includes(s.state));
+  const holderId = holder?.id, holderNativeId = holder?.nativeId;
+  const supported = (holder?.serviceCapabilities || state.capabilities || []).includes('operatorQuotaEditV1');
+  const allowed = Boolean(!disconnected && !state.operatorPolicy?.error && supported && holder && !domain.revokedAt && domain.expiresAt > Date.now());
+  const draft = entry.quotaDraft ||= { editing: false, busy: false, problem: null, saved: false };
+  const stale = draft.editing && draft.scope !== scope;
+  if (stale) { draft.consent = false; draft.accepted = ''; }
+  const key = JSON.stringify([scope, allowed, draft.editing, draft.busy, stale, draft.saved, holder?.id, holder?.nativeId]);
+  if (entry.quotaKey === key) { ui.display.refresh(entry.operatorControls); return; }
+  entry.quotaKey = key;
+  const controls = entry.operatorControls || node('div'); controls.className = 'operator-controls operator-creation-card operator-quota-card';
+  if (!entry.operatorControls) { entry.operatorControls = controls; entry.actions.before(controls); }
+  controls.dataset.domainId = domain.id; controls.replaceChildren();
+  const title = uiNode('h3', 'operator.quota.title', () => ({ id: domain.id.slice(0, 8), holder: domain.initiators.map(i => state.sessions.find(s => s.id === i.id)?.name || uiText('operator.holderGone')).join(' / ') }));
+  title.tabIndex = -1; entry.quotaHeading = title; controls.append(title);
+  controls.append(uiNode('p', 'operator.card.scope', () => ({ providers: domain.providers.join(' / '), directories: domain.directories.join(' / ') })));
+  const permission = uiNode('p', 'operator.card.ceiling', () => ({ permission: uiText('operator.' + domain.permission) })); permission.classList.toggle('operator-bypass', domain.permission === 'bypass'); controls.append(permission);
+  const spaceNameFor = () => { const room = allSpaces().find(r => r.id === domain.space); return !room ? uiText('operator.spaceGone') : room.archived ? uiText('operator.spaceArchived', { name: spaceName(room) }) : spaceName(room); };
+  controls.append(uiNode('p', domain.space ? 'operator.card.join' : 'operator.card.noJoin', () => ({ space: spaceNameFor() })));
+  const usage = node('div', undefined, 'operator-quota-usage');
+  usage.append(uiNode('p', 'operator.quota.used', () => { const d = current() || domain; return { day: d.usage?.day || uiText('operator.unknown'), used: d.usage?.usedToday ?? '—', limit: d.daily }; }),
+    uiNode('p', 'operator.quota.running', () => { const d = current() || domain; return { used: d.usage?.concurrent ?? '—', limit: d.concurrent }; }));
+  controls.append(usage, uiNode('p', 'operator.card.expiry', () => ({ expires: new Date(domain.expiresAt).toLocaleString(ui.language.getSnapshot().active, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) })));
+  const problem = node('p', undefined, 'operator-card-error'); problem.setAttribute('role', 'alert');
+  const paintProblem = () => ui.display.computed(problem, 'text', () => draft.problem ? ui.errorText(draft.problem) : stale && !draft.busy ? uiText('operator.quota.stale') : '');
+  paintProblem();
+  if (!holder) controls.append(uiNode('p', 'operator.quota.holderUnavailable', undefined, 'quiet'));
+  else if (!supported) controls.append(uiNode('p', 'operator.quota.unsupported', undefined, 'quiet'));
+  if (draft.saved) { const saved = uiNode('p', 'operator.quota.saved'); saved.setAttribute('role', 'status'); controls.append(saved); }
+  const repaint = () => { entry.quotaKey = ''; renderOperatorQuota(entry, current() || domain); };
+  if (!draft.editing) {
+    const edit = uiButton('operator.quota.edit', () => {
+      const d = current(); if (!d || !allowed || d.revokedAt || d.expiresAt <= Date.now()) throw uiError('error.operator.stale');
+      Object.assign(draft, { editing: true, scope: scopeOf(d), daily: String(d.daily), concurrent: String(d.concurrent), consent: false, accepted: '', problem: null, saved: false }); repaint();
+      entry.quotaInput?.focus();
+    }, 'small'); edit.disabled = !allowed; controls.append(edit, problem); return;
+  }
+  const form = node('form', undefined, 'operator-grant operator-quota-form'), fields = node('div', undefined, 'operator-quota-fields');
+  ui.display.attribute(form, 'aria-label', 'operator.quota.edit');
+  const field = (name, value) => { const label = node('label'), input = node('input'); input.type = 'number'; input.min = '1'; input.max = String(Number.MAX_SAFE_INTEGER); input.step = '1'; input.required = true; input.value = value; input.name = name;
+    input.id = 'quota-' + domain.id + '-' + name; label.htmlFor = input.id; label.append(uiNode('span', 'operator.quota.' + name), input); fields.append(label); return input; };
+  const daily = field('daily', draft.daily), concurrent = field('concurrent', draft.concurrent); entry.quotaInput = daily;
+  form.append(fields, uiNode('p', 'operator.quota.lowering', undefined, 'quiet'));
+  const label = node('label', undefined, 'operator-grant-consent'), consent = node('input'), sentence = node('span'); consent.type = 'checkbox'; consent.required = true; consent.checked = Boolean(draft.consent);
+  consent.id = 'quota-' + domain.id + '-consent'; label.htmlFor = consent.id; label.append(consent, sentence); form.append(label);
+  const buttons = node('div', undefined, 'operator-creation-buttons'), cancel = uiButton('common.cancel', () => { if (!draft.busy) { draft.editing = false; draft.problem = null; repaint(); } }, 'small'), submit = uiNode('button', 'operator.quota.save'); submit.type = 'submit';
+  buttons.append(cancel, submit); form.append(buttons); controls.append(form, problem);
+  const values = () => daily.value + ':' + concurrent.value;
+  const limitsValid = () => [daily, concurrent].every(el => Number.isSafeInteger(Number(el.value)) && Number(el.value) >= 1);
+  const shownLimit = input => Number.isSafeInteger(Number(input.value)) && Number(input.value) >= 1 ? String(Number(input.value)) : uiText('operator.unknown');
+  const paint = () => {
+    paintProblem();
+    ui.display.text(sentence, 'operator.quota.consent', () => ({ daily: uiText(Number(daily.value) === domain.daily ? 'operator.quota.keep' : 'operator.quota.change', { from: domain.daily, to: shownLimit(daily) }),
+      concurrent: uiText(Number(concurrent.value) === domain.concurrent ? 'operator.quota.keep' : 'operator.quota.change', { from: domain.concurrent, to: shownLimit(concurrent) }) }));
+    for (const el of [daily, concurrent, consent]) el.disabled = !allowed || stale || draft.busy;
+    cancel.disabled = draft.busy; submit.disabled = !allowed || stale || draft.busy || !limitsValid() || !consent.checked || draft.accepted !== values() || Number(daily.value) === domain.daily && Number(concurrent.value) === domain.concurrent;
+  };
+  for (const input of [daily, concurrent]) input.addEventListener('input', () => { draft.daily = daily.value; draft.concurrent = concurrent.value; draft.consent = false; draft.accepted = ''; draft.problem = null; consent.checked = false; paint(); });
+  consent.addEventListener('change', () => { draft.consent = consent.checked; draft.accepted = consent.checked ? values() : ''; paint(); }); paint();
+  form.addEventListener('submit', event => {
+    event.preventDefault(); if (draft.busy) return;
+    attempt(async () => {
+      try {
+        const latest = current(), person = state.sessions.find(s => s.id === holderId);
+        if (!allowed || disconnected || !latest || latest.revokedAt || latest.expiresAt <= Date.now() || scopeOf(latest) !== draft.scope || !person || person.archived || person.nativeId !== holderNativeId || person.nativeContextPending || ['ended', 'recoverable'].includes(person.state)) throw uiError('error.operator.stale');
+        if (!limitsValid() || !consent.checked || draft.accepted !== values()) throw uiError('error.operator.quotaInvalid');
+        draft.busy = true; draft.problem = null; paint();
+        await api.operatorAction(holderId, 'quota', { domainId: domain.id, daily: Number(daily.value), concurrent: Number(concurrent.value), revision: domain.quotaRevision || 0, nativeId: holderNativeId, consent: true });
+        updateState(await api.initial());
+        draft.editing = false; draft.saved = true;
+      } catch (error) { draft.problem = error; if (entry.item.isConnected === false) toastError(error); }
+      finally { draft.busy = false; repaint(); }
+    });
+  });
+}
+
 function renderOperatorCreation(entry, message, { inbox = false } = {}) {
   const op = message.operator, initiator = state.sessions.find(s => s.id === op.initiatorId);
   const allowed = Boolean(!disconnected && initiator && !initiator.archived && (initiator.serviceCapabilities || state.capabilities || []).includes('operatorControl1a'));
   const sameNative = initiator?.nativeId === op.initiatorNativeId;
   const grant = state.operatorPolicy?.domains.find(d => d.id === op.coveredDomainId && !d.revokedAt && d.expiresAt > Date.now());
   const rooms = allSpaces().filter(r => !r.archived);
-  const key = JSON.stringify(['creation', inbox, op, allowed, initiator?.nativeId, initiator?.name, grant, rooms.map(r => r.id)]);
+  const key = JSON.stringify(['creation', inbox, op, allowed, initiator?.nativeId, initiator?.name, grant && { ...grant, usage: undefined }, rooms.map(r => r.id)]);
   if (entry.operatorKey === key) { ui.display.refresh(entry.operatorControls); return; }
   entry.operatorKey = key;
   const controls = entry.operatorControls || node('div');
@@ -3034,7 +3113,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
       if (latest.space && !allSpaces().some(r => r.id === latest.space && !r.archived)) throw uiError('error.operator.stale');
       await act('authorize', { key: op.actionKey, domainId: grant.id });
     }), 'small primary');
-    approvalNodes.push(reuse); coverage.append(reuse); controls.append(coverage);
+    approvalNodes.push(reuse); coverage.append(reuse, uiButton('operator.quota.edit', () => getActivityStream()?.showGrants(grant.id), 'small')); controls.append(coverage);
   }
   const localValue = ms => { const date = new Date(ms); return new Date(ms - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const draft = entry.operatorGrantDraft ||= { daily: '1', concurrent: '1', duration: '1', expires: localValue(Date.now() + 3600000), space: '', consent: false };
@@ -3112,7 +3191,7 @@ function renderOperatorControls(entry, message, context = {}) {
   if (entry.operatorCancelKey !== cancelKey) clearCancel();
   // B5: who holds the grant, and whether it is revoked, can change without this card's own record changing.
   const grant = state.operatorPolicy?.domains.find(d => d.id === op.actual?.domainId);
-  const key = JSON.stringify([op, allowed, disconnected, context.passive === true, state.sessions.map(s => [s.id, s.nativeId, s.archived, s.name]), grant ? [grant.initiators.map(i => i.id), Boolean(grant.revokedAt)] : null]);
+  const key = JSON.stringify([op, allowed, disconnected, context.passive === true, state.sessions.map(s => [s.id, s.nativeId, s.archived, s.name]), grant ? [grant.initiators.map(i => i.id), Boolean(grant.revokedAt), grant.quotaRevision || 0] : null]);
   if (key === entry.operatorKey) return;
   entry.operatorKey = key;
   const controls = entry.operatorControls || node('div', undefined, 'operator-controls');
@@ -4383,6 +4462,7 @@ function getActivityStream() {
     waitingChanged: count => taskBoard.setWaitingCount(count),
     selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, cardHidden: confirmationCardHidden, question: renderWaitingQuestion,
     creation: (entry, message) => renderOperatorCreation(entry, message, { inbox: true }),
+    quota: renderOperatorQuota, refresh: async () => { updateState(await api.initial()); render(); },
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: async target => {

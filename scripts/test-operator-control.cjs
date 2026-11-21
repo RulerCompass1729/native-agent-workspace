@@ -198,6 +198,68 @@ async function creationCardJourney() {
     'Selected terminal, native identity and original draft survive; original record folds its full task and has no duplicate grant form');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, stats, errors, pictures, domain, launchCount }, null, 2));
 }
+async function quotaJourney() {
+  const desk = () => page.evaluate(() => workspace.initial()), native = (await session(source)).nativeId;
+  const observer = await client.call('create', { provider: 'claude', cwd, name: 'Quota observer', view: 'terminal' });
+  await client.call('operatorAction', observer, 'enabled', true);
+  const spec = { providers: ['claude'], directories: [cwd], permission: 'default', daily: 8, concurrent: 6, expiresAt: Date.now() + 3600000, space: 'shared' };
+  const domainId = await client.call('operatorAction', source, 'grant', spec), otherId = await client.call('operatorAction', observer, 'grant', { ...spec, daily: 4, concurrent: 2 });
+  const open = action_id => tool(source, 'open', { action_id, provider: 'claude', cwd, name: 'Quota executor', task: 'Synthetic quota task', permission: 'default' });
+  const one = await open('quota-one'); await open('quota-two'); await choose(observer);
+  assert.equal((await desk()).operatorCreations.length, 0);
+  const actor = { id: source, nativeId: native, name: 'Synthetic quota actor', provider: 'claude', callId: 'quota-call', turnId: 'quota-turn', operationId: 'quota-operation' };
+  const edit = { domainId, daily: 16, concurrent: 6, revision: 0, nativeId: native, consent: true };
+  await assert.rejects(require('../app/background-operation.cjs').run(actor, () => client.call('operatorAction', source, 'quota', edit)), /Only the person/);
+  await assert.rejects(tool(source, 'quota', edit), /Invalid operator tool|Unknown operator tool/);
+  await page.locator('.operator-grants-toggle').click();
+  const card = page.locator('#operator-grants-list [data-domain-id=' + JSON.stringify(domainId) + ']');
+  await card.waitFor(); assert.equal(await page.locator('#operator-grants-list .operator-quota-card').count(), 2);
+  assert.match(await card.innerText(), /2 \/ 8/); assert.match(await card.innerText(), /2 \/ 6/);
+  assert.equal(await page.locator('.stream-waiting-lead').isHidden(), true, 'Valid grants are not pending requests');
+  await capture('quota-01-no-pending');
+  await card.getByRole('button', { name: '调整额度', exact: true }).click();
+  const form = card.locator('form'), daily = form.locator('input[type=number]').nth(0), concurrent = form.locator('input[type=number]').nth(1), consent = form.locator('input[type=checkbox]'), save = form.locator('button[type=submit]');
+  assert.equal(await daily.inputValue(), '8'); assert.equal(await concurrent.inputValue(), '6'); assert.equal(await consent.isChecked(), false); assert.equal(await save.isDisabled(), true);
+  await daily.fill('16'); await consent.check(); await concurrent.fill('5'); assert.equal(await consent.isChecked(), false); await concurrent.fill('6'); await consent.check();
+  const handle = await daily.elementHandle(); await open('quota-live-update');
+  await until(async () => (await card.innerText()).includes('3 / 8'), 'Actual usage updates while editing');
+  assert.equal(await daily.evaluate((el, before) => el === before, handle), true); assert.equal(await daily.inputValue(), '16'); assert.equal(await consent.isChecked(), true);
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en'); await page.locator('#close-setup').click();
+  await page.locator('.operator-grants-toggle').click();
+  assert.equal(await daily.evaluate((el, before) => el === before, handle), true); assert.equal(await consent.isChecked(), true);
+  assert.match(await card.innerText(), /stays at 6/); assert.match(await card.innerText(), /changes from 8 to 16/);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 820)); await card.scrollIntoViewIfNeeded();
+  assert.ok(await card.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'English quota card has no horizontal overflow at 850px'); await capture('quota-02-en-increase');
+  await form.evaluate(el => { el.requestSubmit(); el.requestSubmit(); });
+  await until(async () => (await state()).operatorPolicy.domains.find(d => d.id === domainId).quotaRevision === 1, 'One doubled daily quota');
+  let domain = (await state()).operatorPolicy.domains.find(d => d.id === domainId);
+  assert.deepEqual([domain.daily, domain.concurrent, domain.usage.usedToday, domain.usage.concurrent, domain.expiresAt], [16, 6, 3, 3, spec.expiresAt]);
+  await card.getByRole('button', { name: 'Adjust limits', exact: true }).click(); await daily.fill('24'); await consent.check();
+  await client.call('operatorAction', source, 'quota', { ...edit, daily: 12, revision: 1 });
+  await until(async () => (await card.innerText()).includes('grant or holder changed'), 'Concurrent human edit invalidates old consent');
+  assert.equal(await consent.isChecked(), false); assert.equal(await save.isDisabled(), true); await capture('quota-03-stale');
+  await card.getByRole('button', { name: 'Cancel', exact: true }).click(); await card.getByRole('button', { name: 'Adjust limits', exact: true }).click();
+  await daily.fill('1'); await concurrent.fill('1'); assert.equal(await consent.isChecked(), false); assert.equal(await save.isDisabled(), true);
+  assert.match(await card.innerText(), /leave existing sessions running/); await consent.check(); await save.click();
+  await until(async () => (await state()).operatorPolicy.domains.find(d => d.id === domainId).quotaRevision === 3, 'Decreased quotas saved with new consent');
+  await assert.rejects(open('quota-refused-new'), /quota is exhausted/);
+  domain = (await state()).operatorPolicy.domains.find(d => d.id === domainId);
+  assert.deepEqual([domain.daily, domain.concurrent, domain.usage.usedToday, domain.usage.concurrent], [1, 1, 3, 3]);
+  assert.equal((await session(one.sessionId)).state, 'idle'); assert.equal((await state()).operatorPolicy.domains.length, 2);
+  assert.equal((await state()).operatorPolicy.domains.find(d => d.id === otherId).daily, 4, 'A different grant is unchanged');
+  await capture('quota-04-lower-than-used');
+  assert.equal((await desk()).viewState.selected, observer); assert.equal((await session(source)).nativeId, native); assert.equal((await session(source)).liveDraft, 'ORIGINAL UNSENT INITIATOR DRAFT');
+  await client.call('operatorAction', source, 'revoke', domainId);
+  await until(async () => await card.count() === 0, 'Revoked grant removed from active cards');
+  assert.equal(await page.locator('#operator-grants-list .operator-quota-card').count(), 1);
+  const stats = await fixture('stats'); assert.equal(stats.sends.length, 0); assert.equal(stats.inputs.length, 0); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0); assert.deepEqual(errors, []);
+  checks.push('No pending request: both active grants show scope, actual UTC daily use, concurrency and expiry above another native terminal',
+    'Increase8->16 and decrease12->1 require fresh consent; every edit resets it; current use3 survives, no expiry/scope reset and no other domain changes',
+    'Same input/value/consent survives real creation usage update and language switch; 850px English readable; double submit writes one quota revision',
+    'Concurrent revision invalidates old consent; revoked domain disappears; decrease blocks new creation while existing native identities, sessions and original draft remain',
+    'Authenticated background-actor service wire and native operator tool both refuse quota edits before write; no product model/provider/native input/send');
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, stats, errors, pictures, domain, otherId, launchCount }, null, 2));
+}
 async function run() {
   fs.mkdirSync(pictures, { recursive: true });
   profile = scratch.directory(path.join(os.tmpdir(), 'naw-operator-')); cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd, { mode: 0o700 }); cwd = fs.realpathSync(cwd);
@@ -214,6 +276,7 @@ async function run() {
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '启用 agent 控制接口…', exact: true }).click();
   await menu(source, '允许此会话使用控制接口'); await until(async () => (await session(source)).operatorEnabled, 'Source explicitly enabled');
   if (process.env.NAW_TEST_OPERATOR_CARD === '1') return creationCardJourney();
+  if (process.env.NAW_TEST_OPERATOR_QUOTA === '1') return quotaJourney();
   const args = { action_id: 'gui-one', provider: 'claude', cwd, task: 'Synthetic pending creation task', permission: 'default' };
   const pending = await tool(source, 'open', args); assert.equal(pending.status, 'pending-authorization');
   await page.locator('.stream-waiting-lead').click();

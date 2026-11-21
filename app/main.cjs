@@ -1320,6 +1320,7 @@ function register(name, handler) {
       // where a session went is the desktop's own step. An agent can do neither, with or without confirmation.
       if (name === 'operatorAction' && (['placement', 'placed'].includes(args[1]) || args[1] === 'grant' && args[2] && typeof args[2] === 'object' && Object.hasOwn(args[2], 'space'))) throw uiError('error.operator.personOnlySpace');
       if (name === 'operatorAction' && args[1] === 'succession') throw uiError('error.operator.desktopOnly');
+      if (name === 'operatorAction' && args[1] === 'quota') throw uiError('error.operator.personOnlyQuota');
       if (backgroundOperation.deliveryTargets(name, args)) {
         await c.client.refresh();
         backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
@@ -1739,7 +1740,11 @@ async function boot() {
     if (!c.background) throw uiError('error.background.withdrawNotPending');
     return backgroundControl.withdraw(c.actor, id, c);
   });
-  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy', 'operatorAction']) register(name, (c, ...args) => {
+  register('operatorAction', (c, id, action, value) => {
+    if (c.background && action === 'quota') throw uiError('error.operator.personOnlyQuota');
+    return c.client.call('operatorAction', id, action, value);
+  });
+  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
     const approved = c.background && backgroundOperation.request()?.approved;
     if (name === 'input' && approved) return c.client.call(name, args[0], args[1], { proof: approved.terminalConsent, expiresAt: approved.expiresAt });

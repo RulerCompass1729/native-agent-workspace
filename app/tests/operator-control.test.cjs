@@ -30,6 +30,82 @@ async function fixture(t, options = {}) {
   return { w, root, id, s, r, identity, call, enable, grant, open, report, runtimes, writes };
 }
 
+const quotaSpec = (f, domainId, daily = 16, concurrent = 6, revision = 0) => ({ domainId, daily, concurrent, revision, nativeId: f.s.nativeId, consent: true });
+test('human quota edits keep the same grant, usage, expiry and scope through disk reload', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant({ daily: 8, concurrent: 6, space: 'shared' }); await f.open();
+  const before = structuredClone(f.w.operator.data.domains[id]), records = JSON.stringify(f.w.operator.data.actions);
+  const saved = f.w.operatorAction(f.id, 'quota', quotaSpec(f, id));
+  assert.deepEqual([saved.id, saved.daily, saved.concurrent, saved.quotaRevision], [id, 16, 6, 1]);
+  for (const key of Object.keys(before).filter(k => !['daily', 'concurrent'].includes(k))) assert.deepEqual(saved[key], before[key], key);
+  assert.equal(JSON.stringify(f.w.operator.data.actions), records); assert.equal(f.runtimes.length, 2); assert.deepEqual(f.writes, []);
+  f.w.operator = new OperatorControl(f.w); assert.equal(f.w.operator.error, null);
+  const domain = f.w.snapshot().operatorPolicy.domains.find(d => d.id === id);
+  assert.deepEqual([domain.daily, domain.concurrent, domain.usage.usedToday, domain.usage.concurrent], [16, 6, 1, 1]);
+  assert.equal(f.w.operator.data.audit.at(-1).tool, 'operator_quota');
+});
+test('usage counts UTC reservations and uncertainty, preserves daily use when a session ends, and separates domains', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant({ daily: 8, concurrent: 6 });
+  const first = await f.open(), second = await f.open();
+  const actions = Object.values(f.w.operator.data.actions); f.w.get(first.sessionId).state = 'ended';
+  actions[0].startedAt = Date.now() - 86400000; actions[1].status = 'unconfirmed'; actions[1].sessionId = null;
+  const empty = f.grant(); const domains = f.w.snapshot().operatorPolicy.domains;
+  assert.deepEqual(domains.find(d => d.id === id).usage, { day: new Date().toISOString().slice(0, 10), usedToday: 1, concurrent: 1 });
+  assert.deepEqual(domains.find(d => d.id === empty).usage, { day: new Date().toISOString().slice(0, 10), usedToday: 0, concurrent: 0 });
+  actions[1].startedAt = null;
+  assert.equal(f.w.operator.policy().domains.find(d => d.id === id).usage.usedToday, 1, 'An unknown reservation time stays charged conservatively');
+  assert.equal(f.w.get(second.sessionId).state, 'idle');
+});
+test('lowering limits below used reservations blocks new creation and leaves existing sessions running', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant({ daily: 8, concurrent: 6 }); const one = await f.open(), two = await f.open();
+  f.w.operatorAction(f.id, 'quota', quotaSpec(f, id, 1, 1));
+  await assert.rejects(f.open(), /quota/);
+  assert.deepEqual([f.w.get(one.sessionId).state, f.w.get(two.sessionId).state], ['idle', 'idle']);
+  assert.deepEqual([f.w.operator.policy().domains[0].usage.usedToday, f.w.operator.policy().domains[0].usage.concurrent], [2, 2]);
+  assert.equal(f.runtimes.length, 3); assert.deepEqual(f.writes, []);
+});
+test('a stale quota revision cannot overwrite a newer human decision', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant({ daily: 8, concurrent: 6 }), spec = quotaSpec(f, id);
+  f.w.operatorAction(f.id, 'quota', spec); const before = fs.readFileSync(f.w.operator.file, 'utf8');
+  assert.throws(() => f.w.operatorAction(f.id, 'quota', { ...spec, daily: 4 }), /changed|stale/);
+  assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+});
+test('quota changes require fresh consent and accept only positive safe integer limits and the exact scope', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant(), before = fs.readFileSync(f.w.operator.file, 'utf8');
+  for (const delta of [{ consent: false }, { consent: 1 }, { daily: 0 }, { daily: -1 }, { daily: 1.5 }, { daily: '16' }, { daily: Infinity }, { concurrent: 0 }, { concurrent: 9007199254740992 }, { revision: -1 }, { permission: 'bypass' }, { expiresAt: Date.now() + 86400000 }, { space: 'shared' }]) {
+    assert.throws(() => f.w.operatorAction(f.id, 'quota', { ...quotaSpec(f, id), ...delta }), /quota|consent|Invalid|Explicit|changed/i, JSON.stringify(delta));
+    assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+  }
+});
+for (const reason of ['revoked', 'expired', 'native', 'ended', 'pending', 'foreign']) test('quota change refuses an invalid grant or holder before writing: ' + reason, async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant(), spec = quotaSpec(f, id);
+  if (reason === 'revoked') f.w.operatorAction(f.id, 'revoke', id);
+  if (reason === 'expired') f.w.operator.data.domains[id].expiresAt = Date.now() - 1;
+  if (reason === 'native') f.s.nativeId = 'different-native';
+  if (reason === 'ended') f.s.state = 'ended';
+  if (reason === 'pending') f.s.nativeContextPending = true;
+  if (reason === 'foreign') f.w.operator.data.domains[id].initiators = [{ id: 'another', nativeId: f.s.nativeId }];
+  const before = fs.readFileSync(f.w.operator.file, 'utf8');
+  assert.throws(() => f.w.operatorAction(f.id, 'quota', spec), /changed|stale|expired|revoked|holder/i);
+  assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+});
+test('native tools and background actors cannot adjust quotas, even with forged consent', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant(), spec = quotaSpec(f, id), before = fs.readFileSync(f.w.operator.file, 'utf8');
+  await assert.rejects(f.call('quota', spec), /Invalid operator tool|Unknown operator tool/);
+  const actor = { id: f.id, nativeId: f.s.nativeId, name: 'Synthetic actor', provider: 'claude', callId: 'quota-call', turnId: 'quota-turn', operationId: 'quota-operation' };
+  assert.throws(() => require('../background-operation.cjs').run(actor, () => f.w.operatorAction(f.id, 'quota', spec)), /person|human|真人|本人/i);
+  assert.equal(fs.readFileSync(f.w.operator.file, 'utf8'), before);
+});
+test('a failed quota save does not acknowledge or change the authoritative grant', async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant(), real = f.w.operator.file, before = fs.readFileSync(real, 'utf8');
+  const block = path.join(f.root, 'quota-rename-block'); fs.mkdirSync(block); f.w.operator.file = block;
+  assert.throws(() => f.w.operatorAction(f.id, 'quota', quotaSpec(f, id)), /not saved/);
+  assert.equal(f.w.operator.data.domains[id].daily, 5); assert.equal(fs.readFileSync(real, 'utf8'), before);
+});
+for (const revision of [-1, 1.5, '1']) test('a malformed saved quota revision fails closed on reload: ' + revision, async t => {
+  const f = await fixture(t); f.enable(); const id = f.grant(), data = structuredClone(f.w.operator.data); data.domains[id].quotaRevision = revision;
+  fs.writeFileSync(f.w.operator.file, JSON.stringify(data), { mode: 0o600 }); const restored = new OperatorControl(f.w);
+  assert.match(restored.error, /could not be read/); assert.equal(restored.policy().enabled, false);
+});
 test('pending creation projects existing coverage without granting, creating or writing a record', async t => {
   const f = await fixture(t); f.enable(); await f.open({ action_id: 'pending-card' });
   const row = () => f.w.snapshot().sessions.find(s => s.id === f.id).messages.find(m => m.operator?.actionKey);
