@@ -7,7 +7,7 @@ const filename = require.resolve('../mobile-broker.cjs'), requireFromBroker = cr
 const source = fs.readFileSync(filename, 'utf8');
 const actor = 'synthetic-human', origin = 'https://mobile.invalid';
 
-function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, pushOptions } = {}) {
+function fixture(t, { holdConnect = false, desktop, onHumanInput, pushOptions } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-broker-'))), original = fs.statSync(root);
   let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false, failConnect = false;
   const calls = [], clients = [], receipts = new Map(), sent = [], answered = [];
@@ -60,7 +60,6 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
         if (holdConnect) await new Promise(resolve => { releaseConnect = resolve; });
         return client;
       } };
-      if (name === './mobile-session.cjs' && requestLimit !== undefined) return { MAX_REQUESTS: requestLimit };
       return requireFromBroker(name);
     } }, { filename });
   const changes = [], broker = new module.exports.MobileBroker(root, { exclusive: () => exclusive, changed: () => changes.push('changed'), desktop, onHumanInput, pushOptions });
@@ -243,16 +242,19 @@ test('receipt lookup verifies full CSRF before exposing even an unknown-request 
   await assert.rejects(f.broker.receipt({ ...auth, csrf: 'x'.repeat(43) }, randomUUID()), { code: 'MOBILE_BROKER_DENIED' });
   await assert.rejects(f.broker.receipt(auth, randomUUID()), { code: 'MOBILE_RECEIPT_UNKNOWN' }); assert.equal(f.calls.length, 0);
 });
-test('the bounded pair request cap is explicit while original receipts and duplicates remain available', async t => {
-  const f = fixture(t, { requestLimit: 2 }), { auth } = await f.pair(); const originals = [];
-  for (let i = 0; i < 2; i++) {
-    const row = await f.broker.read(auth, f.record.id), value = { contextId: row.contextId, requestId: randomUUID(), text: 'Bounded explicit ' + i };
-    originals.push(value); await f.broker.send(auth, value);
-  }
-  const row = await f.broker.read(auth, f.record.id);
-  await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId: randomUUID(), text: 'Over cap' }), { code: 'MOBILE_PAIR_LIMIT' });
+test('pair capacity refuses new admissions when all 256 outcomes are uncertain', async t => {
+  const f = fixture(t), { auth } = await f.pair();
+  const { contextId } = await f.broker.read(auth, f.record.id);
+  const originals = Array.from({ length: 256 }, () => ({ contextId, requestId: randomUUID(), text: 'Synthetic' }));
+  f.loseAck(true);
+  for (const original of originals) await assert.rejects(f.broker.send(auth, original), /lost commit/);
+  f.loseAck(false);
+  const next = { contextId, requestId: randomUUID(), text: 'Over cap' };
+  await assert.rejects(f.broker.send(auth, next), { code: 'MOBILE_PAIR_LIMIT' });
   assert.equal((await f.broker.receipt(auth, originals[0].requestId)).status, 'submitted');
-  assert.equal((await f.broker.send(auth, originals[0])).status, 'submitted'); assert.equal(f.sent.length, 2);
+  assert.equal((await f.broker.send(auth, next)).status, 'submitted');
+  await assert.rejects(f.broker.send(auth, originals[0]), { code: 'MOBILE_REQUEST_CONFLICT' });
+  assert.equal(f.sent.length, 257);
 });
 test('malformed Unicode in human text is rejected before native delegation', async t => {
   const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
@@ -521,6 +523,26 @@ test('the actual app-local broker connects over Unix, sends and answers once, th
   assert.deepEqual(after.sessions.map(row => [row.id, row.nativeId, row.owner, row.liveDraft]), identities);
 });
 
+test('actual Unix broker and backend both retire an old confirmed receipt without another native send', async t => {
+  const f = await unixFixture(t);
+  let oldest;
+  for (let i = 0; i < 257; i++) {
+    await f.fixtureCall('idle', f.first);
+    await new Promise(resolve => setTimeout(resolve, 55));
+    const { contextId } = await f.broker.read(f.auth, f.first);
+    const value = { contextId, requestId: randomUUID(), text: 'Synthetic bounded history ' + i };
+    oldest ||= value;
+    const result = await f.broker.send(f.auth, value);
+    assert.equal(result.status, 'submitted', 'Synthetic iteration ' + i + ': ' + result.error);
+  }
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'), 'utf8'));
+  assert.equal(saved.mobileRequests.length, 256);
+  assert.equal(saved.mobileRetiredRequests.rows[oldest.requestId].status, 'submitted');
+  assert.equal((await f.broker.receipt(f.auth, oldest.requestId)).status, 'submitted');
+  await assert.rejects(f.broker.send(f.auth, oldest));
+  assert.equal((await f.stats()).length, 257);
+});
+
 test('revoking the actual broker while prepare ACK is held persists not-sent without closing the desktop or submitting native work', async t => {
   const f = await unixFixture(t), read = await f.broker.read(f.auth, f.first);
   await f.fixtureCall('holdPrepare');
@@ -751,4 +773,63 @@ test('a changed waiting question or native context cannot consume an old receive
     try { assert.equal((await f.resolve(result.requestId)).status, 'not-sent'); } catch (error) { assert.equal(error.code, 'MOBILE_BROKER_DENIED'); }
     assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting'); assert.equal(f.room.queueFind('shared', f.itemId).answer, undefined);
   }
+});
+
+test('seven days of phone sends leave a retired original read-only and an uncertain one recoverable', async t => {
+  const f = fixture(t), { auth } = await f.pair();
+  const start = Date.now();
+  let now = start;
+  t.mock.method(Date, 'now', () => now);
+  const row = await f.broker.read(auth, f.record.id);
+  const uncertain = { contextId: row.contextId, requestId: randomUUID(), text: 'First result lost' };
+  f.loseAck(true);
+  await assert.rejects(f.broker.send(auth, uncertain), /lost commit/);
+  f.loseAck(false);
+  let oldest;
+  for (let day = 0; day < 7; day++) for (let count = 0; count < 100; count++) {
+    now = start + day * 86400000 + count * 1000;
+    const input = { contextId: row.contextId, requestId: randomUUID(), text: 'Synthetic input ' + day + ':' + count };
+    oldest ||= input;
+    assert.equal((await f.broker.send(auth, input)).status, 'submitted');
+  }
+  await assert.rejects(f.broker.send(auth, oldest), { code: 'MOBILE_REQUEST_CONFLICT' });
+  assert.equal((await f.broker.receipt(auth, oldest.requestId)).status, 'submitted');
+  assert.equal((await f.broker.receipt(auth, uncertain.requestId)).status, 'submitted');
+  assert.equal(f.sent.length, 701);
+});
+
+test('workspace actions keep a terminal receipt and never repeat an original retired action', async t => {
+  let writes = 0;
+  const desktop = { grant: (_, grant) => grant, action: async () => { writes++; return { status: 'complete' }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(undefined, false, { roomIds: ['shared'], records: false });
+  const value = { requestId: randomUUID(), action: 'queueAdd', roomId: 'shared', text: 'Synthetic', assignee: null };
+  await f.broker.workspaceAction(auth, value);
+  for (let i = 0; i < 699; i++) await f.broker.workspaceAction(auth, { ...value, requestId: randomUUID() });
+  await assert.rejects(f.broker.workspaceAction(auth, value), { code: 'MOBILE_REQUEST_CONFLICT' });
+  assert.equal((await f.broker.workspaceAction(auth, { requestId: value.requestId, action: 'receipt' })).status, 'complete');
+  assert.equal(writes, 700);
+});
+
+test('backend prepare capacity is reported before any native action and frees the broker reservation', async t => {
+  const f = fixture(t), { auth } = await f.pair(), read = await f.broker.read(auth, f.record.id);
+  const client = f.clients.at(-1), call = client.call.bind(client);
+  const value = { contextId: read.contextId, requestId: randomUUID(), text: 'Before prepare' };
+  client.call = async (method, ...args) => {
+    if (method === 'mobileSend') throw require('../ui-errors.cjs').uiError('error.mobile.receiptLimit');
+    return call(method, ...args);
+  };
+  await assert.rejects(f.broker.send(auth, value), { code: 'MOBILE_PAIR_LIMIT' });
+  await assert.rejects(f.broker.receipt(auth, value.requestId), { code: 'MOBILE_RECEIPT_UNKNOWN' });
+  assert.equal(f.sent.length, 0);
+});
+
+test('retired ID storage has a finite fail-closed limit without losing the earliest result', () => {
+  const { MAX_REQUESTS, MAX_RETIRED_IDS, ReceiptLedger } = require('../mobile-receipts.cjs');
+  const book = new ReceiptLedger(row => row.status === 'complete');
+  const oldest = randomUUID(), result = { status: 'complete' };
+  book.reserve(oldest, result);
+  for (let i = 1; i < MAX_REQUESTS + MAX_RETIRED_IDS; i++) book.reserve(randomUUID(), result);
+  assert.throws(() => book.reserve(randomUUID(), result), { code: 'MOBILE_PAIR_LIMIT' });
+  assert.throws(() => book.reserve(oldest, result), { code: 'MOBILE_REQUEST_CONFLICT' });
+  assert.equal(book.retired(oldest), result);
 });

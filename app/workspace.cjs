@@ -171,6 +171,7 @@ class Workspace extends EventEmitter {
     this.viewOwners = new Map(); this.pagelessOwners = new Set();
     this.claudeAsks = new Map();
     this.mobileRequests = [];
+    this.mobileRetiredRequests = null;
     this.capacityRecoveries = new Map();
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
     // The original file/room remains compatible with retained runtimes. Only
@@ -198,6 +199,7 @@ class Workspace extends EventEmitter {
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
       this.savedGoalContinuation = stored.goalContinuation;
+      this.mobileRetiredRequests = stored.mobileRetiredRequests ?? null;
       this.mobileRequests = Array.isArray(stored.mobileRequests) ? stored.mobileRequests.map(r => r && typeof r === 'object' && ['prepared', 'awaiting-native', 'reply-written'].includes(r.status) ? { ...r, status: 'unconfirmed' } : r) : stored.mobileRequests ?? [];
       for (const record of stored.sessions || []) {
         // Old Claude records could inherit the other provider's app-server PID.
@@ -369,6 +371,7 @@ class Workspace extends EventEmitter {
       return [record, s];
     });
     const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
+    if (this.mobileRetiredRequests !== null) mobile.mobileRetiredRequests = this.mobileRetiredRequests;
     const rest = { sessions: SAVED_MARK, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile };
     const sessions = records.map(([record, s]) => spliceSaved(JSON.stringify({ ...s, messages: SAVED_MARK, pendingTag: null }),
       s.messages === record.messages ? this.savedMessages(record, reuse) : JSON.stringify(persistedMessages(s.messages))));

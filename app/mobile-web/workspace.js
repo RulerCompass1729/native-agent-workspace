@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   const ACTION_KEY = 'naw.mobile.workspace.v1';
-  const { receiptContext, validReceiptContext } = typeof module === 'object' && module.exports ? require('./client.js') : global.NAWMobile;
+  const { receiptContext, validReceiptContext, appendReceipt } = typeof module === 'object' && module.exports ? require('./client.js') : global.NAWMobile;
   const terminal = s => ['complete', 'not-sent'].includes(s);
   function receiptVisible(row, session, view) {
     if (!session || session.candidate || row.deviceId !== session.deviceId) return false;
@@ -49,7 +49,7 @@
       save();
     }
     async function act(session, fields, local = {}) {
-      if (state.storageError || state.busy || !session || state.pending.some(p => p.deviceId === session.deviceId && !terminal(p.status)) || state.pending.length >= 64) throw Error('MOBILE_ACTION_UNCONFIRMED');
+      if (state.storageError || state.busy || !session || state.pending.some(p => p.deviceId === session.deviceId && !terminal(p.status))) throw Error('MOBILE_ACTION_UNCONFIRMED');
       const context = receiptContext({ target: local.target, text: local.text || fields.text || '',
         scope: fields.action === 'recordAcknowledge' ? 'record' : 'room', targetId: fields.record || fields.roomId || '' });
       const requestId = newId(), row = { deviceId: session.deviceId, requestId, status: 'unconfirmed', action: fields.action, context, createdAt: Date.now(),
@@ -57,8 +57,10 @@
         ...(typeof fields.itemId === 'string' ? { itemId: fields.itemId } : {}),
         ...(fields.action === 'queueAdd' ? { text: fields.text } : {}),
         ...(fields.answerRequestId ? { answerRequestId: fields.answerRequestId, questionId: fields.questionId } : {}) };
-      state.pending.push(row);
-      try { save(); } catch (error) { state.pending.pop(); throw error; }
+      const original = state.pending, next = appendReceipt(original, row, 64, p => terminal(p.status));
+      if (!next) throw Error('MOBILE_ACTION_UNCONFIRMED');
+      state.pending = next;
+      try { save(); } catch (error) { state.pending = original; throw error; }
       state.busy = true; changed();
       try { const result = await request('/mobile/workspace/action', { ...fields, requestId }, session.csrf); record(row, result); return result; }
       catch (error) {

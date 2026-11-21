@@ -5,6 +5,11 @@
     zh: '本次配对的请求记录已满。请先核对未确认的回执，再回 Mac 撤销并重新配对。',
     en: 'This pairing has reached its request limit. Check any unconfirmed receipts, then revoke and pair again on the Mac.',
   };
+  function appendReceipt(rows, row, limit, canRetire) {
+    if (rows.length < limit) return [...rows, row];
+    const oldest = rows.findIndex(canRetire);
+    return oldest < 0 ? null : [...rows.slice(0, oldest), ...rows.slice(oldest + 1), row];
+  }
   const KEY = 'naw.mobile.v1', LIMIT = 512 * 1024;
   const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
@@ -126,6 +131,8 @@
     function recordResult(pending, result, authorization) {
       if (result.requestId !== pending.requestId || result.sessionId !== pending.sessionId || result.action !== pending.action || !Object.hasOwn(labels, result.status)) throw failure('MOBILE_RECEIPT_UNKNOWN');
       pending.status = result.status;
+      if (result.storageWarning) pending.storageWarning = true;
+      else delete pending.storageWarning;
       // A late ACK cannot clear edits or a draft in a different reading view.
       if (authorization === state.authorization && pending.action === 'send' && !pending.queueTarget && result.status === 'submitted' && state.session?.deviceId === pending.deviceId && state.selected === pending.sessionId &&
           state.draft === pending.text && state.revision === pending.revision) {
@@ -153,8 +160,11 @@
         pending.answer = state.row.question.questions.map(q => Array.isArray(answers[q.id || q.question]) ? answers[q.id || q.question].filter(a => typeof a === 'string').join('、') : '').join('\n').slice(0, 4000);
       }
       const value = { contextId, requestId, ...(action === 'send' ? { text: input, ...(queueAnswer ? { queueTarget: { ...queueAnswer.target } } : {}) } : { answers }) };
-      state.pending.push(pending);
-      if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
+      const original = state.pending;
+      const next = appendReceipt(original, pending, 16, row => !row.queueTarget && !row.storageWarning && ['submitted', 'not-sent'].includes(row.status));
+      if (!next) { state.notice = '请先核对未确认的回执。草稿已保留。'; changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
+      state.pending = next;
+      if (!persist()) { state.pending = original; changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
       state.busy = true; changed();
       try { recordResult(pending, await request('/mobile/' + action, value, csrf), authorization); }
       catch (error) {
@@ -292,7 +302,7 @@
     return { start() { if (!stopped) return; stopped = false; revision++; wake(); }, wake,
       stop() { stopped = true; revision++; again = false; clear(); } };
   }
-  const exported = { PAIR_LIMIT, createMobileClient, createReadRecovery, mount, KEY, receiptContext, validReceiptContext };
+  const exported = { PAIR_LIMIT, appendReceipt, createMobileClient, createReadRecovery, mount, KEY, receiptContext, validReceiptContext };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobile = exported; if (!global.document.documentElement.hasAttribute('data-workspace-ui')) mount(global.document, global.location, global.history,
     { getItem: key => global.localStorage.getItem(key), setItem: (key, value) => global.localStorage.setItem(key, value) }, global.fetch.bind(global), global.crypto); }

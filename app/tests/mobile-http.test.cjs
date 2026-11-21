@@ -195,3 +195,14 @@ test('logout awaits asynchronous persistence but never clears device drafts',asy
   const result=await f.invoke({method:'POST',url:'/mobile/logout',value:{}});assert.equal(result.statusCode,confirmed?200:409);assert.equal(result.json().authorizationRevoked,confirmed);assert.equal(result.headers['clear-site-data'],undefined);assert.match(result.headers['set-cookie'],/Max-Age=0/);
  }
 });
+
+test('all authenticated write paths preserve the definite pairing-capacity refusal', async () => {
+  const f = fixture();
+  const full = () => { throw Object.assign(Error('full'), { code: 'MOBILE_PAIR_LIMIT' }); };
+  for (const method of ['send', 'answer', 'workspaceAction', 'decisionOptions', 'decide']) f.broker[method] = full;
+  for (const url of ['/mobile/send', '/mobile/answer', '/mobile/workspace/action', '/mobile/consent/options', '/mobile/consent/decide']) {
+    const r = await f.invoke({ method: 'POST', url, value: { action: 'queueAdd' } });
+    assert.equal(r.statusCode, 409);
+    assert.deepEqual(r.json(), { error: 'MOBILE_PAIR_LIMIT' });
+  }
+});

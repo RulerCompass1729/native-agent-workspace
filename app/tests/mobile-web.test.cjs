@@ -181,3 +181,15 @@ test('capacity refusal keeps draft and settles only this attempt as not sent', a
   assert.match(PAIR_LIMIT.zh, /回 Mac 撤销并重新配对/);
   assert.match(PAIR_LIMIT.en, /revoke and pair again on the Mac/);
 });
+
+test('700 settled sends can save a new original without a manual receipt cleanup', async () => {
+  const f = fixture();
+  await f.client.start();
+  await f.client.select('a');
+  for (let i = 0; i < 700; i++) {
+    f.client.setDraft('Synthetic original ' + i);
+    assert.equal((await f.client.send()).status, 'submitted');
+  }
+  assert.equal(f.client.state.pending.length, 16);
+  assert.equal(f.calls.filter(call => call.route === '/mobile/send').length, 700);
+});

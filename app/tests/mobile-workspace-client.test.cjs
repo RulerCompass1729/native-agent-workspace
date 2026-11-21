@@ -59,3 +59,11 @@ test('workspace capacity refusal leaves a definite not-sent receipt', async () =
   await assert.rejects(f.model.act(f.session, { action: 'queueAdd', roomId: 'shared', text: 'Original' }), { code: 'MOBILE_PAIR_LIMIT' });
   assert.equal(JSON.parse(f.disk.get(ACTION_KEY)).pending[0].status, 'not-sent');
 });
+
+test('700 settled workspace actions keep local receipt storage bounded', async () => {
+  const f = fixture();
+  for (let i = 0; i < 700; i++)
+    assert.equal((await f.model.act(f.session, { action: 'queueAdd', roomId: 'shared', text: 'Synthetic ' + i })).status, 'complete');
+  assert.equal(f.model.state.pending.length, 64);
+  assert.equal(f.calls.length, 700);
+});

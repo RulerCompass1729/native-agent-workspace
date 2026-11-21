@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
 const { MobileAccess, SESSION_MS } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
-const { MAX_REQUESTS, currentTarget } = require('./mobile-session.cjs');
+const { currentTarget } = require('./mobile-session.cjs');
+const { MAX_REQUESTS, ReceiptLedger, confirmedNative } = require('./mobile-receipts.cjs');
 const { readLayout } = require('./service-layout.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
@@ -35,11 +36,12 @@ class MobileBroker {
   #candidate=null; #candidateSerial=0; #activatedCandidate=null;
   #fullLayout = null; #fullGeneration = null; #refreshing = null;
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
-  #contexts = new Map(); #requests = new Map();
-  #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
+  #contexts = new Map();
+  #requests = new ReceiptLedger(row => !row.pending && !row.queueTarget && confirmedNative(row.result));
+  #desktop; #human; #workspaceGrant = null; #workspaceRequests = new ReceiptLedger(row => ['complete', 'not-sent'].includes(row.result.status));
   #push = null; #pushOptions;
   #reconnectState = null; #reconnecting = null;
-  #consent = new MobileConsent(); #decisions = new Map(); #consentView = false;
+  #consent = new MobileConsent(); #decisions = new ReceiptLedger(row => !row.pending && ['complete', 'not-sent'].includes(row.status)); #consentView = false;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
   constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {}, persistence } = {}) {
     this.#persistence=persistence||null;
@@ -557,15 +559,14 @@ class MobileBroker {
     const client = this.#bound(), epoch = this.#epoch; await client.refresh();
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
     const state = this.#workspaceState(auth, true), binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value);
-    if (this.#decisions.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
+    this.#decisions.assertAvailable();
     return this.#consent.challenge(state, binding);
   }
   async decide(auth, value) {
     if (!exact(value, ['id', 'version', 'decision', 'challengeId', 'assertion'])) throw denied();
     const state = this.#workspaceState(auth, true), client = this.#bound(), epoch = this.#epoch;
     const binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value), permit = this.#consent.consume(state, value, binding);
-    if (this.#decisions.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
-    const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null, pending:true }; this.#decisions.set(value.challengeId, row);
+    const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null, pending:true }; this.#decisions.reserve(value.challengeId, row);
     const valid = () => {
       if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
       return this.#workspaceState(auth, true);
@@ -579,16 +580,18 @@ class MobileBroker {
   }
   decisionReceipt(auth, value) {
     this.#workspaceState(auth, true);
-    if (!exact(value, ['challengeId']) || !uuid(value.challengeId) || !this.#decisions.has(value.challengeId)) throw denied('MOBILE_RECEIPT_UNKNOWN');
-    return structuredClone(this.#decisions.get(value.challengeId));
+    if (!exact(value, ['challengeId']) || !uuid(value.challengeId)) throw denied('MOBILE_RECEIPT_UNKNOWN');
+    const row = this.#decisions.get(value.challengeId) || this.#decisions.retired(value.challengeId);
+    if (!row) throw denied('MOBILE_RECEIPT_UNKNOWN');
+    return structuredClone(row);
   }
   async workspaceAction(auth, value) {
     this.#workspaceState(auth, true);
     if (!value || typeof value !== 'object' || Array.isArray(value) || !uuid(value.requestId)) throw denied();
     if (value.action === 'receipt' && exact(value, ['action', 'requestId'])) {
-      const previous = this.#workspaceRequests.get(value.requestId);
-      if (!previous) throw denied('MOBILE_RECEIPT_UNKNOWN');
-      return structuredClone(previous.result);
+      const result = this.#workspaceRequests.get(value.requestId)?.result || this.#workspaceRequests.retired(value.requestId);
+      if (!result) throw denied('MOBILE_RECEIPT_UNKNOWN');
+      return structuredClone(result);
     }
     if (!['queueAdd', 'queueCancel', 'queueResolve', 'recordAcknowledge'].includes(value.action)) throw denied();
     const mark = fingerprint(value), previous = this.#workspaceRequests.get(value.requestId);
@@ -596,9 +599,8 @@ class MobileBroker {
       if (previous.mark !== mark) throw denied('MOBILE_REQUEST_CONFLICT');
       return structuredClone(previous.result);
     }
-    if (this.#workspaceRequests.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
     const row = { mark, result: { requestId: value.requestId, status: 'unconfirmed' } };
-    this.#workspaceRequests.set(value.requestId, row);
+    this.#workspaceRequests.reserve(value.requestId, row);
     const client = this.#bound(), epoch = this.#epoch, grant = this.#workspaceGrant?.value || { roomIds: [], records: false };
     const valid = () => {
       if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
@@ -639,7 +641,6 @@ class MobileBroker {
       return this.receipt(auth, value.requestId);
     }
     const context = this.#contexts.get(value.contextId);
-    if (this.#requests.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
     if (!context) throw denied('MOBILE_CONTEXT_UNAVAILABLE');
     const { ticket } = this.#grant(auth, context.ticket.sessionId, action);
     if (ticket.deviceId !== context.ticket.deviceId || ticket.generation !== context.ticket.generation || ticket.nativeId !== context.ticket.nativeId || ticket.serviceKey !== context.ticket.serviceKey) throw denied();
@@ -654,13 +655,18 @@ class MobileBroker {
     const spec = { requestId: value.requestId, proof: structuredClone(context.proof),
       ...(action === 'send' ? { text: value.text } : { questionId: context.questionId, answers: structuredClone(value.answers) }) };
     if (action === 'answer' && !uuid(spec.questionId)) throw denied();
-    this.#human(ticket.sessionId);
     const client = this.#bound(), epoch = this.#epoch, entry = { action, input, ticket, spec, ...(queueTarget ? { queueTarget } : {}), pending: null, result:{status:'unconfirmed'} };
-    this.#requests.set(value.requestId, entry);
+    this.#requests.reserve(value.requestId, entry);
+    this.#human(ticket.sessionId);
     entry.pending = (async () => {
       try {
         const result = await client.call(action === 'send' ? 'mobileSend' : 'mobileAnswer', ticket, spec);
         this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, value.requestId, action);
+      } catch (error) {
+        if (error.uiMessage?.key !== 'error.mobile.receiptLimit') throw error;
+        this.#after(auth, ticket, client, epoch);
+        this.#requests.release(value.requestId, entry);
+        throw denied('MOBILE_PAIR_LIMIT');
       } finally { entry.pending = null; }
     })();
     return entry.pending;
@@ -670,6 +676,11 @@ class MobileBroker {
   async receipt(auth, requestId) {
     if (!uuid(requestId)) throw denied();
     this.#writeState(auth);
+    const retired = this.#requests.retired(requestId);
+    if (retired) {
+      this.#grant(auth, retired.sessionId, retired.action);
+      return structuredClone(retired);
+    }
     const entry = this.#requests.get(requestId);
     if (!entry) throw denied('MOBILE_RECEIPT_UNKNOWN');
     const { ticket } = this.#grant(auth, entry.ticket.sessionId, entry.action), client = this.#bound(), epoch = this.#epoch;
