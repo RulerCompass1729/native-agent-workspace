@@ -214,8 +214,9 @@ function appMobileBroker() {
   if (!primary || quitting || mobileQuitWaiting || !dataDir) throw Error('The local mobile entry is unavailable.');
   if (!mobileBroker) {
     const {PairingStore,keychainAdapter}=require('./mobile-pairing-store.cjs');
-    mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting && !mobileQuitWaiting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),persistence:new PairingStore(dataDir,{adapter:keychainAdapter(),asynchronous:true,log:({phase,category,elapsedMs})=>appMobileLog(phase,category,elapsedMs)}),
-      pushOptions: { alerts: status => appHealth(status) } });
+    const adapter=keychainAdapter();
+    mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting && !mobileQuitWaiting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),persistence:new PairingStore(dataDir,{adapter,asynchronous:true,log:({phase,category,elapsedMs})=>appMobileLog(phase,category,elapsedMs)}),
+      pushOptions: { adapter, alerts: status => appHealth(status) } });
   }
   return mobileBroker;
 }

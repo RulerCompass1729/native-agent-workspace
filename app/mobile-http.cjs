@@ -128,7 +128,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       if (request.url === '/mobile/push') {
         if (typeof broker.pushAction !== 'function') throw reject(403, 'MOBILE_DENIED');
-        return respond(response, 200, broker.pushAction(credentials, value));
+        return respond(response, 200, await broker.pushAction(credentials, value));
       }
       if (Object.hasOwn(consentRoutes, request.url)) {
         const method = consentRoutes[request.url];

@@ -1,8 +1,7 @@
 'use strict';
-// A count and fixed alert codes only. Authority, keys and subscription are memory-only and die
-// with the existing paired-device generation. Importing starts no I/O or timer.
+// Counts and fixed alert codes only. Importing starts no I/O or timer.
 const https = require('node:https'), dns = require('node:dns'), net = require('node:net');
-const crypto = require('node:crypto');
+const crypto = require('node:crypto'), fs = require('node:fs'), path = require('node:path');
 const HOSTS = new Set(['web.push.apple.com', 'fcm.googleapis.com', 'updates.push.services.mozilla.com']);
 // RFC 6068 permits an empty recipient. No contact identity; provider acceptance is unverified.
 const SUBJECT = 'mailto:';
@@ -79,9 +78,9 @@ function sendRequest(details, { signal, valid }, request = https.request) {
   });
 }
 class MobilePush {
-  constructor({ authority, count, alerts = () => ({ alerts: [] }), transport = sendRequest, now = Date.now }) {
+  constructor({ authority, count, alerts = () => ({ alerts: [] }), transport = sendRequest, now = Date.now, expired = () => {} }) {
     if (typeof authority !== 'function' || typeof count !== 'function' || typeof alerts !== 'function') throw denied();
-    Object.assign(this, { authority, count, alerts, transport, now }); this.close();
+    Object.assign(this, { authority, count, alerts, transport, now, expired }); this.close();
   }
   // The listed codes in fixed order, and the latest moment one of them began. That moment is never sent.
   // The source answers { alerts, unknown }. Unknown is never "no problems": a code already said stays while its
@@ -111,6 +110,10 @@ class MobilePush {
     this.abort?.abort(); clearTimeout(this.timer); this.timer = null;
     this.subscription = sub; this.lastCount = undefined; this.said = []; this.at = 0; this.ending = false; this.lastSubmittedAt = null; this.state = 'subscribed';
   }
+  restore(value) {
+    const keys = vapidKeys(value.vapid);
+    this.configuration(); this.keys = keys; this.subscribe(value.subscription);
+  }
   // Says the current state once more, retrying until it is accepted, and then ends: for a source that will not return.
   end() { this.ending = true; return this.subscription ? this.refresh() : this.close(); }
   async refresh() {
@@ -121,7 +124,7 @@ class MobilePush {
     const valid = () => {
       if (abort.signal.aborted || this.current() !== stamp || this.subscription !== sub) return false;
       if (sub.expirationTime !== null && sub.expirationTime <= this.now()) {
-        this.subscription = null; this.state = 'expired'; abort.abort(); return false;
+        this.subscription = null; this.state = 'expired'; abort.abort(); this.expired(); return false;
       }
       return true;
     };
@@ -155,7 +158,7 @@ class MobilePush {
       if (!valid()) return;
       const status = await this.transport(details, { signal: abort.signal, valid });
       if (!valid()) return;
-      if (status === 404 || status === 410) { this.subscription = null; this.state = 'expired'; }
+      if (status === 404 || status === 410) { this.subscription = null; this.state = 'expired'; this.expired(); }
       else if (status === 201 || status === 202) {
         if (!failed) this.lastCount = count;
         this.said = codes; this.at = Math.max(this.at, at); this.lastSubmittedAt = this.now(); this.state = 'accepted';
@@ -178,4 +181,98 @@ class MobilePush {
     this.lastSubmittedAt = null; this.state = 'off';
   }
 }
-module.exports = { MobilePush, ALERTS, subscriptionValue, publicAddress, sendRequest };
+
+
+function vapidKeys(value) {
+  if (!exact(value, ['publicKey', 'privateKey'])) throw denied();
+  const privateKey = key(value.privateKey, 32), publicKey = key(value.publicKey, 65), curve = crypto.createECDH('prime256v1');
+  try { curve.setPrivateKey(privateKey); if (!curve.getPublicKey().equals(publicKey)) throw denied(); } catch { throw denied(); }
+  return { publicKey: value.publicKey, privateKey: value.privateKey };
+}
+const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+class PushStore {
+  constructor(root, { adapter, now = Date.now }) {
+    this.root = fs.realpathSync(root); this.owner = fs.lstatSync(this.root);
+    if (!this.owner.isDirectory() || this.owner.uid !== process.getuid() || this.owner.mode & 0o022 || typeof adapter?.get !== 'function' || typeof adapter?.put !== 'function') throw denied();
+    this.file = path.join(this.root, 'mobile-push.json'); this.account = digest(['mobile-push-v1', process.getuid(), this.root]);
+    this.adapter = adapter; this.now = now; this.serial = 0; this.tail = Promise.resolve(); this.off = false; this.failed = false;
+  }
+  checkRoot() {
+    const s = fs.lstatSync(this.root);
+    if (!s.isDirectory() || s.uid !== this.owner.uid || s.dev !== this.owner.dev || s.ino !== this.owner.ino || s.mode & 0o022) throw denied();
+  }
+  privateFile(s) { return s.isFile() && s.nlink === 1 && s.uid === process.getuid() && !(s.mode & 0o077) && s.size <= 8192; }
+  read() {
+    this.checkRoot(); let fd;
+    try {
+      fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      const stat = fs.fstatSync(fd); if (!this.privateFile(stat)) throw denied();
+      const bytes = Buffer.alloc(stat.size + 1), n = fs.readSync(fd, bytes, 0, bytes.length, 0);
+      if (n !== stat.size) throw denied();
+      return JSON.parse(bytes.subarray(0, n).toString('utf8'));
+    } catch (error) { if (error.code === 'ENOENT') return null; throw denied(); }
+    finally { if (fd !== undefined) fs.closeSync(fd); }
+  }
+  write(value) {
+    this.checkRoot();
+    try { if (!this.privateFile(fs.lstatSync(this.file))) throw denied(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const temp = this.file + '.' + crypto.randomUUID() + '.tmp'; let fd, own;
+    try {
+      fd = fs.openSync(temp, 'wx', 0o600); own = fs.fstatSync(fd); fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+      fs.renameSync(temp, this.file); this.syncDirectory();
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+      try { const s = fs.lstatSync(temp); if (own && s.dev === own.dev && s.ino === own.ino && this.privateFile(s)) fs.unlinkSync(temp); } catch {}
+    }
+  }
+  syncDirectory() { const fd = fs.openSync(this.root, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+  queue(work) { const task = this.tail.then(work); this.tail = task.catch(() => {}); return task; }
+  clear() {
+    if (this.off && !this.failed) return this.flush();
+    this.off = true; const serial = ++this.serial; this.failed = false;
+    try { this.write({ version: 1, enabled: false }); } catch { this.failed = true; }
+    return this.queue(async () => {
+      try {
+        await this.adapter.put(this.account, null);
+        if (serial === this.serial) {
+          this.checkRoot(); const s = fs.lstatSync(this.file); if (!this.privateFile(s)) throw denied();
+          fs.unlinkSync(this.file); this.syncDirectory();
+        }
+      } catch { this.failed = true; throw denied(); }
+    });
+  }
+  reconcile(pairing, until) {
+    try { const d = this.read(); if (d && (!d.enabled || !pairing || d.pairing !== pairing || d.until !== until || d.until <= this.now())) return this.clear(); }
+    catch { return this.clear(); }
+    return Promise.resolve();
+  }
+  retain(pairing) { try { const d = this.read(); if (d?.enabled && d.pairing !== pairing) return this.clear(); } catch { return this.clear(); } return Promise.resolve(); }
+  save(pairing, until, value, valid) {
+    const subscription = subscriptionValue(value.subscription, this.now()), vapid = vapidKeys(value.vapid);
+    if (!/^[a-f0-9]{64}$/.test(pairing) || !Number.isSafeInteger(until) || until <= this.now() || !valid()) throw denied();
+    const serial = ++this.serial; this.off = false; this.failed = false;
+    const descriptor = { version: 1, enabled: true, pairing, until, id: crypto.randomUUID(), endpoint: subscription.endpoint, expirationTime: subscription.expirationTime };
+    this.write({ version: 1, enabled: false });
+    return this.queue(async () => {
+      try {
+        if (serial !== this.serial || !valid()) throw denied();
+        await this.adapter.put(this.account, { version: 1, descriptor: digest(descriptor), vapid, keys: subscription.keys });
+        if (serial !== this.serial || !valid()) throw denied();
+        this.write(descriptor);
+      } catch { if (serial === this.serial) this.failed = true; throw denied(); }
+    });
+  }
+  load(pairing, until, valid) {
+    const serial = this.serial;
+    return this.queue(async () => {
+      const d = this.read(); if (d === null || exact(d, ['version', 'enabled']) && d.version === 1 && d.enabled === false) return null;
+      if (!exact(d, ['version', 'enabled', 'pairing', 'until', 'id', 'endpoint', 'expirationTime']) || d.version !== 1 || d.enabled !== true || d.pairing !== pairing || d.until !== until || d.until <= this.now() || typeof d.id !== 'string') throw denied();
+      endpoint(d.endpoint); const v = await this.adapter.get(this.account);
+      if (serial !== this.serial || !valid()) return null;
+      if (!exact(v, ['version', 'descriptor', 'vapid', 'keys']) || v.version !== 1 || v.descriptor !== digest(d)) throw denied();
+      return { vapid: vapidKeys(v.vapid), subscription: subscriptionValue({ endpoint: d.endpoint, expirationTime: d.expirationTime, keys: v.keys }, this.now()) };
+    });
+  }
+  async flush() { await this.tail; if (this.failed) throw denied(); }
+}
+module.exports = { MobilePush, PushStore, ALERTS, subscriptionValue, publicAddress, sendRequest };

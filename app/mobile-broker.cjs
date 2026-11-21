@@ -37,7 +37,7 @@ class MobileBroker {
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
-  #push = null; #pushOptions;
+  #push = null; #pushOptions; #pushStore;
   #reconnectState = null; #reconnecting = null;
   #consent = new MobileConsent(); #decisions = new Map(); #consentView = false;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
@@ -49,18 +49,31 @@ class MobileBroker {
     this.#desktop = desktop || null;
     this.#human = onHumanInput;
     this.#pushOptions = pushOptions;
+    this.#pushStore = pushOptions.persistence || (pushOptions.adapter ? new (require('./mobile-push.cjs').PushStore)(root, { adapter: pushOptions.adapter }) : null);
     // WorkspaceClient shares human boundaries by the exact app scope string.
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  async preparePersistence(phase='load'){await this.#persistence?.ready?.(phase);}
-  async settlePersistence(quitting=false){return quitting&&this.#persistence?.finish?this.#persistence.finish():this.#persistence?.flush?.();}
+  async preparePersistence(phase='load'){
+    await this.#persistence?.ready?.(phase);
+    if(this.#pushStore){
+      let state;try{state=this.#access.initialized?this.#access.load():this.#persistence?.checkpoint().authority;}catch{}
+      await this.#pushStore.reconcile(state?.enabled&&state.device?this.#pushBinding(state):null,state?.device?.until).catch(()=>{});
+    }
+  }
+  async settlePersistence(quitting=false){
+    const result = await (quitting&&this.#persistence?.finish?this.#persistence.finish():this.#persistence?.flush?.());
+    await this.#pushStore?.flush().catch(()=>{}); return result;
+  }
   #details(state){
     if(this.#staging)return this.#staging;
     return {endpoint:this.#endpoint,all:this.#all(state),workspace:this.#workspaceGrant?.generation===state.generation?this.#workspaceGrant.value:null,
       consent:this.#consent.snapshot(state),consentView:this.#consentView};
   }
-  #persist(state,save){return this.#persistence.commit(state,state.enabled?this.#details(state):null,save);}
+  #persist(state,save){
+    if(this.#pushStore){const task=state.enabled&&state.device?this.#pushStore.retain(this.#pushBinding(state)):this.#pushStore.clear();task.catch(()=>{});}
+    return this.#persistence.commit(state,state.enabled?this.#details(state):null,save);
+  }
   #checkpoint(){
     if(!this.#persistence||!this.#access.initialized||this.#access.closed)return;
     try{const state=this.#access.load();if(state.enabled)this.#access.save(state);}
@@ -99,6 +112,8 @@ class MobileBroker {
       this.#watch(client);
       if(details.all)this.#access.syncAllScopes(this.#scopes(result.state));
       await this.settlePersistence();if(!this.#liveGeneration(result.state.generation,client))throw denied();if(this.#persistence.status?.()==='temporary'){this.#access.revoke();this.#forget();this.#disconnect();throw denied('MOBILE_STORAGE');}
+      await this.#restorePush(result.state, client);
+      if(!this.#liveGeneration(result.state.generation,client))throw denied();
       this.#changed();return {restored:true};
     }catch(error){if(this.#client!==client)try{client.close();}catch{}throw error;}
     finally{this.#staging=null;}
@@ -468,11 +483,23 @@ class MobileBroker {
     return result;
   }
   // What a subscription lives by: the paired device alone, so that a lost service can still be reported.
+  #pushBinding(s) { return fingerprint([s.actor, s.origin, s.device.id, s.device.tokenHash, s.device.until]); }
+  async #restorePush(state, client) {
+    if(!this.#pushStore || this.#workspaceGrant?.value.records !== true)return;
+    const valid=()=>this.#liveGeneration(state.generation,client)&&this.#pushAuthority();
+    let saved;
+    try { saved=await this.#pushStore.load(this.#pushBinding(state),state.device.until,valid); }
+    catch { if(valid())await this.#pushStore.clear().catch(()=>{}); return; }
+    if(!valid())return;
+    if(!saved)return;
+    try { this.#makePush().restore(saved); this.refreshPush(); }
+    catch { this.#push?.close(); this.#push=null; if(valid())await this.#pushStore.clear().catch(()=>{}); }
+  }
   #pushDevice() {
     try {
       if (this.#access.closed || this.#access.disabledMarker()) return null;
       const s = this.#access.load();
-      if (!s.enabled || !s.device || s.device.until <= this.#access.time()) return null;
+      if (!s.enabled || !s.device || s.device.until <= this.#access.time()) { this.#pushStore?.clear().catch(()=>{}); return null; }
       return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
     } catch { return null; }
   }
@@ -499,19 +526,27 @@ class MobileBroker {
   pushInfo(auth) {
     this.#workspaceState(auth);
     if (!this.#pushAuthority()) throw denied();
-    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions, authority: () => this.#pushDevice(),
-      count: () => this.#pushAuthority() ? this.#desktop.records.status(null, this.#bound()).count : null, alerts: () => this.#pushAlerts() });
-    return this.#push.configuration();
+    return this.#makePush().configuration();
+  }
+  #makePush() {
+    return this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions, authority: () => this.#pushDevice(),
+      count: () => this.#pushAuthority() ? this.#desktop.records.status(null, this.#bound()).count : null, alerts: () => this.#pushAlerts(), expired: () => { this.#pushStore?.clear().catch(()=>{}); } });
   }
   pushAction(auth, value) {
-    this.#workspaceState(auth, true);
     if (exact(value, ['action']) && value.action === 'unsubscribe') {
+      const state=this.#authenticateAccess(auth);
+      if(auth.origin!==state.origin||!token(auth.csrf)||!timingSafeEqual(Buffer.from(digest(auth.csrf),'hex'),Buffer.from(state.device.csrfHash,'hex')))throw denied();
       this.#push?.close(); this.#push = null;
-      return { enabled: false, state: 'off', lastSubmittedAt: null };
+      const off={enabled:false,state:'off',lastSubmittedAt:null};
+      return this.#pushStore?this.#pushStore.clear().then(()=>off,()=>({...off,storageWarning:'MOBILE_PUSH_STORAGE_UNCONFIRMED'})):off;
     }
+    this.#workspaceState(auth, true);
     if (!exact(value, ['action', 'subscription']) || value.action !== 'subscribe') throw denied();
-    this.pushInfo(auth); this.#push.subscribe(value.subscription); this.refreshPush();
-    return this.#push.status();
+    this.pushInfo(auth); const push=this.#push, subscription=require('./mobile-push.cjs').subscriptionValue(value.subscription);
+    const activate=()=>{this.#workspaceState(auth,true);if(this.#push!==push)throw denied();push.subscribe(subscription);this.refreshPush();return push.status();};
+    if(!this.#pushStore)return activate();
+    const state=this.#authenticateAccess(auth),binding=this.#pushBinding(state),stamp=this.#pushDevice();
+    return this.#pushStore.save(binding,state.device.until,{vapid:push.keys,subscription},()=>this.#push===push&&this.#pushDevice()===stamp).then(activate);
   }
   refreshPush() { return this.#push?.refresh(); }
   #desktopConsentState() {
@@ -732,8 +767,10 @@ class MobileBroker {
     // Closing only this broker's own connection invalidates its uncommitted
     // reservations. A commit already written may still be native work.
     const summary={ authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
-    if(this.#persistence?.flush){const confirmed=retryPersistence&&this.#persistence.sealRevocation?this.#persistence.sealRevocation():this.#persistence.flush().then(()=>this.#persistence.status()==='ready');return confirmed.then(ok=>({...summary,authorizationRevoked:summary.authorizationRevoked&&ok}),()=>({...summary,authorizationRevoked:false}));}
-    return summary;
+    const pushRevoked=result.confirmed===true?this.#pushStore?.clear():null;pushRevoked?.catch(()=>{});
+    let resultSummary=summary;
+    if(this.#persistence?.flush){const confirmed=retryPersistence&&this.#persistence.sealRevocation?this.#persistence.sealRevocation():this.#persistence.flush().then(()=>this.#persistence.status()==='ready');resultSummary=confirmed.then(ok=>({...summary,authorizationRevoked:summary.authorizationRevoked&&ok}),()=>({...summary,authorizationRevoked:false}));}
+    return pushRevoked?Promise.resolve(resultSummary).then(async value=>{await pushRevoked;return value;}):resultSummary;
   }
 }
 module.exports = { MobileBroker };

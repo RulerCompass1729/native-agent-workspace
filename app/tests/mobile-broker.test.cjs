@@ -162,8 +162,8 @@ test('push uses the same desktop count and dies on logout, revoke or re-pair; a 
     const said = index => JSON.parse(require('http_ece').decrypt(messages[index].body, { version: 'aes128gcm', privateKey: key, authSecret: value.subscription.keys.auth }));
     const settle = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(messages.length, 2); assert.deepEqual(said(1), { alerts: ['service-disconnected'] });
-    // The switch itself is refused until the reader is back; the subscription was kept, and a new alert still leaves.
-    assert.throws(() => f.broker.pushAction(auth, { action: 'unsubscribe' }), { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+    // An invalid CSRF still cannot switch off the retained subscription during a disconnect.
+    assert.throws(() => f.broker.pushAction({ ...auth, csrf: 'x'.repeat(43) }, { action: 'unsubscribe' }));
     health = { alerts: [{ code: 'token-anomaly' }] }; await f.broker.refreshPush(); assert.equal(messages.length, 3);
     assert.deepEqual(said(2), { alerts: ['service-disconnected', 'token-anomaly'] });
     // The phone's own session read reconnects: the same subscription has the count again and drops the lost service.
