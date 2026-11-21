@@ -12,7 +12,9 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   // Per window: the pass of each transport that closed, the backends that came back since its page was last
   // told, and whether the page was told the window is disconnected.
-  const windows = new WeakMap(), recorded = new WeakSet();
+  // spent: a transport whose pass used every attempt, with its backend's generation when that pass began. It is
+  // tried again only after a backend update (workspace-client.cjs maintainService), not when another one closes.
+  const windows = new WeakMap(), recorded = new WeakSet(), spent = new WeakMap();
   return function closed(context, client) {
     const stale = () => context.client !== client || client.closing || context.win.isDestroyed();
     const note = (event, backends, extra) => {
@@ -21,6 +23,7 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
     };
     // A window that is closing, or whose connections were all replaced by hand, is not a lost connection.
     if (stale()) return Promise.resolve('stale');
+    const generation = key => client.control.generations.get(key) || 0;
     const down = client.entries.filter(e => e.closed && !e.closing);
     // No transport closed: the window's own state could not be assembled. Only the person reconnects that.
     if (!down.length) { note('closed', [], { reasons: ['window-state'] }); lost(context, client); return Promise.resolve('lost'); }
@@ -30,7 +33,7 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
     // One closed transport, with attempts and a record of its own: a backend that stays unreachable takes nothing
     // from another one's reconnection.
     async function pass(entry) {
-      const key = entry.key, transport = entry.client, started = Date.now();
+      const key = entry.key, transport = entry.client, started = Date.now(), born = generation(key);
       let attempts = 0, refused = false;
       const ended = (event, extra) => { note(event, [key], { attempts, ms: Date.now() - started, ...extra }); return event; };
       // Another path gave this backend its transport meanwhile (main.cjs replaceBackendSockets): that one stays.
@@ -57,6 +60,8 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
         const prior = next.client.priorClose;
         return ended('restored', prior ? { service: [{ backend: key, reason: prior.reason, endedAt: new Date(prior.at).toISOString() }] } : {});
       }
+      // Attempts a backend update held back were not made: its end gives this transport a pass again.
+      if (attempts === delays.length) spent.set(transport, born);
       return ended('lost', refused ? { refused: 'service-binding' } : {});
     }
     // After a pass: a window with every transport open is told so once, with all that came back; a window whose
@@ -72,7 +77,7 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
     }
     for (const entry of down) {
       const transport = entry.client;
-      if (view.passes.has(transport)) continue;
+      if (view.passes.has(transport) || spent.get(transport) === generation(entry.key)) continue;
       view.timer ||= setTimeout(notice, noticeMs);
       view.passes.set(transport, pass(entry).catch(() => 'lost').then(async result => { view.passes.delete(transport); await settle(); return result; }));
     }

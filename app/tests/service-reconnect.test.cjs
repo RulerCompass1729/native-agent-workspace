@@ -69,14 +69,16 @@ async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa'], { capab
 
 // main.cjs's own handler for a closed window connection, with what it uses there. The page is a list of what
 // main would send to the window.
-function mainWiring(dataDir) {
+function mainWiring(dataDir, { delays, tried = [] } = {}) {
   const handler = main.match(/\n {2}client\.on\('closed', \(\) => \{.*\}\);\n\}\n/)?.[0];
   assert.ok(handler, 'main.cjs handles a closed window connection in bindClient');
   const start = main.indexOf('let connectionEvents = null'), end = start < 0 ? -1 : main.indexOf('let backendSwitching = null', start);
   const block = end < 0 ? '' : main.slice(start, end);
-  const context = vm.createContext({ path, dataDir, connectService, uiError, displayState: state => state, omitHidden: display => display,
+  // delays: the app's own wiring over shorter intervals. tried: each place it connected to, in order.
+  const context = vm.createContext({ path, dataDir, uiError, displayState: state => state, omitHidden: display => display,
+    connectService: (dir, ...rest) => { tried.push(dir); return connectService(dir, ...rest); },
     sendToPage: (target, channel, ...data) => { if (!target.background && !target.win.isDestroyed()) target.page.push([channel, ...data]); },
-    createReconnector: reconnectModule?.createReconnector, createEventLog: reconnectModule?.createEventLog });
+    createReconnector: delays ? options => reconnectModule.createReconnector({ ...options, delays }) : reconnectModule?.createReconnector, createEventLog: reconnectModule?.createEventLog });
   return vm.runInContext(`${block}\n(function wire(context) { const client = context.client; const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };${handler.replace(/\n\}\n$/, '\n')} })`, context);
 }
 
@@ -246,10 +248,41 @@ test('a reconnection refuses a service that is kept for another purpose, as the 
   assert.equal(window.client.socket.destroyed, false);
 });
 
+// The re-review of dfa418e5 (2026-11-21, BLOCK): a backend that had used every attempt was tried all over again,
+// and recorded lost once more, each time another backend's connection closed. Short intervals here; the real ones
+// take about two minutes for the same.
+test('a backend that stayed unreachable through every attempt is not tried again when another backend closes', async t => {
+  const f = await fixture(t), window = await f.open(), [a, b] = f.backends, tried = [];
+  mainWiring(f.dataDir, { delays: [0, 20, 40], tried })(window);
+  const of = backend => { try { return history(f).filter(e => e.backends[0] === backend.key).map(e => [e.event, e.attempts]); } catch { return []; } };
+  await a.stop();
+  assert.ok(await settled(() => of(a).some(([event]) => event === 'lost')));
+  // The other backend's connection closes twice afterwards: each of its connections has attempts of its own.
+  for (const count of [2, 3]) {
+    b.accepted.at(-1).socket.destroy();
+    assert.ok(await settled(() => b.accepted.length === count && !window.client.entries[1].closed), 'the reachable backend was not connected again');
+  }
+  // Longer than every attempt of a pass.
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(of(a), [['closed', undefined], ['lost', 3]]);
+  assert.equal(tried.filter(dir => dir === path.join(f.dataDir, a.key)).length, 3, 'the unreachable backend was connected to again');
+  assert.deepEqual(of(b), [['closed', undefined], ['restored', 1], ['closed', undefined], ['restored', 1]]);
+  assert.deepEqual([channels(window), window.client.socket.destroyed], [['workspace:disconnected'], true]);
+
+  // An update of that backend whose handover could not connect ends by telling the window (maintainService):
+  // that still gives the connection its attempts.
+  const finish = window.client.maintainService(a.key);
+  await a.listen();
+  finish();
+  assert.ok(await settled(() => told(window).length > 0), 'the end of a backend update did not reconnect the window');
+  assert.deepEqual([channels(window), [...told(window)[0][2]].sort(), window.client.socket.destroyed, of(a).at(-1)],
+    [['workspace:disconnected', 'workspace:reconnected'], ['session-0', 'session-1'], false, ['restored', 1]]);
+});
+
 // The retry rules, on stand-in windows: no sockets and no real time.
 const { createReconnector, createEventLog } = reconnectModule || {};
 function standIn({ keys = ['.', 'b'], closed = ['b'] } = {}) {
-  const client = { closing: false, control: { maintenance: new Set() }, socket: { destroyed: closed.length > 0 }, replaced: [],
+  const client = { closing: false, control: { maintenance: new Set(), generations: new Map() }, socket: { destroyed: closed.length > 0 }, replaced: [],
     entries: keys.map(key => ({ key, closed: closed.includes(key), closing: false, client: { closeReason: 'peer' } })),
     replaceService(key, service) { const entry = this.entries.find(e => e.key === key); entry.closed = false; entry.client = service; this.replaced.push(key); this.socket.destroyed = this.entries.some(e => e.closed); } };
   return { client, background: false, win: { isDestroyed: () => false } };
@@ -303,6 +336,10 @@ test('leaves alone a window that closed as a whole, changed its connection, or h
   const updating = rules(), maintained = standIn(); maintained.client.control.maintenance.add('b');
   assert.equal(await updating.run(maintained, maintained.client), 'lost');
   assert.deepEqual([updating.log.connects, maintained.client.replaced], [[], []]);
+  // The update's end tells the window (workspace-client.cjs maintainService): attempts it held back were not used.
+  maintained.client.control.maintenance.delete('b');
+  assert.equal(await updating.run(maintained, maintained.client), 'restored');
+  assert.deepEqual([updating.log.connects, maintained.client.replaced], [['b'], ['b']]);
 });
 
 test('a second connection that closes during a reconnection is reconnected too', { skip: !reconnectModule }, async () => {
@@ -327,6 +364,25 @@ test('a connection that never comes back leaves the other closed one its own att
   assert.deepEqual([one.log.connects.filter(key => key === 'c'), one.log.connects.filter(key => key === 'b'), context.client.replaced, one.log.restored, one.log.lost],
     [['c'], ['b', 'b', 'b'], ['c'], [], 1]);
   assert.deepEqual(events, [['closed', ['b'], undefined], ['closed', ['c'], undefined], ['restored', ['c'], 1], ['lost', ['b'], 3]]);
+});
+
+test('a connection that used up its attempts is not tried again when another one closes', { skip: !reconnectModule }, async () => {
+  const context = standIn({ keys: ['a', 'b'], closed: ['a'] }), events = [];
+  // a never answers; b answers at once the first time it closes, and at its last attempt the second time.
+  const answers = [true, false, false, true];
+  const one = rules({ record: event => { events.push([event.event, event.backends[0], event.attempts]); },
+    connect: async (c, key) => { one.log.connects.push(key); if (key === 'a' || !answers.shift()) throw Error('not listening'); return { client: { closeReason: 'peer', close() {} }, state: {} }; } });
+  const closes = key => { context.client.entries.find(e => e.key === key).closed = true; context.client.socket.destroyed = true; return one.run(context, context.client); };
+  assert.equal(await one.run(context, context.client), 'lost');
+  assert.equal(await closes('b'), 'lost');
+  assert.equal(await closes('b'), 'lost');
+  assert.deepEqual(events, [['closed', 'a', undefined], ['lost', 'a', 3], ['closed', 'b', undefined], ['restored', 'b', 1], ['closed', 'b', undefined], ['restored', 'b', 3]]);
+  assert.deepEqual([one.log.connects.filter(key => key === 'a').length, context.client.replaced, one.log.lost, one.log.restored], [3, ['b', 'b'], 1, []]);
+  // The person's button gives the window a new client with new connections (main.cjs `reconnect`): one of those
+  // that closes has its attempts.
+  const pressed = standIn({ keys: ['a', 'b'], closed: ['a'] });
+  assert.equal(await one.run(pressed, pressed.client), 'lost');
+  assert.equal(one.log.connects.filter(key => key === 'a').length, 6);
 });
 
 test('the connection record keeps the newest events in a private file', { skip: !reconnectModule }, t => {
