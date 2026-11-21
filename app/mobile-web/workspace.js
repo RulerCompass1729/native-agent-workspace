@@ -61,6 +61,10 @@
       try { save(); } catch (error) { state.pending.pop(); throw error; }
       state.busy = true; changed();
       try { const result = await request('/mobile/workspace/action', { ...fields, requestId }, session.csrf); record(row, result); return result; }
+      catch (error) {
+        if (error?.code === 'MOBILE_PAIR_LIMIT') { row.status = 'not-sent'; save(); }
+        throw error;
+      }
       finally { state.busy = false; changed(); }
     }
     async function receipt(session, row) {
@@ -134,7 +138,13 @@
     el('skip').addEventListener('click', event => { event.preventDefault(); el('content').focus(); });
     // Action readiness must not depend on a route read finishing.
     let started;
-    async function run(fn) { try { await started; await fn(); } catch { disconnected = true; paint(); toast('offline'); } }
+    async function run(fn) {
+      try { await started; await fn(); }
+      catch (error) {
+        if (error?.code === 'MOBILE_PAIR_LIMIT') { toast('pairLimit'); return; }
+        disconnected = true; paint(); toast('offline');
+      }
+    }
     async function api(url, value, csrf) {
       const generation = client?.state.authorization;
       const read = value === undefined ? new global.AbortController() : null;
@@ -145,12 +155,14 @@
           headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', 'X-NAW-CSRF': csrf || '' }) }, ...(read ? { signal: read.signal } : { body: JSON.stringify(value) }) });
         const result = await response.json();
         if (generation !== client?.state.authorization) throw Error('MOBILE_AUTH_CHANGED');
-        if (!response.ok) { if ([401, 403].includes(response.status)) { authorizationRejected = true; client.invalidate(); locked = true; view = null; paint(); } throw Error(result.error || 'MOBILE_DENIED'); }
+        if (!response.ok) { if ([401, 403].includes(response.status)) { authorizationRejected = true; client.invalidate(); locked = true; view = null; paint(); } const code = result.error || 'MOBILE_DENIED'; throw Object.assign(Error(code), { code }); }
         disconnected = false;
         if (url === '/mobile/session') { locked = false; authorizationRejected = false; }
         return result;
       } finally { if (read) { readingRequests.delete(read); global.clearTimeout(timer); } }
     }
+    words.zh.pairLimit = global.NAWMobile.PAIR_LIMIT.zh;
+    words.en.pairLimit = global.NAWMobile.PAIR_LIMIT.en;
     const actions = createWorkspaceActions({ storage, request: api, newId: () => global.crypto.randomUUID(), changed: () => updateCompose() });
     const passkeys = global.NAWMobilePasskeys.create({ storage, request: api });
     Object.assign(words.zh,{finishPair:'完成手机配对',qrEnrollment:'这次二维码授权登记一把批准密钥。尚未激活，不能读取或执行操作。',verifyPair:'使用系统验证完成配对',finishVerified:'完成配对',verifyPairNote:'系统可能提示创建凭据及再次验证。每张敏感卡仍须单独验证。',basicPair:'先使用基础权限',basicPairNote:'敏感批准保持关闭。新手机完成后，旧手机才断开。',cancelPair:'取消本次配对',pairUnconfirmed:'验证取消或结果未确认。请刷新核对；可回 Mac 重新出码，或明确选择基础权限。不会自动启用敏感批准。'});
@@ -476,7 +488,7 @@
         const b = button(t(key), async () => {
           for (const button of buttons.children) button.disabled = true;
           try { const result = await passkeys.decide(client.state.session, card, key); toast(result.status); }
-          catch { toast('verifyFailed'); }
+          catch (error) { toast(error?.code === 'MOBILE_PAIR_LIMIT' ? 'pairLimit' : 'verifyFailed'); }
           await refresh();
         }, key === 'approve' ? 'primary' : '');
         b.id = 'consent-' + key; b.disabled = !card.canDecide || expired || Boolean(pending) || passkeys.busy; buttons.append(b);

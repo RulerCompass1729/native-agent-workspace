@@ -557,13 +557,14 @@ class MobileBroker {
     const client = this.#bound(), epoch = this.#epoch; await client.refresh();
     if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
     const state = this.#workspaceState(auth, true), binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value);
+    if (this.#decisions.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
     return this.#consent.challenge(state, binding);
   }
   async decide(auth, value) {
     if (!exact(value, ['id', 'version', 'decision', 'challengeId', 'assertion'])) throw denied();
     const state = this.#workspaceState(auth, true), client = this.#bound(), epoch = this.#epoch;
     const binding = this.#desktop.confirmationBinding(client, this.#scopes(state), value), permit = this.#consent.consume(state, value, binding);
-    if (this.#decisions.size >= MAX_REQUESTS) throw denied();
+    if (this.#decisions.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
     const row = { challengeId: value.challengeId, status: 'unconfirmed', state: null, pending:true }; this.#decisions.set(value.challengeId, row);
     const valid = () => {
       if (epoch !== this.#epoch || client !== this.#bound()) throw denied();
@@ -595,8 +596,7 @@ class MobileBroker {
       if (previous.mark !== mark) throw denied('MOBILE_REQUEST_CONFLICT');
       return structuredClone(previous.result);
     }
-    // Do not evict uncertain outcomes: a repeated ID must never execute twice.
-    if (this.#workspaceRequests.size >= MAX_REQUESTS) throw denied('MOBILE_REQUEST_CONFLICT');
+    if (this.#workspaceRequests.size >= MAX_REQUESTS) throw denied('MOBILE_PAIR_LIMIT');
     const row = { mark, result: { requestId: value.requestId, status: 'unconfirmed' } };
     this.#workspaceRequests.set(value.requestId, row);
     const client = this.#bound(), epoch = this.#epoch, grant = this.#workspaceGrant?.value || { roomIds: [], records: false };

@@ -1,6 +1,10 @@
 /* Same-origin phone UI. No native/provider calls or automatic resend. */
 (function (global) {
   'use strict';
+  const PAIR_LIMIT = {
+    zh: '本次配对的请求记录已满。请先核对未确认的回执，再回 Mac 撤销并重新配对。',
+    en: 'This pairing has reached its request limit. Check any unconfirmed receipts, then revoke and pair again on the Mac.',
+  };
   const KEY = 'naw.mobile.v1', LIMIT = 512 * 1024;
   const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
   const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
@@ -54,7 +58,7 @@
     const unresolved = () => state.pending.some(p => p.deviceId === state.session?.deviceId && p.sessionId === state.selected && !terminal(p.status));
     async function call(route, value) { return request(route, value, state.session?.csrf); }
     function explain(error) {
-      const messages = { MOBILE_PAIR_LIMIT: '本次配对的请求记录已满，请先核对全部未确认回执，再回 Mac 撤销并重新配对。',
+      const messages = { MOBILE_PAIR_LIMIT: PAIR_LIMIT.zh,
         MOBILE_RECEIPT_UNKNOWN: '原回执不可用，结果仍未知。不会自动重发；请回 Mac 核对。',
         MOBILE_CONTEXT_UNAVAILABLE: '原阅读上下文已失效，请刷新原文后再操作。',
         MOBILE_REQUEST_CONFLICT: '请求记录冲突，未替换或重发原请求。' };
@@ -153,7 +157,16 @@
       if (!persist()) { state.pending.pop(); changed(); throw failure('MOBILE_DRAFT_UNSAVED'); }
       state.busy = true; changed();
       try { recordResult(pending, await request('/mobile/' + action, value, csrf), authorization); }
-      catch (error) { if (authorization === state.authorization) state.notice = explain(error); }
+      catch (error) {
+        if (error?.code === 'MOBILE_PAIR_LIMIT') {
+          pending.status = 'not-sent';
+          persist();
+        }
+        if (authorization === state.authorization) {
+          state.notice = explain(error);
+          if (error?.code === 'MOBILE_PAIR_LIMIT') throw error;
+        }
+      }
       finally { if (authorization === state.authorization) state.busy = false; changed(); }
       return pending;
     }
@@ -191,7 +204,9 @@
     const pairSecret = fragment ? fragment.startsWith('#pair=') ? fragment.slice(6) : '' : undefined;
     const el = id => document.getElementById(id), node = (tag, value, className) => { const n = document.createElement(tag); if (value !== undefined) n.textContent = value; if (className) n.className = className; return n; };
     let sessionKey = '', row = null, receiptKey = '';
-    const run = action => Promise.resolve().then(action).catch(() => { el('notice').textContent = '操作未执行，请保留草稿并核对当前会话。'; });
+    const run = action => Promise.resolve().then(action).catch(error => {
+      el('notice').textContent = error?.code === 'MOBILE_PAIR_LIMIT' ? PAIR_LIMIT.zh : '操作未执行，请保留草稿并核对当前会话。';
+    });
     const api = async (route, value, csrf) => {
       const response = await fetch(route, { method: value === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store',
         headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', ...(csrf ? { 'X-NAW-CSRF': csrf } : {}) }) },
@@ -277,7 +292,7 @@
     return { start() { if (!stopped) return; stopped = false; revision++; wake(); }, wake,
       stop() { stopped = true; revision++; again = false; clear(); } };
   }
-  const exported = { createMobileClient, createReadRecovery, mount, KEY, receiptContext, validReceiptContext };
+  const exported = { PAIR_LIMIT, createMobileClient, createReadRecovery, mount, KEY, receiptContext, validReceiptContext };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobile = exported; if (!global.document.documentElement.hasAttribute('data-workspace-ui')) mount(global.document, global.location, global.history,
     { getItem: key => global.localStorage.getItem(key), setItem: (key, value) => global.localStorage.setItem(key, value) }, global.fetch.bind(global), global.crypto); }

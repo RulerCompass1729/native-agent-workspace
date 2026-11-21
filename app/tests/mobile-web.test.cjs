@@ -16,6 +16,7 @@ function fixture({ stored, disk, failStorage = false, failSend = false, holdSend
     if (route === '/mobile/send' || route === '/mobile/answer') {
       const saved = JSON.parse(values.get(KEY)); assert.equal(saved.pending.at(-1).requestId, value.requestId, 'original pending persisted BEFORE native-bound request');
       if (holdSend) await new Promise(resolve => { releaseSend = resolve; });
+      if (typeof failSend === 'string') throw Object.assign(Error('refused'), { code: failSend });
       if (failSend) throw Error('lost acknowledgement');
       return { requestId: value.requestId, sessionId: 'a', action: route.endsWith('send') ? 'send' : 'answer', status: route.endsWith('send') ? 'submitted' : 'reply-written' };
     }
@@ -166,4 +167,17 @@ test('a queue-card answer keeps the original chat draft and binds its own input 
   const sent = f.calls.find(c => c.route === '/mobile/send');
   assert.deepEqual(sent.value.queueTarget, target); assert.equal(sent.value.text, 'Explicit queue answer');
   assert.deepEqual(JSON.parse(f.values.get(KEY)).pending[0].queueTarget, target);
+});
+
+test('capacity refusal keeps draft and settles only this attempt as not sent', async () => {
+  const f = fixture({ failSend: 'MOBILE_PAIR_LIMIT' });
+  await f.client.start();
+  await f.client.select('a');
+  f.client.setDraft('Original draft');
+  await assert.rejects(f.client.send(), { code: 'MOBILE_PAIR_LIMIT' });
+  assert.equal(f.client.state.draft, 'Original draft');
+  assert.equal(f.client.state.pending[0].status, 'not-sent');
+  const { PAIR_LIMIT } = require('../mobile-web/client.js');
+  assert.match(PAIR_LIMIT.zh, /回 Mac 撤销并重新配对/);
+  assert.match(PAIR_LIMIT.en, /revoke and pair again on the Mac/);
 });

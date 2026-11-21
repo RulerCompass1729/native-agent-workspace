@@ -31,3 +31,15 @@ test('receipt capacity reclaims only known outcomes and preserves uncertain card
   assert.deepEqual(client.pending.map(p => p.challengeId), ['uncertain', 'fresh']);
   await assert.rejects(client.decide({ deviceId: 'device' }, { id: 'unknown-card', version: 'v' }, 'approve'));
 });
+
+test('decision capacity refusal after verification settles only the new no-op', async () => {
+  const disk = new Map();
+  const client = create({ storage: { getItem: k => disk.get(k), setItem: (k, v) => disk.set(k, v) },
+    credentials: { get: async () => ({ toJSON: () => ({}) }) },
+    request: async route => {
+      if (route.endsWith('/options')) return { challengeId: 'fresh', publicKey: { challenge: 'YQ', rpId: 'phone.example.test' } };
+      throw Object.assign(Error('full'), { code: 'MOBILE_PAIR_LIMIT' });
+    } });
+  await assert.rejects(client.decide({ deviceId: 'device', csrf: 'csrf' }, { id: 'card', version: 'v' }, 'deny'), { code: 'MOBILE_PAIR_LIMIT' });
+  assert.equal(JSON.parse(disk.get(KEY))[0].status, 'not-sent');
+});

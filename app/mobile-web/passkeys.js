@@ -54,7 +54,12 @@
         const start = await request('/mobile/consent/options', fields, session.csrf), assertion = await get(start.publicKey);
         const row = { deviceId: session.deviceId, id: card.id, challengeId: start.challengeId, status: 'unconfirmed' };
         pending.push(row); save(); // Save only receipt identity, never an assertion or biometric/CSRF data.
-        const result = await request('/mobile/consent/decide', { ...fields, challengeId: row.challengeId, assertion }, session.csrf);
+        let result;
+        try { result = await request('/mobile/consent/decide', { ...fields, challengeId: row.challengeId, assertion }, session.csrf); }
+        catch (error) {
+          if (error?.code === 'MOBILE_PAIR_LIMIT') { row.status = 'not-sent'; save(); }
+          throw error;
+        }
         if (result.challengeId !== row.challengeId || !['complete', 'not-sent', 'unconfirmed'].includes(result.status)) throw Error('MOBILE_ACTION_UNCONFIRMED');
         row.status = result.status; save(); return result;
       } finally { busy = false; }
