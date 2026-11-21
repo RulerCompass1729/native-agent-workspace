@@ -47,3 +47,19 @@ test('portrait keyboard keeps the full composer; missing visualViewport remains 
   assert.ok(s.classes.has('keyboard-compose')); assert.ok(!s.classes.has('compact-compose'));
   s.global.visualViewport = undefined; s.layout(); assert.equal(s.classes.size, 0);
 });
+
+test('short landscape without a keyboard frees reading space and restores portrait layout', () => {
+  const s = scene();
+  s.global.innerWidth = 667; s.global.innerHeight = 375;
+  s.viewport.height = 375; s.viewport.offsetTop = 0;
+  s.d.activeElement = {};
+  s.layout();
+  assert.ok(s.classes.has('compact-compose'));
+  assert.ok(!s.classes.has('keyboard-compose'));
+  assert.equal(s.properties.get('--keyboard-inset'), '0px');
+  assert.equal(s.properties.get('--mobile-bottom'), '375px');
+  s.global.innerWidth = 375; s.global.innerHeight = 667; s.viewport.height = 667;
+  s.layout(); assert.equal(s.classes.size, 0);
+  s.global.innerWidth = 844; s.global.innerHeight = 390; s.viewport.height = 390;
+  s.box.hidden = true; s.layout(); assert.equal(s.classes.size, 0);
+});

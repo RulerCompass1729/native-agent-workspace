@@ -540,7 +540,8 @@
       const box = el('compose'), viewport = global.visualViewport;
       const editing = !box.hidden && (d.activeElement === el('message') || d.body.classList.contains('keyboard-compose')) && viewport?.scale === 1 && global.innerHeight - viewport.height > 100;
       d.body.classList.toggle('keyboard-compose', editing);
-      d.body.classList.toggle('compact-compose', editing && viewport.height < 200);
+      const shortLandscape = global.innerWidth > global.innerHeight && global.innerHeight <= 450;
+      d.body.classList.toggle('compact-compose', !box.hidden && (editing ? viewport.height < 200 : shortLandscape));
       d.documentElement.style.setProperty('--keyboard-inset', (editing ? Math.max(0, global.innerHeight - viewport.height - viewport.offsetTop) : 0) + 'px');
       d.documentElement.style.setProperty('--keyboard-top', (editing ? Math.max(0, viewport.offsetTop) : 0) + 'px');
       const nav = el('navigation').getBoundingClientRect().height, height = box.getBoundingClientRect().height;

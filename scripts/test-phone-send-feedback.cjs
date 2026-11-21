@@ -136,20 +136,25 @@ async function count(page) { return page.locator('.thread .bubble').filter({ has
         check(viewport.width + ' opening and refresh do not send', s.posted.length === 0);
       } finally { await s.close(); }
     }
-    {
-      const s = await scene('zh', true, 5, { width: 667, height: 375 }, 'SYNTHETIC_LATEST_REPLY\n合成最新回复的第二行。');
+    for (const lang of ['zh', 'en']) for (const viewport of [{ width: 667, height: 375 }, { width: 844, height: 390 }]) {
+      const s = await scene(lang, true, 5, viewport, 'SYNTHETIC_LATEST_REPLY\n' + (lang === 'zh' ? '合成最新回复的第二行。' : 'Synthetic second reply line.'));
+      const label = lang + ' ' + viewport.width + '×' + viewport.height + ' ';
       try {
         const geometry = await s.page.locator('.thread .message:last-child .bubble').evaluate(e => {
           const r = e.getBoundingClientRect(), header = document.querySelector('#top').getBoundingClientRect(), compose = document.querySelector('#compose').getBoundingClientRect();
           const hit = [0.2, 0.5, 0.8].every(x => [0.2, 0.5, 0.8].every(y => { const at = document.elementFromPoint(r.left + x * r.width, r.top + y * r.height); return at === e || e.contains(at); }));
           return { height: r.height, top: r.top, bottom: r.bottom, header: header.bottom, compose: compose.top, hit };
         });
-        console.log(JSON.stringify({ scenario: 'landscape two-line reply', ...geometry }));
-        check('landscape regression has a real two-line latest reply', geometry.height > 40);
-        check('landscape latest reply is fully visible between header and composer', geometry.top >= geometry.header && geometry.bottom <= geometry.compose && geometry.hit);
+        console.log(JSON.stringify({ scenario: label + 'landscape two-line reply', ...geometry }));
+        if (process.env.NAW_PICTURES_DIR) {
+          fs.mkdirSync(process.env.NAW_PICTURES_DIR, { recursive: true });
+          await s.page.screenshot({ path: path.join(process.env.NAW_PICTURES_DIR, lang + '-landscape-' + viewport.width + '.png'), scale: 'css' });
+        }
+        check(label + 'landscape regression has a real two-line latest reply', geometry.height > 40);
+        check(label + 'landscape latest reply is fully visible between header and composer', geometry.top >= geometry.header && geometry.bottom <= geometry.compose && geometry.hit);
         const input = await s.page.locator('#message').evaluate(e => ({ height: e.getBoundingClientRect().height, font: parseFloat(getComputedStyle(e).fontSize) }));
-        check('landscape input retains readable type and a touch-sized field', input.height >= 48 && input.font >= 16);
-        check('landscape opening does not send', s.posted.length === 0);
+        check(label + 'landscape input retains readable type and a touch-sized field', input.height >= 48 && input.font >= 16);
+        check(label + 'landscape opening does not send', s.posted.length === 0);
       } finally { await s.close(); }
     }
     for (const earlier of [false, true]) {
