@@ -68,8 +68,9 @@ phone show “告警已解除”; after that the count-only payload returns.
 
 An alert payload outlasts a phone that is briefly unreachable; the shared
 topic lets a later state replace one the push service has not delivered. Alerts
-are reported by the same check as the count, at most a minute after they begin.
-A lost service is the exception: it is said at once (see below).
+are reported by the same check as the count, about a minute after they begin: a
+60-second timer and then the send. Whether a locked Mac slows that timer is
+unverified. A lost service is the exception: it is said at once (see below).
 
 Main's `appHealth(status)` is the one source:
 `{ available, alerts: [{ code, at? }], unknown: [code] }`. `unknown` lists the
