@@ -309,6 +309,48 @@ test('a read-only device cannot send or answer but may explicitly log out with i
   assert.throws(() => f.broker.logout({ ...auth, csrf: undefined }));
   assert.equal(f.broker.logout(auth).authorizationRevoked, true); assert.ok(f.clients[0].closing); assert.equal(f.sent.length, 0);
 });
+for (const actions of [['read'], ['read', 'send', 'answer']]) test('source-offline logout revokes ' + actions.join('+') + ' without reconnecting', async t => {
+  const f = fixture(t), { auth } = await f.pair(actions); f.clients[0].close();
+  assert.equal(f.broker.logout(auth).authorizationRevoked, true);
+  assert.equal(f.broker.openUntil(), 0);
+  await assert.rejects(f.broker.refreshSession(auth));
+  assert.equal(f.clients.length, 1); assert.equal(f.sent.length, 0);
+});
+test('source-offline logout still requires the original phone, actor, origin and CSRF', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  for (const bad of [{ ...auth, token: 'x'.repeat(43) }, { ...auth, actor: 'other' }, { ...auth, origin: 'https://other.invalid' },
+    { ...auth, origin: undefined }, { ...auth, csrf: undefined }, { ...auth, csrf: 'x'.repeat(43) }]) {
+    assert.throws(() => f.broker.logout(bad)); assert.ok(f.broker.openUntil() > Date.now());
+  }
+  assert.equal(f.clients.length, 1); assert.equal(f.broker.logout(auth).authorizationRevoked, true);
+});
+test('logout during an unfinished reconnect rejects the late reader and prevents another connect', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close(); f.holdConnect(true);
+  const reading = f.broker.refreshSession(auth); reading.catch(() => {});
+  let result, error;
+  try { result = f.broker.logout(auth); } catch (caught) { error = caught; } finally { f.releaseConnect(); }
+  await reading.catch(() => {});
+  assert.ifError(error); assert.equal(result.authorizationRevoked, true);
+  assert.equal(f.clients[1].closing, true); await assert.rejects(f.broker.refreshSession(auth));
+  assert.equal(f.clients.length, 2); assert.equal(f.sent.length, 0);
+});
+test('HTTP source-offline logout clears the cookie and old credentials cannot reopen a reader', async t => {
+  const { Readable } = require('node:stream'), { createMobileHandler, COOKIE } = require('../mobile-http.cjs');
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  const handler = createMobileHandler({ broker: f.broker, origin, actor });
+  async function request(method, url) {
+    const req = Readable.from(method === 'POST' ? [Buffer.from('{}')] : []);
+    Object.assign(req, { method, url, socket: { remoteAddress: '127.0.0.1' }, rawHeaders: ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor,
+      'X-NAW-Mobile', '1', 'Origin', origin, 'Cookie', `${COOKIE}=${auth.token}`, 'X-NAW-CSRF', auth.csrf, 'Content-Type', 'application/json'] });
+    const res = { headers: {}, setHeader(key, value) { this.headers[key.toLowerCase()] = value; }, end(body) { this.body = body; this.writableEnded = true; } };
+    await handler(req, res); return res;
+  }
+  const leaving = await request('POST', '/mobile/logout');
+  assert.equal(leaving.statusCode, 200); assert.equal(JSON.parse(leaving.body).authorizationRevoked, true);
+  assert.equal(leaving.headers['set-cookie'], `${COOKIE}=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+  assert.equal((await request('GET', '/mobile/session')).statusCode, 403);
+  assert.equal(f.clients.length, 1); assert.equal(f.sent.length, 0);
+});
 test('revocation or replacement while a read is pending cannot disclose its late body', async t => {
   const f = fixture(t), { auth } = await f.pair(); f.holdRead(true);
   const reading = f.broker.read(auth, f.record.id); f.broker.revoke(); f.releaseRead(); await assert.rejects(reading);

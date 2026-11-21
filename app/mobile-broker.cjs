@@ -580,11 +580,11 @@ class MobileBroker {
     this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, requestId, entry.action);
   }
   logout(auth) {
-    // Logging out a read-only device must not require send permission. It
-    // still requires an explicit same-origin, session-bound CSRF token.
+    // Revocation needs the phone's authority and CSRF, never an online backend.
     let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
     if(candidate){try{this.#dropCandidate(candidate.c.id);}finally{this.#changed();}return {authorizationRevoked:true,connectionClosed:true,committedWorkMayContinue:false};}
-    this.#writeState(auth);
+    const state = this.#authenticateAccess(auth);
+    if (auth.origin !== state.origin || !token(auth.csrf) || !timingSafeEqual(Buffer.from(digest(auth.csrf), 'hex'), Buffer.from(state.device.csrfHash, 'hex'))) throw denied();
     try { return this.revoke(); }
     finally { this.#changed(); }
   }
