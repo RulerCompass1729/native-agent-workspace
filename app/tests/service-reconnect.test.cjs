@@ -479,6 +479,20 @@ test('the real service tells an owner\'s next transport why it ended the previou
   assert.equal(await reason('window-a'), undefined, 'an ending without a rule of the service stays unexplained');
 });
 
+// 2026-11-21: the butler's releaseRotation came back 「本地运行服务断开」 twice and wrote nothing. That call has six
+// arguments, and the service ended every transport that sent more than five (seven for `run`).
+test('the real service answers releaseRotation on the transport that asked', { timeout: 30000 }, async t => {
+  const { connect } = await ownedService(t), client = await connect('window-a');
+  const answer = await client.call('releaseRotation', 'no-such-session', 'native', 'epoch', 'tag', { kind: 'person', id: 'window-a' }, 'discard-unresolved-handoff')
+    .then(value => ({ value }), error => ({ error: error.message }));
+  assert.equal(client.socket.destroyed, false, `the service ended the transport that asked: ${JSON.stringify(answer)}`);
+  assert.ok(answer.error && answer.error !== uiError('error.serviceClosed').message, JSON.stringify(answer));
+  assert.equal((await client.call('initial')).protocol, 1);
+  // One argument more is still refused, as for every other method.
+  const more = client.call('releaseRotation', 1, 2, 3, 4, 5, 6, 7).catch(error => error.message);
+  assert.equal(await more, uiError('error.serviceClosed').message);
+});
+
 // C's review of 65c2d03e, C-TR-1: a terminal marked failed that a late success brings back shows a first screen and
 // then drops every later output. Here a failed terminal is never brought back: it is removed and loaded again.
 test('a terminal that failed to load because the window was disconnected is loaded again after the reconnection', () => {
