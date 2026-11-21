@@ -1,12 +1,14 @@
 // Waiting cards that one "Confirm all" may answer together: the same agent, the same reversible method with no risk
-// mark, each actionable on its own. Every card is still answered and checked one by one in the main process.
+// mark, each actionable on its own. Creation may carry its permission risk: it is part of the shared configuration
+// shown once, and every card is still checked and receipted one by one in the main process.
 (function (root) {
-  const METHODS = new Set(['archiveSession']);
+  const METHODS = new Set(['archiveSession', 'create']);
   function batchable(card) {
     const op = card?.message?.backgroundOperation, summary = card?.summary;
+    const riskless = Array.isArray(summary?.risks) && (summary.risks.length === 0 || summary.method === 'create');
     return Boolean(card && op && card.state === 'confirmation-required' && card.actionable === true && !card.replacedBy && !op.replacedBy &&
       !op.repeated && !op.answer && !op.disposition && op.confirmation?.kind === 'message' && METHODS.has(summary?.method) &&
-      Array.isArray(summary.risks) && summary.risks.length === 0);
+      riskless && (summary.method !== 'create' || typeof summary.createKey === 'string' && summary.createKey));
   }
   // `started`: batches the person already answered, by the card keys they covered, kept together until they are gone.
   function plan(cards, started = []) {
@@ -20,7 +22,9 @@
     const groups = new Map();
     for (const card of list) {
       if (used.has(card.key) || !batchable(card)) continue;
-      const key = [card.sessionId, card.nativeId, card.summary.method].join('\n');
+      const key = card.summary.method === 'create'
+        ? [card.sessionId, card.nativeId, 'create', card.summary.createKey].join('\n')
+        : [card.sessionId, card.nativeId, card.summary.method].join('\n');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(card);
     }

@@ -899,6 +899,7 @@ header h1, header p { overflow-wrap: anywhere; }
 .background-risk::before { content:"⚠ "; }
 .background-note { margin:6px 0 0; color:var(--muted); overflow-wrap:anywhere; }
 .background-batch-list { margin:6px 0 0; padding:0; list-style:none; display:grid; gap:2px; }
+.background-batch-config { margin:4px 0 0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
 .background-batch-item { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; padding:3px 0; border-top:1px solid var(--border); overflow-wrap:anywhere; }
 .background-batch-item:first-child { border-top:0; }
 .background-batch-target { flex:1 1 12em; min-width:0; }

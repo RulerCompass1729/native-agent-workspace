@@ -12,7 +12,7 @@ function page(language, sessions = [], rooms = []) {
   const sandbox = vm.createContext({ uiText: (key, params) => { try { return locale.format(language, key, params); } catch { return key; } }, state: { sessions, rooms },
     participantLabel: s => s.name, window: { nativeWorkspaceLocale: locale } });
   vm.runInContext(['uiTextKnown', 'readingNawTool', 'readingNawToolPreview'].map(name => fn(reading, name)).join('\n'), sandbox);
-  vm.runInContext(['backgroundActionText', 'backgroundSummaryText', 'backgroundButtonKeys'].map(name => fn(renderer, name)).join('\n'), sandbox);
+  vm.runInContext(['backgroundActionText', 'backgroundSummaryText', 'backgroundButtonKeys', 'providerName'].map(name => fn(renderer, name)).join('\n'), sandbox);
   return sandbox;
 }
 const tool = (title, input) => ({ role: 'tool', title, input: JSON.stringify(input, null, 2) });

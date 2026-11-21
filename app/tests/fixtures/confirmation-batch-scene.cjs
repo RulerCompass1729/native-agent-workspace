@@ -55,6 +55,7 @@ function render(cards, started) {
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../renderer/confirmation-batch.js'), 'utf8'), sandbox);
   const source = fs.readFileSync(path.join(__dirname, '../../renderer/renderer.js'), 'utf8');
+  vm.runInContext(source.match(/function providerName\([\s\S]*?\n}/)[0], sandbox);
   const start = source.indexOf('const confirmationBatchStarted ='), end = source.indexOf('\nfunction renderOperatorControls(', start);
   vm.runInContext(source.slice(start, end), sandbox);
   if (started) {

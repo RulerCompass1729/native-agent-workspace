@@ -204,6 +204,44 @@ test('merged errors are plain text and error-only updates invalidate the batch r
     assert.ok(!scope.entry.backgroundControls.textContent.includes(op.error), 'Server result notice takes precedence');
   } finally { await f.cleanup(); }
 });
+function createCard(id, name, summary = {}, changes = {}, op = {}) {
+  const at = Date.now() + 600000, base = { key: 'agent:native:' + id, operationId: id, sessionId: 'agent', nativeId: 'native', time: Date.now(),
+    state: 'confirmation-required', actionable: true, expiresAt: at, replacedBy: null,
+    summary: { action: 'create', method: 'create', name, provider: 'codex', risks: [], createKey: 'cfg-a', model: 'deepseek-v4', effort: 'max', profile: 'pro', folder: 'workspace', ...summary },
+    message: { backgroundOperation: { id, sessionId: 'agent', nativeId: 'native', state: 'confirmation-required', summary: { action: 'create', method: 'create', name, provider: 'codex', risks: [], createKey: 'cfg-a', model: 'deepseek-v4', effort: 'max', profile: 'pro', folder: 'workspace', ...summary },
+      confirmation: { kind: 'message', options: { buttons: ['Cancel', 'Confirm'], cancelId: 0 } }, ...op } } };
+  return { ...base, ...changes };
+}
+test('a create batch states the shared model and permissions once and lists each name', () => {
+  const cards = ['A', 'B', 'C', 'D', 'E'].map((name, index) => createCard('c' + index, 'Session ' + name, { permissionMode: 'acceptEdits', risks: ['acceptEdits'] }));
+  const { shown } = render(cards, false);
+  assert.ok(shown.includes('新建会话 · 5 项'));
+  assert.ok(shown.includes('模型：deepseek-v4'));
+  assert.ok(shown.includes('思考强度：max'));
+  assert.ok(shown.includes('配置：pro'));
+  assert.ok(shown.includes('权限：自动接受编辑'));
+  assert.ok(shown.includes('目录 workspace'));
+  for (const name of ['Session A', 'Session B', 'Session C', 'Session D', 'Session E']) assert.ok(shown.includes(name), name);
+  assert.equal(shown.split('模型：').length - 1, 1, 'The shared config is not repeated per row');
+  assert.equal(shown.split('· 权限：').length - 1, 1, 'Permissions are not repeated per row');
+});
+test('duplicate create submission sends one decision per actionable card', async () => {
+  const cards = ['A', 'B', 'C', 'D', 'E'].map((name, index) => createCard('c' + index, 'Session ' + name));
+  const scope = render(cards, false).sandbox, calls = [];
+  scope.api.backgroundDecision = async (_session, _native, id) => { calls.push(id); return { state: 'running' }; };
+  const submit = () => vm.runInContext('answerConfirmationBatch(nativeWorkspaceConfirmationBatch.plan(state.backgroundConfirmations)[0], false)', scope);
+  await Promise.all([submit(), submit()]);
+  assert.deepEqual(calls, ['c0', 'c1', 'c2', 'c3', 'c4']);
+  assert.equal(vm.runInContext('confirmationBatchStarted.size', scope), 1);
+});
+test('a partially expired create batch sends decisions only for its fresh cards', async () => {
+  const fresh = ['A', 'B', 'C', 'D'].map((name, index) => createCard('c' + index, 'Session ' + name));
+  const expired = createCard('x', 'Expired', {}, { state: 'expired', actionable: false });
+  const scope = render([...fresh, expired], false).sandbox, calls = [];
+  scope.api.backgroundDecision = async (_session, _native, id) => { calls.push(id); return { state: 'running' }; };
+  await vm.runInContext('answerConfirmationBatch(nativeWorkspaceConfirmationBatch.plan(state.backgroundConfirmations)[0], false)', scope);
+  assert.deepEqual(calls, ['c0', 'c1', 'c2', 'c3']);
+});
 
 test('a late read from the failed attempt cannot remove a newer explicit submission', async () => {
   const f = await fixture(); let finishRead, finishSecond;

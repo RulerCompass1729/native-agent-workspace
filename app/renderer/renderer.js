@@ -2737,7 +2737,7 @@ function backgroundSummaryText(summary, compact = false) {
   const parts = [summary.name ? uiText('background.card.named', { action, name: summary.name }) : action];
   if (summary.target) parts.push(uiText('background.card.session', { name: summary.target }));
   if (summary.room) parts.push(uiText('background.card.room', { name: summary.room }));
-  if (summary.provider) parts.push(summary.provider === 'codex' ? 'Codex' : 'Claude');
+  if (summary.provider) parts.push(providerName(summary.provider));
   if (summary.program) parts.push(summary.program);
   if (summary.folder) parts.push(uiText('background.card.folder', { name: summary.folder }));
   if (summary.risks?.includes('skipPermissions')) parts.push(uiText('background.card.skipPermissions'));
@@ -2846,8 +2846,30 @@ async function answerConfirmationBatch(batch, cancel) {
   }
   render();
 }
+// A create batch states its one shared configuration once; each row keeps only the name that differs.
+function backgroundPermissionText(summary) {
+  // DSH keeps its own approvals and takes no per-session settings.
+  if (summary?.provider === 'dsh') return uiText('background.permission.dsh');
+  const modes = ['manual', 'plan', 'dontAsk', 'acceptEdits', 'auto', 'bypassPermissions'];
+  if (summary?.risks?.includes('skipPermissions') || summary?.permissionMode === 'bypassPermissions') return uiText('background.permission.skipped');
+  return uiText(modes.includes(summary?.permissionMode) ? 'background.permission.' + summary.permissionMode : 'background.permission.native');
+}
+function backgroundBatchConfig(summary) {
+  const parts = [], native = uiText('standing.nativeDefault');
+  if (summary.provider) parts.push(providerName(summary.provider));
+  if (summary.provider !== 'dsh') {
+    parts.push(uiText('background.card.model', { model: summary.model || native }));
+    if (summary.effort) parts.push(uiText('background.card.effort', { effort: summary.effort }));
+    if (summary.profile) parts.push(uiText('background.card.profile', { profile: summary.profile }));
+  }
+  parts.push(uiText('background.card.permissions', { permissions: backgroundPermissionText(summary) }));
+  if (summary.folder) parts.push(uiText('background.card.folder', { name: summary.folder }));
+  if (summary.worktree) parts.push(uiText('background.card.worktree'));
+  return parts.join(' · ');
+}
 function renderConfirmationBatch(box, role) {
   const { itemState } = globalThis.nativeWorkspaceConfirmationBatch, cards = role.batch.cards, count = cards.length;
+  const create = cards[0].summary?.method === 'create';
   const states = cards.map(itemState), tally = name => states.filter(s => s === name).length;
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('strong', undefined, 'background-sentence');
   ui.display.computed(sentence, 'text', () => uiText('background.batch.title', { action: backgroundActionText(cards[0].summary), count }));
@@ -2862,10 +2884,21 @@ function renderConfirmationBatch(box, role) {
   } else if (tally('cancelled') === count) ui.display.text(state, 'background.batch.cancelled', { count });
   else ui.display.text(state, tally('unconfirmed') ? 'background.batch.resultUnconfirmed' : 'background.batch.result', { done: tally('done'), void: tally('void') + tally('cancelled'), unconfirmed: tally('unconfirmed') });
   line.append(state, sentence); box.append(line);
+  if (create) {
+    const config = node('p', undefined, 'background-batch-config');
+    ui.display.computed(config, 'text', () => backgroundBatchConfig(cards[0].summary));
+    box.append(config);
+    if (cards[0].summary?.risks?.length) {
+      const risks = node('ul', undefined, 'background-risks');
+      for (const risk of cards[0].summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
+      box.append(risks);
+    }
+  }
   const list = node('ul', undefined, 'background-batch-list');
   cards.forEach((card, index) => {
     const item = node('li', undefined, 'background-batch-item'), target = node('span', undefined, 'background-batch-target');
-    ui.display.computed(target, 'text', () => card.summary ? backgroundSummaryText(card.summary) : card.title);
+    ui.display.computed(target, 'text', () => !card.summary ? card.title
+      : create ? card.summary.name || uiText('background.batch.unnamed') : backgroundSummaryText(card.summary));
     item.append(target);
     if (role.batch.started) {
       item.dataset.state = states[index];

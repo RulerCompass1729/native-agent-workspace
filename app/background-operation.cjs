@@ -1,5 +1,6 @@
 // One invocation's provenance. Never global mutable "current user" state.
 const { AsyncLocalStorage } = require('node:async_hooks');
+const path = require('node:path');
 const scope = new AsyncLocalStorage();
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
 function actor(value) {
@@ -176,8 +177,24 @@ function operationSummary(command, actor, names = {}) {
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
   if (method === 'create' || method === 'importHistory') {
     const options = (method === 'create' ? args[0] : args[1]) || {};
-    put('name', shown(options.name)); put('provider', ['claude', 'codex'].includes(options.provider) ? options.provider : undefined);
+    const providers = method === 'create' ? ['claude', 'codex', 'dsh'] : ['claude', 'codex'];
+    put('name', shown(options.name)); put('provider', providers.includes(options.provider) ? options.provider : undefined);
     put('folder', last(options.cwd));
+    if (method === 'create') {
+      // Creation's batch identity. Names differ on purpose; everything that changes what starts must match.
+      // A hash keeps the absolute directory out of the broadcast summary while still separating same-named folders.
+      const settings = options.settings && typeof options.settings === 'object' && !Array.isArray(options.settings) ? options.settings : {};
+      // The key follows what workspace.create runs: a fork and DSH are terminal-only, and one folder has one path.
+      const requested = ['chat', 'terminal'].includes(options.view) ? options.view : options.provider === 'codex' ? 'terminal' : 'chat';
+      const view = options.fork != null || options.provider === 'dsh' ? 'terminal' : requested;
+      const directory = typeof options.cwd === 'string' && path.isAbsolute(options.cwd) ? path.resolve(options.cwd) : options.cwd;
+      put('model', shown(settings.model)); put('effort', shown(settings.effort)); put('profile', shown(settings.profile));
+      put('permissionMode', ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'].includes(settings.permissionMode) ? settings.permissionMode : undefined);
+      // A prepared worktree gives every card its own target, so those cards are never one batch.
+      if (options.gitWorktree == null) put('createKey', require('node:crypto').createHash('sha256').update(JSON.stringify([options.provider, directory,
+        view, settings.model ?? null, settings.effort ?? null, settings.permissionMode ?? null, settings.profile ?? null,
+        options.skipPermissions === true, options.fork ?? null, options.newDirectory === true])).digest('hex').slice(0, 16));
+    }
     if (options.gitWorktree != null) summary.worktree = true;
     // Claude's own permission modes loosen it too; dontAsk refuses what was not allowed beforehand, so it is not marked.
     const mode = options.settings?.permissionMode;

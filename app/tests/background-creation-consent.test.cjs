@@ -339,7 +339,9 @@ for (const provider of ['claude', 'codex']) {
     const f = await fixture(t, provider);
     const card = await f.ask('create', session(f, 'Claude 5', { skipPermissions: true }));
     const row = rowFor(f, f.controller, card);
-    assert.deepEqual(row.summary, { action: 'create', method: 'create', risks: ['skipPermissions'], name: 'Claude 5', provider, folder: path.basename(f.dir) });
+    const { createKey, ...summary } = row.summary;
+    assert.match(createKey, /^[0-9a-f]{16}$/, 'The card exposes a batch identity for its shared creation settings');
+    assert.deepEqual(summary, { action: 'create', method: 'create', risks: ['skipPermissions'], name: 'Claude 5', provider, folder: path.basename(f.dir) });
     assert.equal(JSON.parse(row.arguments)[0].skipPermissions, true);
     assert.equal(row.replacedBy, null); assert.equal(row.repeated, null);
   });
