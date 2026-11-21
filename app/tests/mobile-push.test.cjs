@@ -173,3 +173,39 @@ test('VAPID subject and generated JWT carry no account, contact address or appli
     assert.deepEqual(JSON.parse(plain), { count: 7 });
   }
 });
+const sent = (f, index = -1) => JSON.parse(require('http_ece').decrypt(f.messages.at(index).body, { version: 'aes128gcm', privateKey: f.key, authSecret: f.sub.keys.auth }).toString());
+test('alerts leave only as fixed codes; a cleared alert is said once, then the count contract returns', async t => {
+  let alerts = [{ code: 'token-anomaly' }, { code: 'PRIVATE_NAME' }, { code: 'service-disconnected', text: 'PRIVATE_BODY' }, { code: 'token-anomaly' }, 'decision-waiting', null];
+  const f = fixture(t, { alerts: () => alerts }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: ['service-disconnected', 'token-anomaly'] });
+  assert.equal(f.messages[0].headers.TTL, 3600); assert.equal(f.messages[0].headers.Urgency, 'high'); assert.equal(f.messages[0].headers.Topic, 'naw-count');
+  await f.push.refresh(); assert.equal(f.messages.length, 1);
+  alerts = []; await f.push.refresh();
+  assert.deepEqual(sent(f), { count: 7, alerts: [] }); assert.equal(f.messages[1].headers.TTL, 60); assert.equal(f.messages[1].headers.Urgency, 'normal');
+  await f.push.refresh(); assert.equal(f.messages.length, 2);
+  f.count(8); await f.push.refresh(); assert.deepEqual(sent(f), { count: 8 });
+});
+test('without a permitted count only the alert leaves, and nothing leaves when there is no alert', async t => {
+  let alerts = [];
+  const f = fixture(t, { count: () => null, alerts: () => alerts }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); assert.equal(f.messages.length, 0);
+  alerts = [{ code: 'service-disconnected' }]; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: ['service-disconnected'] });
+  alerts = []; await f.push.refresh(); assert.deepEqual(sent(f), { alerts: [] });
+  await f.push.refresh(); assert.equal(f.messages.length, 2);
+});
+test('a failing alert source adds nothing and does not hold back the count', async t => {
+  const f = fixture(t, { alerts: () => { throw Error('PRIVATE_FAILURE'); } }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); assert.deepEqual(sent(f), { count: 7 }); assert.equal(f.push.status().state, 'accepted');
+});
+test('an unchanged alert is said again only for a newer case, and its time never leaves', async t => {
+  let alerts = [{ code: 'decision-waiting', at: 1000 }];
+  const f = fixture(t, { alerts: () => alerts }); f.push.configuration(); f.push.subscribe(f.sub);
+  await f.push.refresh(); await f.push.refresh(); assert.equal(f.messages.length, 1);
+  alerts = [{ code: 'decision-waiting', at: 2000 }]; await f.push.refresh();
+  assert.equal(f.messages.length, 2); assert.deepEqual(sent(f), { count: 7, alerts: ['decision-waiting'] });
+  // The newer question was answered; the older one is still open and was already announced.
+  alerts = [{ code: 'decision-waiting', at: 1000 }]; await f.push.refresh(); assert.equal(f.messages.length, 2);
+  alerts = [{ code: 'decision-waiting', at: 'PRIVATE' }, { code: 'token-anomaly', at: 1.5 }]; await f.push.refresh();
+  assert.equal(f.messages.length, 3); assert.deepEqual(sent(f), { count: 7, alerts: ['token-anomaly', 'decision-waiting'] });
+});

@@ -1,11 +1,13 @@
 'use strict';
-// Count-only wakeup. Authority, keys and subscription are memory-only and die
+// A count and fixed alert codes only. Authority, keys and subscription are memory-only and die
 // with the existing paired-device generation. Importing starts no I/O or timer.
 const https = require('node:https'), dns = require('node:dns'), net = require('node:net');
 const crypto = require('node:crypto');
 const HOSTS = new Set(['web.push.apple.com', 'fcm.googleapis.com', 'updates.push.services.mozilla.com']);
 // RFC 6068 permits an empty recipient. No contact identity; provider acceptance is unverified.
 const SUBJECT = 'mailto:';
+// The whole alert vocabulary, most urgent first. The phone holds the wording; nothing else is ever sent.
+const ALERTS = ['service-disconnected', 'steward-wake-stalled', 'token-anomaly', 'decision-waiting'];
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const denied = () => Object.assign(Error('Mobile push unavailable'), { code: 'MOBILE_PUSH_DENIED' });
 function library() {
@@ -77,9 +79,15 @@ function sendRequest(details, { signal, valid }, request = https.request) {
   });
 }
 class MobilePush {
-  constructor({ authority, count, transport = sendRequest, now = Date.now }) {
-    if (typeof authority !== 'function' || typeof count !== 'function') throw denied();
-    Object.assign(this, { authority, count, transport, now }); this.close();
+  constructor({ authority, count, alerts = () => [], transport = sendRequest, now = Date.now }) {
+    if (typeof authority !== 'function' || typeof count !== 'function' || typeof alerts !== 'function') throw denied();
+    Object.assign(this, { authority, count, alerts, transport, now }); this.close();
+  }
+  // The listed codes in fixed order, and the latest moment one of them began. That moment is never sent.
+  read() {
+    let values; try { values = this.alerts(); } catch { values = []; }
+    const found = Array.isArray(values) ? values.filter(v => v && typeof v === 'object' && ALERTS.includes(v.code)) : [];
+    return { codes: ALERTS.filter(code => found.some(v => v.code === code)), at: Math.max(0, ...found.map(v => Number.isSafeInteger(v.at) ? v.at : 0)) };
   }
   current() { try { return this.authority() || null; } catch { return null; } }
   configuration() {
@@ -97,7 +105,7 @@ class MobilePush {
     const sub = subscriptionValue(value, this.now());
     // Replacing a browser subscription also cancels any old in-flight request.
     this.abort?.abort(); clearTimeout(this.timer); this.timer = null;
-    this.subscription = sub; this.lastCount = null; this.lastSubmittedAt = null; this.state = 'subscribed';
+    this.subscription = sub; this.lastSent = null; this.alerted = false; this.at = 0; this.lastSubmittedAt = null; this.state = 'subscribed';
   }
   async refresh() {
     if (this.current() !== this.stamp) { this.close(); return; }
@@ -114,11 +122,17 @@ class MobilePush {
     this.abort = abort; this.running = true;
     try {
       if (!valid()) return;
-      const count = this.count();
-      if (!Number.isSafeInteger(count) || count < 0) throw denied();
-      if (count === this.lastCount) return;
-      const details = library().generateRequestDetails(sub, JSON.stringify({ count }), {
-        TTL: 60, topic: 'naw-count', urgency: 'normal', contentEncoding: 'aes128gcm',
+      // A null count means it may not be read now (no reminders permission, or the source is lost).
+      const count = this.count(), { codes, at } = this.read();
+      if (count !== null && (!Number.isSafeInteger(count) || count < 0)) throw denied();
+      const state = JSON.stringify([count, codes]);
+      // An unchanged alert is said again only when a newer case of it began, such as a second question.
+      if (state === this.lastSent && at <= this.at || count === null && !codes.length && !this.alerted) return;
+      // An empty list is sent once after an alert, so the phone can say it has cleared.
+      const payload = { ...(count === null ? {} : { count }), ...(codes.length || this.alerted ? { alerts: codes } : {}) };
+      // An alert must outlast a phone that is briefly unreachable; the shared topic lets a later state replace it.
+      const details = library().generateRequestDetails(sub, JSON.stringify(payload), {
+        TTL: codes.length ? 3600 : 60, topic: 'naw-count', urgency: codes.length ? 'high' : 'normal', contentEncoding: 'aes128gcm',
         vapidDetails: { subject: SUBJECT, ...this.keys },
       });
       // APNs requires a JWT to be reused for at least an hour. Keep it per
@@ -130,7 +144,7 @@ class MobilePush {
       const status = await this.transport(details, { signal: abort.signal, valid });
       if (!valid()) return;
       if (status === 404 || status === 410) { this.subscription = null; this.state = 'expired'; }
-      else if (status === 201 || status === 202) { this.lastCount = count; this.lastSubmittedAt = this.now(); this.state = 'accepted'; }
+      else if (status === 201 || status === 202) { this.lastSent = state; this.at = Math.max(this.at, at); this.alerted = codes.length > 0; this.lastSubmittedAt = this.now(); this.state = 'accepted'; }
       else this.state = 'delayed';
     } catch { if (valid()) this.state = 'delayed'; }
     finally {
@@ -143,9 +157,9 @@ class MobilePush {
   }
   close() {
     clearTimeout(this.timer); this.abort?.abort(); this.abort = null; this.timer = null;
-    this.subscription = null; this.keys = null; this.stamp = null; this.lastCount = null;
+    this.subscription = null; this.keys = null; this.stamp = null; this.lastSent = null; this.alerted = false; this.at = 0;
     this.authorization = new Map();
     this.lastSubmittedAt = null; this.state = 'off';
   }
 }
-module.exports = { MobilePush, subscriptionValue, publicAddress, sendRequest };
+module.exports = { MobilePush, ALERTS, subscriptionValue, publicAddress, sendRequest };

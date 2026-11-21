@@ -231,8 +231,8 @@ async function verifyFullConnect() {
     assert.equal(sent.status,200);assert.equal(sent.value.status,'submitted');
     assert.equal((await nativeFixture('stats',future.id)).stats.sends,1);
     const updated=(await client.call('initial')).sessions.find(s=>s.id===future.id);assert.ok(updated.messages.some(m=>m.text==='FULL_PHONE_SYNTHETIC_MESSAGE'));assert.equal(updated.liveDraft,desktopDraft);
-    const workspace=await request('/mobile/workspace',{cookie});assert.equal(workspace.status,200);assert.equal(workspace.value.capabilities.push,false);assert.equal(workspace.value.capabilities.sensitiveDecisions,false);
-    assert.equal((await request('/mobile/push',{cookie})).status,403);
+    const workspace=await request('/mobile/workspace',{cookie});assert.equal(workspace.status,200);assert.equal(workspace.value.capabilities.push,true);assert.equal(workspace.value.capabilities.sensitiveDecisions,false);
+    const pushInfo=await request('/mobile/push',{cookie});assert.equal(pushInfo.status,200);assert.equal(pushInfo.value.enabled,false);assert.match(pushInfo.value.publicKey,/^[A-Za-z0-9_-]{87}$/);
     assert.equal((await request('/mobile/push',{method:'POST',cookie,csrf:after.value.csrf,body:{action:'subscribe',subscription:{}}})).status,403);
     // Decode was in memory only; never persist a pairing bearer in evidence.
     await page.locator('#mobile-pair-qr').evaluate(el=>{el.style.visibility='hidden';});

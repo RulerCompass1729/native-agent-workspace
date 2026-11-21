@@ -44,8 +44,8 @@ software client who obtains the QR first can enroll its own key. The desktop
 warns about this accepted boundary; there is no claim that per-card verification
 repairs a stolen first enrollment. See [WebAuthn's none attestation format](https://www.w3.org/TR/webauthn-3/#sctn-none-attestation).
 
-All current/future target, ended-target, shared-host exception and push-off
-boundaries below remain. No native terminal, arbitrary command, session/space
+All current/future target, ended-target and shared-host exception boundaries
+below remain. No native terminal, arbitrary command, session/space
 creation, membership, model/settings, interruption/takeover or file API is added.
 The session/space creation `+` controls remain hidden; queue task addition remains
 the separately authorized existing action. No real pairing, phone, notification
@@ -99,9 +99,9 @@ eight-MiB response unavailable. The original native records, confirmation conten
 and selected-mode limits are unchanged. Metadata itself still has the existing
 hard response bound.
 
-The all-scope path **forbids push on the server**
-for an all-scope pairing, even with records access. The phone also omits its push
-controls in this mode. Enrollment and candidate activation follow the separate
+Since 2026-11-20 an all-scope pairing may use push like any pairing with records
+access, at the person's request (it was refused on the server before); what a
+push may carry is in `docs/mobile-phase3.md`. Enrollment and candidate activation follow the separate
 QR authorization above. This checkpoint is not a daily installation.
 Session/space `+` controls that only explained a Mac-only
 action are now hidden; no creation API is added.

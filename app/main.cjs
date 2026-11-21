@@ -188,9 +188,27 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   const cards = snapshot?.backgroundConfirmations || (backgroundControl && names ? backgroundControl.confirmations(names, snapshot) : []);
   return confirmationInbox.inboxStatus(records, temp, cards.map(confirmationInbox.confirmationSummary));
 }
+// The one list of fixed alert codes for the phone, shared by its push and its banner: no names, text, counts or
+// error messages. available false means unknown, never "no problems". A lost service is added where it is seen.
+// at is when the newest case began, so that a second question is announced while the first is still open.
+// status is the shared reminder status when the caller may read it; without it, cards are not judged.
+function appHealth(status = null) {
+  const alerts = []; let available = true;
+  try { if (stewardWake?.view().blocked) alerts.push({ code: 'steward-wake-stalled' }); } catch { available = false; }
+  try {
+    const rooms = [roomState.value, ...roomState.spaces.rooms];
+    // The same rule as the desktop's decision notification: waiting with no reason asks the person.
+    const asked = rooms.filter(room => !room.archived).flatMap(room => (room.queue || []).filter(item => item.status === 'waiting' && !item.reason));
+    const cards = (status?.confirmations || []).filter(card => card.actionable === true);
+    if (asked.length || cards.length) alerts.push({ code: 'decision-waiting', at: Math.max(0,
+      ...asked.map(item => Number.isSafeInteger(item.finishedAt) ? item.finishedAt : 0), ...cards.map(card => Number.isSafeInteger(card.time) ? card.time : 0)) });
+  } catch { available = false; }
+  return { available, alerts };
+}
 function appMobileBroker() {
   if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
-  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id) });
+  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting, changed: () => watchAppMobile(MOBILE_RESPONSE_GRACE_MS), desktop: appMobileWorkspace(), onHumanInput: id => queueDispatcher?.noteHuman(id),
+    pushOptions: { alerts: status => appHealth(status).alerts } });
   return mobileBroker;
 }
 function appMobileWorkspace() {

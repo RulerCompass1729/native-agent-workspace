@@ -51,6 +51,9 @@ class MobileBroker {
   }
   #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
+  // A lost service is itself an alert: only the push outlives it, still bound to the paired device, so the phone can
+  // be told. Nothing is sent here; the push's own minute check reports it, so a brief drop says nothing.
+  #lost() { const push = this.#push; this.#push = null; this.#forget(); this.#push = push; this.#disconnect(); }
   #bound() {
     const client = this.#client;
     if (!(client instanceof WorkspaceClient) || client.closing || client.socket.destroyed ||
@@ -157,7 +160,7 @@ class MobileBroker {
       this.#fullLayout=c.layout;this.#fullGeneration=next.generation;this.#workspaceGrant={value:c.grant,generation:next.generation};
       this.#consent=c.consent;if(value.mode==='basic')this.#consent.revoke();
       this.#csrf={generation:next.generation,deviceId:next.device.id,value:auth.csrf};
-      c.client.once('closed',()=>{if(this.#client===c.client){this.#forget();this.#disconnect();}});
+      c.client.once('closed',()=>{if(this.#client===c.client)this.#lost();});
       try{old?.close();if(old && (!old.closing || !old.socket.destroyed))throw denied();}
       catch{this.revoke();this.#changed();throw denied('MOBILE_CLEANUP_UNCONFIRMED');}
       this.#changed();
@@ -185,7 +188,7 @@ class MobileBroker {
     const client = await connect(this.#scope, 'mobile-' + randomUUID());
     if (epoch !== this.#epoch) { client.close(); throw denied(); }
     this.#client = client;
-    client.once('closed', () => { if (this.#client === client) { this.#forget(); this.#disconnect(); } });
+    client.once('closed', () => { if (this.#client === client) this.#lost(); });
     try {
       this.#bound();
       const scopes = selection.map(value => {
@@ -270,7 +273,7 @@ class MobileBroker {
           const fresh = this.#authenticate(auth);
           if (epoch !== this.#epoch || fresh.generation !== state.generation || layout !== this.#layout() || !(next instanceof WorkspaceClient) || fs.realpathSync(next.scope) !== this.#root || next.socket?.destroyed) throw denied();
           const old = this.#client; this.#client = next; this.#epoch++; this.#contexts.clear(); this.#fullLayout = layout;
-          next.once('closed', () => { if (this.#client === next) { this.#forget(); this.#disconnect(); } });
+          next.once('closed', () => { if (this.#client === next) this.#lost(); });
           old.close();
         } catch (error) { if (this.#client !== next) next.close(); throw error; }
       }
@@ -330,25 +333,40 @@ class MobileBroker {
     }
     const consent = this.#consent.status(state);
     result.capabilities.sensitiveDecisions = consent.enabled;
-    result.capabilities.push = !this.#all(state) && this.#workspaceGrant?.value.records === true;
+    result.capabilities.push = this.#workspaceGrant?.value.records === true;
     for (const card of result.confirmations) card.canDecide = Boolean(consent.enabled && card.version && card.state === 'confirmation-required' && !card.disposition && card.expiresAt > Date.now());
     return result;
   }
+  // What a subscription lives by: the paired device alone, so that a lost service can still be reported.
+  #pushDevice() {
+    try {
+      if (this.#access.closed || this.#access.disabledMarker()) return null;
+      const s = this.#access.load();
+      if (!s.enabled || !s.device || s.device.until <= this.#access.time()) return null;
+      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+    } catch { return null; }
+  }
+  // Who may subscribe and read the count: that device, connected, holding the reminders permission.
   #pushAuthority() {
     try {
       this.#bound();
-      if (this.#access.closed || this.#access.disabledMarker()) return null;
-      const s = this.#access.load();
-      if (this.#all(s) || !s.enabled || !s.device || s.device.until <= this.#access.time() ||
-          this.#workspaceGrant?.generation !== s.generation || this.#workspaceGrant.value.records !== true) return null;
-      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+      if (this.#workspaceGrant?.generation !== this.#access.load().generation || this.#workspaceGrant.value.records !== true) return null;
+      return this.#pushDevice();
     } catch { return null; }
+  }
+  #pushAlerts() {
+    const alerts = []; let client = null, status = null;
+    try { client = this.#bound(); } catch { alerts.push({ code: 'service-disconnected' }); }
+    // The app judges waiting cards from the same reminder status the count comes from.
+    try { if (client && this.#pushAuthority()) status = this.#desktop.records.status(null, client); } catch { status = null; }
+    let more; try { more = this.#pushOptions.alerts?.(status); } catch { more = null; }
+    return Array.isArray(more) ? alerts.concat(more) : alerts;
   }
   pushInfo(auth) {
     this.#workspaceState(auth);
     if (!this.#pushAuthority()) throw denied();
-    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions,
-      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status(null, this.#bound()).count });
+    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions, authority: () => this.#pushDevice(),
+      count: () => this.#pushAuthority() ? this.#desktop.records.status(null, this.#bound()).count : null, alerts: () => this.#pushAlerts() });
     return this.#push.configuration();
   }
   pushAction(auth, value) {

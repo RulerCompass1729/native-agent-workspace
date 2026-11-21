@@ -100,7 +100,7 @@ test('proved QR enrollment swaps the old cookie and key only at activation; new 
  const f=brokerFixture(t),old=await f.paired(),{auth:a}=await f.candidate({replace:true}),key=await f.prove(a);
  assert.equal(f.broker.session(old).deviceId!==f.broker.session(a).deviceId,true);assert.equal(f.broker.approvalStatus().registered,false);
  await f.broker.activateCandidate(a,{mode:'verified'});assert.throws(()=>f.broker.session(old));assert.equal(f.broker.session(a).consent.enabled,true);
- assert.throws(()=>f.broker.registrationOptions(a,{}));assert.throws(()=>f.broker.pushInfo(a));
+ assert.throws(()=>f.broker.registrationOptions(a,{}));assert.equal(f.broker.pushInfo(a).publicKey.length,87);
  const value={id:'card',version:f.binding.version,decision:'approve'},challenge=await f.broker.decisionOptions(a,value);
  await assert.rejects(f.broker.decide(a,{...value,challengeId:challenge.challengeId,assertion:key.assertion(challenge.publicKey,{flags:1})}));
  const fresh=await f.broker.decisionOptions(a,value);const result=await f.broker.decide(a,{...value,challengeId:fresh.challengeId,assertion:key.assertion(fresh.publicKey)});assert.equal(result.status,'complete');
