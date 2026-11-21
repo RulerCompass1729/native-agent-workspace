@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm'), { randomUUID } = require('node:crypto');
 const { Workspace } = require('../workspace.cjs'), { Claude } = require('../adapters.cjs');
 const { ScopedOutboxRuntime } = require('../scoped-outbox-runtime.cjs'), { rootCall } = require('../background-control-native.cjs');
+const { classifyOutboxFailure } = require('../computer-use-outbox-native.cjs');
 const bridgeSource = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8');
 
 // A mid-turn native compaction is followed by the engine's next step of the same root turn, with no new
@@ -84,7 +85,8 @@ export function drained() { return !observing && !observations.length; }
       reached.push(route); sent.push({ route, tool: body.tool ?? null, arguments: body.arguments });
       if (route === '/background-control') {
         try { rootCall(f.r, body, new AbortController().signal, () => true); return reply({ state: 'complete' }); }
-        catch (error) { return reply({ state: 'unconfirmed', error: error.message }); }
+        // As claude-submit.cjs answers a refused root call.
+        catch (error) { return reply({ state: 'unconfirmed', error: error.message, retry: false, ...classifyOutboxFailure(error, 'binding', 'binding-unavailable') }); }
       }
       // operator-control.cjs actor() and session-wake.cjs: the caller is NAW's live root turn and prompt.
       const live = f.r.liveTurn?.id === body.turnId && f.r.liveTurn.promptId === body.promptId;
@@ -176,6 +178,28 @@ test('the daily sequence: queue calls, an automatic compaction, then workspace_o
     'NAW receives both calls with the arguments the turn gave');
   assert.deepEqual(b.mod.bridgeState(), RESTORED);
   assert.deepEqual(b.observed.filter(id => id !== 'control:activity'), ['control:compact', 'control:turn-continue']);
+});
+
+// Also seen that day: NAW had declared a display gap in the turn, and answered its queue calls unconfirmed,
+// before the turn compacted. The continuation is not a gap recovery: NAW's answer stays that same one.
+test('a turn NAW holds a display gap for gets NAW\'s same answer after its compaction, not the turn back', async t => {
+  const f = await fixture(t), b = await bridge(f);
+  const queueAdd = () => {
+    const input = { action: 'invoke', method: 'spaceAction', arguments: ['fixture-room', 'queueAdd', ['SYNTHETIC ITEM', null]], operation_id: `fixture-queueAdd-${randomUUID()}` };
+    return b.tool('workspace_control', input, { approved: true, background: input });
+  };
+  const ending = result => {
+    const answer = result.result ? JSON.parse(result.result) : {};
+    return [result.deny ?? null, answer.state ?? null, answer.failureReason ?? null, answer.failureCheck ?? null];
+  };
+  f.r.observeRootGap({ sessionId: f.s.nativeId, lease: f.binding.lease, epoch: f.r.observationEpoch, gapThrough: f.sequence() });
+  const before = ending(await queueAdd());
+  assert.deepEqual(before, [null, 'unconfirmed', 'native-call-invalidated', 'display-gap'], 'before the compact NAW answers for its gap');
+  await b.compact(); await b.step();
+  assert.deepEqual(ending(await queueAdd()), before, 'after the compact the call still reaches NAW and gets that answer');
+  assert.deepEqual(b.mod.bridgeState(), RESTORED, 'the bridge lost nothing and has its own turn back');
+  assert.equal(f.r.liveTurn, null); assert.equal(f.r.rootTurn, null);
+  assert.throws(() => f.mint(), 'NAW mints nothing for the turn while its gap stands');
 });
 
 test('in the continued turn a sub-agent, another origin and a call without a tool use id are still refused', async t => {
