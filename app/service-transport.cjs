@@ -2,8 +2,12 @@
 // chunk; snapshots may be large, and a slow UI must not lose ordered replies.
 const RESPONSE_BYTES = 64 * 1024 * 1024;
 const REQUEST_BYTES = 2 * 1024 * 1024;
+// Why the service ended a client's transport itself. Its next transport is told (daemon.cjs, the ready frame):
+// the reason cannot travel on the transport being ended, least of all one whose reader has stopped.
+const SERVICE_CLOSE_REASONS = ['write-queue-frames', 'write-queue-bytes', 'frame-too-large', 'encode-failed', 'broadcast-failed', 'request-too-large', 'request-unreadable', 'request-refused'];
 
-function readFrames(socket, maxBytes, onMessage) {
+// refused(reason) runs before this side ends the transport: 'too-large' or 'unreadable' for a frame it read.
+function readFrames(socket, maxBytes, onMessage, refused = () => {}) {
   let parts = [], bytes = 0;
   socket.setEncoding('utf8');
   socket.on('data', chunk => {
@@ -13,13 +17,13 @@ function readFrames(socket, maxBytes, onMessage) {
       const end = chunk.indexOf('\n', start);
       const part = chunk.slice(start, end < 0 ? chunk.length : end);
       bytes += Buffer.byteLength(part);
-      if (bytes > maxBytes) { parts = []; socket.destroy(); return; }
+      if (bytes > maxBytes) { parts = []; refused('too-large'); socket.destroy(); return; }
       if (part) parts.push(part);
       if (end < 0) return;
       const line = parts.join(''); parts = []; bytes = 0;
       let message;
-      try { message = JSON.parse(line); } catch { socket.destroy(); return; }
-      if (!message || typeof message !== 'object' || Array.isArray(message)) { socket.destroy(); return; }
+      try { message = JSON.parse(line); } catch { refused('unreadable'); socket.destroy(); return; }
+      if (!message || typeof message !== 'object' || Array.isArray(message)) { refused('unreadable'); socket.destroy(); return; }
       onMessage(message);
       if (socket.destroyed) return;
       start = end + 1;
@@ -34,7 +38,8 @@ function encodeFrame(value) {
   return Buffer.from(text + '\n');
 }
 
-function createWriter(socket, { maxBytes = 2 * RESPONSE_BYTES, maxFrames = 1024 } = {}) {
+// refused(reason) runs before the writer ends the transport, with one of SERVICE_CLOSE_REASONS.
+function createWriter(socket, { maxBytes = 2 * RESPONSE_BYTES, maxFrames = 1024, refused = () => {} } = {}) {
   let queue = [], queuedBytes = 0, blocked = false;
   function flush() {
     while (!blocked && !socket.destroyed && queue.length) {
@@ -53,9 +58,8 @@ function createWriter(socket, { maxBytes = 2 * RESPONSE_BYTES, maxFrames = 1024 
       // Append the replacement AFTER intervening RPC replies. Replacing in
       // place would allow an older initial response to overwrite newer state.
     }
-    if (frame.length > RESPONSE_BYTES + 1 || queuedBytes + frame.length > maxBytes || queue.length >= maxFrames) {
-      socket.destroy(); return false;
-    }
+    const over = frame.length > RESPONSE_BYTES + 1 ? 'frame-too-large' : queuedBytes + frame.length > maxBytes ? 'write-queue-bytes' : queue.length >= maxFrames ? 'write-queue-frames' : null;
+    if (over) { refused(over); socket.destroy(); return false; }
     queue.push({ frame, key }); queuedBytes += frame.length; flush(); return true;
   }
   return {
@@ -64,9 +68,9 @@ function createWriter(socket, { maxBytes = 2 * RESPONSE_BYTES, maxFrames = 1024 
     queued: key => queue.some(entry => entry.key === key),
     send(value, key = null) {
       let frame;
-      try { frame = encodeFrame(value); } catch { socket.destroy(); return false; }
+      try { frame = encodeFrame(value); } catch (error) { refused(error instanceof RangeError ? 'frame-too-large' : 'encode-failed'); socket.destroy(); return false; }
       return sendFrame(frame, key);
     },
   };
 }
-module.exports = { RESPONSE_BYTES, REQUEST_BYTES, readFrames, encodeFrame, createWriter };
+module.exports = { RESPONSE_BYTES, REQUEST_BYTES, SERVICE_CLOSE_REASONS, readFrames, encodeFrame, createWriter };

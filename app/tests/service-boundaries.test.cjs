@@ -28,6 +28,8 @@ test('malformed or unauthorized local clients cannot crash or read the service',
   assert.equal(fs.statSync(path.dirname(info.endpoint)).mode & 0o077, 0);
   assert.equal(fs.statSync(file).mode & 0o077, 0);
   const auth = JSON.stringify({ protocol: 1, token: info.token, owner: 'invalid-frame-client' }) + '\n';
+  // An owner whose previous transport the service ended over a request is told that on its next one, and no more.
+  let ended = false;
   async function rejected(payload, authenticated) {
     const socket = net.connect(info.endpoint); socket.setEncoding('utf8');
     socket.on('error', () => {});
@@ -39,7 +41,9 @@ test('malformed or unauthorized local clients cannot crash or read the service',
       await once(socket, 'connect');
       socket.write((authenticated ? auth : '') + payload + '\n');
       await closed;
-      assert.equal(received, authenticated ? '{"ready":true}\n' : '');
+      if (!authenticated) assert.equal(received, '');
+      else if (!ended) { assert.equal(received, '{"ready":true}\n'); ended = true; }
+      else assert.match(received, /^\{"ready":true,"ended":\{"reason":"request-unreadable","at":[1-9][0-9]*\}\}\n$/);
       assert.equal(child.exitCode, null, 'Only the malformed client may be closed');
       const after = await client.call('initial');
       assert.equal(after.servicePid, before.servicePid);

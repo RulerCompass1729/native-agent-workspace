@@ -75,6 +75,8 @@ async function run() {
   assert.ok((await drop(0)).dropped >= 1, 'The service closed this window\'s connection');
   await until(() => restoredCount() === 1, async () => `The window stayed disconnected after the service closed its connection: ${JSON.stringify(await banner())}`);
   assert.deepEqual(await banner(), { button: false, alert: '', shown: 0 }, 'A connection that is back at once shows no notice');
+  // The fixture dropped it, not a rule of the service: no reason of the service's may be recorded.
+  assert.equal('service' in events().find(e => e.event === 'restored'), false, 'A dropped connection has no service reason');
   inputs = await worksAgain(id, 'Brief close', inputs);
   checks.push('A connection the service closed is back without the person and without a notice; draft kept, nothing sent again, terminal output and input continue');
 
@@ -95,8 +97,12 @@ async function run() {
   await until(() => restoredCount() === 3, async () => `A held main process did not end with a restored connection: ${JSON.stringify(events().slice(-3))} ${JSON.stringify(await banner())}`, 15000);
   const closed = events().filter(e => e.event === 'closed').at(-1);
   assert.ok(closed.loopDelayMs >= 1500, `The record names the held event loop: ${JSON.stringify(closed)}`);
+  // The service ended it itself and says why on the next connection (daemon.cjs, the ready frame).
+  const told = events().filter(e => e.event === 'restored').at(-1).service;
+  assert.deepEqual(told?.map(s => [s.backend, s.reason]), [[closed.backends[0], 'write-queue-frames']], `The record names the service's reason: ${JSON.stringify(told)}`);
+  assert.ok(Math.abs(Date.parse(told[0].endedAt) - Date.parse(closed.at)) < 10000);
   inputs = await worksAgain(id, 'Held main process', inputs);
-  checks.push(`A main process held for 2.5 s while ${frames} terminal frames arrive loses its connection (${closed.reasons.join(',')}, loopDelayMs ${closed.loopDelayMs}) and gets it back by itself`);
+  checks.push(`A main process held for 2.5 s while ${frames} terminal frames arrive loses its connection (${closed.reasons.join(',')}, loopDelayMs ${closed.loopDelayMs}, service reason ${told[0].reason}) and gets it back by itself`);
 
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, events: events(), screenLocked: { start: lockedAtStart, end: screenLocked() }, modelTasks: 0, nativeProcesses: 0, errors }, null, 2));

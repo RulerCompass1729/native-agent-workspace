@@ -42,6 +42,14 @@ async function main() {
   const workspace = new Workspace(host, dataDir, `${path.resolve(defaultWorkspace)}-sessions`); const clients = new Set(), writers = new Map();
   // Clients that take state deltas (state-delta.cjs), each with the states its next frame may build on.
   const deltas = new Map(), stateEncoder = createStateEncoder();
+  // Why this service itself ended an owner's transport, kept for that owner's next one (the ready frame below).
+  const owners = new WeakMap(), endings = new Map();
+  const ending = (client, reason) => {
+    const owner = owners.get(client); if (owner === undefined) return;
+    endings.delete(owner); endings.set(owner, { reason, at: Date.now() });
+    if (endings.size > 64) endings.delete(endings.keys().next().value);
+  };
+  const endAll = reason => { for (const client of clients) { ending(client, reason); client.destroy(); } };
   workspace.peerLeases = new PeerLeases(workspace);
   const peerRunner = workspace.peerRunner = new PeerRunner(workspace, dataDir);
   const send = (client, value) => writers.get(client)?.send(value);
@@ -55,12 +63,12 @@ async function main() {
     if (event === 'state') {
       const changed = stateChanges; stateChanges = new Set();
       try { sendState(stateEncoder, [...clients].map(client => ({ writer: writers.get(client), delta: deltas.get(client) || null })).filter(target => target.writer), data, changed); }
-      catch { for (const client of clients) client.destroy(); }
+      catch { endAll('broadcast-failed'); }
       return;
     }
     let frame;
     try { frame = encodeFrame({ event, data }); }
-    catch { for (const client of clients) client.destroy(); return; }
+    catch { endAll('broadcast-failed'); return; }
     // Only complete state snapshots supersede each other. Terminal bytes,
     // progress and RPC acknowledgements retain their order and payload.
     for (const client of clients) writers.get(client)?.sendFrame(frame, event === 'state' ? 'state' : null);
@@ -236,20 +244,22 @@ async function main() {
     }
   };
   const server = net.createServer(client => {
-    writers.set(client, createWriter(client));
+    writers.set(client, createWriter(client, { refused: reason => ending(client, reason) }));
     let authenticated = false, owner = null, page = true;
     const authTimer = setTimeout(() => { if (!authenticated) client.destroy(); }, 3000);
     client.on('error', () => {});
     readFrames(client, REQUEST_BYTES, request => {
       if (!authenticated) {
         if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100 || ![undefined, true, false].includes(request.page)) { client.destroy(); return; }
-        authenticated = true; owner = request.owner; page = request.page !== false; clients.add(client); workspace.viewConnected(owner, page); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer); send(client, { ready: true }); return;
+        authenticated = true; owner = request.owner; page = request.page !== false; clients.add(client); workspace.viewConnected(owner, page); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer);
+        const ended = endings.get(owner); endings.delete(owner); owners.set(client, owner);
+        send(client, { ready: true, ...(ended ? { ended } : {}) }); return;
       }
-      if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
+      if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { ending(client, 'request-refused'); client.destroy(); return; }
       Promise.resolve().then(() => request.backgroundActor
         ? background.run(request.backgroundActor, () => dispatch(owner, request.method, request.args, client))
         : dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
-    });
+    }, reason => ending(client, 'request-' + reason));
     client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); deltas.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner, page, leavingViews.has(client)); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);

@@ -1,6 +1,6 @@
 const fs = require('node:fs'), net = require('node:net'), path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
+const { readFrames, RESPONSE_BYTES, SERVICE_CLOSE_REASONS } = require('./service-transport.cjs');
 const { rebuildState } = require('./state-delta.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
@@ -20,7 +20,12 @@ class ServiceClient extends EventEmitter {
       }
       const value = m.event ? m.data : m.value;
       if (value && typeof value === 'object') this.receipts.set(value, ++received);
-      if (m.ready) this.emit('ready');
+      if (m.ready) {
+        // priorClose: why the service ended this owner's previous transport, when it did and said so (daemon.cjs).
+        const ended = m.ended;
+        if (ended && typeof ended === 'object' && SERVICE_CLOSE_REASONS.includes(ended.reason) && Number.isSafeInteger(ended.at) && ended.at > 0) this.priorClose = { reason: ended.reason, at: ended.at };
+        this.emit('ready');
+      }
       else if (m.event) this.emit(m.event, m.data);
       else if (this.pending.has(m.id)) {
         const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer);

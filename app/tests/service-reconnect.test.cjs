@@ -1,13 +1,15 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net'), vm = require('node:vm');
+const { fork } = require('node:child_process'), { once } = require('node:events');
 const { ServiceClient, connectService } = require('../service-connection.cjs');
+const { createWriter, readFrames } = require('../service-transport.cjs');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { uiError } = require('../ui-errors.cjs');
 
 // 2026-11-20: the service ended one of a window's backend connections and the whole window stayed 「本地服务断开」
 // until the person pressed 「重新连接本机服务」, several times within minutes. Real service clients over local
 // sockets; each backend is a synthetic stand-in that answers `initial`, holds `hold`, and can end a connection.
-const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8'), renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const reconnectModule = (() => { try { return require('../service-reconnect.cjs'); } catch { return null; } })();
 const settled = async (check, ms = 3000) => { for (const end = Date.now() + ms; Date.now() < end;) { if (check()) return true; await new Promise(resolve => setTimeout(resolve, 10)); } return check(); };
 const channels = context => context.page.map(([channel]) => channel);
@@ -20,7 +22,7 @@ async function backend(dataDir, key, session) {
   const state = { owner: 'view', runtimeVersion: 'synthetic', capabilities: [], diagnostics: { dispatches: 0, shellModelCalls: 0 },
     sessions: [{ id: session, nativeId: 'native-' + session, provider: 'codex', state: 'idle', owner: 'view' }], room: { revision: 0, messages: [], run: null } };
   // Each accepted connection, in order, with its handshake and the methods it was asked.
-  const accepted = [];
+  const accepted = [], told = { ready: null };
   const serve = socket => {
     const connection = { socket, hello: null, methods: [] }; accepted.push(connection); let buffer = '';
     socket.setEncoding('utf8'); socket.on('error', () => {});
@@ -28,7 +30,7 @@ async function backend(dataDir, key, session) {
       buffer += chunk;
       for (let end = buffer.indexOf('\n'); end >= 0; end = buffer.indexOf('\n')) {
         const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
-        if (!connection.hello) { connection.hello = request; socket.write('{"ready":true}\n'); continue; }
+        if (!connection.hello) { connection.hello = request; socket.write(JSON.stringify(told.ready || { ready: true }) + '\n'); told.ready = null; continue; }
         connection.methods.push(request.method);
         if (request.method !== 'hold') socket.write(JSON.stringify({ id: request.id, ok: true, value: request.method === 'initial' ? structuredClone(state) : true }) + '\n');
       }
@@ -38,7 +40,8 @@ async function backend(dataDir, key, session) {
   const listen = async () => { server = net.createServer(serve); await new Promise(resolve => server.listen(endpoint, resolve)); };
   const stop = async () => { const old = server; server = null; for (const c of accepted) c.socket.destroy(); if (old) await new Promise(resolve => old.close(resolve)); };
   await listen();
-  return { key, accepted, listen, stop, remove: () => fs.rmSync(socketDir, { recursive: true, force: true }) };
+  // tell: the ready frame of the next connection only.
+  return { key, accepted, listen, stop, tell: ready => { told.ready = ready; }, remove: () => fs.rmSync(socketDir, { recursive: true, force: true }) };
 }
 
 async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa']) {
@@ -101,6 +104,7 @@ test('a window whose backend connection the service ended works again without th
   const events = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'connection-events.json'), 'utf8'));
   assert.deepEqual(events.map(e => [e.event, e.window, e.backends]), [['closed', 'page', [other.key]], ['restored', 'page', [other.key]]]);
   assert.deepEqual(events[0].reasons, ['peer']);
+  assert.equal('service' in events[1], false, 'no reason is recorded that the service did not give');
   assert.ok(Number.isInteger(events[0].loopDelayMs) && events[1].attempts === 1);
   assert.equal(fs.statSync(path.join(f.dataDir, 'connection-events.json')).mode & 0o777, 0o600);
 });
@@ -214,4 +218,150 @@ test('a service client says which side ended its connection', async t => {
   assert.equal(await reasonAfter(client => client.close()), 'local-close');
   assert.equal(await reasonAfter((client, peer) => peer.write('not json\n')), 'local-destroy');
   assert.equal(await reasonAfter((client, peer) => peer.write(JSON.stringify({ event: 'state', delta: 1, data: null }) + '\n')), 'state-rebuild');
+});
+
+// The service's own reason for ending a transport (C's review of 65c2d03e, C-TR-2): it cannot travel on the
+// transport being ended, so the service hands it to the same owner's next one.
+test('the record of a reconnection carries the reason the service gave for ending the transport', async t => {
+  const f = await fixture(t), wire = mainWiring(f.dataDir), window = await f.open(), other = f.backends[1], at = Date.UTC(2026, 10, 20, 23, 0, 0);
+  wire(window);
+  other.tell({ ready: true, ended: { reason: 'write-queue-frames', at } });
+  other.accepted[0].socket.destroy();
+  assert.ok(await settled(() => channels(window).includes('workspace:reconnected')));
+  const events = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'connection-events.json'), 'utf8'));
+  assert.deepEqual(events.map(e => e.event), ['closed', 'restored']);
+  assert.deepEqual(events[1].service, [{ backend: other.key, reason: 'write-queue-frames', endedAt: new Date(at).toISOString() }]);
+  assert.deepEqual(events[0].reasons, ['peer'], 'what this process saw itself stays as it was');
+});
+
+test('a service client keeps only a known reason and a time from what the service says', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-told-')); fs.chmodSync(dir, 0o700);
+  const endpoint = path.join(dir, 's.sock'); let ready = null;
+  const server = net.createServer(socket => { socket.on('error', () => {}); socket.write(JSON.stringify(ready) + '\n'); });
+  await new Promise(resolve => server.listen(endpoint, resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
+  const kept = async frame => {
+    ready = frame; const socket = net.connect(endpoint), client = new ServiceClient(socket);
+    await once(client, 'ready'); socket.destroy(); return client.priorClose;
+  };
+  assert.equal(await kept({ ready: true }), undefined);
+  assert.deepEqual(await kept({ ready: true, ended: { reason: 'write-queue-frames', at: 1763679600000, error: 'ENOENT: /private/place', path: '/private/place' } }), { reason: 'write-queue-frames', at: 1763679600000 });
+  for (const ended of ['write-queue-frames', { reason: 'ENOENT: no such file /private/place', at: 1763679600000 }, { reason: 'write-queue-frames', at: 'now' }, { reason: 'write-queue-frames' }, { reason: ['write-queue-frames'], at: 1 }, null])
+    assert.equal(await kept({ ready: true, ended }), undefined, JSON.stringify(ended));
+});
+
+test('the writer and the reader say why they end a transport, once, before ending it', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-writer-')); fs.chmodSync(dir, 0o700);
+  const endpoint = path.join(dir, 's.sock'), accepted = [], server = net.createServer(socket => { socket.on('error', () => {}); accepted.push(socket); });
+  await new Promise(resolve => server.listen(endpoint, resolve));
+  const peers = [];
+  t.after(async () => { for (const socket of [...accepted, ...peers]) socket.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
+  // A real local socket whose other end never reads: what the service writes stays queued.
+  const pair = async () => {
+    const peer = net.connect(endpoint), index = accepted.length; peer.on('error', () => {}); peers.push(peer);
+    await once(peer, 'connect'); peer.pause(); assert.ok(await settled(() => accepted.length > index));
+    return accepted[index];
+  };
+  const frame = Buffer.alloc(256 * 1024, 'x');
+  const written = async options => {
+    const socket = await pair(), reasons = [], writer = createWriter(socket, { ...options, refused: reason => { reasons.push([reason, socket.destroyed]); } });
+    let sent = 0; while (writer.sendFrame(frame) && sent < 64) sent++;
+    return { reasons, destroyed: socket.destroyed };
+  };
+  assert.deepEqual(await written({ maxFrames: 4 }), { reasons: [['write-queue-frames', false]], destroyed: true });
+  assert.deepEqual(await written({ maxBytes: 3 * frame.length }), { reasons: [['write-queue-bytes', false]], destroyed: true });
+  const unencodable = await pair(), why = [];
+  assert.equal(createWriter(unencodable, { refused: reason => why.push(reason) }).send({ value: 1n }), false);
+  assert.deepEqual([why, unencodable.destroyed], [['encode-failed'], true]);
+
+  const read = async text => {
+    const socket = await pair(), reasons = []; readFrames(socket, 64, () => {}, reason => { reasons.push([reason, socket.destroyed]); });
+    peers.at(-1).write(text); assert.ok(await settled(() => socket.destroyed, 2000));
+    return reasons;
+  };
+  assert.deepEqual(await read('x'.repeat(200) + '\n'), [['too-large', false]]);
+  assert.deepEqual(await read('not json\n'), [['unreadable', false]]);
+  assert.deepEqual(await read('[1]\n'), [['unreadable', false]]);
+});
+
+// The real service process and two real transports of one owner. Synthetic native host, no session and no model.
+test('the real service tells an owner\'s next transport why it ended the previous one, and only then', { timeout: 30000 }, async t => {
+  const root = path.resolve(__dirname, '../..'), directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-service-')));
+  const child = fork(path.join(root, 'app/daemon.cjs'), [directory], { execArgv: ['--require', path.join(root, 'scripts/fixtures/connection-drop.cjs')],
+    env: { PATH: process.env.PATH, HOME: directory, TMPDIR: os.tmpdir(), NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: directory }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  const open = [];
+  t.after(async () => {
+    for (const client of open) client.socket.destroy();
+    if (child.exitCode === null && child.signalCode === null) { const ended = once(child, 'exit'); child.kill(); await ended; }
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  assert.ok(await settled(() => fs.existsSync(path.join(directory, 'connection.json')) || child.exitCode !== null, 10000) && child.exitCode === null, 'the owned synthetic service starts');
+  const connect = async owner => { const client = await connectService(directory, owner); open.push(client); return client; };
+  const closed = client => client.socket.destroyed ? Promise.resolve() : once(client, 'closed');
+  const reason = async owner => { const client = await connect(owner), prior = client.priorClose; client.close(); await closed(client); return prior?.reason; };
+
+  // A request the service refuses.
+  const first = await connect('window-a'), other = await connect('window-b'), before = Date.now();
+  assert.equal(first.priorClose, undefined);
+  first.socket.write(JSON.stringify({ id: 1, method: 'initial', args: 'not a list' }) + '\n');
+  await closed(first);
+  assert.equal(first.closeReason, 'peer', 'the ended transport itself still only says which side ended it');
+  const second = await connect('window-a');
+  assert.equal(second.priorClose?.reason, 'request-refused');
+  assert.ok(second.priorClose.at >= before - 1000 && second.priorClose.at <= Date.now() + 1000);
+  assert.equal(await other.call('ping').catch(error => error.message) !== undefined, true);
+  assert.equal(other.socket.destroyed, false, 'another owner\'s transport is left alone');
+  second.close(); await closed(second);
+  assert.equal(await reason('window-a'), undefined, 'the reason is told once');
+  assert.equal(await reason('window-b-new'), undefined, 'and to no other owner');
+
+  // A reader that stopped: replies wait in the service until it ends the transport (createWriter, 1024 frames).
+  const stalled = await connect('window-a');
+  stalled.socket.pause();
+  for (let index = 0; index < 1400; index++) stalled.call('initial').catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  stalled.socket.resume();
+  await closed(stalled);
+  assert.equal(await reason('window-a'), 'write-queue-frames');
+
+  // Controls: a transport the client closes, and one the service's process drops without any of its rules.
+  const leaving = await connect('window-a'); leaving.close(); await closed(leaving);
+  assert.equal(await reason('window-a'), undefined);
+  const dropped = await connect('window-a');
+  // The fixture's native host answers every message as well; only the drop's own answer counts.
+  const answer = new Promise(resolve => { const heard = m => { if (m.dropId === 1) { child.off('message', heard); resolve(m); } }; child.on('message', heard); });
+  child.send({ id: 1, method: 'drop-connections', value: 0 });
+  assert.ok((await answer).dropped >= 1); await closed(dropped);
+  assert.equal(dropped.closeReason, 'peer');
+  assert.equal(await reason('window-a'), undefined, 'an ending without a rule of the service stays unexplained');
+});
+
+// C's review of 65c2d03e, C-TR-1: a terminal marked failed that a late success brings back shows a first screen and
+// then drops every later output. Here a failed terminal is never brought back: it is removed and loaded again.
+test('a terminal that failed to load because the window was disconnected is loaded again after the reconnection', () => {
+  const handler = renderer.match(/api\.onReconnected\((\(next, redraw = \[\]\) => \{\n.*?\n {2}\})\),\n/s)?.[1];
+  const offlineRule = renderer.match(/entry\.offline = (.*);\n/)?.[1];
+  assert.ok(handler && offlineRule, 'renderer.js marks and reloads terminals around a reconnection');
+  const offline = vm.runInNewContext(`(error => ${offlineRule})`);
+  const failedBy = key => offline(key ? { name: 'Error', message: 'x', uiMessage: { version: 1, key } } : new Error('x'));
+  assert.deepEqual(['error.serviceClosed', 'error.client.serviceNotConnected', 'error.terminalViewChanged', 'error.confirmationTimeout', null].map(failedBy), [true, true, false, false, false]);
+  const entry = extra => ({ term: { dispose() { this.disposed = true; } }, element: { remove() { this.removed = true; } }, ...extra });
+  const terminals = new Map([
+    ['restored-backend', entry({ ready: true })],
+    ['failed-while-closed', entry({ failed: true, offline: failedBy('error.client.serviceNotConnected') })],
+    ['failed-in-flight', entry({ failed: true, offline: failedBy('error.serviceClosed') })],
+    ['failed-otherwise', entry({ failed: true, offline: failedBy('error.terminalViewChanged') })],
+    ['first-message', entry({ failed: true, waitingForFirstTurn: true, offline: failedBy(null) })],
+    ['live-backend', entry({ ready: true })],
+  ]), all = new Map(terminals), log = [];
+  const context = vm.createContext({ terminals, state: { sessions: [] }, freezeLegacyProgress() {}, updateState: next => log.push(['state', next]), render: () => log.push(['render', context.disconnected]), disconnected: true });
+  vm.runInContext(`var run = ${handler}`, context);
+  context.run('next state', ['restored-backend']);
+  assert.deepEqual([...terminals.keys()], ['failed-otherwise', 'first-message', 'live-backend']);
+  for (const [id, e] of all) assert.deepEqual([id, Boolean(e.term.disposed), Boolean(e.element.removed)], [id, !terminals.has(id), !terminals.has(id)]);
+  assert.deepEqual(log, [['state', 'next state'], ['render', false]], 'the page counts as connected before it draws again');
+
+  // A failed terminal takes no output, and only its own first load ever marks a terminal ready.
+  assert.match(renderer, /api\.onTerminal\(event => \{ const entry = terminals\.get\(event\.id\); if \(!entry \|\| entry\.failed\) return;/);
+  assert.equal(renderer.match(/entry\.ready = true/g).length, 1);
 });

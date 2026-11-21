@@ -13,7 +13,7 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
   const closedEntries = client => client.entries.filter(e => e.closed && !e.closing);
   async function pass(context, client) {
     const stale = () => context.client !== client || client.closing || context.win.isDestroyed();
-    const started = Date.now(), first = closedEntries(client), replaced = new Set();
+    const started = Date.now(), first = closedEntries(client), replaced = new Set(), service = [];
     let noticed = false, attempts = 0;
     const notice = () => { if (!noticed && !stale()) { noticed = true; lost(context, client); } };
     const note = (event, extra) => {
@@ -35,18 +35,21 @@ function createReconnector({ connect, restored, lost, record = () => {}, delays 
         attempts++;
         try {
           for (const entry of closedEntries(client)) {
-            const service = await connect(context, entry.key);
-            if (stale() || client.control.maintenance.size) { service.client.close(); break; }
-            client.replaceService(entry.key, service.client, service.state); replaced.add(entry.key);
+            const next = await connect(context, entry.key);
+            if (stale() || client.control.maintenance.size) { next.client.close(); break; }
+            client.replaceService(entry.key, next.client, next.state); replaced.add(entry.key);
+            // The service's own reason for ending the transport that closed, when it had one (daemon.cjs).
+            const prior = next.client.priorClose;
+            if (prior) service.push({ backend: entry.key, reason: prior.reason, endedAt: new Date(prior.at).toISOString() });
           }
           if (stale()) return 'stale';
           if (client.socket.destroyed) continue;
           await restored(context, client, [...replaced]);
-          note('restored', { attempts, ms: Date.now() - started });
+          note('restored', { attempts, ms: Date.now() - started, ...(service.length ? { service } : {}) });
           return 'restored';
         } catch { /* The next attempt starts from what is closed then. */ }
       }
-      notice(); note('lost', { attempts, ms: Date.now() - started });
+      notice(); note('lost', { attempts, ms: Date.now() - started, ...(service.length ? { service } : {}) });
       return 'lost';
     } finally { clearTimeout(timer); }
   }
