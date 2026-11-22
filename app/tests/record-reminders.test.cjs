@@ -304,6 +304,14 @@ test('the open-dialog clock refreshes once at the source deadline and stops on c
  p.dialog.close();clock+=10000;t.mock.timers.tick(10000);assert.equal(p.calls.length,reads+1,'Closed dialog stops its display clock');
 });
 
+test('a card cancelled after it started says on its one line that earlier steps may have run', async t => {
+ const p=page(t,folder(t),NOW);
+ p.status({count:0,confirmations:[{id:'c',key:'a:n:c',sessionId:'a',nativeId:'n',operationId:'c',actorName:'A',targetName:'B',summary:{action:'input'},state:'cancelled',afterStart:true,actionable:false,time:NOW-120000}]});
+ await p.view.open();await p.find('allConfirmations').fire('click');
+ const summary=p.dialog.all().find(node=>node.dataset.focusKey==='confirmation:a:n:c'),line=summary.all().map(node=>node.textContent).join(' ');
+ assert.ok(line.includes(zh('records.confirmations.partial')),line);assert.ok(!line.includes(zh('background.state.cancelled')),line);
+});
+
 test('a missing original keeps its summary and follow-up expiry never claims earlier steps were undone', async t => {
  const p=page(t,folder(t),NOW,{confirmation:async()=>false});
  p.status({count:0,confirmations:[{id:'original',key:'a:n:op',sessionId:'a',nativeId:'n',operationId:'op',actorName:'A',targetName:'B',summary:{action:'input'},state:'unconfirmed',disposition:'expired',afterStart:true,actionable:false,time:NOW-120000,expiresAt:NOW}]});

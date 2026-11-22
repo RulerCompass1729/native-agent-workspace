@@ -101,7 +101,8 @@
           const full = timestamp(parts.time, row.time);
           const description = () => format('records.confirmations.fromTo', { actor: row.actorName, target: row.targetName || format('records.confirmations.targetUnknown') }) + ' · ' + (row.summary ? summaryText(row.summary) : row.title || '');
           if (display?.computed) display.computed(parts.text, 'text', description); else parts.text.textContent = description();
-          say(parts.end, stateKey);
+          // Cancelled after it started: earlier steps may have run, as the phone says (mobile-web/workspace.js).
+          say(parts.end, row.afterStart && !row.disposition && row.state === 'cancelled' ? 'records.confirmations.partial' : stateKey);
           if (full) { const date = make('p', 'records-confirmation-date'); date.textContent = full; parts.body.append(date); }
           parts.body.append(link);
           parts.summary.dataset.focusKey = 'confirmation:' + key; parts.summary.dataset.confirmationKey = key;

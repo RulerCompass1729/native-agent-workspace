@@ -7,7 +7,7 @@ fs.mkdirSync(evidence, { recursive: true }); fs.mkdirSync(pictures, { recursive:
 const now = Date.now(), cards = Array.from({ length: 40 }, (_, n) => ({
   id: 'past-' + n, key: 'synthetic:native:' + n, sessionId: 'synthetic', nativeId: 'native', operationId: 'op-' + n,
   actorName: 'Agent A', targetName: 'Agent B', title: n === 39 ? 'A complete action with a deliberately long description that must remain available after visual truncation' : 'Review current task',
-  state: n === 38 ? 'confirmation-required' : 'complete', disposition: n === 38 ? 'expired' : undefined, actionable: false,
+  state: n === 38 ? 'confirmation-required' : n === 37 ? 'cancelled' : 'complete', disposition: n === 38 ? 'expired' : undefined, afterStart: n === 37 || undefined, actionable: false,
   time: now - (41 - n) * 3600000, finishedAt: now - (41 - n) * 3600000 + 40000,
 }));
 cards.push({ ...cards[0], id: 'pending', key: 'synthetic:native:pending', state: 'confirmation-required', disposition: undefined, actionable: true, time: now - 60000, expiresAt: now + 300000 });
@@ -43,8 +43,9 @@ async function check(name, action) { try { await action(); checks.push(name); co
         assert.ok(await dialog.locator('.records-confirmation-time').first().getAttribute('aria-label'));
       });
       await check(name + ' finished rows occupy one line', async () => {
-        const heights = await dialog.locator('details.records-history > summary').evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height));
-        assert.equal(heights.length, 15); assert.ok(heights.every(height => height >= 28 && height <= 38), JSON.stringify(heights));
+        // The cancelled-after-start row may wrap once: its recovery hint stays whole rather than clipped.
+        const heights = await dialog.locator('details.records-history').evaluateAll(rows => rows.map(row => ({ partial: Boolean(row.querySelector('[data-confirmation-key="synthetic:native:37"]')), height: row.querySelector(':scope > summary').getBoundingClientRect().height })));
+        assert.equal(heights.length, 15); assert.ok(heights.every(({ partial, height }) => height >= 28 && height <= (partial ? 56 : 38)), JSON.stringify(heights));
         assert.equal(await dialog.locator('details .records-confirmation-waited').count(), 0);
       });
       await check(name + ' expired disposition is not presented as waiting', async () => {
@@ -52,6 +53,14 @@ async function check(name, action) { try { await action(); checks.push(name); co
         assert.equal(await expired.count(), 1);
         assert.equal(await expired.locator('.records-confirmation-waited').count(), 0);
         assert.ok((await expired.locator('summary').innerText()).includes(language === 'zh' ? '已过期' : 'Expired'));
+      });
+      await check(name + ' cancelled after start says on its one line that earlier steps may have run', async () => {
+        const row = dialog.locator('details.records-history').filter({ has: page.locator('[data-confirmation-key="synthetic:native:37"]') });
+        assert.equal(await row.count(), 1); assert.equal(await row.getAttribute('open'), null);
+        const partial = await page.evaluate(language => nativeWorkspaceLocale.format(language, 'records.confirmations.partial'), language);
+        assert.ok((await row.locator('summary').innerText()).includes(partial));
+        const end = row.locator('summary .disclosure-end');
+        assert.equal(await end.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1), true, 'Not clipped');
       });
       await check(name + ' All has a history heading', async () => {
         assert.equal(await dialog.locator('[data-record="confirmations"] > h3').innerText(), language === 'zh' ? '确认记录' : 'Confirmation history');
