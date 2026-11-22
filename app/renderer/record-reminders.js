@@ -19,6 +19,7 @@
     let filter = 'pending', clock = null, clockRows = [], disposed = false, navigationFailed = false;
     // The latest 15 confirmations, earlier ones brought in above them; one still waiting for the person is always listed.
     let confirmationsShown = disclosure.PAGE;
+    const expanded = new Set();
     const earlier = disclosure.pager({ document, say: (el, key, params) => display ? display.text(el, key, params) : (el.textContent = format(key, params())), onMore: () => {
       const before = new Set(focusTargets.keys());
       confirmationsShown += disclosure.PAGE; draw();
@@ -29,10 +30,8 @@
     function updateTimes() {
       let expired = false;
       for (const { row, waited, remaining } of clockRows) {
-        const ended = !row.actionable && !['unverifiable', 'confirmation-required'].includes(row.state);
-        const through = ended ? row.finishedAt || row.expiresAt || now() : now();
-        const age = Math.max(0, Math.floor((through - row.time) / 1000));
-        waited.textContent = format('records.confirmations.waited', { minutes: Math.floor(age / 60), seconds: age % 60 });
+        const age = Number.isSafeInteger(row.time) ? Math.max(0, Math.floor((now() - row.time) / 1000)) : null;
+        waited.textContent = age === null ? '' : format('records.confirmations.waited', { minutes: Math.floor(age / 60), seconds: age % 60 });
         if (row.actionable && Number.isSafeInteger(row.expiresAt)) {
           const left = Math.max(0, Math.ceil((row.expiresAt - now()) / 1000));
           remaining.textContent = format('records.confirmations.remaining', { minutes: Math.floor(left / 60), seconds: left % 60 });
@@ -47,9 +46,20 @@
       if (disposed || !dialog.open || dialog.dataset.view !== 'reminders' || !clockRows.some(({ row }) => row.actionable && row.expiresAt > now())) return;
       clock = setTimeout(() => { clock = null; updateTimes(); armClock(); }, 1000); clock.unref?.();
     }
+    function timestamp(el, value) {
+      el.className = 'records-confirmation-time';
+      const date = new Date(Number.isSafeInteger(value) ? value : NaN), today = new Date(now());
+      if (!Number.isSafeInteger(value) || !Number.isFinite(date.getTime())) { say(el, 'reading.unknownTime'); return ''; }
+      const pad = n => String(n).padStart(2, '0'), day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+      const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      const full = `${date.getFullYear()}-${day} ${time}:${pad(date.getSeconds())} ${date.toTimeString().split(' ')[1]}`;
+      el.textContent = date.toDateString() === today.toDateString() ? time : `${day} ${time}`;
+      el.setAttribute('datetime', date.toISOString()); el.setAttribute('aria-label', full); el.title = full;
+      return full;
+    }
     function confirmationSection() {
       const section = make('section', 'records-section'); section.dataset.record = 'confirmations';
-      section.append(make('h3', '', 'records.confirmations.title'));
+      section.append(make('h3', '', filter === 'all' ? 'records.confirmations.history' : 'records.confirmations.title'));
       const filters = make('div', 'records-actions'); filters.setAttribute('role', 'group'); filters.setAttribute('aria-label', format('records.confirmations.filters'));
       for (const value of ['pending', 'all']) {
         const tab = control('records.confirmations.' + value, value === 'pending' ? 'pendingConfirmations' : 'allConfirmations', () => { filter = value; confirmationsShown = disclosure.PAGE; draw(); });
@@ -62,8 +72,9 @@
       const settled = all.filter(row => row.actionable !== true), from = Math.max(0, settled.length - confirmationsShown);
       const hidden = new Set(settled.slice(0, from)), rows = all.filter(row => !hidden.has(row));
       const list = make('ul', 'records-confirmations');
+      list.id = (dialog.id || 'records-dialog') + '-confirmations';
       for (const row of rows) {
-        const li = make('li'), key = row.key || [row.sessionId, row.nativeId, row.operationId].join(':');
+        const key = row.key || [row.sessionId, row.nativeId, row.operationId].join(':');
         const link = control(null, 'openConfirmation', async () => {
           dialog.close();
           let opened = false;
@@ -80,17 +91,40 @@
           : ['unverifiable', 'replaced'].includes(row.state) ? 'records.confirmations.' + row.state
           : row.actionable ? 'background.card.waiting' : 'background.state.' + row.state;
         say(state, stateKey);
-        const waited = make('time', 'quiet'), remaining = make('time', 'quiet');
-        if (Number.isSafeInteger(row.time)) waited.setAttribute('datetime', new Date(row.time).toISOString());
-        if (Number.isSafeInteger(row.expiresAt)) remaining.setAttribute('datetime', new Date(row.expiresAt).toISOString());
-        clockRows.push({ row, waited, remaining }); link.append(who, action, state, waited, remaining);
+        link.append(who, action, state);
+        const compact = !row.actionable && (Boolean(row.disposition) || !['unverifiable', 'confirmation-required'].includes(row.state));
+        let li;
+        if (compact) {
+          const parts = disclosure.line(document); li = parts.row; li.className += ' records-confirmation-history';
+          parts.details.className = 'records-history'; parts.details.open = expanded.has(key);
+          parts.details.addEventListener('toggle', () => { if (parts.details.open) expanded.add(key); else expanded.delete(key); });
+          const full = timestamp(parts.time, row.time);
+          const description = () => format('records.confirmations.fromTo', { actor: row.actorName, target: row.targetName || format('records.confirmations.targetUnknown') }) + ' · ' + (row.summary ? summaryText(row.summary) : row.title || '');
+          if (display?.computed) display.computed(parts.text, 'text', description); else parts.text.textContent = description();
+          say(parts.end, stateKey);
+          if (full) { const date = make('p', 'records-confirmation-date'); date.textContent = full; parts.body.append(date); }
+          parts.body.append(link);
+          parts.summary.dataset.focusKey = 'confirmation:' + key; parts.summary.dataset.confirmationKey = key;
+          focusTargets.set('confirmation:' + key, parts.summary);
+        } else {
+          li = make('li');
+          const time = make('time'), waited = make('span', 'quiet records-confirmation-waited'), remaining = make('span', 'quiet');
+          timestamp(time, row.time); link.append(time, waited, remaining); clockRows.push({ row, waited, remaining }); li.append(link);
+        }
         if (row.afterStart && (row.disposition || row.state === 'cancelled' || row.state === 'unconfirmed')) link.append(make('span', 'quiet', 'records.confirmations.partial'));
         else if (row.reason && row.reason !== 'replaced') link.append(make('span', 'quiet', 'background.card.reason.' + row.reason));
-        li.append(link); list.append(li);
+        list.append(li);
       }
       if (!rows.length) section.append(make('p', 'records-empty', filter === 'all' ? 'records.confirmations.emptyAll' : current.count === 0 && !current.confirmations.length ? 'records.nothing' : 'records.confirmations.empty'));
       earlier.show({ count: Math.min(disclosure.PAGE, from), total: all.length, shown: rows.length });
-      section.append(earlier.button, list, earlier.status); return section;
+      earlier.button.setAttribute('aria-controls', list.id); earlier.button.setAttribute('aria-expanded', String(confirmationsShown > disclosure.PAGE));
+      const pages = make('div', 'records-history-actions');
+      const collapse = control('records.confirmations.collapse', 'collapseConfirmations', () => {
+        confirmationsShown = disclosure.PAGE; expanded.clear(); draw(); focusTargets.get('allConfirmations')?.focus?.();
+      });
+      collapse.hidden = confirmationsShown <= disclosure.PAGE || settled.length <= disclosure.PAGE;
+      collapse.className = 'records-text-action'; pages.append(earlier.button, collapse);
+      section.append(pages, list, earlier.status); return section;
     }
 
     // The original bell position remains available even when no reminder is due.
@@ -240,7 +274,7 @@
     }
     async function open() { await refresh(true); if (disposed) return; confirmationsShown = disclosure.PAGE; draw(); if (!dialog.open) dialog.showModal(); armClock(); }
     const click = () => { void open(); };
-    const onClose = () => { stopClock(); clockRows = []; expiryRequested.clear(); dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; navigationFailed = false; filter = 'pending'; };
+    const onClose = () => { stopClock(); clockRows = []; expiryRequested.clear(); expanded.clear(); dialog.replaceChildren(); dialog.dataset.view = ''; lastResult = null; cleanupFailed = false; navigationFailed = false; filter = 'pending'; };
     button.addEventListener('click', click);
     const off = typeof api.onRecordsChanged === 'function' ? api.onRecordsChanged(() => { void refresh(); }) : null;
     dialog.addEventListener('close', onClose);

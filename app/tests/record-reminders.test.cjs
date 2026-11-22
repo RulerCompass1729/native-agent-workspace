@@ -311,3 +311,54 @@ test('a missing original keeps its summary and follow-up expiry never claims ear
  await p.find('openConfirmation').fire('click');assert.equal(p.dialog.open,true);assert.ok(p.text().includes(zh('records.confirmations.unavailable')));
  await p.find('allConfirmations').fire('click');assert.equal(p.find('openConfirmation')!==undefined,true,'Original summary remains available');
 });
+
+for (const language of ['zh', 'en']) test(`confirmation history shows absolute times without presenting finished work as waiting (${language})`, async t => {
+ const time = Date.UTC(2026, 10, 22, 12), card = { id:'original', key:'a:n:op', sessionId:'a', nativeId:'n', operationId:'op', actorName:'Agent A', targetName:'Agent B', title:'Synthetic action', state:'complete', actionable:false, time:time-60000, finishedAt:time-20000 };
+ const p=page(t,folder(t),time,{now:()=>time,text:(key,params)=>locale.format(language,key,params)});
+ p.status({count:0,confirmations:[card,{...card,id:'missing-time',key:'a:n:missing',time:null}]});
+ await p.view.open();await p.find('allConfirmations').fire('click');
+ const times=p.dialog.all().filter(n=>n.className==='records-confirmation-time');
+ assert.equal(times.length,2,'Every confirmation has a visible timestamp, including an explicit unknown');
+ const known=times.find(n=>n.attributes.datetime===new Date(card.time).toISOString()),unknown=times.find(n=>n.attributes.datetime===undefined);
+ assert.ok(known);assert.ok(unknown);
+ assert.match(known.textContent,/\d{2}:\d{2}/);assert.ok(known.title.includes('2026'));
+ assert.equal(known.attributes['aria-label'],known.title,'Full time is also available without hovering');
+ assert.equal(unknown.textContent,locale.format(language,'reading.unknownTime'));
+ assert.doesNotMatch(p.text(),language==='zh'?/已等/:/Waited/);
+ const details=p.dialog.all().filter(n=>n.tag==='details');assert.equal(details.length,2);
+ assert.ok(details.every(n=>!n.open),'Finished confirmations start collapsed');
+ assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,2,'Exact original-card navigation stays available in each disclosure');
+});
+
+test('confirmation history can return to the latest page without hiding pending cards or deciding anything', async t => {
+ const p=page(t,folder(t)),time=Date.now(),card={id:'waiting',key:'a:n:waiting',sessionId:'a',nativeId:'n',operationId:'waiting',actorName:'A',targetName:'B',state:'confirmation-required',actionable:true,time,expiresAt:time+120000};
+ p.status({count:1,confirmations:[card,...Array.from({length:40},(_,i)=>({...card,id:'past-'+i,key:'a:n:'+i,state:'complete',actionable:false,time:time-i*1000}))]});
+ await p.view.open();await p.find('allConfirmations').fire('click');
+ const more=()=>p.dialog.all().find(n=>n.className==='disclosure-more');
+ assert.equal(p.find('collapseConfirmations').hidden,true);
+ await more().fire('click');await more().fire('click');
+ assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,41);
+ assert.equal(p.find('collapseConfirmations').hidden,false);assert.equal(more().hidden,true);
+ await p.find('collapseConfirmations').fire('click');
+ assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,16);
+ assert.ok(p.dialog.all().some(n=>n.dataset.confirmationKey==='a:n:waiting'),'Pending card survives collapse');
+ assert.equal(p.find('collapseConfirmations').hidden,true);assert.equal(Element.focused?.dataset.action,'allConfirmations');
+ assert.ok(p.calls.every(c=>c[0]==='status'),'Collapsing neither acknowledges nor approves nor writes a record');
+});
+
+for (const language of ['zh','en']) test(`confirmation section title follows its filter (${language})`,async t=>{
+ const p=page(t,folder(t),NOW,{text:(key,params)=>locale.format(language,key,params)});p.status({count:0,confirmations:[]});
+ await p.view.open();const heading=()=>p.dialog.all().find(n=>n.tag==='h3');
+ assert.equal(heading().textContent,locale.format(language,'records.confirmations.title'));
+ await p.find('allConfirmations').fire('click');
+ assert.equal(heading().textContent,locale.format(language,'records.confirmations.history'));
+ await p.find('pendingConfirmations').fire('click');
+ assert.equal(heading().textContent,locale.format(language,'records.confirmations.title'));
+});
+
+test('a disposed request is history even if its saved state still says confirmation-required', async t => {
+ const p=page(t,folder(t)),card={id:'expired',key:'a:n:expired',sessionId:'a',nativeId:'n',operationId:'expired',actorName:'A',targetName:'B',title:'Synthetic action',state:'confirmation-required',disposition:'expired',actionable:false,time:NOW-120000};
+ p.status({count:0,confirmations:[card]});await p.view.open();await p.find('allConfirmations').fire('click');
+ assert.equal(p.dialog.all().filter(n=>n.tag==='details').length,1);
+ assert.ok(p.text().includes(zh('background.card.expired')));assert.doesNotMatch(p.text(),/已等/);
+});

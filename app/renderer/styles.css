@@ -1330,6 +1330,19 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 .records-confirmations { list-style: none; margin: 8px 0 0; padding: 0; }
 .records-confirmation-link { width: 100%; text-align: left; white-space: normal; }
 .records-confirmation-link > strong, .records-confirmation-link > span, .records-confirmation-link > time { display: block; overflow-wrap: anywhere; }
+.records-confirmation-link > .records-confirmation-time { margin-top: 4px; }
+.records-confirmation-time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.records-history-actions { display: flex; align-items: center; gap: 8px; }
+.records-history-actions button { padding: 5px 8px; font-size: 12px; }
+.records-history-actions > .records-text-action { flex: none; white-space: nowrap; }
+.records-history-actions [hidden] { display: none; }
+.records-confirmations .records-history > summary { min-height: 34px; align-items: center; gap: 8px; padding: 6px 2px; font-size: 12px; line-height: 20px; }
+.records-confirmations .records-history .disclosure-title { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.records-confirmations .records-history .disclosure-end { max-width: 45%; color: var(--muted); font-size: 11px; }
+.records-confirmations .records-history .disclosure-body { padding: 2px 0 10px 16px; }
+.records-confirmation-date { margin: 0 0 4px; color: var(--muted); font-size: 11px; }
+.records-history .records-confirmation-link { margin-top: 0; padding: 5px 8px; }
+.records-confirmations .records-history > summary:focus-visible { outline-offset: -2px; }
 .records-dialog:modal { overscroll-behavior: contain; }
 .records-dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 

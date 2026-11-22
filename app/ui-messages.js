@@ -209,6 +209,8 @@
 
     "background.card.reason.target-changed": "没执行，因为目标的身份、位置或所在空间已改变。需要的话，由发起的 agent 重新发卡。",
     "records.confirmations.title": "待你确认",
+    "records.confirmations.history": "确认记录",
+    "records.confirmations.collapse": "收起较早记录",
     "records.confirmations.pending": "待确认",
     "records.confirmations.all": "全部",
     "records.confirmations.filters": "确认请求筛选",
@@ -4048,6 +4050,8 @@
 
     "background.card.reason.target-changed": "Not done: the target's identity, placement, or space changed. If it is still needed, the requesting agent sends a new request.",
     "records.confirmations.title": "Awaiting your confirmation",
+    "records.confirmations.history": "Confirmation history",
+    "records.confirmations.collapse": "Back to latest",
     "records.confirmations.pending": "Pending",
     "records.confirmations.all": "All",
     "records.confirmations.filters": "Filter confirmation requests",
