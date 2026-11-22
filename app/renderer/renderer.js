@@ -1131,7 +1131,6 @@ function renderRoomOverview() {
   if (!records && !focused) overview.setAttribute('aria-current', 'page'); else overview.removeAttribute('aria-current');
   ui.display.text(overview, focused ? 'room.returnSpace' : 'room.overview', { name: spaceName(state.room) });
   $('room-record').setAttribute('aria-pressed', String(records));
-  $('room-member-tabs').hidden = !focused;
   if (roomOverview) roomOverview.toolbar.hidden = focused || records;
   // The header's row now holds what this page shows of it.
   fitRoomTabs();
@@ -5319,6 +5318,8 @@ function render() {
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
+    // Set on every route, not only in a space: the toolbar holding it shows for any session.
+    $('room-member-tabs').hidden = !memberFocus;
     document.title = sessionWindowTitle(s);
     $('welcome').hidden = Boolean(s || inRoom || inPanorama); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('panorama-view').hidden = !inPanorama;
