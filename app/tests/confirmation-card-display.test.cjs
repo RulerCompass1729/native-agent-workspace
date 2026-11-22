@@ -114,8 +114,10 @@ test('the approved short confirmation label also covers the exact shared-history
 test('a card keeps its frame when the reading list redraws an unchanged record', () => {
   // The reading list rewrites each row's class name on every pass; the card class must come back even when the
   // record has not changed (the first hidden-window pictures showed bare cards).
-  const sandbox = vm.createContext({ disconnected: false, confirmationBatchRole: () => null });
-  vm.runInContext(fn(renderer, 'renderBackgroundControls'), sandbox);
+  const sandbox = vm.createContext({ disconnected: false, state: undefined, confirmationBatchRole: () => null });
+  const pending = renderer.slice(renderer.indexOf('const confirmationBatchStarted = new Map()'), renderer.indexOf('async function answerConfirmationCard('));
+  assert.match(pending, /function confirmationCardPending\(/);
+  vm.runInContext(pending + '\n' + fn(renderer, 'confirmationBatchKey') + '\n' + fn(renderer, 'renderBackgroundControls'), sandbox);
   const classes = new Set(), item = { classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name) } };
   const confirmation = { kind: 'message', options: { buttons: ['取消', '确认此操作'] } };
   for (const [op, expected] of [[{ state: 'confirmation-required', confirmation }, ['background-card']],
@@ -124,7 +126,8 @@ test('a card keeps its frame when the reading list redraws an unchanged record',
     [{ state: 'confirmation-required', confirmation, disposition: 'invalidated' }, ['background-void']],
     [{ state: 'not-executed', disposition: 'expired' }, ['background-void']]]) {
     classes.clear();
-    const entry = { item, backgroundKey: JSON.stringify([op, false]) };
+    // The key an unchanged record already drew with: connected, no batch, no answer in flight.
+    const entry = { item, backgroundKey: JSON.stringify([op, false, false, null, false, undefined, undefined]) };
     sandbox.renderBackgroundControls(entry, { backgroundOperation: op });
     assert.deepEqual([...classes], expected);
   }

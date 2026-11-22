@@ -16,6 +16,7 @@ for (const [count, shown] of [[0,false],[37,false],[0,true],[37,true]]) test(`en
     isCurrentHumanContext: () => true, register: (name, fn) => { commands[name] = fn; },
     require: name => { assert.equal(name, './mobile-workspace.cjs'); return { MobileWorkspace: class { constructor(options) { Object.assign(this, options); } } }; },
   });
+  vm.runInContext(require('./fixtures/main-person-actions.cjs')(source), context);
   vm.runInContext(source.slice(start, end), context);
   vm.runInContext(source.slice(records, recordsEnd), context);
   const workspace = context.appMobileWorkspace(), curve = crypto.createECDH('prime256v1'); curve.generateKeys();
@@ -56,6 +57,7 @@ for(const count of [0,37])test(`present storage failure keeps desktop, phone and
     isCurrentHumanContext:c=>c.human===true,uiError:key=>Error(key),register:(name,fn)=>{commands[name]=fn;},
     require:name=>{assert.equal(name,'./mobile-workspace.cjs');return {MobileWorkspace:class{constructor(options){Object.assign(this,options);}}};},
   });
+  vm.runInContext(require('./fixtures/main-person-actions.cjs')(source),context);
   vm.runInContext(source.slice(start,end),context);vm.runInContext(source.slice(records,recordsEnd),context);
   const workspace=context.appMobileWorkspace(),person={human:true,client:{snapshot:()=>({sessions:[],rooms:[]})}},desktop=await commands.records(person,'status',true);
   const phone=workspace.records.status();

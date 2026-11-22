@@ -225,7 +225,7 @@ test('Claude and Codex get the same stdio launcher without foreground/clipboard 
 });
 test('actual provider MCP construction preserves workspace messaging and injects computer use on both launch paths', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../adapters.cjs'), 'utf8');
-  const begin = source.indexOf('    const mcp = JSON.stringify('), end = source.indexOf('\n    // Native --resume', begin);
+  const begin = source.indexOf('    const mcp = JSON.stringify('), end = source.indexOf(';\n', begin);
   assert.ok(begin >= 0 && end > begin);
   const expression = source.slice(begin + '    const mcp = '.length, end).trim().replace(/;$/, '');
   const claude = JSON.parse(vm.runInNewContext(expression, { JSON, process, path, __dirname: path.resolve(__dirname, '..'), computerUseMcpServer }));

@@ -497,6 +497,7 @@ function inboxDesktop() {
  const scope=vm.createContext({recordReminders:{status:()=>({count:1,records:[]})},operationsUnavailable:null,stewardRecord:null,dataDir:'/synthetic',tempReminders:{cached:temp},tempSummary:require('../temp-reminders.cjs').tempSummary,
   roomState:{apply:s=>s},sessionLabels:{apply:s=>s,labels:new Map()},confirmationInbox:require('../confirmation-inbox.cjs'),backgroundControl:{confirmations:(_names,snapshot)=>cards(snapshot)},displayState:s=>s,queueDispatcher:null,broadcastRoom(){},
   require(name){assert.equal(name,'./mobile-workspace.cjs');return {MobileWorkspace:class{constructor(options){Object.assign(this,options);}}};}});
+ vm.runInContext(require('./fixtures/main-person-actions.cjs')(main),scope);
  vm.runInContext(main.slice(main.indexOf('function confirmationSnapshot('),main.indexOf('// The listener stays open')),scope);
  const adapter=scope.appMobileWorkspace();return {grant:(_client,grant)=>grant,records:adapter.records,read:async client=>{reads++;return {...adapter.snapshot(client),capabilities:{},confirmations:[]};},total:client=>scope.appRecordsStatus(client.snapshot()).count,reads:()=>reads};
 }

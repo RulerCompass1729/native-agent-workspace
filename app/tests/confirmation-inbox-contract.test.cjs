@@ -22,6 +22,7 @@ test('desktop status and the mobile/push status callback use the same live bell 
  const {tempSummary}=require('../temp-reminders.cjs'); let state={sessions:[],backgroundConfirmations:[{id:'original',key:'a:n:op',summary:{action:'input',target:'Target'},actionable:true}]};
  const scope=vm.createContext({dataDir:'/synthetic',operationsUnavailable:false,stewardRecord:null,recordReminders:{status:()=>({count:1,records:[]})},tempSummary,tempReminders:{cached:{shown:true,version:1,checkedAt:1,directories:1,bytes:1,oldestDay:null,ticket:'PRIVATE_TICKET'}},sessionLabels:{apply:s=>s,labels:new Map()},roomState:{apply:s=>s},confirmationInbox:require('../confirmation-inbox.cjs'),backgroundControl:{confirmations:()=>state.backgroundConfirmations},displayState:s=>s,queueDispatcher:null,broadcastRoom(){},Date,
  require(name){assert.equal(name,'./mobile-workspace.cjs');return {MobileWorkspace:class{constructor(options){Object.assign(this,options);}}};}});
+ vm.runInContext(require('./fixtures/main-person-actions.cjs')(source),scope);
  vm.runInContext(source.slice(source.indexOf('function confirmationSnapshot('),source.indexOf('// The listener stays open')),scope);
  const mobile=scope.appMobileWorkspace(),client={snapshot:()=>state};mobile.snapshot(client);
  const desktop=scope.appRecordsStatus(state),push=mobile.records.status(null,client);assert.equal(desktop.count,3);assert.equal(push.count,desktop.count);assert.doesNotMatch(JSON.stringify(push),/PRIVATE_/);

@@ -3,6 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const { EventEmitter } = require('node:events');
 const { Workspace } = require('../workspace.cjs');
 const locale = require('../ui-locale.js');
+const personActionsSource = require('./fixtures/main-person-actions.cjs');
 const app = path.resolve(__dirname, '..');
 const main = fs.readFileSync(path.join(app, 'main.cjs'), 'utf8');
 const renderer = fs.readFileSync(path.join(app, 'renderer/renderer.js'), 'utf8');
@@ -36,7 +37,7 @@ function harness(language = 'zh') {
   const notifier = section('function notifyCapacity(', '\nfunction bindClient(');
   const binding = section('function bindClient(', '\nfunction displayState(');
   const initial = section("register('initial',", '\n  register(');
-  vm.runInContext(notifier + '\n' + binding + '\n' + initial + '\nbindClient(context);', sandbox);
+  vm.runInContext(personActionsSource(main) + '\n' + notifier + '\n' + binding + '\n' + initial + '\nbindClient(context);', sandbox);
   return { notifications, delivered, sent, client, win, sandbox,
     fire(sessions) { client.emit('state', { sessions }); },
     initial: value => { client.call = async method => { assert.equal(method, 'initial'); return value; }; return callbacks.get('initial')(context); },

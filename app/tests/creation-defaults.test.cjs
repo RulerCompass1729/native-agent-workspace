@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const { CreationDefaults } = require('../creation-defaults.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+const personActionsSource = require('./fixtures/main-person-actions.cjs');
 function section(start, end) {
   const a = main.indexOf(start), b = main.indexOf(end, a + start.length);
   assert.ok(a >= 0 && b > a, 'Actual production handler exists: ' + start);
@@ -102,7 +103,7 @@ test('B2: production startup keeps directory migration closed even when the test
     const sandbox = { queueDispatcher: null, backgroundTest, process: { env: { NAW_TEST_QUEUE_DIRECTORY_MIGRATION: flag, NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS: '12000' } }, roomState: {}, dataDir: '/synthetic/private', windows: new Map(),
       connect() {}, sessionLabels: { labels: new Map() }, broadcastRoom() {}, notifyRotation() {}, creationDefaults: { get() { return {}; } }, butlerIngress: null, stewardWake: null, answerNotices: null,
       QueueDispatcher: class { constructor(value) { options = value; } async start() { return this; } } };
-    await vm.runInNewContext(section('async function startQueueDispatcher()', 'async function broadcastRoom()') + '\nstartQueueDispatcher()', sandbox);
+    await vm.runInNewContext(personActionsSource(main) + '\n' + section('async function startQueueDispatcher()', 'async function broadcastRoom()') + '\nstartQueueDispatcher()', sandbox);
     assert.ok(options, 'production startup constructed the dispatcher');
     assert.equal(options.directoryTrustTimeoutMs, '12000', 'the wait limit is configurable in production without enabling migration');
     assert.equal(options.migrateDirectories === true, enabled, JSON.stringify({ backgroundTest, flag }));
