@@ -74,6 +74,21 @@ test('the daemon negotiates compact fresh replies; clients without negotiation s
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
   const { fork } = require('node:child_process'), { once } = require('node:events');
   const { connectService } = require('../service-connection.cjs');
+  const responses = new WeakMap(), originalConnect = net.connect;
+  net.connect = function (...args) {
+    const socket = Reflect.apply(originalConnect, this, args), frames = [];
+    responses.set(socket, frames); let buffered = '';
+    socket.on('data', chunk => {
+      buffered += chunk; let end;
+      while ((end = buffered.indexOf('\n')) >= 0) {
+        const line = buffered.slice(0, end); buffered = buffered.slice(end + 1);
+        const frame = JSON.parse(line);
+        if (Object.hasOwn(frame, 'id') && !frame.event && !frame.ready) frames.push({ id: frame.id, bytes: Buffer.byteLength(line + '\n') });
+      }
+    });
+    return socket;
+  };
+  t.after(() => { net.connect = originalConnect; });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-snapshot-'));
   const child = fork(path.join(__dirname, 'fixtures/initial-delta-daemon.cjs'), [dir], {
     env: { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, NODE_OPTIONS: '--max-old-space-size=256' }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -92,21 +107,25 @@ test('the daemon negotiates compact fresh replies; clients without negotiation s
   }
   client = await connectService(dir, 'observer', { page: false });
   const first = await client.call('initial'); assert.equal(first.sessions[0].messages.length, 100);
-  const before = client.socket.bytesRead;
+  const before = responses.get(client.socket).length;
   for (let i = 0; i < 8; i++) {
     const next = await client.call('initial');
     assert.ok(next.fixtureRevision > first.fixtureRevision); assert.deepEqual(next.sessions[0].messages, first.sessions[0].messages);
     assert.equal(next.servicePid, child.pid);
   }
-  const bytes = client.socket.bytesRead - before;
+  const replies = responses.get(client.socket).slice(before);
+  assert.equal(replies.length, 8);
+  const bytes = replies.reduce((sum, frame) => sum + frame.bytes, 0);
   assert.ok(bytes < 100000, `eight unchanged fresh snapshots used ${bytes} bytes`);
   const info = JSON.parse(fs.readFileSync(filename)), socket = net.connect(info.endpoint);
   legacy = new ServiceClient(socket);
   const ready = once(legacy, 'ready');
   socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner: 'legacy', token: info.token, page: false }) + '\n'));
   await ready;
-  const at = socket.bytesRead;
+  const at = responses.get(socket).length;
   await legacy.call('initial'); const full = await legacy.call('initial');
-  assert.ok(full.fixtureRevision > first.fixtureRevision); assert.ok(socket.bytesRead - at > 1500000);
+  assert.ok(full.fixtureRevision > first.fixtureRevision); const legacyReplies = responses.get(socket).slice(at);
+  assert.equal(legacyReplies.length, 2);
+  assert.ok(legacyReplies.reduce((sum, frame) => sum + frame.bytes, 0) > 1500000);
   t.diagnostic(`eight negotiated initial replies: ${bytes} bytes; legacy full replies preserved`);
 });
