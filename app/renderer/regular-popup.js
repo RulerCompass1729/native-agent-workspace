@@ -68,7 +68,7 @@
       current = { ...value, popup: false }; translate();
       badge.textContent = value.unread ? String(value.unread) : ''; button.setAttribute('aria-label', f('entry', { count: value.unread })); button.title = f('entry', { count: value.unread });
       const latestRun = value.runs[0], runKey = run => run.skipReason === 'usage-unconfirmed' ? 'run.budget-unconfirmed' : 'run.' + run.state;
-      set(status, f(value.error ? 'storage' : !value.allowed ? 'approval' : !value.config.enabled ? 'off' : latestRun && latestRun.state !== 'ready' ? runKey(latestRun) : 'on'));
+      set(status, value.error && value.errorFile ? f('storageFile', { file: value.errorFile }) : f(value.error ? 'storage' : !value.allowed ? 'approval' : !value.config.enabled ? 'off' : latestRun && latestRun.state !== 'ready' ? runKey(latestRun) : 'on'));
       historyStatus.hidden = !latestRun;
       const total = latestRun ? value.runs.filter(r => r.budgetDay === latestRun.budgetDay).reduce((n, r) => n + r.chargedMicros, 0) : 0;
       const uncertain = latestRun && value.runs.some(r => r.budgetDay === latestRun.budgetDay && r.attempted && r.costKnown !== true && r.state !== 'ready');

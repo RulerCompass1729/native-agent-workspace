@@ -43,11 +43,14 @@ function validState(s) {
   return known(s, ['version', 'revision', 'authorization', 'origin', 'config', 'runs']) && [undefined, 'local', 'user'].includes(s.origin) && [undefined, null, AUTHORIZATION].includes(s.authorization) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(validRun);
 }
 const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+// A mark can land on a run already archived when replacing main failed; read/ignored is not part of its identity.
+const identity = run => canonical({ ...run, items: run.items.map(({ read, ignored, ...item }) => item) });
+const unavailable = (file, cause) => cause?.file ? cause : Object.assign(Error('storage-unavailable'), { file: path.basename(file) });
 function uniqueRuns(records) {
   const byId = new Map();
   for (const r of records) {
     const prior = byId.get(r.id);
-    if (prior && canonical(prior) !== canonical(r)) throw Error('storage-unavailable');
+    if (prior && identity(prior) !== identity(r)) throw Error('storage-unavailable');
     byId.set(r.id, r);
   }
   return [...byId.values()];
@@ -62,7 +65,7 @@ class FileStore {
       const value = JSON.parse(fs.readFileSync(fd, 'utf8')); if (!validState(value)) throw Error();
       return value.runs.length > RUN_LIMIT ? this.write(value) : value;
     }
-    catch (e) { if (e.code === 'ENOENT' && fd === undefined) return null; throw Error('storage-unavailable'); }
+    catch (e) { if (e.code === 'ENOENT' && fd === undefined) return null; throw unavailable(this.file, e); }
     finally { if (fd !== undefined) fs.closeSync(fd); }
   }
   scanArchive(fd, month, visit) {
@@ -86,9 +89,10 @@ class FileStore {
     const directory = path.dirname(this.file), result = [];
     for (const name of fs.readdirSync(directory)) {
       const match = /^regular-popup-archive-(\d{4}-\d{2})\.jsonl$/.exec(name); if (!match) continue;
-      const fd = fs.openSync(path.join(directory, name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-      try { this.scanArchive(fd, match[1], r => { if (r.day === filter.day || r.budgetDay === filter.budgetDay) result.push(r); }); }
-      finally { fs.closeSync(fd); }
+      const file = path.join(directory, name); let fd;
+      try { fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); this.scanArchive(fd, match[1], r => { if (r.day === filter.day || r.budgetDay === filter.budgetDay) result.push(r); }); }
+      catch (e) { throw unavailable(file, e); }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
     }
     return uniqueRuns(result);
   }
@@ -97,27 +101,31 @@ class FileStore {
     for (const r of uniqueRuns(records)) { const month = r.budgetDay.slice(0, 7); if (!months.has(month)) months.set(month, []); months.get(month).push(r); }
     for (const [month, runs] of months) {
       const file = path.join(directory, `regular-popup-archive-${month}.jsonl`);
-      const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+      let fd;
       try {
+        fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
         const pending = new Map(runs.map(r => [r.id, r]));
         this.scanArchive(fd, month, r => {
           const prior = pending.get(r.id);
-          if (prior && canonical(prior) !== canonical(r)) throw Error('storage-unavailable');
+          if (prior && identity(prior) !== identity(r)) throw Error('storage-unavailable');
           pending.delete(r.id);
         });
         for (const r of pending.values()) fs.writeFileSync(fd, JSON.stringify(r) + '\n');
         fs.fsyncSync(fd);
-      } finally { fs.closeSync(fd); }
+      }
+      catch (e) { throw unavailable(file, e); }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
     }
     if (months.size) { const fd = fs.openSync(directory, fs.constants.O_RDONLY); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
   }
   write(value) {
-    if (!validState(value)) throw Error('storage-unavailable');
+    if (!validState(value)) throw unavailable(this.file);
     const retained = { ...value, runs: value.runs.slice(0, RUN_LIMIT) }, body = JSON.stringify(retained);
-    if (Buffer.byteLength(body) > MAX_BYTES) throw Error('storage-unavailable');
+    if (Buffer.byteLength(body) > MAX_BYTES) throw unavailable(this.file);
     this.archive(value.runs.slice(RUN_LIMIT));
     const temporary = `${this.file}.${randomUUID()}.tmp`; let fd;
     try { fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); fs.writeFileSync(fd, body); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined; fs.renameSync(temporary, this.file); }
+    catch (e) { throw unavailable(this.file, e); }
     finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temporary); } catch {} }
     return retained;
   }
@@ -126,30 +134,31 @@ class RegularPopup {
   constructor({ directory, store, now = Date.now, permitted = false, requireAuthorization = false, readSource, select, notify = () => {}, changed = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store || new FileStore(directory); this.now = now; this.permitted = permitted === true && typeof readSource === 'function' && typeof select === 'function';
     this.readSource = readSource; this.select = select; this.notify = notify; this.changed = changed; this.setTimer = setTimer; this.clearTimer = clearTimer;
-    this.active = false; this.closed = false; this.timer = null; this.flight = null; this.abort = null; this.error = null;
+    this.active = false; this.closed = false; this.timer = null; this.flight = null; this.abort = null; this.error = null; this.errorFile = null;
     this.requireAuthorization = requireAuthorization;
     try {
       const loaded = this.store.read(); this.data = loaded === null ? emptyState() : loaded; if (!validState(this.data)) throw Error('storage-unavailable'); this.data = copy(this.data);
     }
-    catch { this.data = emptyState(); this.error = 'storage-unavailable'; }
+    catch (e) { this.data = emptyState(); this.fail(e); }
   }
+  fail(error) { this.error = 'storage-unavailable'; this.errorFile = typeof error?.file === 'string' ? error.file : null; }
   status() {
     const s = copy(this.data);
     if (this.requireAuthorization && s.authorization !== AUTHORIZATION) s.config.enabled = false;
     for (const r of s.runs) if (['fetching', 'generating'].includes(r.state) && !this.flight) r.state = r.attempted ? 'unconfirmed' : 'cancelled';
-    return { ...s, source: s.config.source || SOURCE, suggestion: s.origin === 'local' ? s.config.concern === DEFAULT_CONCERN ? 'generic' : 'local' : null, allowed: this.permitted, error: this.error, dailyMicros: DAILY_MICROS,
+    return { ...s, source: s.config.source || SOURCE, suggestion: s.origin === 'local' ? s.config.concern === DEFAULT_CONCERN ? 'generic' : 'local' : null, allowed: this.permitted, error: this.error, errorFile: this.error ? this.errorFile : null, dailyMicros: DAILY_MICROS,
       unread: s.runs.reduce((n, r) => n + r.items.filter(i => !i.read && !i.ignored).length, 0) };
   }
   save(next, popup = false) {
     if (this.error) throw Error(this.error);
     try { if (!validState(next)) throw Error(); const persisted = this.store.write(next); if (validState(persisted)) next = persisted; }
-    catch { this.error = 'storage-unavailable'; throw Error(this.error); }
+    catch (e) { this.fail(e); throw Error(this.error); }
     this.data = next;
     if (!this.closed) try { this.changed(this.status(), popup); } catch {}
   }
   history(filter) {
     try { return uniqueRuns([...this.data.runs.filter(r => r.day === filter.day || r.budgetDay === filter.budgetDay), ...(this.store.archivedRuns?.(filter) || [])]); }
-    catch { this.error = 'storage-unavailable'; throw Error(this.error); }
+    catch (e) { this.fail(e); throw Error(this.error); }
   }
   prefill(rooms) {
     if (this.closed || this.error || this.data.origin === 'user' || this.data.config.enabled ||

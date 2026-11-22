@@ -100,3 +100,29 @@ test('unreadable historical state refuses a paid attempt and does not create tim
     readSource: () => assert.fail('source forbidden'), select: () => assert.fail('model forbidden'), setTimer: () => timers++ });
   e.start(); await e.tick(); assert.equal(timers, 0); assert.equal(e.status().error, 'storage-unavailable'); e.dispose();
 });
+test('a mark landing after the oldest run reached the archive but before main dropped it never stops later saves', t => {
+  const f = fixture(t), oldest = f.state.runs[60]; Object.assign(oldest.items[0], { read: false, ignored: false });
+  f.store.write({ ...f.state, runs: f.state.runs.slice(1) });
+  const rename = fs.renameSync; let fail = true;
+  t.mock.method(fs, 'renameSync', (...args) => { if (fail) { fail = false; throw Object.assign(Error('synthetic ENOSPC'), { code: 'ENOSPC' }); } return rename(...args); });
+  assert.throws(() => f.store.write(f.state)); const archived = fs.readFileSync(f.archive(oldest));
+  const e = new RegularPopup({ directory: f.directory }); e.mark(oldest.id, 'tool', 'read');
+  const next = structuredClone(e.data); next.runs.unshift({ ...structuredClone(f.state.runs[0]), id: 'new-run' });
+  e.save(next); assert.equal(e.status().error, null); assert.equal(e.status().runs.length, 60); assert.ok(!e.status().runs.some(r => r.id === oldest.id));
+  assert.deepEqual(fs.readFileSync(f.archive(oldest)), archived);
+  const again = new RegularPopup({ directory: f.directory }), later = structuredClone(again.data);
+  later.runs.unshift({ ...structuredClone(f.state.runs[0]), id: 'newer-run' }); again.save(later); assert.equal(again.status().error, null);
+  e.dispose(); again.dispose();
+});
+test('a storage stop names the file it could not use, and a real archive conflict still stops', t => {
+  const f = fixture(t), old = f.state.runs[60]; f.store.write({ ...f.state, runs: f.state.runs.slice(1) });
+  const archive = f.archive(old), conflict = JSON.stringify({ ...old, chargedMicros: 600 }) + '\n';
+  fs.writeFileSync(archive, conflict, { mode: 0o600 });
+  const e = new RegularPopup({ directory: f.directory }); assert.equal(e.status().errorFile, null);
+  assert.throws(() => e.save(f.state), /storage-unavailable/); assert.equal(e.status().errorFile, path.basename(archive)); e.dispose();
+  assert.equal(fs.readFileSync(archive, 'utf8'), conflict);
+  fs.appendFileSync(archive, '{'); const reader = new RegularPopup({ directory: f.directory });
+  assert.throws(() => reader.history({ day: old.day }), /storage-unavailable/); assert.equal(reader.status().errorFile, path.basename(archive)); reader.dispose();
+  fs.writeFileSync(f.store.file, '{'); const broken = new RegularPopup({ directory: f.directory });
+  assert.equal(broken.status().error, 'storage-unavailable'); assert.equal(broken.status().errorFile, 'regular-popup.json'); broken.dispose();
+});
