@@ -51,7 +51,7 @@ async function fixture(t, { capability = true, retained = false } = {}) {
 
 // The real hook module with a seed seam (as in compact-control-retirement.test.cjs). Its requests reach
 // NAW as claude-submit.cjs routes them: rows to observeRoot, a control call to rootCall's own check.
-async function bridge(f, { capability = true, ambiguous = false } = {}) {
+async function bridge(f, { capability = true, ambiguous = false, beforeObservation } = {}) {
   const source = bridgeSource + `
 export function seedTurn(binding, ambiguous) {
   stopped = false; observationGap = false; nativeBlocks = true; addressedTool = true; operatorTools = Object.keys(operatorSchemas); rootBinding = binding;
@@ -79,6 +79,7 @@ export function drained() { return !observing && !observations.length; }
       const body = JSON.parse(spec.body), route = url.slice('http://localhost'.length);
       if (route === '/observation') {
         observed.push(body.id);
+        if (beforeObservation) await beforeObservation(body);
         try { const result = f.r.observeRoot(body); f.skip(body.sequence); return reply(result); }
         catch { return { ok: false, status: 409, text: '{}' }; }
       }
@@ -98,22 +99,22 @@ export function drained() { return !observing && !observations.length; }
     for (let i = 0; i < 500 && !mod.drained(); i++) await new Promise(resolve => setTimeout(resolve, 2));
     assert.equal(mod.drained(), true, 'the observation queue drains');
   };
-  const compact = async ({ hookFirst = false } = {}) => {
+  const compact = async ({ hookFirst = false, drain = true } = {}) => {
     let settingsNotice;
     await hooks.get('classic.SessionStart')($, { session_id: f.s.nativeId, source: 'compact' }, async event => {
       settingsNotice = event;
       if (hookFirst) f.settingsCompact(event.naw_compaction);
       return {};
     });
-    await settle();
+    if (drain) await settle();
     return settingsNotice;
   };
-  const step = async (turnId = 'owned-turn', { agentId, origin = ENGINE } = {}) => {
+  const step = async (turnId = 'owned-turn', { agentId, origin = ENGINE, drain = true } = {}) => {
     const next = async function* () { yield { kind: 'text' }; return 'done'; };
     if (origin) next.origin = origin;
     const iterator = hooks.get('turn.step')($, { turnId, index: 1, ...(agentId ? { agentId } : {}) }, next);
     let item; do { item = await iterator.next(); } while (!item.done);
-    await settle();
+    if (drain) await settle();
   };
   const call = (kind, { agentId, origin = ENGINE, toolUseId = `toolu_${randomUUID()}` } = {}) => {
     const input = { control: { action: 'catalog' }, operator: {}, message: { recipient_id: 'peer', message: 'SYNTHETIC MESSAGE' } }[kind];
@@ -572,4 +573,65 @@ test('the capability holds only when this bridge offers it and NAW answers it', 
   assert.deepEqual(await negotiate({ nativeTurnContinue: true }), { offered: true, bound: true });
   assert.deepEqual(await negotiate({}), { offered: true, bound: false }, 'an older NAW does not answer');
   assert.deepEqual(await negotiate({ nativeTurnContinue: true }, true), { offered: false, bound: false }, 'a compatibility copy never offers it');
+});
+
+
+test('a later compact settings boundary rejects an earlier in-flight continuation until its own proof', { timeout: 4000 }, async t => {
+  const f = await fixture(t), { rootValidity } = require('../native-root-proof.cjs');
+  const refusal = () => rootValidity(f.r, { ...f.binding, epoch: f.r.observationEpoch,
+    turnId: 'owned-turn', promptId: 'owned-prompt' }, new AbortController().signal, () => true).failureCheck();
+  let markFirst, markSecond, releaseFirst, releaseSecond, compacts = 0, continuations = 0;
+  const enteredFirst = new Promise(resolve => { markFirst = resolve; });
+  const enteredSecond = new Promise(resolve => { markSecond = resolve; });
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+  const secondGate = new Promise(resolve => { releaseSecond = resolve; });
+  const b = await bridge(f, { beforeObservation: async row => {
+    if (row.id === 'control:turn-continue' && ++continuations === 1) { markFirst(row.sequence); await firstGate; }
+    if (row.id === 'control:compact' && ++compacts === 2) { markSecond(row.sequence); await secondGate; }
+  } });
+  let waiting, waitingRefusal, earlyProof = false;
+  try {
+    const first = await b.compact({ hookFirst: true });
+    await b.step('owned-turn', { drain: false });
+    const priorContinue = await enteredFirst;
+    const second = await b.compact({ hookFirst: true, drain: false });
+    assert.equal(refusal(), 'live-turn-missing');
+    releaseFirst();
+    const laterCompact = await enteredSecond;
+    assert.ok(priorContinue < laterCompact);
+    assert.equal(first.naw_compaction, f.stamp(2)); assert.equal(second.naw_compaction, f.stamp(laterCompact));
+    waiting = f.r.liveTurn; waitingRefusal = refusal();
+    try { f.mint(); earlyProof = true; } catch {}
+  } finally { releaseFirst(); releaseSecond(); await b.settle(); }
+  assert.equal(f.r.liveTurn, null, 'the current compact row still retires authority');
+  await b.step();
+  assert.equal(f.r.liveTurn?.id, 'owned-turn'); assert.equal(f.r.rootTurn?.id, 'owned-turn');
+  const fresh = await f.issue(); assert.equal((await fresh()).ok, true, 'its own continuation can hold a new scope');
+  assert.equal((await f.check()).failureReason, 'grant-invalidated', 'the prior scope never revives');
+  assert.deepEqual(f.ends, []); assert.deepEqual(f.states, []);
+  assert.equal(f.w.versions.dispatches, 0, 'no native input is repeated');
+  t.diagnostic(JSON.stringify({ beforeCurrentCompact: waiting?.id ?? null, waitingRefusal, earlyProof,
+    currentContinuation: f.r.liveTurn.id, oldScope: (await f.check()).failureReason, nativeDispatches: f.w.versions.dispatches }));
+  assert.equal(waiting, null, 'the later settings notice remains effective while the old continuation drains');
+  assert.equal(waitingRefusal, 'live-turn-missing'); assert.equal(earlyProof, false);
+});
+
+test('a compact position from an old root epoch cannot block a freshly proved current continuation', async t => {
+  const f = await fixture(t);
+  f.settingsCompact(f.stamp(100));
+  const binding = { sessionId: f.s.nativeId, ...f.r.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeTurnContinue: true }) };
+  assert.notEqual(binding.observationEpoch, f.binding.observationEpoch);
+  let sequence = 0;
+  const row = fields => f.r.observeRoot({ ...binding, epoch: binding.observationEpoch, sequence: ++sequence,
+    block: true, kind: 'control', status: 'complete', ...fields });
+  row({ id: 'control:turn-start', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
+  row({ id: 'control:compact' });
+  row({ id: 'control:turn-continue', status: 'running', turnId: 'next-turn', promptId: 'next-prompt' });
+  assert.equal(f.r.liveTurn?.id, 'next-turn');
+  const call = { ...binding, epoch: binding.observationEpoch, turnId: 'next-turn', promptId: 'next-prompt',
+    callId: 'current-epoch-proof', arguments: { action: 'catalog' } };
+  assert.ok(rootCall(f.r, call, new AbortController().signal, () => true));
+  assert.throws(() => rootCall(f.r, call, new AbortController().signal, () => true), /already used/);
+  assert.equal((await f.check()).failureReason, 'grant-invalidated');
+  assert.equal(f.w.versions.dispatches, 0);
 });

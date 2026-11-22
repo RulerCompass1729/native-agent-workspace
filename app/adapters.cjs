@@ -926,6 +926,8 @@ class Claude extends EventEmitter {
         this.compactBoundary(message.replayed || message.gap);
       } else if (message.id === 'control:turn-continue') {
         if (!this.nativeTurnContinue || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn continuation');
+        const position = this.compactPosition;
+        if (position?.epoch === this.observationEpoch && message.sequence <= position.sequence) return { observed: true };
         const kept = this.compactedTurn; this.compactedTurn = null;
         // The engine's own next step of the compacted turn (2.1.329, measured: no new turn start or prompt).
         // It gets what it held, as new objects: everything issued before the compact stays retired, and
@@ -1179,14 +1181,15 @@ class Claude extends EventEmitter {
       started: this.startedRootTurn?.id === live.id ? this.startedRootTurn : null };
     this.retireRootAuthority();
   }
-  compactAlreadyObserved(stamp) {
-    if (!this.nativeTurnContinue || typeof stamp !== 'string' || !this.rootObservation) return false;
+  observeCompactNotice(stamp) {
+    if (!this.nativeTurnContinue || typeof stamp !== 'string') return false;
     const marker = /^([a-f0-9]{32}):([1-9][0-9]{0,15})$/.exec(stamp);
     const sequence = Number(marker?.[2]);
-    // The bridge assigns the sequence to this compact before running the settings hooks.
-    // A later ordered position has already applied that boundary or handled its observation gap.
-    return marker?.[1] === this.observationEpoch && Number.isSafeInteger(sequence) &&
-      sequence <= this.rootObservation.sequence;
+    if (marker?.[1] !== this.observationEpoch || !Number.isSafeInteger(sequence)) return false;
+    const prior = this.compactPosition?.epoch === this.observationEpoch ? this.compactPosition.sequence : 0;
+    // Settings can retire a later boundary before earlier ordered continuations arrive.
+    this.compactPosition = { epoch: this.observationEpoch, sequence: Math.max(prior, sequence) };
+    return sequence <= (this.rootObservation?.sequence || 0);
   }
   // A native compaction keeps the session but ends the running turn's authority:
   // every issued root call, outbox proof and control scope checks these
@@ -1344,7 +1347,7 @@ class Claude extends EventEmitter {
     });
     if (isChild) return;
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
-    if (compact && this.compactAlreadyObserved(event.naw_compaction)) return;
+    if (compact && this.observeCompactNotice(event.naw_compaction)) return;
     // Only an authenticated root settings event selects the journal. The
     // identity lookup route never accepts a caller-supplied filesystem path.
     if (event.session_id === this.record.nativeId && typeof event.transcript_path === 'string' &&
