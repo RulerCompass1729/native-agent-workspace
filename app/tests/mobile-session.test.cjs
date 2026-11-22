@@ -206,6 +206,38 @@ test('700 confirmed native submissions over seven days retain uncertain rows and
     assert.equal(f.calls.length, 700);
   } finally { reopened.close(); }
 });
+test('a retired not-sent receipt preserves its reason through compaction and reopen', async t => {
+  const f = await fixture(t), ticket = f.ticket('send'), original = f.spec(), connection = {};
+  const prepared = f.w.mobilePrepare(ticket, original, 'send', connection);
+  const reason = 'Synthetic original reason: paused before dispatch.';
+  f.w.mobileCancel(ticket, prepared.lease, 'send', connection, reason);
+  const receipt = f.w.mobileReceipt(ticket, original, 'send');
+  assert.equal(receipt.status, 'not-sent');
+  assert.equal(receipt.error, reason);
+
+  const row = f.w.mobileRequests[0];
+  f.w.mobileRequests.push(...Array.from({ length: mobile.MAX_REQUESTS - 1 }, () => ({
+    ...row, requestId: randomUUID(), tag: randomUUID(), status: 'unconfirmed',
+  })));
+  assert.equal(f.w.mobilePrepare(ticket, f.spec(), 'send', {}).prepared, true);
+  assert.ok(!f.w.mobileRequests.some(record => record.requestId === original.requestId));
+  assert.equal(f.w.mobileRequests.filter(record => record.status === 'unconfirmed').length, mobile.MAX_REQUESTS - 1);
+  assert.deepEqual(f.w.mobileReceipt(ticket, original, 'send'), receipt);
+
+  const reopened = new Workspace(f.host, f.root);
+  try {
+    assert.deepEqual(reopened.mobileReceipt(ticket, original, 'send'), receipt);
+    assert.throws(() => reopened.mobileReceipt({ ...ticket, generation: randomUUID() }, original, 'send'));
+    assert.throws(() => reopened.mobileReceipt(ticket, { ...original, text: 'Different input' }, 'send'));
+    assert.equal(reopened.mobileReceipt(ticket, { ...original, requestId: randomUUID() }, 'send'), null);
+    assert.throws(() => reopened.mobilePrepare(ticket, original, 'send', {}));
+    assert.equal(f.calls.length, 0);
+
+    delete reopened.mobileRetiredRequests.rows[original.requestId].error;
+    assert.deepEqual(reopened.mobileReceipt(ticket, original, 'send'), { ...receipt, error: null });
+  } finally { reopened.close(); }
+});
+
 test('a caller-supplied function cannot impersonate the internal human delegate', async t => {
   const f = await fixture(t);
   await assert.rejects(f.w.send(f.id, 'Forged mobile', null, null, null, null, null, null, { valid: () => true, human() {}, reserve() {} }));

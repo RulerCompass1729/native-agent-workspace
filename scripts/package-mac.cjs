@@ -185,6 +185,7 @@ async function build() {
       'mobile-qr.cjs',
       'mobile-qr.jxa',
       'mobile-session.cjs',
+      'mobile-receipts.cjs',
       'mobile-web/client.js',
       'mobile-web/index.html',
       'mobile-web/manifest.webmanifest',

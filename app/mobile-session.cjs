@@ -93,12 +93,20 @@ function request(spec, action) {
     if (typeof spec.text !== 'string' || !spec.text.trim() || spec.text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(spec.text) || /^\//.test(spec.text.trim())) throw denied();
   } else if (!uuid(spec.questionId) || !spec.answers || typeof spec.answers !== 'object' || Array.isArray(spec.answers) || Buffer.byteLength(JSON.stringify(spec.answers)) > TEXT_BYTES) throw denied();
 }
+const receiptError = value => value === null || typeof value === 'string' && value.length <= 16000;
+const RETIRED_KEYS = ['key', 'tag', 'status'];
+function validRetiredReceipt(row) {
+  // The original compact format did not record the failure reason.
+  const shape = exact(row, RETIRED_KEYS) ||
+    row?.status === 'not-sent' && exact(row, [...RETIRED_KEYS, 'error']) && receiptError(row.error);
+  return shape && /^[a-f0-9]{64}$/.test(row.key) && uuid(row.tag) && confirmedNative(row);
+}
 function records(w) {
   if (!Array.isArray(w.mobileRequests) || w.mobileRequests.length > MAX_REQUESTS || w.mobileRequests.some(r =>
     !exact(r, ['deviceId', 'generation', 'issuer', 'requestId', 'serviceKey', 'sessionId', 'nativeId', 'action', 'digest', 'tag', 'status', 'error', 'at']) ||
     !['deviceId', 'generation', 'issuer', 'requestId', 'tag'].every(k => uuid(r[k])) || !['send', 'answer'].includes(r.action) ||
     !['serviceKey', 'sessionId', 'nativeId'].every(k => typeof r[k] === 'string' && r[k].length > 0 && r[k].length <= 512) ||
-    !/^[a-f0-9]{64}$/.test(r.digest) || !(r.error === null || typeof r.error === 'string' && r.error.length <= 16000) || !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(r.status) || !Number.isSafeInteger(r.at))) throw denied();
+    !/^[a-f0-9]{64}$/.test(r.digest) || !receiptError(r.error) || !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(r.status) || !Number.isSafeInteger(r.at))) throw denied();
   return w.mobileRequests;
 }
 function retiredFor(w, ticket) {
@@ -107,8 +115,7 @@ function retiredFor(w, ticket) {
   if (!exact(retired, ['deviceId', 'rows']) || !uuid(retired.deviceId) ||
     !retired.rows || Object.getPrototypeOf(retired.rows) !== Object.prototype) throw denied();
   const entries = Object.entries(retired.rows);
-  if (entries.length > MAX_RETIRED_IDS || entries.some(([id, row]) => !uuid(id) ||
-    !exact(row, ['key', 'tag', 'status']) || !/^[a-f0-9]{64}$/.test(row.key) || !uuid(row.tag) || !confirmedNative(row))) throw denied();
+  if (entries.length > MAX_RETIRED_IDS || entries.some(([id, row]) => !uuid(id) || !validRetiredReceipt(row))) throw denied();
   return retired.deviceId === ticket.deviceId ? retired.rows : {};
 }
 function retiredBinding(row) {
@@ -139,7 +146,9 @@ function reserve(w, ticket, spec, action, tag) {
     const [retired] = rows.splice(oldest, 1);
     const entries = pending.get(w);
     for (const [lease, delegate] of entries || []) if (delegate.row === retired) entries.delete(lease);
-    retiredRows = { ...retiredRows, [retired.requestId]: { key: retiredBinding(retired), tag: retired.tag, status: retired.status } };
+    const compact = { key: retiredBinding(retired), tag: retired.tag, status: retired.status };
+    if (retired.status === 'not-sent') compact.error = retired.error;
+    retiredRows = { ...retiredRows, [retired.requestId]: compact };
   }
   const row = { deviceId: ticket.deviceId, generation: ticket.generation, issuer: ticket.issuer.instance, requestId: spec.requestId,
     serviceKey: ticket.serviceKey, sessionId: ticket.sessionId, nativeId: ticket.nativeId, action, digest: digest(spec), tag, status: 'awaiting-native', error: null, at: Date.now() };
@@ -321,7 +330,7 @@ function find(w, ticket, spec, action) {
     const { generation, serviceKey, sessionId, nativeId } = ticket;
     if (retired.key !== retiredBinding({ issuer: ticket.issuer.instance, generation, serviceKey, sessionId, nativeId, action, digest: digest(spec) })) throw denied();
     return { requestId: spec.requestId, tag: retired.tag, sessionId, nativeId, action, status: retired.status,
-      error: null, storageWarning: w.storageWarning || null };
+      error: Object.hasOwn(retired, 'error') ? retired.error : null, storageWarning: w.storageWarning || null };
   }
   const row = lookup(w, ticket, spec, action);
   return row ? receipt(w, row) : null;
