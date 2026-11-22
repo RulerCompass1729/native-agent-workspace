@@ -45,6 +45,7 @@ function spaceAction(extra = {}) {
       handler = fn;
     },
     validRoomId: () => true,
+    roomIds: require('../collaboration-spaces.cjs').roomIds,
     uiError,
     roomState,
     broadcastRoom: async () => {},
@@ -87,7 +88,8 @@ function registered(extra) {
     require: require('node:module').createRequire(path.join(__dirname, '../main.cjs')),
     applicationHandlers: handlers, backgroundOperation, uiError,
     ipcMain: { handle: (name, handler) => ipc.set(name, handler) },
-    validRoomId: () => true, broadcastRoom: async () => {},
+    validRoomId: () => true,
+    roomIds: require('../collaboration-spaces.cjs').roomIds, broadcastRoom: async () => {},
     queueDispatcher: { schedule() {} }, stewardCaller: async () => null, ...extra,
   });
   const start = source.indexOf('function register(name, handler) {');
@@ -482,4 +484,11 @@ test('only the current person or designated butler can explicitly release an epi
  await handler({background:true,butler:true,client},'shared','releaseRotation',args);
  assert.deepEqual(JSON.parse(JSON.stringify(releases)),[['member','native','epoch','tag',{kind:'person',id:'window'},'discard-handoff'],['member','native','epoch','tag',{kind:'steward',id:'butler-id'},'discard-handoff']]);
  session.roomIds=['other'];await assert.rejects(handler({current:true,view:{owner:'window'},client},'shared','releaseRotation',args));assert.equal(releases.length,2);
+});
+
+test('a standalone session has the same person/steward release boundary without acquiring membership',async()=>{
+ const releases=[],session={id:'outside',nativeId:'native',roomIds:[],roomId:null},args=['outside','native','epoch','tag','discard-handoff'];
+ const {handler}=spaceAction({isCurrentHumanContext:c=>c.current===true,queueDispatcher:{releaseRotation:async(...x)=>{releases.push(x);return {state:'released'};}}});const client={call:async()=>({sessions:[session]})};
+ await handler({current:true,view:{owner:'window'},client},'shared','releaseRotation',args);assert.equal(releases.length,1);assert.deepEqual(session.roomIds,[]);
+ await assert.rejects(handler({background:true,client},'shared','releaseRotation',args));assert.equal(releases.length,1);
 });

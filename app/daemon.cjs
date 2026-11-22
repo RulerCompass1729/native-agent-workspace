@@ -159,7 +159,7 @@ async function main() {
       }
       case 'completeRotation': return workspace.completeRotation(args[0], args[1], args[2], args[3]);
       case 'releaseRotation': return workspace.releaseRotation(...args);
-      case 'invalidateRotation': return workspace.invalidateRotation(args[0], args[1], args[2]);
+      case 'invalidateRotation': return workspace.invalidateRotation(args[0], args[1], args[2], args[3]);
       case 'dispatch': {
         // A NAW queue item (queue-dispatch.cjs): sent under the person's automatic-message
         // switches, never as a takeover. Native commands stay terminal-only.

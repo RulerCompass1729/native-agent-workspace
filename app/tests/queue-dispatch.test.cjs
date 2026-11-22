@@ -549,8 +549,9 @@ class FakeClient extends EventEmitter {
       session.rotationEpisode.state = 'complete'; return { epoch: args[2], state: 'complete' };
     }
     if (method === 'invalidateRotation') {
-      if (session.nativeId !== args[1] || session.rotationEpisode?.epoch !== args[2]) throw Error('control identity changed');
-      if (session.rotationEpisode.state !== 'complete') session.rotationEpisode.state = 'invalid'; return { epoch: args[2], state: 'invalid' };
+      const prototype = require('../workspace.cjs').Workspace.prototype;
+      return prototype.invalidateRotation.call({ get: () => session, changed() {}, persist: () => true,
+        retireRotation: prototype.retireRotation }, ...args);
     }
     if (method === 'dispatch') {
       this.sequence += 1;
@@ -954,9 +955,9 @@ test('the person using the old member during the handoff pauses the rotation: no
   advance(3 * 60 * 1000);
   await dispatcher.schedule();
   assert.equal(dispatcher.rotations.a, undefined);
-  assert.equal(client.sends('a').length, 1, 'an unresolved control is not silently replaced by a queue item');
-  client.state.sessions[0].nativeId = 'fresh-native-a';
-  client.state.sessions[0].messages = heavyMessages();
+  assert.equal(client.sends('a').length, 2, 'the durably discarded control no longer blocks its queued item');
+  assert.equal(client.state.sessions[0].nativeId, 'native-a', 'resuming does not replace the native session');
+  assert.equal(client.state.sessions[0].messages.find(m => m.id === 'tag-1').status, 'failed');
   await dispatcher.schedule();
   const sends = client.sends('a');
   assert.match(sends[sends.length - 1][2], /next task/);

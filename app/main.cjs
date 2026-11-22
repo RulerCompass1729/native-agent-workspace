@@ -1842,7 +1842,9 @@ async function boot() {
       if (args.length !== 5) throw uiError('error.invalidSpaceAction');
       const snapshot = roomState.apply(await c.client.call('initial'));
       const member = snapshot.sessions.find(s => s.id === args[0]);
-      if (!member || member.archived || !(member.roomIds || [member.roomId || 'shared']).includes(roomId)) throw uiError('error.workspace.handoffExpired');
+      if (!member || member.archived) throw uiError('error.workspace.handoffExpired');
+      const memberships = roomIds(member);
+      if (memberships.length ? !memberships.includes(roomId) : roomId !== 'shared') throw uiError('error.workspace.handoffExpired');
       const actor = steward ? { kind: 'steward', id: steward.id } : { kind: 'person', id: c.view.owner };
       const result = await queueDispatcher.releaseRotation(...args.slice(0, 4), actor, args[4]);
       await broadcastRoom(); return result;

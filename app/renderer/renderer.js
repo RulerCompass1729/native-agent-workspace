@@ -3248,6 +3248,17 @@ async function archiveChainSession(id) {
   if (others.length) toastMessage('chain.archiveNotice', () => ({ names: others.map(link => archivedName(state.sessions.find(s => s.id === link.id), link.name)).join(' / ') }));
   else toastMessage('toast.sessionArchived');
 }
+function rotationReleaseAction(record) {
+  if (!record || !record.nativeId || record.archived || window.nativeWorkspaceSpaces.roomIds(record).length ||
+      record.rotationEpisode?.nativeId !== record.nativeId || !['invalid', 'waiting-provider'].includes(record.rotationEpisode?.state)) return [];
+  return [{ id: 'rotation-release', label: uiText('queue.releaseRotation', { name: (record.name || record.id) }),
+    labelKey: 'queue.releaseRotation', labelParams: { name: (record.name || record.id) } }];
+}
+async function releaseSessionRotation(record) {
+  const episode = record.rotationEpisode;
+  await api.spaceAction('shared', 'releaseRotation', [record.id, record.nativeId, episode.epoch, episode.tag, 'discard-unresolved-handoff']);
+  updateState(await api.initial()); render();
+}
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
@@ -3260,7 +3271,7 @@ function sessionMenuModel(id, row) {
   const secretaryKey = state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   const secretary = typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === id || record.nativeId && !record.archived)
     ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey }] : [];
-  const actions = [...update, ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -3392,6 +3403,7 @@ function openSessionMenu(id, point, rowKey = id) {
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
       } else if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : id));
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
+      else if (action === 'rotation-release') attempt(() => releaseSessionRotation(record));
       else if (action === 'steward-set') openStewardChooser(id);
       else if (action === 'steward-revoke') attempt(() => revokeSteward(id));
       else if (action === 'steward-change') openStewardChooser();
@@ -4679,10 +4691,11 @@ function openHeaderMenu(anchor, terminal = false) {
   if (!current()) return;
   if (sessionMenu?.anchor === anchor) return sessionMenu.close();
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
-  const key = headerMenuKey(), h = headerControls;
+  const key = headerMenuKey(), h = headerControls, rotationTarget = current();
   const actions = terminal ? [{ id: 'display', label: uiText('header.display'), labelKey: 'header.display', control: $('terminal-display') }]
     : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
   // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
+  if (rotationTarget.rotationEpisode) actions.push(...rotationReleaseAction(rotationTarget));
   if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));
   const secretaryKey = state.queueSecretary?.sessionId === current().id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   if (typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === current().id || current().nativeId && !current().archived)) actions.push({
@@ -4694,7 +4707,7 @@ function openHeaderMenu(anchor, terminal = false) {
   const items = actions.filter(item => (terminal || !current().archived || item.id === 'usage' || item.secretary) && !(item.id === 'membership' && item.control.hidden));
   anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
-    items: items.map(({ control, secretary, ...item }) => ({ ...item, disabled: Boolean(control?.disabled) || Boolean(secretary && disconnected) })),
+    items: items.map(({ control, secretary, ...item }) => ({ ...item, disabled: Boolean(control?.disabled) || Boolean(disconnected && (secretary || item.id === 'rotation-release')) })),
     getAnchorRect: () => anchor.getBoundingClientRect(),
     onClose: () => {
       if (sessionMenu?.close === close) sessionMenu = null;
@@ -4705,6 +4718,7 @@ function openHeaderMenu(anchor, terminal = false) {
       if (key !== headerMenuKey()) return;
       if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') { if (!disconnected) attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
+      else if (action === 'rotation-release') { if (!disconnected) attempt(() => releaseSessionRotation(rotationTarget)); }
       else if (action === 'steward-set') openStewardChooser(current().id);
       else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }
       else if (action === 'steward-change') openStewardChooser();

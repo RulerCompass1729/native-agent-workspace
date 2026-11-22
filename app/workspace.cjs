@@ -1483,10 +1483,15 @@ class Workspace extends EventEmitter {
     const control = s.controlRevision, keys = this.terminalKeys.get(s.id) || 0;
     return () => s.controlRevision - (this.terminalKeys.get(s.id) || 0) === control - keys;
   }
-  invalidateRotation(id, nativeId, epoch) {
+  invalidateRotation(id, nativeId, epoch, deferred) {
     const s = this.get(id), episode = s.rotationEpisode;
     if (!episode || s.nativeId !== nativeId || episode.nativeId !== nativeId || episode.epoch !== epoch)
       throw uiError('error.workspace.handoffExpired');
+    if (deferred !== undefined) {
+      if (!deferred || Object.keys(deferred).sort().join(',') !== 'reason,tag' || deferred.reason !== 'person-active' ||
+          deferred.tag !== episode.tag || !['invalid', 'complete'].includes(episode.state)) throw uiError('error.workspace.handoffExpired');
+      return this.retireRotation(s, { kind: 'naw', id: 'rotation-dispatcher' }, deferred.reason);
+    }
     if (!['not-sent', 'complete', 'released'].includes(episode.state)) episode.state = 'invalid';
     this.changed(); this.persist();
     if (this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
@@ -1509,6 +1514,10 @@ class Workspace extends EventEmitter {
         !['invalid', 'waiting-provider'].includes(episode.state) ||
         !actor || !['person', 'steward'].includes(actor.kind) || typeof actor.id !== 'string' || !actor.id || actor.id.length > 200 || /[\p{Cc}]/u.test(actor.id) ||
         typeof reason !== 'string' || !reason.trim() || reason.length > 500 || /[\p{Cc}]/u.test(reason)) throw uiError('error.workspace.handoffExpired');
+    return this.retireRotation(s, actor, reason);
+  }
+  retireRotation(s, actor, reason) {
+    const { epoch, tag } = s.rotationEpisode, episode = s.rotationEpisode, id = s.id;
     const disposition = { actor: { kind: actor.kind, id: actor.id }, at: Date.now(), reason, action: 'release', outcome: 'failed' };
     const next = { ...s, rotationEpisode: { ...episode, state: 'released', disposition }, messages: s.messages.map(m => m.id === tag
       ? { ...m, status: 'failed', rotationDisposition: { ...disposition, epoch } } : m) };

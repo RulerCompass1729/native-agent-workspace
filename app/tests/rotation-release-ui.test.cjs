@@ -17,3 +17,21 @@ for(const language of ['zh','en'])test('queue release is a labelled button with 
  await button.click();assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))),['shared','releaseRotation',['member','native','epoch','tag','discard-unresolved-handoff']]);
  }
 });
+
+for(const language of ['zh','en'])test('outside sessions offer the same release action with the captured generation: '+language,async()=>{
+ const calls=[],c=vm.createContext({window:{nativeWorkspaceSpaces:require('../collaboration-spaces.cjs')},sessionName:s=>s.name,uiText:(k,p)=>locale.format(language,k,p),api:{spaceAction:async(...x)=>calls.push(x),initial:async()=>({})},updateState(){},render(){}});
+ vm.runInContext(section('function rotationReleaseAction(','function sessionMenuModel('),c);
+ const record={id:'outside',name:'Synthetic butler',nativeId:'native',roomIds:[],rotationEpisode:{nativeId:'native',epoch:'epoch',tag:'tag',state:'invalid'}};
+ assert.equal(c.rotationReleaseAction(record)[0].id,'rotation-release');await c.releaseSessionRotation(record);
+ assert.deepEqual(JSON.parse(JSON.stringify(calls)),[['shared','releaseRotation',['outside','native','epoch','tag','discard-unresolved-handoff']]]);
+ for(const changed of [{archived:true},{nativeId:'new'},{roomIds:['shared'],roomId:'shared'},{rotationEpisode:{...record.rotationEpisode,state:'open'}}])assert.equal(c.rotationReleaseAction({...record,...changed}).length,0);
+ assert.match(source.slice(source.indexOf('function sessionMenuModel('),source.indexOf('async function chooseIntegrator(')),/rotationReleaseAction\(record\)/);
+ assert.match(source.slice(source.indexOf('function openHeaderMenu('),source.indexOf('const ROOM_TABS')),/releaseSessionRotation\(rotationTarget\)/);
+});
+
+test('standalone release stays visibly disabled while disconnected, without disabling existing usage',()=>{
+ const header=section('function openHeaderMenu(','const ROOM_TABS'),start=header.indexOf('items: ')+7,end=header.indexOf(',\n    getAnchorRect:',start),expression=header.slice(start,end);
+ const items=[{id:'rotation-release'},{id:'usage',control:{disabled:false}}];
+ const offline=vm.runInNewContext(expression,{items,disconnected:true});assert.equal(offline[0].disabled,true);assert.equal(offline[1].disabled,false);
+ const online=vm.runInNewContext(expression,{items,disconnected:false});assert.equal(online[0].disabled,false);
+});

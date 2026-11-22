@@ -1913,7 +1913,7 @@ function readRotations(file, now, faults = {}) {
     // The person used the old session before a successor was made (an older build rested it a week; see
     // deferRotation). Trust records and a record with a successor (its stop unconfirmed, its handoff confirmed, or
     // its isolation hold naming this record) keep theirs, as failRotation keeps them.
-    if (record.phase === 'failed' && record.reason === 'person-active' && !trustRecord(record) && !validId(record.newId)) {
+    if (record.phase === 'failed' && record.reason === 'person-active' && !record.episodeEpoch && !trustRecord(record) && !validId(record.newId)) {
       continue;
     }
     if (record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS) {
@@ -3352,6 +3352,13 @@ class QueueDispatcher {
         catch { if (!this.closed) await this.isolateTrustRecovery(oldId, record); }
       }
     }
+    for (const [id, record] of Object.entries(this.rotations)) {
+      if (record.phase === 'failed' && record.reason === 'person-active' && record.episodeEpoch &&
+          !record.newId && !record.handoffConfirmed && !trustRecord(record)) {
+        try { await this.deferRotation(id, record, null, now); }
+        catch { /* Keep the exact unresolved record until its release is confirmed. */ }
+      }
+    }
     for (const oldId of this.activeRotations()) {
       if (this.closed) return;
       const record = this.rotations[oldId];
@@ -3377,7 +3384,8 @@ class QueueDispatcher {
   }
 
   async releaseRotation(id, nativeId, epoch, tag, actor, reason) {
-    const entry = this.client.route(id);
+    const client = this.client || await this.source();
+    const entry = client.route(id);
     const result = await withTimeout(entry.client.call('releaseRotation', id, nativeId, epoch, tag, actor, reason), CALL_TIMEOUT_MS, 'release-timeout');
     if (result?.epoch !== epoch || result.tag !== tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
     const record = this.rotations[id];
@@ -3488,6 +3496,12 @@ class QueueDispatcher {
   // Nothing failed: the record goes, and the member is rotated again once quiet (personDeferred). No OS notice, since
   // the person is at that session; the space says why the request stopped. Each new attempt asks for a handoff again.
   async deferRotation(oldId, record, due, now) {
+    if (record.episodeEpoch) {
+      const entry = this.client.route(oldId);
+      const result = await withTimeout(entry.client.call('invalidateRotation', oldId, record.oldNativeId, record.episodeEpoch,
+        { tag: record.tag, reason: 'person-active' }), CALL_TIMEOUT_MS, 'invalidate-timeout');
+      if (result?.epoch !== record.episodeEpoch || result.tag !== record.tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
+    }
     delete this.rotations[oldId];
     this.save();
     this.deferredAt.set(oldId, { at: now, due });

@@ -93,3 +93,79 @@ test('a durable release receipt repairs a coordinator left behind by a lost rele
  f.w.releaseRotation(f.s.id,f.s.nativeId,p.epoch,p.tag,actor,'discard-handoff');
  await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.dispatcher.rotations[f.s.id],undefined);assert.equal(f.writes.length,1);
 });
+
+
+test('a person interrupts within 60 seconds: defer retires the exact episode before deleting its coordinator',async t=>{
+ const f=fixture(t),epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch));
+ const record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compactions',provider:'codex',cwd:f.dir,name:'Synthetic',roomIds:['shared']};
+ f.dispatcher.rotations[f.s.id]=record;f.runtime.emit('nativeInput','Synthetic person input',{source:'user'});f.s.state='idle';f.s.pendingTag=null;
+ assert.equal(f.dispatcher.untouched(f.s,record,null),false);
+ await f.dispatcher.failRotation(f.s.id,record,'person-active',NOW,f.client.snapshot());
+ assert.equal(disk(f).rotationEpisode.state,'released');assert.equal(rules.sessionReady(f.snapshot(),AWAKE).ready,true);assert.equal(f.dispatcher.rotations[f.s.id],undefined);
+ assert.equal(f.writes.length,1);assert.equal(f.s.messages.find(m=>m.id===tag).status,'failed');
+ f.runtime.emit('submitted',tag);f.runtime.emit('complete',{tag,text:'Late abandoned handoff'});
+ assert.equal(f.s.messages.find(m=>m.id===tag).status,'failed');assert.equal(f.s.rotationEpisode.state,'released');
+ await f.send('new-task');assert.equal(f.writes.length,2);assert.notEqual(settle(f.snapshot(),tag,'new-task')?.status,'done');
+ const again=randomUUID();await f.send('rotation:'+f.s.id,control(again));assert.equal(f.s.rotationEpisode.epoch,again);
+});
+test('a failed or old-backend deferral keeps the coordinator and the unresolved gate instead of dropping evidence',async t=>{
+ const f=fixture(t),p=await invalid(f),record={phase:'failed',reason:'person-active',episodeEpoch:p.epoch,tag:p.tag,oldId:f.s.id,oldNativeId:f.s.nativeId,roomIds:['shared']};f.dispatcher.rotations[f.s.id]=record;
+ const call=f.client.call;f.client.call=async(method,...args)=>method==='invalidateRotation'&&args.length===4?{epoch:p.epoch,state:'invalid'}:call(method,...args);
+ await assert.rejects(f.dispatcher.deferRotation(f.s.id,record,'compactions',NOW));assert.equal(f.dispatcher.rotations[f.s.id],record);assert.equal(f.s.rotationEpisode.state,'invalid');
+});
+
+test('automatic deferral refuses a changed native, epoch, tag, unsupported reason, open episode and failed persistence',async t=>{
+ const f=fixture(t),p=await invalid(f),payload={tag:p.tag,reason:'person-active'};
+ for(const args of [[f.s.id,'wrong',p.epoch,payload],[f.s.id,f.s.nativeId,'wrong',payload],[f.s.id,f.s.nativeId,p.epoch,{...payload,tag:'wrong'}],[f.s.id,f.s.nativeId,p.epoch,{...payload,reason:'other'}]])assert.throws(()=>f.w.invalidateRotation(...args));
+ assert.equal(f.s.rotationEpisode.state,'invalid');assert.throws(()=>fault(f,()=>f.w.invalidateRotation(f.s.id,f.s.nativeId,p.epoch,payload)));assert.equal(f.s.rotationEpisode.state,'invalid');assert.equal(disk(f).rotationEpisode.state,'invalid');
+ f.s.rotationEpisode.state='open';assert.throws(()=>f.w.invalidateRotation(f.s.id,f.s.nativeId,p.epoch,payload));assert.equal(f.writes.length,1);
+});
+test('a lost deferral response retains a recoverable exact record and never replays the request',async t=>{
+ const f=fixture(t),p=await invalid(f),record={phase:'failed',reason:'person-active',episodeEpoch:p.epoch,tag:p.tag,oldId:f.s.id,oldNativeId:f.s.nativeId,roomIds:['shared']};f.dispatcher.rotations[f.s.id]=record;
+ const call=f.client.call;f.client.call=async(method,...args)=>{const result=await call(method,...args);if(method==='invalidateRotation'&&args.length===4)throw Error('lost receipt');return result;};
+ await assert.rejects(f.dispatcher.deferRotation(f.s.id,record,'compactions',NOW));assert.equal(f.dispatcher.rotations[f.s.id],record);assert.equal(f.s.rotationEpisode.state,'released');
+ await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.dispatcher.rotations[f.s.id],undefined);assert.equal(f.writes.length,1);
+});
+
+test('typing without submitting a new turn also retires the request and retains the same native identity',async t=>{
+ const f=fixture(t),epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch));
+ const record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'codex',cwd:f.dir,name:'Synthetic',roomIds:['shared']};f.dispatcher.rotations[f.s.id]=record;f.dispatcher.idleSince.set(f.s.id,NOW-60000);f.dispatcher.noteHuman(f.s.id);
+ await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.s.rotationEpisode.state,'released');assert.equal(f.s.nativeId,'native-a');assert.equal(f.writes.length,1);assert.equal(rules.sessionReady(f.snapshot(),AWAKE).ready,true);
+});
+
+test('the same standalone butler can be woken through the real dispatcher after its interrupted episode is retired',async t=>{
+ const f=fixture(t);f.s.roomIds=[];f.s.roomId=null;f.s.provider='claude';f.s.model='claude-test-model';
+ const epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch)),record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'claude',cwd:f.dir,name:'Synthetic',roomIds:[]};
+ f.dispatcher.rotations[f.s.id]=record;f.dispatcher.noteHuman(f.s.id);f.dispatcher.idleSince.set(f.s.id,NOW-60000);await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.s.rotationEpisode.state,'released');
+ const {ButlerLedger}=require('../butler-ledger.cjs'),{StewardWake}=require('../steward-wake.cjs'),ledger=new ButlerLedger(f.dir),identity={sessionId:f.s.id,nativeId:f.s.nativeId};
+ f.dispatcher.now=()=>NOW+180000;f.dispatcher.steward=()=>identity;f.dispatcher.stewardWake=new StewardWake(f.dir,{ledger:()=>ledger,selected:()=>identity,now:f.dispatcher.now,record(){}});f.dispatcher.stewardWake.set(true);
+ ledger.ingest({eventId:'synthetic-event',sourceRef:'synthetic-source',kind:'request',payload:{reason:'synthetic-action'}});
+ await f.dispatcher.wakeSteward(f.dispatcher.view(),[]);assert.equal(f.writes.length,2);assert.match(f.writes.at(-1).text,/stewardEvents/);assert.equal(f.s.nativeId,identity.nativeId);
+});
+
+test('a prepared but unadopted handoff is discarded too if the person interrupts before successor adoption',async t=>{
+ const f=fixture(t),epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch)),record={phase:'creating',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'codex',cwd:f.dir,name:'Synthetic',roomIds:['shared']};
+ f.runtime.emit('complete',{tag,text:'Prepared handoff'});await f.dispatcher.completeEpisode(f.s.id,record);f.dispatcher.rotations[f.s.id]=record;
+ await f.dispatcher.failRotation(f.s.id,record,'person-active',NOW,f.client.snapshot());assert.equal(f.s.rotationEpisode.state,'released');assert.equal(f.dispatcher.rotations[f.s.id],undefined);assert.equal(f.s.messages.find(m=>m.id===tag).status,'failed');assert.equal(f.writes.length,1);
+});
+
+for (const complete of [false, true]) test('production daemon forwards exact retirement proof: ' + (complete ? 'complete' : 'invalid'), async t => {
+  const f = fixture(t), epoch = randomUUID(), tag = await f.send('rotation:' + f.s.id, control(epoch));
+  if (complete) { f.runtime.emit('complete', { tag, text: 'Synthetic handoff' }); f.w.completeRotation(f.s.id, f.s.nativeId, epoch, tag); }
+  else f.w.invalidateRotation(f.s.id, f.s.nativeId, epoch);
+  const source = fs.readFileSync(require.resolve('../daemon.cjs'), 'utf8');
+  const start = source.indexOf('  const dispatch = async ('), end = source.indexOf('\n  };', start) + 5;
+  assert.ok(start >= 0 && end > start);
+  const expression = source.slice(start, end).replace(/^\s*const dispatch = /u, '').replace(/;\s*$/u, '');
+  const dispatch = require('node:vm').runInNewContext('(' + expression + ')', { binding: null, shuttingDown: false, workspace: f.w });
+  const call = f.client.call;
+  f.client.call = async (method, ...args) => method === 'invalidateRotation' ? dispatch('synthetic-owner', method, args, {}) : call(method, ...args);
+  const record = { phase: 'failed', reason: 'person-active', episodeEpoch: epoch, tag, oldId: f.s.id, oldNativeId: f.s.nativeId, roomIds: ['shared'] };
+  f.dispatcher.rotations[f.s.id] = record;
+  await f.dispatcher.deferRotation(f.s.id, record, 'compactions', NOW);
+  assert.equal(disk(f).rotationEpisode.state, 'released');
+  assert.equal(f.dispatcher.rotations[f.s.id], undefined);
+  assert.equal(f.s.messages.find(m => m.id === tag).status, 'failed');
+  assert.equal(rules.sessionReady(f.snapshot(), AWAKE).ready, true);
+  assert.equal(f.writes.length, 1, 'retirement never resends the old input');
+});
