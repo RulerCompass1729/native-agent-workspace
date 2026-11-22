@@ -162,7 +162,7 @@ test('the page has the entry above everything else, the mark before the title an
   assert.ok(renderer.includes("...(index >= 0 && index < visible.length - 1 ? [{ id: 'down'"), 'A row that is not in the list is not offered "move down"');
   assert.ok(renderer.includes("const roomItems = isSteward && !window.nativeWorkspaceSpaces.roomIds(record).length ? [] :"));
   // Both menus offer the same items and carry them out the same way; the butler's header has no "join".
-  assert.ok(renderer.includes("const actions = [...update, ...stewardAction(record), ...secretary, ...integratorAction(record), "));
+  assert.ok(renderer.includes("const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), "));
   assert.ok(renderer.includes("if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));"));
   assert.ok(renderer.includes("else if (action === 'steward-set') openStewardChooser(id);\n      else if (action === 'steward-revoke') attempt(() => revokeSteward(id));"));
   assert.ok(renderer.includes("else if (action === 'steward-set') openStewardChooser(current().id);\n      else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }"));
