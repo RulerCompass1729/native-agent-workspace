@@ -351,6 +351,8 @@ test('every sentence exists in both languages, and the words say what the design
     'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable',
     // The sender of a wake in the butler's conversation; checked in steward-wake.test.cjs.
     'reading.stewardWake', 'stewardWake.openRecord', 'stewardWake.stalled',
+    // The wake chip in the header (11-22): its short text and the detail it opens.
+    'stewardWake.chip', 'stewardWake.chipDetail',
     ...require('../steward-wake.cjs').BLOCK_REASONS.map(reason => `stewardWake.reason.${reason}`)];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);

@@ -39,7 +39,8 @@
     more.button.className += ' stream-more';
     panel.append(head, tools, list, more.status);
     doc.getElementById('room-layout').append(panel);
-    doc.getElementById('header').before(strip);
+    // In the header row since 11-22: the needs-you count is shown once, beside the card countdown.
+    doc.getElementById('header').insertBefore(strip, doc.getElementById('task-board'));
     const validTime = time => Number.isFinite(time) && Math.abs(time) <= 8640000000000000;
     const clock = time => validTime(time) ? new Date(time).toLocaleTimeString(host.language(), { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }) : '';
     const day = time => validTime(time) ? new Date(time).toLocaleDateString(host.language(), { year: 'numeric', month: 'long', day: 'numeric' }) : t('unknownDate');

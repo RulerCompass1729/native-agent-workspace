@@ -1,4 +1,4 @@
-:root{--vendor-image-size:26px;--reading-slot-height:32px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;color:var(--ink);background:var(--surface)}
+:root{--vendor-image-size:26px;--reading-slot-height:32px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;--ink:var(--dsw-alias-label-primary,#232723);--muted:var(--dsw-alias-label-secondary,#60675d);--surface:var(--dsw-alias-bg-base,#fafbf8);--panel:var(--dsw-alias-bg-layer-1,#f0f2ed);--raised:var(--dsw-alias-bg-layer-2,#fff);--hover:var(--dsw-alias-interactive-bg-hover-solid,#e9eee2);--selected:var(--dsw-alias-bg-multi-select,#e3e9dc);--border:var(--dsw-alias-border-l2,#dce2d5);--green:#365744;--approval-ink:#a8553a;--agent-idle:#6b8761;--agent-working:#b78c42;--agent-waiting:#b26345;--agent-offline:#868980;--agent-background:#5b7fa6;--agent-unknown:#6c7266;color:var(--ink);background:var(--surface)}
 /* "Needs you" status text, 4.5:1 on sidebar rows and on the card over the page (app/tests/approval-ink.test.cjs).
    build-ui nests this file in .naw, so & is each NAW surface there. */
 body[data-ds-dark-theme] &{--approval-ink:#f28d61}
@@ -803,6 +803,15 @@ header h1, header p { overflow-wrap: anywhere; }
 /* Idle with reported background work, or with an unconfirmed report. */
 .state-dot.bg-work{background:#5b7fa6}
 .state-dot.bg-unknown{background:transparent;box-shadow:inset 0 0 0 1.5px #747b6f}
+/* 11-22: one colour per status, read by the sidebar corner mark, the hover card and the header squares
+   (agent-distribution.js look()). Later rules win: unknown < offline < waiting. */
+.state-dot{--agent-color:var(--agent-idle)}
+.state-dot:is(.working,.starting,.stopping){--agent-color:var(--agent-working)}
+.state-dot.bg-unknown{--agent-color:var(--agent-unknown)}
+.state-dot:is(.ended,.disconnected,.recoverable){--agent-color:var(--agent-offline)}
+.state-dot:is(.approval,.error){--agent-color:var(--agent-waiting)}
+.state-dot.idle:is(.bg-work,.goal-enabled){--agent-color:var(--agent-background)}
+.state-dot.idle.goal-stopped{--agent-color:var(--agent-working)}
 
 /* T-142: a session's status mark sits on its avatar's top-right corner, 10px, set off from the avatar by a
    ring in the colour of the sidebar or of the row behind it (--ring). Each state has its own shape, so
@@ -811,14 +820,14 @@ header h1, header p { overflow-wrap: anywhere; }
    hollow ring; unknown sub-tasks or unconfirmed background work a dashed ring. Only working breathes and
    waiting pulses, and nothing moves when reduced motion is asked for. The full text is in the row's label. */
 .session-link .agent-icon{position:relative}
-.session-link .agent-icon>.state-dot{--ring:var(--panel,var(--bg,#fff));position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring)}
+.session-link .agent-icon>.state-dot{--ring:var(--panel,var(--bg,#fff));background:var(--agent-color);position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring)}
 .session-row.active .session-link .agent-icon>.state-dot{--ring:var(--selected)}
 .session-row.space-highlight .session-link .agent-icon>.state-dot{--ring:var(--raised)}
-.session-link .agent-icon>.state-dot.working{background:radial-gradient(circle,#b78c42 0 1.6px,var(--ring) 1.6px 2.6px,#b78c42 2.6px)}
-.session-link .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 1.5px #5b7fa6}
-.session-link .agent-icon>.state-dot.ended,.session-link .agent-icon>.state-dot.disconnected,.session-link .agent-icon>.state-dot.recoverable{background:var(--ring);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 2px #868980}
-.session-link .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed #6c7266}
-.session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{background:#b26345;border:0;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),0 0 0 calc(var(--state-dot-ring-width, 2px) + 1.5px) #b26345}
+.session-link .agent-icon>.state-dot.working{background:radial-gradient(circle,var(--agent-color) 0 1.6px,var(--ring) 1.6px 2.6px,var(--agent-color) 2.6px)}
+.session-link .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,var(--agent-color) 50%,var(--ring) 50%);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 1.5px var(--agent-color)}
+.session-link .agent-icon>.state-dot.ended,.session-link .agent-icon>.state-dot.disconnected,.session-link .agent-icon>.state-dot.recoverable{background:var(--ring);box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),inset 0 0 0 2px var(--agent-color)}
+.session-link .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed var(--agent-color)}
+.session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{background:var(--agent-color);border:0;box-shadow:0 0 0 var(--state-dot-ring-width, 2px) var(--ring),0 0 0 calc(var(--state-dot-ring-width, 2px) + 1.5px) var(--agent-color)}
 .session-row:not(.active) .session-link:hover .agent-icon>.state-dot{--ring:var(--hover)}
 .session-link .agent-icon>.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
 @media(prefers-reduced-motion:no-preference){
@@ -1055,8 +1064,8 @@ main.settings-panel-open{margin-inline-end:340px}
 #space-create-dialog { padding:20px }
 
 /* A persistent goal is distinct from a running turn and from native approval. */
-.state-dot.idle.goal-stopped{background:transparent;border:1.5px solid #b78c42;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
-.state-dot.idle.goal-enabled{background:transparent;border:1.5px solid #5b7fa6;box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
+.state-dot.idle.goal-stopped{background:transparent;border:1.5px solid var(--agent-color);box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
+.state-dot.idle.goal-enabled{background:transparent;border:1.5px solid var(--agent-color);box-shadow:0 0 0 2px var(--ring,var(--panel,#fff))}
 /* Compact existing merge preview: keep text and controls unchanged. */
 #space-merge-preview>h3{margin:8px 0}
 #space-merge-preview>p{margin:8px 0}
@@ -1255,10 +1264,6 @@ dialog p.records-note { color: var(--ink); }
 .steward-record-error { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
 /* NAW's switch for waking the butler: on one line with how it stands. */
 .steward-record-wake { margin: 4px 0 14px; }
-.steward-wake-warning { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--approval-ink); border-radius: 8px; background: var(--raised); color: var(--ink); font-size: 13px; }
-.steward-wake-warning[hidden] { display: none; }
-.steward-wake-warning p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.steward-wake-warning button { flex-shrink: 0; font-size: 13px; }
 .steward-record-wake-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
 dialog .steward-record-wake label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 500; }
 dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
