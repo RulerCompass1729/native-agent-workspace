@@ -9,7 +9,7 @@ const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity: peerIdentity } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
-const { createStateEncoder, sendState } = require('./state-delta.cjs');
+const { createStateEncoder, createInitialResponse, sendState } = require('./state-delta.cjs');
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
@@ -245,20 +245,25 @@ async function main() {
   };
   const server = net.createServer(client => {
     writers.set(client, createWriter(client, { refused: reason => ending(client, reason) }));
-    let authenticated = false, owner = null, page = true;
+    let authenticated = false, owner = null, page = true, initialResponse = null;
     const authTimer = setTimeout(() => { if (!authenticated) client.destroy(); }, 3000);
     client.on('error', () => {});
     readFrames(client, REQUEST_BYTES, request => {
       if (!authenticated) {
         if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100 || ![undefined, true, false].includes(request.page)) { client.destroy(); return; }
-        authenticated = true; owner = request.owner; page = request.page !== false; clients.add(client); workspace.viewConnected(owner, page); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); clearTimeout(authTimer);
+        authenticated = true; owner = request.owner; page = request.page !== false; clients.add(client); workspace.viewConnected(owner, page); if (request.stateDelta === 1) deltas.set(client, { sent: null, waiting: null }); if (request.initialDelta === 1) initialResponse = createInitialResponse(); clearTimeout(authTimer);
         const ended = endings.get(owner); endings.delete(owner); owners.set(client, owner);
         send(client, { ready: true, ...(ended ? { ended } : {}) }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : request.method === 'releaseRotation' ? 6 : 5) || !Number.isInteger(request.id)) { ending(client, 'request-refused'); client.destroy(); return; }
       Promise.resolve().then(() => request.backgroundActor
         ? background.run(request.backgroundActor, () => dispatch(owner, request.method, request.args, client))
-        : dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
+        : dispatch(owner, request.method, request.args, client)).then(value => {
+          let reply;
+          try { reply = request.method === 'initial' && initialResponse ? initialResponse(value) : { value }; }
+          catch { ending(client, 'encode-failed'); client.destroy(); return; }
+          send(client, { id: request.id, ok: true, ...reply });
+        }, error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }));
     }, reason => ending(client, 'request-' + reason));
     client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); deltas.delete(client); workspace.scopedOutboxDisconnected(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner, page, leavingViews.has(client)); });
   });

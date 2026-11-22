@@ -517,7 +517,8 @@ test('the real service tells an owner\'s next transport why it ended the previou
   // A reader that stopped: replies wait in the service until it ends the transport (createWriter, 1024 frames).
   const stalled = await connect('window-a');
   stalled.socket.pause();
-  for (let index = 0; index < 1400; index++) stalled.call('initial').catch(() => {});
+  // Written raw: the client itself shares concurrent reads (service-connection.cjs readState).
+  for (let index = 0; index < 1400; index++) stalled.socket.write(JSON.stringify({ id: 10000 + index, method: 'initial', args: [] }) + '\n');
   await new Promise(resolve => setTimeout(resolve, 1500));
   stalled.socket.resume();
   await closed(stalled);

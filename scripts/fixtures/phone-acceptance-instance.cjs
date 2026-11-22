@@ -10,6 +10,7 @@ function mainMobile(root, profile, roomState, labels, background, steward) {
     dataDir: profile, roomState, sessionLabels: labels, recordReminders, operationsUnavailable: null, stewardRecord: null,
     confirmationInbox: require('../app/confirmation-inbox.cjs'), tempReminders: null,
     tempSummary: require('../app/temp-reminders.cjs').tempSummary, readTempSummary: require('../app/temp-reminders.cjs').readSummary,
+    personActions: null, stewardWake: null, usageAlerts: null,
     backgroundControl: background, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     queueSecretary: null, integratorRole: null, stewardRole: { current: () => steward }, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => scheduled.push(true), noteHuman: id => human.set(id, Date.now()) },
@@ -22,6 +23,9 @@ function mainMobile(root, profile, roomState, labels, background, steward) {
   const a = mainSource.indexOf('function displayState('), b = mainSource.indexOf('function reportViewStorage(', a);
   const c = mainSource.indexOf('let mobileBroker;'), d = mainSource.indexOf('const startupFile =', c);
   assert.ok(a > 0 && b > a && c > 0 && d > c);
+  const r = mainSource.indexOf('function recordPersonAction('), s = mainSource.indexOf('function observePersonActions(', r);
+  assert.ok(r > 0 && s > r);
+  vm.runInContext(mainSource.slice(r, s), context);
   vm.runInContext(mainSource.slice(a, b), context); vm.runInContext(mainSource.slice(c, d), context);
   return { context, human, scheduled, broker: () => context.appMobileBroker(), stop: async () => { context.revokeAppMobile(); await vm.runInContext('mobileStopped', context); } };
 }

@@ -50,6 +50,7 @@ const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
 const { roomId: validRoomId, roomIds, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
+const { PersonActions } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
@@ -76,6 +77,15 @@ const applicationHandlers = new Map();
 let backgroundControl, backgroundUnavailable = false, operationsUnavailable = null, operationsBlocks = -1, stewardRecord = null, stewardOf = null;
 // Waking the butler when NAW has recorded something new (steward-wake.cjs): off until the person or the butler turns it on.
 let stewardWake = null;
+let personActions = null;
+function recordPersonAction(name, args, value) {
+  try { personActions?.call(name, args, value); }
+  catch { butlerIngress?.errors.set('person-actions', 'source-unavailable'); }
+}
+function observePersonActions(snapshot) {
+  try { personActions?.observe(snapshot, backgroundControl?.data?.records || []); }
+  catch { butlerIngress?.errors.set('person-actions', 'source-unavailable'); }
+}
 // The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
 const answerNotices = new AnswerNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
@@ -203,6 +213,7 @@ function appMobileWorkspace() {
     },
     confirmation: (...args) => backgroundControl.mobileBinding(...args), decide: (...args) => backgroundControl.decide(...args),
     broadcast: () => broadcastRoom(), schedule: () => queueDispatcher?.schedule(),
+    personAction: recordPersonAction,
     // The same designation the Mac sidebar shows; before it is read, the phone says unavailable, not none.
     steward: () => { if (!stewardRole) throw Error('Butler designation not read yet'); return stewardRole.current() || null; },
   });
@@ -891,6 +902,7 @@ function bindClient(context) {
   };
   const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed() && !context.background) {
+    observePersonActions(data);
     const display = displayState(data, context);
     pushState(context, display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
@@ -1013,6 +1025,7 @@ async function startQueueDispatcher() {
       directoryTrustTimeoutMs: process.env.NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS,
       // Passive local facts only; no controller or native/model runner is bound.
       observeQueueState: states => butlerIngress?.observeQueues(states),
+      observePersonActions,
       // The butler, woken on what NAW records when the person or the butler turned that on (steward-wake.cjs).
       stewardWake: stewardWake || undefined,
       // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
@@ -1362,8 +1375,13 @@ function register(name, handler) {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
     // Read before the handler records the new view. A window without a bound has nothing to hold.
+    const person = ['operatorAction', 'spaceAction', 'approve', 'answer'].includes(name) && isCurrentHumanContext(context);
     if (context.statePush && typingKey(name, context.view, args)) context.statePush.typed();
-    try { return { ok: true, value: await handler(context, ...args) }; }
+    try {
+      const value = await handler(context, ...args);
+      if (person) recordPersonAction(name, args, value);
+      return { ok: true, value };
+    }
     catch (error) { return { ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }; }
     // The page reads what its action changed once this reply arrives: the state waiting for its time goes first.
     finally { if (hurries) try { context.statePush?.flushNow(); } catch { /* lost, as any failed send */ } }
@@ -1610,6 +1628,7 @@ async function boot() {
       butlerIngress.ledger.openQuestionMetricEpoch(randomUUID());
     } else butlerIngress.roomState = roomState;
     butlerIngress.recover();
+    personActions ||= new PersonActions({ ingress: butlerIngress });
   }
   catch { /* Sources stay in the committed room events; status remains blocked. */ }
   bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);
@@ -1651,7 +1670,7 @@ async function boot() {
   viewStore = new ViewStore(dataDir);
   const loaded = dropRetiredViewFields(viewStore.load());
   views = loaded.views;
-  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { backgroundNotifications?.sync(); broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
+  try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { observePersonActions(); backgroundNotifications?.sync(); broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
     confirmationFingerprint: (row, snapshot, view, live) => backgroundOperation.controlFingerprint(row.command,
       { state: snapshot, actor: row.actor, context: live || { view }, roomState, sessionLabels, client: live?.client }),
     confirmationPending: notifyBackgroundConfirmation,

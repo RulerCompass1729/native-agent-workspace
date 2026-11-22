@@ -62,24 +62,29 @@ function createStateEncoder(hash = digest, clock = Date.now) {
     frames(snapshot, withDelta, changed = null) {
       const current = ++generation, now = withDelta ? digests(snapshot, changed, kept.get(current - 1)) : null;
       if (now) kept.set(current, now);
-      let full = null; const deltas = new Map();
+      let full = null; const deltas = new Map(), data = new Map();
       const whole = () => full ||= encodeFrame({ event: 'state', data: snapshot });
+      const deltaData = base => {
+        const before = kept.get(base);
+        if (!now || !before || base === current) return snapshot;
+        if (!data.has(base)) data.set(base, mapRecords(snapshot, (key, record) => {
+          const after = now.get(key), earlier = before.get(key);
+          if (!after || !earlier || !record || !Array.isArray(record.messages)) return record;
+          let keep = after === earlier ? after.length : 0;
+          while (keep < after.length && keep < earlier.length && after[keep] === earlier[keep]) keep++;
+          return keep ? { ...record, messages: record.messages.slice(keep), messagesKeep: keep } : record;
+        }));
+        return data.get(base);
+      };
       return {
         generation: current,
         full: whole,
+        data: deltaData,
         // From the state of an earlier broadcast to this one; whole when that state is not known.
         delta(base) {
           const before = kept.get(base);
           if (!now || !before || base === current) return whole();
-          if (!deltas.has(base)) deltas.set(base, encodeFrame({ event: 'state', delta: 1, data: mapRecords(snapshot, (key, record) => {
-            const after = now.get(key), earlier = before.get(key);
-            if (!after || !earlier || !record || !Array.isArray(record.messages)) return record;
-            // Carried digests are the same immutable array; this says nothing
-            // about the identity of the live, possibly edited message array.
-            let keep = after === earlier ? after.length : 0;
-            while (keep < after.length && keep < earlier.length && after[keep] === earlier[keep]) keep++;
-            return keep ? { ...record, messages: record.messages.slice(keep), messagesKeep: keep } : record;
-          }) }));
+          if (!deltas.has(base)) deltas.set(base, encodeFrame({ event: 'state', delta: 1, data: deltaData(base) }));
           return deltas.get(base);
         },
       };
@@ -87,6 +92,17 @@ function createStateEncoder(hash = digest, clock = Date.now) {
     // Forget the digests of every broadcast not listed: no client can build on them any more.
     keep(generations) { for (const known of kept.keys()) if (!generations.has(known)) kept.delete(known); },
     held: () => kept.size,
+  };
+}
+
+// RPC responses are ordered and never coalesced. Their history must stay separate from state events.
+function createInitialResponse() {
+  const encoder = createStateEncoder(); let base = null;
+  return snapshot => {
+    const frames = encoder.frames(snapshot, true), value = frames.data(base);
+    const response = { initialDelta: base === null ? 0 : 1, value };
+    base = frames.generation; encoder.keep(new Set([base]));
+    return response;
   };
 }
 
@@ -122,4 +138,4 @@ function rebuildState(base, data) {
   });
 }
 
-module.exports = { createStateEncoder, sendState, rebuildState };
+module.exports = { createStateEncoder, createInitialResponse, sendState, rebuildState };

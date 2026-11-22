@@ -8,11 +8,18 @@ const background = require('./background-operation.cjs');
 
 class ServiceClient extends EventEmitter {
   constructor(socket) {
-    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let received = 0;
+    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); this.stateRead = { flying: null, next: null }; let received = 0;
     // The last whole state, which a delta frame builds on (state-delta.cjs). lastState: the same, for whoever takes
     // this client over after the `initial` it asked for (workspace-client.cjs newestState).
-    let state = null;
+    let state = null, initial = null;
     readFrames(socket, RESPONSE_BYTES, m => {
+      const pending = this.pending.get(m.id);
+      if (Object.hasOwn(m, 'initialDelta')) {
+        if (m.event || ![0, 1].includes(m.initialDelta) || !m.ok || pending?.method !== 'initial' || m.initialDelta === 1 && !initial) { this.closeReason = 'initial-rebuild'; socket.destroy(); return; }
+        try { if (m.initialDelta === 1) m = { ...m, value: rebuildState(initial, m.value) }; }
+        catch { this.closeReason = 'initial-rebuild'; socket.destroy(); return; }
+        initial = m.value;
+      }
       if (m.event === 'state') {
         if (m.delta === 1) {
           try { m = { ...m, data: rebuildState(state, m.data) }; } catch { this.closeReason = 'state-rebuild'; socket.destroy(); return; }
@@ -46,8 +53,28 @@ class ServiceClient extends EventEmitter {
   }
   receivedOrder(value) { return this.receipts.get(value); }
   call(method, ...args) {
+    if (method === 'initial' && !args.length) return this.readState();
     // A retained old daemon must reject this method, never ignore a new guard argument.
     if (method === 'input' && args[2] !== undefined) method = 'inputIfCurrent';
+    return this.request(method, args, background.current());
+  }
+  // Later reads share the next unsent request; negotiated replies may be deltas.
+  readState() {
+    const read = this.stateRead, actor = background.current();
+    const start = () => {
+      const flying = read.flying = this.request('initial', [], actor);
+      flying.catch(() => {}).then(() => { if (read.flying === flying) read.flying = null; });
+      return flying;
+    };
+    let shared = read.next;
+    if (!shared && read.flying) shared = read.next = read.flying.catch(() => {}).then(() => { read.next = null; return start(); });
+    if (!shared) shared = start();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(uiError('error.confirmationTimeout')), 40000);
+      shared.then(resolve, reject).finally(() => clearTimeout(timer));
+    });
+  }
+  request(method, args, actor) {
     return new Promise((resolve, reject) => {
       if (this.socket.destroyed) return reject(uiError('error.serviceDisconnected'));
       const id = ++this.sequence;
@@ -59,8 +86,8 @@ class ServiceClient extends EventEmitter {
       // the running turn reads it at a tool boundary or its own turn starts; its other steps keep their own limits.
       const queued = ['queue', 'queueShared', 'wakeReceive'].includes(method) || method === 'spaceAction' && args[1] === 'queueShared';
       const timer = queued ? null : setTimeout(() => { this.pending.delete(id); reject(uiError('error.confirmationTimeout')); }, 40000);
-      this.pending.set(id, { resolve, reject, timer });
-      this.socket.write(JSON.stringify({ id, method, args, ...(background.current() ? { backgroundActor: background.current() } : {}) }) + '\n');
+      this.pending.set(id, { resolve, reject, timer, method });
+      this.socket.write(JSON.stringify({ id, method, args, ...(actor ? { backgroundActor: actor } : {}) }) + '\n');
     });
   }
   close() { this.closeReason ||= 'local-close'; this.socket.end(); }
@@ -79,8 +106,8 @@ async function connectService(dataDir, owner, { page = true } = {}) {
     const timer = setTimeout(() => { socket.destroy(); reject(uiError('error.serviceUnresponsive')); }, 2500);
     client.once('ready', () => { clearTimeout(timer); resolve(); });
     socket.once('error', () => { clearTimeout(timer); reject(uiError('error.serviceConnect')); });
-    // stateDelta: this client rebuilds delta state frames. An older service ignores it and sends whole ones.
-    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token, stateDelta: 1, ...(page ? {} : { page: false }) }) + '\n'));
+    // Separate delta histories for broadcasts and initial replies. Older services ignore these flags.
+    socket.once('connect', () => socket.write(JSON.stringify({ protocol: 1, owner, token: info.token, stateDelta: 1, initialDelta: 1, ...(page ? {} : { page: false }) }) + '\n'));
   });
   return client;
 }

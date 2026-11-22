@@ -54,6 +54,7 @@ function fixture() {
     viewStore: { loaded: true }, saveViews() { calls.push({ method: 'saveViews' }); if (context.saveFailure) throw Error('Synthetic view save failed'); },
     dsh: { stop() { calls.push({ method: 'stopUI' }); } }, app: { on(name, handler) { assert.equal(name, 'before-quit'); quit = handler; } },
   });
+  vm.runInContext('let personActions = null;\n' + source.slice(source.indexOf('function recordPersonAction('), source.indexOf('function observePersonActions(')), context);
   vm.runInContext(source.slice(source.indexOf('let mobileBroker;'), source.indexOf('const startupFile =')), context);
   vm.runInContext(source.slice(source.indexOf('function register('), source.indexOf('async function boot(')), context);
   vm.runInContext(source.slice(source.indexOf('function isCurrentHumanContext('), source.indexOf('function showDialog(')), context);

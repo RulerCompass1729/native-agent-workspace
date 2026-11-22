@@ -659,12 +659,12 @@ class Claude extends EventEmitter {
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
       args: ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } },
       peekaboo: computerUseMcpServer() } });
-    // Native --resume restores the saved model and every permission mode except
-    // bypassPermissions, but resolves effort from settings again. Re-pass only
-    // those two, as this session's own last native reports had them.
+    // Resume re-reads defaults: keep this session's model and reported effort.
     // A new session starts in bypass only when the person chose it at creation;
     // later launches follow what the session last reported.
     // A session NAW's rotation created starts with the old session's model, effort and mode.
+    const model = record.requestedSettings?.model || record.model;
+    const resumeModel = typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/.test(model) ? model : null;
     const posture = !record.recovering ? [
       ...(record.skipPermissions ? ['--permission-mode', 'bypassPermissions']
         : record.requestedSettings?.permissionMode ? ['--permission-mode', record.requestedSettings.permissionMode]
@@ -672,6 +672,7 @@ class Claude extends EventEmitter {
       ...(record.requestedSettings?.model ? ['--model', record.requestedSettings.model] : []),
       ...(record.requestedSettings?.effort ? ['--effort', record.requestedSettings.effort] : [])] : [
       ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
+      ...(resumeModel ? ['--model', resumeModel] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
     // A picker branch opens the native session picker once and forks the chosen
     // session into this row's pre-assigned ID; recovery always resumes that ID.

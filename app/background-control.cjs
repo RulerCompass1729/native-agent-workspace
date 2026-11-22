@@ -1016,6 +1016,16 @@ class BackgroundControl {
     const entry = row.state === 'confirmation-required' && this.decisions?.get(this.key(row.actor) + ':' + row.id);
     return entry ? (entry.waiting ? 'queued' : 'running') : null;
   }
+  answerProgress(row) {
+    if (this.answerState(row) === 'queued') {
+      const actor = this.key(row.actor), slot = actor + ':' + row.id;
+      const own = new Set(this.data.records.filter(r => this.key(r.actor) === actor).map(r => actor + ':' + r.id));
+      let queuedAhead = 0;
+      for (const key of this.decisions.keys()) { if (key === slot) break; if (own.has(key)) queuedAhead++; }
+      return { queuedAhead };
+    }
+    return row.state === 'running' && Number.isSafeInteger(row.humanDecisionAt) ? { startedAt: row.humanDecisionAt } : {};
+  }
   async carryOut(sessionId, nativeId, id, response, authorize, queued) {
     if (queued) authorize?.();
     const row = this.data.records.find(r => r.actor.id === sessionId && r.actor.nativeId === nativeId && r.id === id);
@@ -1108,7 +1118,7 @@ class BackgroundControl {
     return own.map(saved => { const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved; return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${r.disposition ? require('./ui-locale.js').format('zh', r.stateUiMessage.key) : ({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
-      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}), ...(this.answerState(r) ? { answer: this.answerState(r) } : {}),
+      backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}), ...(this.answerState(r) ? { answer: this.answerState(r) } : {}), ...this.answerProgress(r),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),

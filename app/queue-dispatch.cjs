@@ -1943,6 +1943,7 @@ class QueueDispatcher {
     this.directoryTrustTimeoutMs = Number.isSafeInteger(trustTimeout) && trustTimeout > 0 ? trustTimeout : NEW_SESSION_READY_MS;
     this.broadcast = options.broadcast || (async () => {});
     this.observeQueueState = options.observeQueueState || null;
+    this.observePersonActions = options.observePersonActions || null;
     // B6: the engine that hands delivered work to the person's designated integrator. The caller
     // builds it for this dispatcher, because it sends through the dispatcher's own send. Absent
     // unless given: without it nothing below runs. It is built at the end of this constructor.
@@ -1999,6 +2000,7 @@ class QueueDispatcher {
     this.lastFullPass = 0;
     this.onState = snapshot => {
       this.dirty = true;
+      if (this.observePersonActions) this.observePersonActions(snapshot);
       if (this.observeQueueState) this.observeVacancyReadiness(snapshot, this.now());
     };
     this.rotationRead = {};
@@ -2588,6 +2590,7 @@ class QueueDispatcher {
 
   view() {
     const snapshot = this.roomState.apply(this.client.snapshot());
+    if (this.observePersonActions) this.observePersonActions(snapshot);
     const now = this.now();
     for (const session of snapshot.sessions) {
       // A live control needs an idle clock; this does not grant delivery readiness.
@@ -2679,6 +2682,14 @@ class QueueDispatcher {
     if (!this.hasOpenWork()) {
       // No queued work: still check quiet space members for rotation once a minute, through a window only.
       const windowClient = this.clients();
+      if (!windowClient && this.observePersonActions) {
+        this.client = await this.source();
+        this.listen(this.client);
+        const snapshot = this.client.snapshot();
+        if (this.observePersonActions) this.observePersonActions(snapshot);
+        this.idleSince.clear();
+        return;
+      }
       this.dropOwnClient();
       const watching = Boolean(windowClient);
       if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {

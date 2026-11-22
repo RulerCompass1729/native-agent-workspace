@@ -2,7 +2,7 @@
 // mark, each actionable on its own. Creation may carry its permission risk: it is part of the shared configuration
 // shown once, and every card is still checked and receipted one by one in the main process.
 (function (root) {
-  const METHODS = new Set(['archiveSession', 'create']);
+  const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession']);
   function batchable(card) {
     const op = card?.message?.backgroundOperation, summary = card?.summary;
     const riskless = Array.isArray(summary?.risks) && (summary.risks.length === 0 || summary.method === 'create');

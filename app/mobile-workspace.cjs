@@ -52,9 +52,9 @@ function conversation(rows = [], sessionId, budget, cards) {
   return { messages: result.reverse(), earlierMessagesOmitted: omitted };
 }
 class MobileWorkspace {
-  constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now, steward }) {
+  constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now, steward, personAction = () => {} }) {
     if (typeof snapshot !== 'function' || !roomState || !records || typeof records.status !== 'function' || typeof records.acknowledge !== 'function') throw denied();
-    Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now, steward });
+    Object.assign(this, { snapshot, roomState, labels, records, confirmation, decide, broadcast, schedule, now, steward, personAction });
   }
   waitingQuestions(roomId, items) {
     const questions = new Map();
@@ -256,6 +256,8 @@ class MobileWorkspace {
         this.roomState.queueResolve(itemId, value.roomId, null, proof.text);
       } else this.roomState.queueResolve(itemId, value.roomId, null);
     }
+    if (['queueCancel', 'queueResolve'].includes(value.action))
+      this.personAction('spaceAction', [value.roomId, value.action, Object.hasOwn(value, 'answerRequestId') ? [itemId, null] : [itemId]]);
     await this.broadcast(); this.schedule();
     return { status: 'complete', itemId };
   }

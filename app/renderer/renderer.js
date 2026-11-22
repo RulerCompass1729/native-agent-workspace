@@ -2774,12 +2774,70 @@ function scheduleBackgroundExpiryClock() {
       if (!pending.has(row?.dataset.messageId || row?.dataset.waitingId)) { delete line.dataset.expiresAt; continue; }
       backgroundRemaining(line);
     }
-    if (!document.querySelector('.background-state[data-expires-at]')) return;
+    for (const line of document.querySelectorAll('.background-elapsed[data-started-at]')) backgroundElapsed(line);
+    if (!document.querySelector('.background-state[data-expires-at], .background-elapsed[data-started-at]')) return;
     scheduleBackgroundExpiryClock();
   }, 1000);
 }
 // Batches the person answered with one click (kept until their cards are gone) and batches opened one by one; memory only.
 const confirmationBatchStarted = new Map(), confirmationBatchOpen = new Set();
+const confirmationCardAnswers = new Map();
+const backgroundExecutionUnavailable = () => disconnected || state?.backgroundConfirmationsAvailable === false;
+const confirmationCardKey = op => [op.sessionId, op.nativeId, op.id].join(':');
+function confirmationCardPending(op) {
+  const key = confirmationCardKey(op), pending = confirmationCardAnswers.get(key);
+  if (pending && (op.answer || op.state !== 'confirmation-required' || op.disposition || op.replacedBy)) {
+    confirmationCardAnswers.delete(key); return null;
+  }
+  if ((pending?.failed || pending?.settled) && !backgroundExecutionUnavailable() && pending.observed !== state?.backgroundConfirmations) {
+    const card = state.backgroundConfirmations?.find(card => card.key === key), current = card?.message?.backgroundOperation;
+    if (card?.actionable === true && card.state === 'confirmation-required' && current?.state === 'confirmation-required' &&
+        !card.replacedBy && !current.replacedBy && !current.answer && !current.disposition) { confirmationCardAnswers.delete(key); return null; }
+  }
+  if (!pending && op.state === 'confirmation-required' && !op.answer && !op.disposition && !op.replacedBy && backgroundExecutionUnavailable() &&
+      [...confirmationBatchStarted.values()].some(batch => batch.keys.includes(key))) return { failed: true };
+  return pending;
+}
+async function answerConfirmationCard(op, response) {
+  if (backgroundExecutionUnavailable() || op.state !== 'confirmation-required' || op.replacedBy || op.disposition || op.answer || confirmationCardPending(op)) return;
+  const key = confirmationCardKey(op), pending = { failed: false };
+  confirmationCardAnswers.set(key, pending); render();
+  try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
+  catch (error) { pending.failed = true; toastError(error); }
+  finally {
+    pending.settled = true; pending.observed = state?.backgroundConfirmations;
+    if (confirmationCardAnswers.get(key) === pending) try {
+      const fresh = await api.initial(), card = fresh.backgroundConfirmations?.find(card => card.key === key), current = card?.message?.backgroundOperation;
+      if (confirmationCardAnswers.get(key) === pending && fresh.backgroundConfirmationsAvailable !== false && card?.actionable === true && card.state === 'confirmation-required' &&
+          current?.state === 'confirmation-required' && !card.replacedBy && !current.replacedBy && !current.answer && !current.disposition)
+        confirmationCardAnswers.delete(key);
+    } catch { /* Unknown delivery keeps the original answer locked; never resubmit it. */ }
+    render();
+  }
+}
+function backgroundProgressLabel(op) {
+  const pending = confirmationCardPending(op), running = op.state === 'running' || op.answer === 'running';
+  if (!(pending || running || op.answer === 'queued')) {
+    if (op.state !== 'confirmation-required' || op.confirmation?.kind !== 'message' || op.disposition || op.replacedBy || !backgroundExecutionUnavailable()) return null;
+    return { key: disconnected ? 'background.card.confirmDisconnected' : 'background.card.confirmUnavailable' };
+  }
+  if (backgroundExecutionUnavailable()) return { key: 'background.card.statusUnknown' };
+  if (pending) return { key: pending.failed || pending.settled ? 'background.card.submitUnknown' : 'background.card.submitting' };
+  if (op.answer === 'queued') return Number.isSafeInteger(op.queuedAhead) && op.queuedAhead > 0
+    ? { key: 'background.card.queuePosition', params: { count: op.queuedAhead } } : { key: 'background.card.queueCurrent' };
+  return { key: 'background.card.executing' };
+}
+function backgroundElapsed(line) {
+  const seconds = Math.max(0, Math.floor((Date.now() - Number(line.dataset.startedAt)) / 1000));
+  ui.display.text(line, 'background.card.executionElapsed', { seconds });
+}
+function appendBackgroundElapsed(parent, op) {
+  if (backgroundExecutionUnavailable() || op.state !== 'running' || !Number.isSafeInteger(op.startedAt)) return;
+  const elapsed = node('span', undefined, 'background-elapsed');
+  elapsed.dataset.startedAt = String(op.startedAt); elapsed.setAttribute('aria-live', 'off');
+  backgroundElapsed(elapsed); parent.append(elapsed); scheduleBackgroundExpiryClock();
+}
+
 // Release only failed submissions that a later authoritative read still shows as unanswered and actionable.
 function reconcileConfirmationBatch(started, cards) {
   const retryable = new Set(cards.filter(card => {
@@ -2797,12 +2855,12 @@ function confirmationBatchRole(op) {
   if (!batch || !op) return null;
   const present = new Set(cards.map(card => card.key));
   for (const [key, started] of confirmationBatchStarted) {
-    if (!started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
+    if (!disconnected && state.backgroundConfirmationsAvailable !== false && !started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
     else if (started.failedKeys?.length && cards !== started.observed && state.backgroundConfirmationsAvailable !== false) {
       reconcileConfirmationBatch(started, cards); started.observed = cards;
     }
   }
-  const role = batch.find(batch.plan(cards, [...confirmationBatchStarted.values()]), [op.sessionId, op.nativeId, op.id].join(':'));
+  const role = batch.find(batch.plan(cards.filter(card => !confirmationCardAnswers.has(card.key)), [...confirmationBatchStarted.values()]), [op.sessionId, op.nativeId, op.id].join(':'));
   return role && { ...role, open: !role.batch.started && confirmationBatchOpen.has(role.batch.key) };
 }
 function confirmationBatchTitle(op) {
@@ -2822,7 +2880,7 @@ function confirmationBatchKey(role) {
 // One answer per card, sent in the cards' order; main carries them out one at a time, each with its own checks.
 async function answerConfirmationBatch(batch, cancel) {
   const key = JSON.stringify(batch.cards.map(card => card.key));
-  if (confirmationBatchStarted.has(key)) return;
+  if (confirmationBatchStarted.has(key) || backgroundExecutionUnavailable() || batch.cards.some(card => confirmationCardPending(card.message.backgroundOperation))) return;
   const started = { key, keys: batch.cards.map(card => card.key), submitting: true };
   confirmationBatchStarted.set(key, started);
   render();
@@ -2873,14 +2931,24 @@ function renderConfirmationBatch(box, role) {
   const states = cards.map(itemState), tally = name => states.filter(s => s === name).length;
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('strong', undefined, 'background-sentence');
   ui.display.computed(sentence, 'text', () => uiText('background.batch.title', { action: backgroundActionText(cards[0].summary), count }));
-  if (!role.batch.started) {
-    ui.display.text(state, 'background.card.waiting');
-    const soonest = Math.min(...cards.map(c => c.expiresAt).filter(Number.isSafeInteger));
-    if (Number.isSafeInteger(soonest)) { state.dataset.expiresAt = String(soonest); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  state.setAttribute('role', 'status');
+  if (role.batch.started && backgroundExecutionUnavailable() && states.some(value => ['waiting', 'queued', 'running'].includes(value))) {
+    ui.display.text(state, 'background.card.statusUnknown');
+  } else if (!role.batch.started) {
+    const blocked = backgroundProgressLabel(cards[0].message.backgroundOperation);
+    if (blocked) ui.display.text(state, blocked.key, blocked.params);
+    else {
+      ui.display.text(state, 'background.card.waiting');
+      const soonest = Math.min(...cards.map(c => c.expiresAt).filter(Number.isSafeInteger));
+      if (Number.isSafeInteger(soonest)) { state.dataset.expiresAt = String(soonest); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+    }
   } else if (tally('waiting') && !tally('queued') && !tally('running')) {
     ui.display.text(state, role.batch.submitting ? 'background.batch.submitting' : 'background.batch.enqueueUnconfirmed');
   } else if (tally('queued') + tally('running') + tally('waiting')) {
-    ui.display.text(state, 'background.batch.progress', { index: Math.min(count, tally('done') + tally('void') + tally('cancelled') + tally('unconfirmed') + 1), count });
+    const running = cards.find(card => itemState(card) === 'running'), queued = cards.find(card => itemState(card) === 'queued');
+    const label = queued && !running ? backgroundProgressLabel(queued.message.backgroundOperation) : null;
+    if (label) ui.display.text(state, label.key, label.params);
+    else ui.display.text(state, 'background.batch.executionProgress', { done: tally('done'), count });
   } else if (tally('cancelled') === count) ui.display.text(state, 'background.batch.cancelled', { count });
   else ui.display.text(state, tally('unconfirmed') ? 'background.batch.resultUnconfirmed' : 'background.batch.result', { done: tally('done'), void: tally('void') + tally('cancelled'), unconfirmed: tally('unconfirmed') });
   line.append(state, sentence); box.append(line);
@@ -2902,8 +2970,9 @@ function renderConfirmationBatch(box, role) {
     item.append(target);
     if (role.batch.started) {
       item.dataset.state = states[index];
-      item.append(uiNode('span', 'background.batch.item.' + states[index], undefined, 'background-batch-state'));
-      const op = card.message?.backgroundOperation, notice = op?.resultNotice;
+      const op = card.message?.backgroundOperation, notice = op?.resultNotice, label = op && backgroundProgressLabel(op);
+      const status = uiNode('span', label?.key || 'background.batch.item.' + states[index], label?.params, 'background-batch-state');
+      status.setAttribute('role', 'status'); item.append(status); if (op) appendBackgroundElapsed(item, op);
       if (notice || op?.error) {
         const why = node('span', undefined, 'background-batch-why');
         if (notice) ui.display.text(why, notice.key, notice.params); else why.textContent = op.error;
@@ -2918,7 +2987,7 @@ function renderConfirmationBatch(box, role) {
   const cancel = node('button', '', 'small'), review = node('button', '', 'small'), all = node('button', '', 'small primary');
   ui.display.text(cancel, 'background.batch.cancelAll'); ui.display.attribute(cancel, 'aria-label', 'background.batch.cancelAllName', { count });
   ui.display.text(review, 'background.batch.review'); ui.display.text(all, 'background.batch.confirmAll', { count });
-  for (const button of [cancel, review, all]) button.disabled = disconnected;
+  for (const button of [cancel, review, all]) button.disabled = backgroundExecutionUnavailable();
   cancel.addEventListener('click', () => answerConfirmationBatch(role.batch, true));
   all.addEventListener('click', () => answerConfirmationBatch(role.batch, false));
   review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); render(); });
@@ -2930,8 +2999,8 @@ function renderBackgroundControls(entry, message) {
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
   entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition));
   entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
-  const batchRole = confirmationBatchRole(op);
-  const key = JSON.stringify(batchRole ? [op, disconnected, confirmationBatchKey(batchRole)] : [op, disconnected]);
+  const batchRole = confirmationBatchRole(op), pending = op && confirmationCardPending(op);
+  const key = JSON.stringify([op, disconnected, backgroundExecutionUnavailable(), confirmationBatchKey(batchRole), Boolean(pending), pending?.failed, pending?.settled]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
   if (entry.backgroundControls) { for (const el of entry.backgroundControls.querySelectorAll('*')) ui.display.unbind(el); ui.display.unbind(entry.backgroundControls); entry.backgroundControls.remove(); }
@@ -2944,11 +3013,13 @@ function renderBackgroundControls(entry, message) {
   const answered = card && !op.replacedBy && !op.disposition && op.answer;
   const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : answered ? (op.answer === 'queued' ? 'background.card.queued' : 'background.card.answerRunning')
     : card ? 'background.card.waiting' : backgroundStates.includes(op.state) ? 'background.state.' + op.state : '');
-  if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
-  if (card && !answered && !op.replacedBy && !op.disposition && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
+  const progress = backgroundProgressLabel(op); state.setAttribute('role', 'status');
+  if (progress) ui.display.text(state, progress.key, progress.params);
+  else if (stateKey) ui.display.text(state, stateKey); else state.textContent = op.state;
+  if (card && !answered && !progress && !op.replacedBy && !op.disposition && Number.isSafeInteger(op.expiresAt)) { state.dataset.expiresAt = String(op.expiresAt); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
   if (summary) ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
   else if (card) sentence.textContent = question.options.message || '';
-  line.append(state, sentence);
+  line.append(state); appendBackgroundElapsed(line, op); line.append(sentence);
   if (summary || card) box.append(line);
   if (summary?.risks?.length) {
     const risks = node('ul', undefined, 'background-risks');
@@ -2980,14 +3051,9 @@ function renderBackgroundControls(entry, message) {
   const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options, summary);
   question.options.buttons.forEach((label, response) => {
     const cancel = response === (question.options.cancelId ?? 0);
-    const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = disconnected;
+    const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = backgroundExecutionUnavailable() || Boolean(pending);
     if (keys) ui.display.text(button, response === 1 ? 'background.card.confirm' : keys[response]);
-    button.addEventListener('click', async () => {
-      button.disabled = true;
-      try { await api.backgroundDecision(op.sessionId, op.nativeId, op.id, response); }
-      catch (error) { toastError(error); }
-      finally { button.disabled = disconnected; }
-    });
+    button.addEventListener('click', () => answerConfirmationCard(op, response));
     buttons.append(button);
   });
   if (batchRole?.open && batchRole.anchor) {

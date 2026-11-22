@@ -1352,3 +1352,7 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 #mobile-setup #mobile-shared-host[aria-invalid=true]{outline:2px solid var(--approval-ink);outline-offset:3px}
 #mobile-setup #mobile-status[role=timer],#mobile-setup .mobile-renewal-state{color:var(--ink)}
 #mobile-setup .mobile-renewal-paused{color:var(--approval-ink)}
+
+.background-elapsed { color:var(--muted); font-size:12px; white-space:nowrap; }
+.background-batch-item[data-state="running"] .background-batch-state { color:var(--ink); }
+.background-batch-item[data-state="unconfirmed"] .background-batch-state { color:var(--approval-ink); }

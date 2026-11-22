@@ -337,7 +337,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
   const binding = mainSource.slice(mainSource.indexOf('function bindClient(context)'), mainSource.indexOf('\nfunction displayState('));
   function wire(background) {
     const sent = [], reconnects = [];
-    let displays = 0;
+    let displays = 0, personSamples = 0;
     const client = new EventEmitter();
     const context = {
       client,
@@ -354,6 +354,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
       },
       notifyToolWait() {},
       notifyCapacity() {},
+      observePersonActions: snapshot => { assert.ok(Array.isArray(snapshot.sessions)); personSamples++; },
       // The state listener's record and placement steps have their own suites (stuck-records, open-placement).
       placeOpened: async () => {}, carryGrants: async () => {},
       uiError: () => ({ message: 'disconnected', uiMessage: null }),
@@ -366,17 +367,19 @@ test('the actual client wiring forwards state, terminal and progress to a page a
     client.emit('terminal', { id: 's1', data: 'x' });
     client.emit('progress', { id: 's1' });
     client.emit('closed');
-    return { sent, reconnects, displays: () => displays };
+    return { sent, reconnects, displays: () => displays, personSamples: () => personSamples };
   }
   const page = wire(false);
   assert.deepEqual(page.sent.map(entry => entry[0]), ['workspace:state', 'workspace:terminal', 'workspace:progress']);
   assert.deepEqual(page.reconnects, [true]);
   assert.equal(page.displays(), 1);
+  assert.equal(page.personSamples(), 1);
 
   const hidden = wire(true);
   assert.deepEqual(hidden.sent, []);
   assert.deepEqual(hidden.reconnects, [true]);
   assert.equal(hidden.displays(), 0, 'the display state of a background window is not even computed');
+  assert.equal(hidden.personSamples(), 0);
 });
 
 test('the page acknowledges every numbered snapshot exactly once, also when a subscriber throws or none exists yet', () => {
@@ -759,7 +762,7 @@ test('main reports keys to the bound: the draft, the person\'s terminal input, a
 test('main tells a window\'s bound about each key before the handler runs, and arms it with the typing wait', () => {
   const start = mainSource.indexOf("ipcMain.handle(`workspace:${name}`");
   const wrapper = mainSource.slice(start, mainSource.indexOf('\n}', start));
-  assert.match(wrapper, /\n    if \(context\.statePush && typingKey\(name, context\.view, args\)\) context\.statePush\.typed\(\);\n    try \{ return \{ ok: true, value: await handler\(context, \.\.\.args\) \}; \}/);
+  assert.match(wrapper, /\n    if \(context\.statePush && typingKey\(name, context\.view, args\)\) context\.statePush\.typed\(\);\n    try \{\n      const value = await handler\(context, \.\.\.args\);/);
   assert.match(mainSource, /const STATE_PUSH_TYPING_QUIET = 400;\nconst STATE_PUSH_TYPING_HOLD = 1500;/);
   const h = mainHelpers();
   h.context.armStatePush();

@@ -204,6 +204,7 @@ async function build() {
       'observation.cjs',
       'operator-control.cjs',
       'peer-handoffs.cjs',
+      'person-actions.cjs',
       'platform.cjs',
       'preflight.cjs',
       'preload.cjs',
