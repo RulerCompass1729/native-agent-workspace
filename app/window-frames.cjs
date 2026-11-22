@@ -1,5 +1,12 @@
 'use strict';
-function windowFrames(contexts) {
+function windowId(source) {
+  if (typeof source !== 'string' || !/^window:[1-9][0-9]*:[0-9]+$/.test(source)) throw Error('Window frame unavailable');
+  const id = Number(source.split(':')[1]);
+  if (!Number.isSafeInteger(id) || id > 0xffffffff) throw Error('Window frame unavailable');
+  return id;
+}
+
+function windowFrames(contexts, localPageWindows) {
   const proof = { windows: [], hiddenBackgroundWindows: [] }, ids = new Set(), owners = new Set();
   for (const c of contexts) {
     if (c.win.isDestroyed()) continue;
@@ -7,9 +14,8 @@ function windowFrames(contexts) {
     const hidden = () => c.win.isVisible() === false && c.win.isFocusable() === false;
     if (background && !hidden()) throw Error('Window frame unavailable');
     const owner = c.view?.owner, source = c.win.getMediaSourceId();
-    if (typeof source !== 'string' || !/^window:[1-9][0-9]*:[0-9]+$/.test(source)) throw Error('Window frame unavailable');
-    const id = Number(source.split(':')[1]), frame = c.win.getBounds();
-    if (!Number.isSafeInteger(id) || id > 0xffffffff || ids.has(id) || owners.has(owner) ||
+    const id = windowId(source), frame = c.win.getBounds();
+    if (ids.has(id) || owners.has(owner) ||
         typeof owner !== 'string' || !owner || owner.length > 200 || /[\x00-\x1f\x7f]/.test(owner) ||
         !frame || !['x', 'y', 'width', 'height'].every(k => Number.isFinite(frame[k])) || frame.width <= 0 || frame.height <= 0 ||
         c.win.isDestroyed() || c.win.getMediaSourceId() !== source || c.view?.owner !== owner ||
@@ -19,6 +25,17 @@ function windowFrames(contexts) {
     if (ids.size > 1000) throw Error('Window frame unavailable');
   }
   if (!proof.windows.length) throw Error('Window frame unavailable');
+  if (localPageWindows !== undefined) {
+    proof.localPageWindowIds = [];
+    for (const win of localPageWindows) {
+      if (win.isDestroyed()) throw Error('Window frame unavailable');
+      const source = win.getMediaSourceId(), id = windowId(source);
+      if (ids.has(id) || ids.size >= 1000 || win.getMediaSourceId() !== source || win.isDestroyed())
+        throw Error('Window frame unavailable');
+      ids.add(id);
+      proof.localPageWindowIds.push(id);
+    }
+  }
   return proof;
 }
 module.exports = { windowFrames };

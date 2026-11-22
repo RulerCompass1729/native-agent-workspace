@@ -44,10 +44,11 @@ test('PF08 integration: fresh install and edited-current protection stay intact'
 // Use that main ancestor so this fixture survives a clone without release refs.
 // These digests were obtained from the historical outputs, not the working tree.
 for (const parent of [
-  { commit: '907f10a06a2880c15d4e4ef1f1e5a348548ad832', digest: 'c41614cb3c81aa10d7a7b7efe2068ce73aa1546edb1a72fac5ce03d352b1b0ca', label: 'main with workspace_open view' },
-  { commit: 'c08b56a3bb49b1f59ca21acee6ea28909df29490', digest: 'eaaa169a4620cd888fbba1d0663b9aa094ff92bbf19b3b78cc56d5451df98991', label: 'installed alpha.261 output' },
+  { commit: '907f10a06a2880c15d4e4ef1f1e5a348548ad832', digest: 'c41614cb3c81aa10d7a7b7efe2068ce73aa1546edb1a72fac5ce03d352b1b0ca', label: 'automatic qualification integration: main with workspace_open view' },
+  { commit: 'c08b56a3bb49b1f59ca21acee6ea28909df29490', digest: 'eaaa169a4620cd888fbba1d0663b9aa094ff92bbf19b3b78cc56d5451df98991', label: 'automatic qualification integration: installed alpha.261 output' },
+  { commit: 'bbbd56fe2f4f2e3ceedd815d60d4d8eb0d6835ea', digest: '7233253cb5c7adcfafef8d9d7ea3ae6ff48afc26840e3a800f18d828a9ef93b6', label: 'compacted turn continuation: main before it' },
 ]) for (const existingOnly of [false, true])
-test(`automatic qualification integration: ${parent.label} upgrades with existingOnly=${existingOnly}; one byte edits stay`, t => {
+test(`${parent.label} upgrades with existingOnly=${existingOnly}; one byte edits stay`, t => {
   const { cwd, file } = fixture(t);
   installPlugin(cwd); const current = fs.readFileSync(file);
   const prior = Buffer.from(execFileSync('git', ['show', `${parent.commit}:app/claude-bridge/hooks/register.js`],

@@ -18,6 +18,9 @@ def main():
         "permission_mode", "effort", "transcript_path",
     )
     event = {key: message[key] for key in fields if key in message}
+    stamp = message.get("naw_compaction")
+    if message.get("hook_event_name") == "SessionStart" and message.get("source") == "compact" and isinstance(stamp, str) and len(stamp) <= 49:
+        event["naw_compaction"] = stamp
     event["token"] = os.environ["NAW_HOOK_TOKEN"]
     # A tool that started background work: only that task's ID, so that its notification is known
     # even when it ends before any turn-end report lists it. Nothing the tool ran or printed.

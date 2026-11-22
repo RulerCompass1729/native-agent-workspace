@@ -105,6 +105,7 @@ async function observeUsage($) {
   finally { usageReading = false; if (usageReadAgain) { usageReadAgain = false; observeUsage($); } }
 }
 let activeTurn = null;
+let compactedTurn = null;
 let lastPhase = null;
 const rootToolCalls = new Map();
 const nativeReadImages = new Map();
@@ -361,12 +362,14 @@ function enqueueBlock($, row, binding = rootBinding) {
   while (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
     observations.shift(); markObservationGap(binding);
   }
-  observations.push({ row: { ...row, block: true, sequence: ++binding.observationSequence, epoch: binding.observationEpoch }, binding });
+  const sequence = ++binding.observationSequence;
+  observations.push({ row: { ...row, block: true, sequence, epoch: binding.observationEpoch }, binding });
   if (row.kind !== 'control' && row.kind !== 'narration' && !row.mediaOnly && !emittedRows.has(row.id)) {
     emittedRows.add(row.id); if (emittedRows.size > 512) emittedRows.delete(emittedRows.values().next().value);
     rootRows.push({ seq: ++rootRowSeq, id: row.id }); if (rootRows.length > 64) rootRows.shift();
   }
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
+  return sequence;
 }
 
 function observeAppend($, e, result, binding, turnId, candidate, nativeApiError, nativeCreditError, nativeStandIn) {
@@ -815,7 +818,9 @@ async function bindRoot($, ownGeneration) {
     // tool call runs is stored after that tool's result and read by the same turn's next request.
     nativeMidturnAppend: !legacyOnly && qualifiedVersion(['2.1.322', '2.1.323', '2.1.327'], version),
     nativeTurnRecords: !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version),
-    nativeNarration: !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version) }, binding);
+    nativeNarration: !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version),
+    // Needs no version list: a compacted turn is restored only by the engine's own next step of that same turn.
+    nativeTurnContinue: !legacyOnly && nativeBlocks }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0, gapThrough: 0,
@@ -824,7 +829,8 @@ async function bindRoot($, ownGeneration) {
     nativeQueuedPromptLinks: nativeBlocks && !legacyOnly && result.nativeQueuedPromptLinks === true,
     nativeMidturnAppend: nativeBlocks && !legacyOnly && qualifiedVersion(['2.1.322', '2.1.323', '2.1.327'], version) && result.nativeMidturnAppend === true,
     nativeTurnRecords: nativeBlocks && !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version) && result.nativeTurnRecords === true,
-    nativeNarration: nativeBlocks && !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version) && result.nativeNarration === true };
+    nativeNarration: nativeBlocks && !legacyOnly && qualifiedVersion(['2.1.316', '2.1.317', '2.1.318', '2.1.319', '2.1.321', '2.1.322', '2.1.323', '2.1.327'], version) && result.nativeNarration === true,
+    nativeTurnContinue: nativeBlocks && !legacyOnly && result.nativeTurnContinue === true };
   nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
@@ -889,6 +895,19 @@ async function syncRoot($) {
     syncingRoot = false;
     if (!rootSyncBlocked && (syncRootAgain || retry)) $.clock.after(syncRootAgain ? 0 : 1000, () => syncRoot($));
   }
+}
+
+// A mid-turn compaction is followed by the engine's next step of the same root turn, with no new turn.start or
+// UserPromptSubmit (measured on 2.1.329). That step alone restores the turn's own prompt link; anything that
+// came between (a prompt, a gap, a root change, the turn's end) dropped the snapshot or fails a check here.
+function resumeCompactedTurn($, turnId) {
+  const kept = compactedTurn; compactedTurn = null;
+  if (kept.turnId !== turnId || kept.binding !== rootBinding || kept.generation !== generation || kept.gapRevision !== observationGapRevision ||
+    stopped || observationGap || activeTurn || rootPrompt || !rootIdle) return;
+  activeTurn = turnId; rootPrompt = kept.prompt; promptTurns.set(kept.prompt.id, kept.link);
+  rootIdle = false; queuedPrompts = kept.queuedPrompts; lastPhase = null;
+  // In order after control:compact: NAW restores its own references only on this row.
+  enqueueBlock($, { id: 'control:turn-continue', kind: 'control', turnId, promptId: kept.prompt.id, status: 'running' });
 }
 
 export function register(on) {
@@ -1192,7 +1211,7 @@ export function register(on) {
           trimLinks(queuedPromptIdentities);
         }
       }
-      activeTurn = e.turnId;
+      activeTurn = e.turnId; compactedTurn = null;
       lastPhase = null;
       flushShell($);
       const triggers = rootIdle && !collecting
@@ -1223,6 +1242,7 @@ export function register(on) {
       const read = midturnRead; midturnRead = null;
       if (read.binding === binding) request($, '/midturn-read', { id: read.id, uuid: read.uuid, turnId: e.turnId }, read.connection).catch(() => {});
     }
+    if (compactedTurn && !e.agentId && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') resumeCompactedTurn($, e.turnId);
     if (e.agentId || e.turnId !== activeTurn || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return yield* next(e);
     observePhase($, 'requesting', binding, e.turnId);
     const iterator = next(e)[Symbol.asyncIterator](); let finished = false, sent;
@@ -1244,7 +1264,7 @@ export function register(on) {
     const result = await next(e);
     try {
       // Flush first: an unpaired `!` from inside this turn is shown, never claimed later.
-      if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); }
+      if (!e.agentId) { flushShell($); rootIdle = true; compactedTurn = null; turnTriggers = []; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); }
       // No tool boundary came: the held message runs as its own turn.
       if (!e.agentId && heldMidturn) releaseHeld(heldMidturn, 'ended');
       if (!e.agentId && binding === rootBinding) {
@@ -1313,6 +1333,7 @@ export function register(on) {
     foreignRevision++;
     if (['composer', 'bridge'].includes(e.origin?.kind)) personRevision++;
     if (collecting) collecting.invalid = true;
+    compactedTurn = null;
     enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
     const inFlight = { origin: e.origin?.kind || null }; foreignInFlight.add(inFlight);
     try { return await next(e); }
@@ -1324,6 +1345,7 @@ export function register(on) {
   });
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const root = !e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || ''), binding = rootBinding;
+    if (!e.agent_id) compactedTurn = null;
     if (root && shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
     const candidate = collecting;
     // Read before the settings hooks run (they can take seconds): the one foreign submission this
@@ -1387,7 +1409,7 @@ export function register(on) {
   });
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
-    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); queuedPrompts = [];
+    rootIdle = true; compactedTurn = null; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); queuedPrompts = [];
     queuedPromptIdentities.clear();
     queuedDisplayLookups.clear();
     const ownGeneration = ++generation;
@@ -1427,7 +1449,7 @@ export function register(on) {
   });
   on('session.end', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
-    stopped = true; generation++; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
+    stopped = true; generation++; compactedTurn = null; releaseHeld(heldMidturn, 'stopped'); midturnRead = null;
     const known = rootBinding && (e.sessionId === rootBinding.sessionId || rootTransitions.some(t => t.nextSessionId === e.sessionId));
     if (known) {
       if (rootEnds.size >= 64 && !rootEnds.has(e.sessionId)) rootSyncBlocked = true;
@@ -1452,14 +1474,23 @@ export function register(on) {
       $.clock.after(0, () => syncRoot($));
     } else if (!e.agent_id && e.source === 'compact') {
       // A background compaction restarts the context without a session end. The
-      // running turn's prompt no longer authorizes operations; the next person or
-      // NAW turn re-authorizes (the old pair must not survive the compact).
+      // running turn's prompt no longer authorizes operations (the old pair must
+      // not survive the compact): the next person or NAW turn re-authorizes, or
+      // the engine's own next step of this same turn does (resumeCompactedTurn).
+      const link = rootPrompt && promptTurns.get(rootPrompt.id);
+      // A repeated compact before that step finds no active turn and keeps the first snapshot.
+      if (activeTurn) compactedTurn = !rootIdle && rootBinding?.nativeTurnContinue && !stopped && !observationGap &&
+        rootPrompt?.binding === rootBinding && link?.binding === rootBinding && link.turnId === activeTurn && !link.ambiguous
+        ? { binding: rootBinding, turnId: activeTurn, prompt: rootPrompt, link, queuedPrompts, generation, gapRevision: observationGapRevision } : null;
       rootPrompt = null; promptTurns.clear(); activeTurn = null; shellTurn = null;
       rootIdle = true; queuedPrompts = [];
       // NAW's issued scopes check its own turn references, not this module: retire
       // them in order on the observation channel. An older NAW refuses the row,
       // which is then a declared gap, also retiring them.
-      enqueueBlock($, { id: 'control:compact', kind: 'control', status: 'complete' });
+      const binding = rootBinding;
+      const sequence = enqueueBlock($, { id: 'control:compact', kind: 'control', status: 'complete' }, binding);
+      if (sequence && binding.nativeTurnContinue && e.session_id === binding.sessionId)
+        return next({ ...e, naw_compaction: `${binding.observationEpoch}:${sequence}` });
     }
     return next(e);
   });

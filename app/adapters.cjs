@@ -734,7 +734,7 @@ class Claude extends EventEmitter {
     // observer independently of the native submission/control credential.
     if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
-    this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
+    this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.compactedTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
     if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeMedia = this.nativeBlocks && message.nativeMedia === true;
@@ -757,8 +757,10 @@ class Claude extends EventEmitter {
     this.nativeMidturnAppend = this.nativeBlocks && message.nativeMidturnAppend === true && !this.retainedReader;
     // The model's running explanation, as the native terminal drew it (T-130).
     this.nativeNarration = this.nativeBlocks && message.nativeNarration === true && !this.retainedReader;
+    // The bridge proves a compacted turn's own continuation (control:turn-continue).
+    this.nativeTurnContinue = this.nativeBlocks && message.nativeTurnContinue === true && !this.retainedReader;
     this.displayProofs = new Map(); this.displayGap = false; this.gapFloor = 0;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeMidturnAppend: this.nativeMidturnAppend, nativeNarration: this.nativeNarration };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeMidturnAppend: this.nativeMidturnAppend, nativeNarration: this.nativeNarration, nativeTurnContinue: this.nativeTurnContinue };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
@@ -890,6 +892,7 @@ class Claude extends EventEmitter {
         return { observed: true };
       } else if (message.id === 'control:turn-start') {
         if (!/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn start');
+        this.compactedTurn = null;
         this.seenRootTurns ||= new Set();
         // Replayed starts are history, never fresh authority to release input.
         // Keep bounded tombstones so a duplicate start cannot revive a stopped turn.
@@ -920,7 +923,21 @@ class Claude extends EventEmitter {
         if (message.status !== 'complete') throw Error('Invalid native compact');
         // In order with the turn start that granted it, and also for a retained
         // reader, which has no settings hook. A replay retires too (fail closed).
-        this.retireRootAuthority();
+        this.compactBoundary(message.replayed || message.gap);
+      } else if (message.id === 'control:turn-continue') {
+        if (!this.nativeTurnContinue || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn continuation');
+        const position = this.compactPosition;
+        if (position?.epoch === this.observationEpoch && message.sequence <= position.sequence) return { observed: true };
+        const kept = this.compactedTurn; this.compactedTurn = null;
+        // The engine's own next step of the compacted turn (2.1.329, measured: no new turn start or prompt).
+        // It gets what it held, as new objects: everything issued before the compact stays retired, and
+        // no nativeTurnStart is emitted, so the turn's wake and human proofs are not renewed.
+        if (kept && !message.replayed && !message.gap && !this.displayGap && !this.rootEnding && !this.liveTurn && !this.rootTurn &&
+            kept.id === message.turnId && kept.promptId === message.promptId && kept.epoch === this.observationEpoch) {
+          this.liveTurn = { id: kept.id, promptId: kept.promptId, phase: 'requesting', label: 'requesting', ...(kept.toolPhaseSerial ? { toolPhaseSerial: kept.toolPhaseSerial } : {}) };
+          if (kept.sharing) this.rootTurn = { id: kept.id, promptId: kept.promptId, status: 'working' };
+          this.startedRootTurn = kept.started;
+        }
       } else if (message.id === 'control:heartbeat') {
         // The observation lease has its own liveness proof; a held native
         // submit may legitimately leave the independent input poll pending.
@@ -940,6 +957,7 @@ class Claude extends EventEmitter {
         if (!message.replayed && !message.gap && this.livePermissions.delete(message.permissionId) && !this.livePermissions.size && this.liveTurn) this.emit('state', 'working');
       } else {
         if (!['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
+        this.compactedTurn = null;
         if (message.awaitingUser !== undefined && (message.id !== 'control:permission' || message.boundaryOnly !== true || message.awaitingUser !== false)) throw Error('Invalid native permission check');
         if (message.id === 'control:permission' && message.turnId &&
             (this.liveTurn && message.turnId !== this.liveTurn.id || this.displayProofs?.get(message.turnId)?.ended)) return { observed: true };
@@ -976,7 +994,7 @@ class Claude extends EventEmitter {
     }
     const freshInline = inline && !message.replayed && !this.record.messages?.some(row => row.id === `native:${this.record.nativeId}:${id}`);
     if (freshInline) {
-      this.rootTurn = null;
+      this.rootTurn = null; this.compactedTurn = null;
       if (this.startedRootTurn?.ended) this.startedRootTurn.inputRevoked = true;
       if (this.startedRootTurn) this.startedRootTurn.inputOnlyBoundary = this.startedRootTurn.inputOnlyBoundary !== false;
       this.emit('nativeControlBoundary', 'control:input');
@@ -1000,6 +1018,7 @@ class Claude extends EventEmitter {
     const endedQuestion = endedLiveTurn && this.liveTurn.question === true;
     if (kind === 'turn') {
       if (endedLiveTurn) this.liveTurn = null;
+      this.compactedTurn = null;
       for (const [key, request] of this.livePermissions) if (!request.turnId || request.turnId === turnId) this.livePermissions.delete(key);
       turn.ended = true;
       const block = turn.blocks.get(message.finalDisplayId);
@@ -1151,17 +1170,39 @@ class Claude extends EventEmitter {
     this.nativeAbortRequest = null; clearTimeout(request.timer);
     this.nativeInputRequired = false; this.emit('inputRequired', false); request.resolve({ interrupted: true });
   }
+  // A compaction, by whichever notice comes first. With a bridge that proves continuations the turn's
+  // identity is kept, apart from the retired references and for control:turn-continue only; a repeated
+  // compact keeps the first one.
+  compactBoundary(drop = false) {
+    const live = this.liveTurn;
+    if (drop || !this.nativeTurnContinue) this.compactedTurn = null;
+    else if (live) this.compactedTurn = { id: live.id, promptId: live.promptId, epoch: this.observationEpoch, toolPhaseSerial: live.toolPhaseSerial,
+      sharing: this.rootTurn?.id === live.id && this.rootTurn.status === 'working' && !this.rootTurn.completed,
+      started: this.startedRootTurn?.id === live.id ? this.startedRootTurn : null };
+    this.retireRootAuthority();
+  }
+  observeCompactNotice(stamp) {
+    if (!this.nativeTurnContinue || typeof stamp !== 'string') return false;
+    const marker = /^([a-f0-9]{32}):([1-9][0-9]{0,15})$/.exec(stamp);
+    const sequence = Number(marker?.[2]);
+    if (marker?.[1] !== this.observationEpoch || !Number.isSafeInteger(sequence)) return false;
+    const prior = this.compactPosition?.epoch === this.observationEpoch ? this.compactPosition.sequence : 0;
+    // Settings can retire a later boundary before earlier ordered continuations arrive.
+    this.compactPosition = { epoch: this.observationEpoch, sequence: Math.max(prior, sequence) };
+    return sequence <= (this.rootObservation?.sequence || 0);
+  }
   // A native compaction keeps the session but ends the running turn's authority:
   // every issued root call, outbox proof and control scope checks these
   // references (native-root-proof.cjs). The next person or NAW turn re-authorizes;
-  // its turn start is new, and the compacted turn's id stays tombstoned.
+  // its turn start is new, and the compacted turn's id stays tombstoned. The
+  // compacted turn itself comes back only through control:turn-continue.
   retireRootAuthority() {
     this.rootTurn = null; this.liveTurn = null; this.startedRootTurn = null; this.livePermissions?.clear();
   }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
     this.creationSettings = null;
-    this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
+    this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.compactedTurn = null; this.livePermissions?.clear();
     if (this.startedRootTurn) this.startedRootTurn.inputRevoked = true;
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     // The last sequence the bridge had numbered when it lost something; a declaration without one (an older bridge)
@@ -1175,7 +1216,7 @@ class Claude extends EventEmitter {
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
     this.cancelNativeAbort(); this.rootEnding = { sessionId: this.record.nativeId, reason };
-    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear(); this.pending = null; this.ready = false; this.lastPromptId = null;
+    this.rootTurn = null; this.liveTurn = null; this.compactedTurn = null; this.livePermissions?.clear(); this.pending = null; this.ready = false; this.lastPromptId = null;
     this.submission.close?.();
     this.emit('contextEnd', { nativeId: this.record.nativeId, reason });
     this.emit('state', 'stopping');
@@ -1232,7 +1273,7 @@ class Claude extends EventEmitter {
     const idleHook = this.localApprovalState === 'idle' || this.localApprovalPending === this.observationEpoch;
     this.localApprovalPending = idleHook && this.nativeBlocks === true && !this.displayGap && !this.liveTurn && this.rootTurn?.status !== 'working' &&
       !this.pending && !this.queued && !this.submission?.pending ? this.observationEpoch : false;
-    this.rootTurn = null;
+    this.rootTurn = null; this.compactedTurn = null;
     if (this.queued) this.queued.superseded = true;
     this.pending = null;
     if (!this.reconcileLocalApproval()) this.emit('state', 'approval');
@@ -1305,6 +1346,8 @@ class Claude extends EventEmitter {
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
     if (isChild) return;
+    const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
+    if (compact && this.observeCompactNotice(event.naw_compaction)) return;
     // Only an authenticated root settings event selects the journal. The
     // identity lookup route never accepts a caller-supplied filesystem path.
     if (event.session_id === this.record.nativeId && typeof event.transcript_path === 'string' &&
@@ -1360,16 +1403,18 @@ class Claude extends EventEmitter {
     switch (event.hook_event_name) {
       case 'SessionStart':
         if (this.rootEnding) break;
-        // A compaction restarts the context without ending the root. The ordered
-        // observation also carries it (control:compact); this settings hook is the
-        // second path, for a bridge copy that does not send it yet.
-        if (event.source === 'compact') this.retireRootAuthority();
-        this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
+        if (compact) this.compactBoundary();
+        this.ready = true;
+        const gapWhileRunning = this.displayGap && ['working', 'approval'].includes(this.localApprovalState || this.record.state);
+        if (!(compact && this.nativeTurnContinue && (this.liveTurn || this.compactedTurn || gapWhileRunning))) this.emit('state', 'idle');
+        if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage);
+        break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
+        this.compactedTurn = null;
         this.lastPromptId = event.prompt_id || null;
         const promptAlreadyAnnounced = Boolean(event.prompt_id && (this.announcedPrompts?.has(event.prompt_id) || this.firstPromptRow(event.prompt_id)));
         if (event.prompt_id) {
@@ -1446,6 +1491,7 @@ class Claude extends EventEmitter {
       case 'StopFailure':
         if (this.liveTurn) this.liveTurn.question = false;
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
+        this.compactedTurn = null;
         clearTimeout(this.pending?.displayTimer); this.pending = null;
         this.emit('state', 'error'); { const notice = uiNotice(this.rootTurn?.failureCause === 'usageCredits' && this.failedTurnInputMatches(this.rootTurn.id)
           ? 'notice.failure.usageCreditsUnavailable' : 'notice.failure.nativeRequestIncomplete'); this.emit('failed', notice.text, undefined, notice.uiMessage); }

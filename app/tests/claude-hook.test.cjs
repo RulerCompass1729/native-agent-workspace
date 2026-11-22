@@ -41,3 +41,15 @@ test('nothing else is forwarded as a background task', async () => {
   assert.equal((await forward(post('Bash', { backgroundTaskId: 'b'.repeat(65) }))).background_task_id, undefined);
   assert.equal((await forward(post('Bash', { backgroundTaskId: 'b'.repeat(64) }))).background_task_id, 'b'.repeat(64));
 });
+
+test('only a compact SessionStart forwards the bridge observation marker', async () => {
+  const naw_compaction = 'a'.repeat(32) + ':42';
+  const compact = { hook_event_name: 'SessionStart', source: 'compact', session_id: 'synthetic-native', naw_compaction };
+  assert.equal((await forward(compact)).naw_compaction, naw_compaction);
+  for (const event of [
+    { ...compact, source: 'resume' },
+    { ...compact, hook_event_name: 'UserPromptSubmit' },
+    { ...compact, naw_compaction: '9'.repeat(50) },
+    { ...compact, naw_compaction: 42 },
+  ]) assert.equal((await forward(event)).naw_compaction, undefined);
+});

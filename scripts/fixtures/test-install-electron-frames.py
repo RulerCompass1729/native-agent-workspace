@@ -92,6 +92,39 @@ class Frames(unittest.TestCase):
             with self.assertRaises(ValueError):
                 m.validate(dict(value(), hiddenBackgroundWindows=rows), PID, STARTED, NONCE, 1001, PROFILE)
 
+    def test_local_pages_must_match_same_pid_and_remain_in_the_bracket(self):
+        proof = m.validate(dict(value(), version=3, localPageWindowIds=[2]), PID, STARTED, NONCE, 1001, PROFILE, 3)
+        page = dict(row(), id=2, bounds=dict(x=0, y=940, width=500, height=500))
+        for visible in [True, False]:
+            page['onScreen'] = visible
+            records = [row(), page]
+            result = m.collect(PID, '/synthetic', STARTED, sample=lambda _: records, frames=lambda *_: proof)
+            self.assertEqual(result['windows'], [dict(row(), frame=FRAME, frameBasis=m.BASIS, owner='synthetic-owner')])
+            for after in [[row()], [row(), dict(page, pid=PID + 1)], [row(), page, dict(page, id=3)]]:
+                with self.subTest(after=after), self.assertRaises(ValueError):
+                    samples = iter([records, after])
+                    m.collect(PID, '/synthetic', STARTED, sample=lambda _: next(samples), frames=lambda *_: proof)
+        for ids in [None, [True], [0], [1], [2, 2], [dict(id=2, title='private')]]:
+            with self.subTest(ids=ids), self.assertRaises(ValueError):
+                m.validate(dict(value(), version=3, localPageWindowIds=ids), PID, STARTED, NONCE, 1001, PROFILE, 3)
+
+    def test_legacy_fallback_uses_new_nonce_and_requires_exact_old_refusal(self):
+        def exchange(_desc, pid, kind, nonce):
+            if kind == 'window-frames-v3':
+                return dict(m.LEGACY_UNSUPPORTED)
+            return dict(value(), nonce=nonce)
+        with patch.object(m, 'descriptor', return_value=({}, PROFILE)), patch.object(m.time, 'time', return_value=1.001), \
+                patch.object(m, 'exchange', side_effect=exchange) as calls:
+            self.assertEqual(m.request('/synthetic', PID, STARTED)['windows'][1]['owner'], 'synthetic-owner')
+            a, b = (call.args for call in calls.call_args_list)
+            self.assertEqual([a[2], b[2]], ['window-frames-v3', 'window-frames'])
+            self.assertNotEqual(a[3], b[3])
+        for response in [dict(m.LEGACY_UNSUPPORTED, failureReason='operation-unconfirmed'), dict(m.LEGACY_UNSUPPORTED, retry=0), value()]:
+            with patch.object(m, 'descriptor', return_value=({}, PROFILE)), patch.object(m, 'exchange', return_value=response) as call:
+                with self.assertRaises(ValueError):
+                    m.request('/synthetic', PID, STARTED)
+                call.assert_called_once()
+
     def test_wrong_kernel_peer_pid_refuses_before_sending_capability(self):
         class Socket:
             def getsockopt(self, level, option):

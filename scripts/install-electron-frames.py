@@ -14,6 +14,8 @@ import time
 
 MESSAGE = 'frame 口径待核实'
 BASIS = 'electron-getbounds-v1'
+LEGACY_UNSUPPORTED = dict(status='unconfirmed', retry=False, failurePhase='admission', failureReason='invalid-request',
+                          message='The authorized outbox could not confirm delivery; do not resend automatically.')
 
 
 def require(value):
@@ -134,25 +136,40 @@ def peer(sock, pid):
     require(getpeereid(sock.fileno(), C.byref(uid), C.byref(gid)) == 0 and uid.value == os.getuid())
 
 
-def request(profile, pid, started):
-    (d, identity), nonce = descriptor(profile, pid), secrets.token_hex(16)
+def exchange(d, pid, kind, nonce):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(1.0)
         sock.connect(d['socketPath'])
         peer(sock, pid)
-        sock.sendall((json.dumps(dict(kind='window-frames', capability=d['capability'], identity=d['issuer'], nonce=nonce)) + '\n').encode())
+        sock.sendall((json.dumps(dict(kind=kind, capability=d['capability'], identity=d['issuer'], nonce=nonce)) + '\n').encode())
         data = b''
         while b'\n' not in data:
             block = sock.recv(65536)
             require(block and len(data) + len(block) <= 1024 * 1024)
             data += block
         require(data.endswith(b'\n') and data.count(b'\n') == 1)
-        return validate(json.loads(data, object_pairs_hook=exact_object), pid, started, nonce, time.time() * 1000, identity)
+        return json.loads(data, object_pairs_hook=exact_object)
 
 
-def validate(value, pid, started, nonce, now, identity):
-    require(isinstance(value, dict) and set(value) == {'version', 'basis', 'pid', 'started', 'profile', 'nonce', 'capturedAt', 'windows', 'hiddenBackgroundWindows'})
-    require(type(value['version']) is int and value['version'] == 1 and value['basis'] == BASIS and type(value['pid']) is int and value['pid'] == pid and value['started'] == started and value['nonce'] == nonce)
+def request(profile, pid, started):
+    d, identity = descriptor(profile, pid)
+    nonce = secrets.token_hex(16)
+    value = exchange(d, pid, 'window-frames-v3', nonce)
+    version = 3
+    if value == LEGACY_UNSUPPORTED and value['retry'] is False:
+        # A current broker reports an unavailable capture separately.
+        nonce = secrets.token_hex(16)
+        value = exchange(d, pid, 'window-frames', nonce)
+        version = 1
+    return validate(value, pid, started, nonce, time.time() * 1000, identity, version)
+
+
+def validate(value, pid, started, nonce, now, identity, version=1):
+    keys = {'version', 'basis', 'pid', 'started', 'profile', 'nonce', 'capturedAt', 'windows', 'hiddenBackgroundWindows'}
+    if version == 3:
+        keys.add('localPageWindowIds')
+    require(isinstance(value, dict) and set(value) == keys)
+    require(type(value['version']) is int and value['version'] == version and value['basis'] == BASIS and type(value['pid']) is int and value['pid'] == pid and value['started'] == started and value['nonce'] == nonce)
     require(value['profile'] == identity)
     at = value['capturedAt']
     require(type(at) in (int, float) and math.isfinite(at) and 0 <= now - at <= 2000)
@@ -168,6 +185,13 @@ def validate(value, pid, started, nonce, now, identity):
             owners.add(owner); ids.add(number)
             require(len(ids) <= 1000)
             rows[number] = dict(row, frame=rectangle(row['frame']))
+    if version == 3:
+        locals_ids = value['localPageWindowIds']
+        require(isinstance(locals_ids, list) and len(ids) + len(locals_ids) <= 1000)
+        for number in locals_ids:
+            require(type(number) is int and 0 < number <= 0xffffffff and number not in ids)
+            ids.add(number)
+        result['localPageWindowIds'] = locals_ids
     return result
 
 
@@ -176,8 +200,9 @@ def collect(pid, profile, started, sample=observe, frames=request):
     before, displays, layers = observation(sample(pid), pid)
     proof = frames(profile, pid, started)
     live, background = proof['windows'], proof['hiddenBackgroundWindows']
-    managed = set(live).union(background)
-    require(not set(live).intersection(background) and managed.issubset({row['id'] for row in before}))
+    local_pages = proof.get('localPageWindowIds', [])
+    managed = set(live).union(background, local_pages)
+    require(len(managed) == len(live) + len(background) + len(local_pages) and managed.issubset({row['id'] for row in before}))
     inferred = infer_menu_windows(before, displays, layers, managed)
     require(all(row['onScreen'] is False for row in before if row['id'] in background))
     result = [dict(row, frame=live[row['id']]['frame'], owner=live[row['id']]['owner'], frameBasis=BASIS) for row in before if row['id'] in live]

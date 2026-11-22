@@ -1582,7 +1582,8 @@ async function boot() {
       const acquireAX = require('./native-accessibility.cjs').createAccessibilityScope(app, id => BrowserWindow.getAllWindows().some(win =>
         !win.isDestroyed() && win.getMediaSourceId().split(':')[1] === String(id)));
       outboxBroker = await createOutboxBroker({ descriptorFile, acquireAccessibility: target => acquireAX(target.windowId),
-        windowFrames: () => require('./window-frames.cjs').windowFrames(windows.values()),
+        windowFrames: includeLocalPages => require('./window-frames.cjs').windowFrames(
+          windows.values(), includeLocalPages ? localPages?.windows() ?? [] : undefined),
         bind: (identity, args, signal) => bindOriginalOutbox({ contexts: () => windows.values(), roomState }, identity, args, signal),
         bindControl: (identity, args, signal) => bindOriginalControl({ contexts: () => windows.values(), roomState }, identity, args, signal),
         control: async (binding, args) => {

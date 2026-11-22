@@ -71,6 +71,20 @@ test('a window destroyed or rebound while sampling cannot yield a partial frame 
   const closed = context(); closed.win.getBounds = () => { closed.win.isDestroyed = () => true; return frame; };
   assert.throws(() => windowFrames([closed]));
 });
+test('local page evidence contains only stable native IDs, unique across all categories', () => {
+  const { windowFrames } = require('../window-frames.cjs');
+  const main = context();
+  const page = context('unused', 3).win;
+  page.getBounds = page.isVisible = page.isFocusable = page.getTitle = () => { throw Error('Only the native ID is needed'); };
+  assert.deepEqual(windowFrames([main], [page]), { ...windowFrames([main]), localPageWindowIds: [3] });
+  assert.throws(() => windowFrames([main], [page, page]));
+  assert.throws(() => windowFrames([main], [main.win]));
+  let calls = 0;
+  page.getMediaSourceId = () => `window:${++calls + 2}:0`;
+  assert.throws(() => windowFrames([main], [page]));
+  page.isDestroyed = () => true;
+  assert.throws(() => windowFrames([main], [page]));
+});
 async function request(file, change = {}) {
   const d = JSON.parse(fs.readFileSync(file));
   return new Promise((resolve, reject) => {
@@ -84,11 +98,15 @@ async function request(file, change = {}) {
 }
 test('existing authenticated GUI socket provides fresh frame metadata without control, AX or native input', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-frame-owner-')); fs.chmodSync(root, 0o700);
-  let reads = 0;
+  let reads = 0, unavailable = false;
   const no = () => { throw Error('No action or AX may run'); };
   const broker = await createOutboxBroker({ descriptorFile: path.join(root, 'owner.json'), bind: no, createView: no,
-    control: no, acquireAccessibility: no, windowFrames: () => { reads++; return {
-      windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [{ id: 2, owner: 'background', frame }] }; } });
+    control: no, acquireAccessibility: no, windowFrames: includeLocalPages => {
+      reads++;
+      if (includeLocalPages && unavailable) throw Error('fixture local page capture failed');
+      return { windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [{ id: 2, owner: 'background', frame }],
+        localPageWindowIds: [3] };
+    } });
   t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const result = await request(broker.descriptorFile);
   assert.equal(result.basis, 'electron-getbounds-v1'); assert.equal(result.pid, process.pid);
@@ -98,11 +116,20 @@ test('existing authenticated GUI socket provides fresh frame metadata without co
   assert.ok(Date.now() - result.capturedAt < 1000); assert.deepEqual(result.windows, [{ id: 1, owner: 'synthetic-owner', frame }]);
   assert.deepEqual(result.hiddenBackgroundWindows, [{ id: 2, owner: 'background', frame }]);
   for (const row of [...result.windows, ...result.hiddenBackgroundWindows]) assert.deepEqual(Object.keys(row).sort(), ['frame', 'id', 'owner']);
-  assert.equal(reads, 1);
+  assert.equal(result.version, 1);
+  assert.equal(result.localPageWindowIds, undefined);
+  const v3 = await request(broker.descriptorFile, { kind: 'window-frames-v3' });
+  assert.deepEqual({ ...v3, capturedAt: result.capturedAt }, { ...result, version: 3, localPageWindowIds: [3] });
+  assert.equal(reads, 2);
   for (const bad of [{ capability: '0'.repeat(64) }, { nonce: 'bad' }, { identity: { pid: process.pid, started: 'stale' } }, { extra: true }]) {
     assert.equal((await request(broker.descriptorFile, bad)).basis, undefined);
+    assert.equal((await request(broker.descriptorFile, { ...bad, kind: 'window-frames-v3' })).basis, undefined);
   }
-  assert.equal(reads, 1, 'invalid requests cannot even read the window getter');
+  assert.equal(reads, 2, 'invalid requests cannot even read the window getter');
+  unavailable = true;
+  const refused = await request(broker.descriptorFile, { kind: 'window-frames-v3' });
+  assert.equal(refused.failureReason, 'operation-unconfirmed');
+  assert.equal(refused.localPageWindowIds, undefined);
 });
 function rows() { return [{ pid: 424242, id: 1, owner: 'synthetic-owner', onScreen: true,
   bounds: { x: 297, y: 168, width: 1867, height: 1022 }, frame: { ...frame }, frameBasis: 'electron-getbounds-v1' }]; }
@@ -124,7 +151,7 @@ test('public GUI frame bridge refuses stale, foreign, malformed and changing ide
 });
 test('Main wires only its managed contexts and packages the public getter module', () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
-  assert.match(source, /windowFrames:\s*\(\) => require\('\.\/window-frames\.cjs'\)\.windowFrames\(windows\.values\(\)\)/);
+  assert.match(source, /windowFrames: includeLocalPages => require\('\.\/window-frames\.cjs'\)\.windowFrames\(\s*windows\.values\(\), includeLocalPages \? localPages\?\.windows\(\) \?\? \[\] : undefined\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '../../scripts/package-mac.cjs'), 'utf8'), /'window-frames\.cjs'/);
 });
 test('real kernel peer PID mismatch receives no capability bytes', async t => {

@@ -153,19 +153,27 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
-        if (request.kind === 'window-frames') {
+        if (request.kind === 'window-frames' || request.kind === 'window-frames-v3') {
+          const includeLocalPages = request.kind === 'window-frames-v3';
+          const unavailable = () => failed('admission', includeLocalPages ? 'operation-unconfirmed' : 'invalid-request');
           const target = request.identity;
           if (closed || Object.keys(request).sort().join(',') !== 'capability,identity,kind,nonce' ||
               typeof request.capability !== 'string' || !/^[a-f0-9]{64}$/.test(request.capability) ||
               !crypto.timingSafeEqual(Buffer.from(capability), Buffer.from(request.capability)) ||
               !target || Object.keys(target).sort().join(',') !== 'pid,started' || target.pid !== issuer.pid || target.started !== issuer.started ||
               typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce) || typeof windowFrames !== 'function' || abort.signal.aborted)
-            return failed('admission', 'invalid-request');
-          const identity = processIdentityUTC(process.pid);
-          if (!identity || JSON.stringify(profileIdentity()) !== JSON.stringify(frameProfile)) return failed('admission', 'invalid-request');
-          const proof = windowFrames();
-          return { version: 1, basis: 'electron-getbounds-v1', ...identity, profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(),
-            windows: proof.windows, hiddenBackgroundWindows: proof.hiddenBackgroundWindows };
+            return unavailable();
+          try {
+            const identity = processIdentityUTC(process.pid);
+            if (!identity || JSON.stringify(profileIdentity()) !== JSON.stringify(frameProfile)) return unavailable();
+            const proof = windowFrames(includeLocalPages);
+            return { version: includeLocalPages ? 3 : 1, basis: 'electron-getbounds-v1', ...identity,
+              profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(),
+              windows: proof.windows, hiddenBackgroundWindows: proof.hiddenBackgroundWindows,
+              ...(includeLocalPages ? { localPageWindowIds: proof.localPageWindowIds } : {}) };
+          } catch {
+            return unavailable();
+          }
         }
         if (request.kind === 'accessibility') {
           const target = request.identity;
