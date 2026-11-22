@@ -52,14 +52,77 @@ const clean = scratch.cleanup(async () => {
   await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page);await page.locator('#room-nav').click();
   await page.evaluate(now=>{window.taskStatusClock=now;Date.now=()=>window.taskStatusClock;},base);
   const normalQueue=queue.map(q=>({...q})),actor=(await client.call('initial')).sessions.find(s=>s.id===ids[0]);assert.ok(actor.nativeId);
+  const syntheticCard=now=>({id:'synthetic-confirmation',key:actor.id+':'+actor.nativeId+':input',sessionId:actor.id,nativeId:actor.nativeId,operationId:'input',state:'confirmation-required',actionable:true,expiresAt:now+100000,message:{id:'synthetic-confirmation',role:'system',kind:'background-operation',name:'Synthetic actor',time:now,text:'Synthetic confirmation metadata',status:'error',backgroundOperation:{id:'input',sessionId:actor.id,nativeId:actor.nativeId,state:'confirmation-required',expiresAt:now+100000,confirmation:{kind:'message',options:{message:'Synthetic confirmation',buttons:['Cancel','Confirm'],cancelId:0}}}}});
   async function scene(kind){
-    await app.evaluate((_,data)=>{const t=globalThis.taskStatusTest;t.background.failed= data.kind==='unknown';t.cards=data.kind==='waiting'?[{id:'synthetic-confirmation',key:data.actor.id+':'+data.actor.nativeId+':input',sessionId:data.actor.id,nativeId:data.actor.nativeId,operationId:'input',state:'confirmation-required',actionable:true,expiresAt:data.now+100000,message:{id:'synthetic-confirmation',role:'system',kind:'background-operation',name:'Synthetic actor',time:data.now,text:'Synthetic confirmation metadata',status:'error',backgroundOperation:{id:'input',sessionId:data.actor.id,nativeId:data.actor.nativeId,state:'confirmation-required',expiresAt:data.now+100000,confirmation:{kind:'message',options:{message:'Synthetic confirmation',buttons:['Cancel','Confirm'],cancelId:0}}}}}]:[];globalThis.taskBoardFixture.update({queue:data.queue},undefined,'shared');},{kind,actor:{id:actor.id,nativeId:actor.nativeId},now:base,queue:kind==='waiting'?normalQueue.concat(item('waiting',200,{sentTo:actor.id,sentNative:actor.nativeId}),item('waiting',201,{sentTo:actor.id,sentNative:actor.nativeId})):normalQueue});
+    await app.evaluate((_,data)=>{const t=globalThis.taskStatusTest;t.background.failed= data.kind==='unknown';t.cards=data.kind==='waiting'?[data.card]:[];globalThis.taskBoardFixture.update({queue:data.queue},undefined,'shared');},{kind,card:syntheticCard(base),queue:kind==='waiting'?normalQueue.concat(item('waiting',200,{sentTo:actor.id,sentNative:actor.nativeId}),item('waiting',201,{sentTo:actor.id,sentNative:actor.nativeId})):normalQueue});
     await page.evaluate(now=>window.taskStatusClock=now,base);
     await fixture('state',ids[2],kind==='unknown'?'disconnected':'working');
     await fixture('state',ids[4],kind==='waiting'?'approval':'idle');
     await client.call('draft',ids[0],'Synthetic metadata-only push'); await settled();
-    await until(async()=>{const x=await page.locator('.task-status-chips').evaluate(e=>e.textContent);return kind==='waiting'?x.includes('1:40'):kind==='unknown'?x.includes(en?'Cards not updated':'确认卡未更新'):await page.locator('.task-status-card-time').isHidden()&&await page.locator('.task-status-warning').isHidden();},'Scene projection '+kind);
+    await until(async()=>{const x=await page.locator('.task-status-chips').evaluate(e=>e.textContent);return kind==='waiting'?x.includes('1:40'):kind==='unknown'?x.includes(en?'to verify':'件待核实'):await page.locator('.task-status-card-time').isHidden()&&await page.locator('.task-status-warning').isHidden();},'Scene projection '+kind);
   }
+  const mixedHeader=()=>page.evaluate(()=>{const w=document.querySelector('.task-status-warning'),c=document.querySelector('.task-status-card-time');
+    return{strip:document.querySelector('.stream-waiting-count')?.textContent||'',warn:w.textContent,warnCls:w.className,weight:Number(getComputedStyle(w).fontWeight),card:c.textContent,cardHidden:c.hidden,cardLabel:c.getAttribute('aria-label')};});
+  async function mixedScene(){
+    const decision=item('waiting',300,{assignee:null,sentTo:ids[0],sentNative:actor.nativeId}),
+      purpose=Array.from({length:7},(_,i)=>item('waiting',301+i,{reason:'input-purpose-unconfirmed',assignee:null,...(i===0?{sentTo:ids[0],sentNative:actor.nativeId}:{})})),
+      silence=item('waiting',308,{reason:'no-reply',assignee:null,sentTo:ids[0],sentNative:actor.nativeId}),
+      queue=normalQueue.concat(decision,...purpose,silence),
+      unverified=Array.from({length:6},()=>({state:'confirmation-required',actionable:true,expiresAt:null})).concat({id:'synthetic-unverifiable',key:actor.id+':'+actor.nativeId+':verification',sessionId:actor.id,nativeId:actor.nativeId,operationId:'verification',state:'unverifiable',actionable:false,expiresAt:base+200000,
+        message:{id:'synthetic-unverifiable',role:'system',kind:'background-operation',name:'Synthetic actor',time:base,text:'Synthetic unverifiable confirmation metadata',status:'error',backgroundOperation:{id:'verification',sessionId:actor.id,nativeId:actor.nativeId,state:'unverifiable'}}});
+    await app.evaluate((_,d)=>{const t=globalThis.taskStatusTest;t.background.failed=false;t.cards=[d.card,...d.unverified];globalThis.taskBoardFixture.update({queue:d.queue},undefined,'shared');},{queue,card:syntheticCard(base),unverified});
+    await page.evaluate(now=>window.taskStatusClock=now,base);
+    await fixture('state',ids[2],'working');await fixture('state',ids[4],'approval');
+    await client.call('draft',ids[0],'Synthetic mixed push');await settled();
+    await until(async()=>{const x=await mixedHeader();return x.strip.includes(en?'2 to handle':'2 件待你处理')&&x.warn===(en?'7 to verify':'7 件待核实');},'Mixed projection');
+    return {decision,purpose,silence};
+  }
+  const mixed=await mixedScene();
+  for(const [width,height]of[[1240,820],[850,600]])for(const theme of['light','dark']){
+    await app.evaluate(({BrowserWindow,nativeTheme},v)=>{BrowserWindow.getAllWindows()[0].setContentSize(v.width,v.height);nativeTheme.themeSource=v.theme;},{width,height,theme});await page.emulateMedia({colorScheme:theme});await page.waitForFunction(w=>innerWidth===w,width);await settled();
+    await until(async()=>{const x=await mixedHeader();return x.strip.includes(en?'2 to handle':'2 件待你处理')&&x.warn===(en?'7 to verify':'7 件待核实');},'Mixed resize projection');
+    const x=await mixedHeader();
+    check(x.strip.includes(en?'2 to handle':'2 件待你处理')&&!x.strip.includes(en?'At least':'至少'),`mixed ${width} ${theme}: known decision and approval stay one neutral group`);
+    check(x.warn===(en?'7 to verify':'7 件待核实'),`mixed ${width} ${theme}: unverified cards stay a separate neutral chip`);
+    check(x.card.includes('1:40')&&!x.cardHidden,`mixed ${width} ${theme}: only the confirmation card keeps its real deadline`);
+    check(x.cardLabel===(en?'1 confirmation card expires in 1:40; open it':'1 张确认卡，1:40 后失效，打开它'),`mixed ${width} ${theme}: the unverifiable card with a stored expiry adds no second deadline`);
+    check(x.weight<=500&&!x.warnCls.includes('failed'),`mixed ${width} ${theme}: unknown is not styled as an alarm`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-mixed-${theme}-${width}.png`)});
+    await page.locator('.task-board-toggle').click();await settled();
+    check(await page.locator('.task-board-availability').isVisible()&&!(await page.locator('.task-board-availability').innerText()).includes('0 '),`mixed ${width} ${theme}: the panel states that counts are partial`);
+    await page.locator('[data-board-tab="review"]').click();await settled();
+    check(Number(await page.locator('[data-board-tab="review"]').getAttribute('data-count'))===8,`mixed ${width} ${theme}: seven input-purpose checks and one no-reply stay in review`);
+    const reviewRows=page.locator('.task-board-list .task-board-entry');check(await reviewRows.count()===8,`mixed ${width} ${theme}: every review row is reachable`);
+    check(await reviewRows.evaluateAll(es=>es.every(e=>['待查看','To review'].includes(e.querySelector('.task-board-status').textContent))),`mixed ${width} ${theme}: review rows never claim a person decision`);
+    const purposeRow=page.locator(`.task-board-list .task-board-entry[data-item-id="${mixed.purpose[0].id}"]`),unassignedRow=page.locator(`.task-board-list .task-board-entry[data-item-id="${mixed.purpose[1].id}"]`);
+    check(await purposeRow.count()===1&&(await purposeRow.innerText()).includes('Synthetic A')&&(await purposeRow.innerText()).includes(en?'Could not confirm this input belongs to this task':'没确认这段输入属于本项'),`mixed ${width} ${theme}: a dispatched input-purpose row keeps its reason and owner`);
+    check(await page.locator(`.task-board-list .task-board-entry[data-item-id="${mixed.silence.id}"]`).innerText().then(t=>t.includes(en?'No reply to the previous dispatch':'未收到上轮回复')),`mixed ${width} ${theme}: a dispatched no-reply row keeps its reason`);
+    check(await unassignedRow.count()===1&&(await unassignedRow.innerText()).includes(en?'Unassigned':'未分配')&&(await unassignedRow.innerText()).includes(en?'Could not confirm this input belongs to this task':'没确认这段输入属于本项'),`mixed ${width} ${theme}: the unassigned input is listed with its reason and owner`);
+    for(const [text,name]of[[mixed.purpose[0].text,en?'input-purpose':'input-purpose'],[mixed.silence.text,en?'no-reply':'no-reply']])check(await page.locator('.task-board-list .task-board-entry').filter({hasText:text}).count()===1,`mixed ${width} ${theme}: ${name} row stays individually reachable`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-mixed-${theme}-${width}-reviews.png`)});
+    await purposeRow.click();await page.locator('#task-board-panel').waitFor({state:'hidden'});check(await page.locator('#queue-dialog').isHidden(),`mixed ${width} ${theme}: a dispatched review opens its session, not the space queue`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-mixed-${theme}-${width}-session.png`)});
+    await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page);await page.locator('#room-nav').click();await settled();
+    await page.locator('.task-board-toggle').click();await page.locator('[data-board-tab="review"]').click();await settled();
+    await unassignedRow.click();await page.locator('#queue-dialog').waitFor({state:'visible'});
+    const dialog=await page.locator('#queue-dialog').innerText();
+    check(dialog.includes(en?'Could not confirm this input belongs to this task':'没确认这段输入属于本项')&&dialog.includes(en?'For you to look at':'留给你看一眼'),`mixed ${width} ${theme}: expanded input-purpose row keeps its reason and review state`);
+    check(dialog.includes(en?'Unassigned':'未分配'),`mixed ${width} ${theme}: expanded row keeps the responsible owner`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-mixed-${theme}-${width}-open.png`)});
+    await page.locator('#close-queue').click();await page.locator('#task-board-panel').waitFor({state:'hidden'});
+    await page.locator('.task-board-toggle').click();await page.locator('[data-board-tab="unknown"]').click();await settled();
+    const unverifiedRow=page.locator('.task-board-list .task-board-entry[data-source="confirmation"]');
+    check(await unverifiedRow.count()===1&&(await unverifiedRow.locator('.task-board-status').innerText())===(en?'Cards unverified':'确认卡待核对')&&!/[0-9]+:[0-9]{2}/.test(await unverifiedRow.locator('.task-board-status').innerText()),`mixed ${width} ${theme}: the unverifiable card is listed for checking without a countdown`);
+    if(pictures)await page.screenshot({scale:'css',path:path.join(pictures,`${language}-mixed-${theme}-${width}-unverified.png`)});
+    await page.keyboard.press('Escape');
+    await page.locator('.task-board-toggle').click();await page.locator('[data-board-tab="waiting"]').click();await settled();
+    check(Number(await page.locator('[data-board-tab="waiting"]').getAttribute('data-count'))===3,`mixed ${width} ${theme}: only the known decision, approval and confirmation card remain actionable`);
+    const decisionRow=page.locator(`.task-board-list .task-board-entry[data-item-id="${mixed.decision.id}"]`);check(await decisionRow.count()===1&&(await decisionRow.innerText()).includes(en?'Decision needed':'等你决定'),`mixed ${width} ${theme}: the known decision keeps its own status and owner`);
+    const approvalRow=page.locator('.task-board-list .task-board-entry').filter({hasText:'Independent question'});check(await approvalRow.count()===1&&(await approvalRow.innerText()).includes(en?'Decision needed':'等你决定'),`mixed ${width} ${theme}: the verifiable approval is reachable as a decision`);
+    check(await page.locator('.task-board-list .task-board-entry[data-source="confirmation"]').count()===1,`mixed ${width} ${theme}: the expiring confirmation stays reachable`);
+    await page.keyboard.press('Escape');
+  }
+  await scene('normal');
   for(const kind of ['normal','waiting','unknown']){
     await scene(kind);
     for(const [width,height]of[[1240,820],[850,600]])for(const theme of['light','dark']){
@@ -76,8 +139,8 @@ const clean = scratch.cleanup(async () => {
       check(!/(^|\s)0 /u.test(g.text)&&!g.text.includes(en?'working':'在做'),`${kind} ${width} ${theme}: no progress count or healthy zero is resident in the header`);
       check(!g.text.includes(en?'Queue done today':'今天队列完成'),`${kind} ${width} ${theme}: completion statistics stay in the panel`);
       if(kind==='waiting'){
-        const banner=await page.locator('.stream-waiting-count').innerText(),bannerNumber=banner.match(en?/(\d+) waiting for you/:/(\d+) 件等你(?!确认)/);
-        check(bannerNumber&&Number(bannerNumber[1])===3&&!/等你|need you/u.test(g.text),`${width} ${theme}: the header shows the three non-card waiting items once`);
+        const banner=await page.locator('.stream-waiting-count').innerText(),bannerNumber=banner.match(en?/(\d+) to handle/:/(\d+) 件待你处理/);
+        check(bannerNumber&&Number(bannerNumber[1])===3&&!/等你|need you|待你处理|to handle/u.test(g.text),`${width} ${theme}: the header shows the three non-card waiting items once`);
       }
       if(kind==='waiting')check(g.text.includes('1:40')&&(await page.locator('.task-status-card-time').getAttribute('aria-label'))===(en?'1 confirmation card expires in 1:40; open it':'1 张确认卡，1:40 后失效，打开它'),`${width} ${theme}: one unexpired confirmation deadline is visible`);
       if(kind==='waiting'){const contrast=await page.locator('.stream-waiting-count').evaluate(e=>{const parse=s=>{const v=s.match(/[\d.]+/g).map(Number),k=s.startsWith('color(')?255:1;return{c:v.slice(0,3).map(x=>x*k),a:v.length>3?v[3]:1};};const lum=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);const layers=[];for(let p=e;p;p=p.parentElement){const b=parse(getComputedStyle(p).backgroundColor);if(b.a>0)layers.push(b);if(b.a>=1)break;}let bg=[255,255,255];for(const l of layers.reverse())bg=bg.map((v,i)=>l.c[i]*l.a+v*(1-l.a));const a=lum(parse(getComputedStyle(e).color).c),z=lum(bg);return(Math.max(a,z)+.05)/(Math.min(a,z)+.05);});check(contrast>=4.5,`${width} ${theme}: needs-you contrast is at least 4.5 (${contrast.toFixed(2)})`);}
@@ -101,7 +164,7 @@ const clean = scratch.cleanup(async () => {
   await until(async()=>(await page.locator('#agent-distribution [data-group="status:working"] .agent-group-count').textContent())==='4','Space members without queued tasks still count');
   check(true,'Native space work without queue items remains visible beside independent work');
   await fixture('state',ids[0],'approval');await until(async()=>(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('data-agent-status'))==='waiting','Native member needs a person');
-  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'1 waiting for you':'1 件等你'),'A native member question with no queue has the same banner/header count');
+  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'1 to handle':'1 件待你处理'),'A native member question with no queue has the same banner/header count');
   await fixture('state',ids[0],'disconnected');await until(async()=>(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('data-agent-status'))==='stuck','Disconnected member is shown as stuck or offline');
   check(!/(^|\s)0 /u.test(await page.locator('.task-status-chips').evaluate(e=>e.textContent))&&(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('class')).includes('disconnected'),'A disconnected space member without a queue is never healthy zero and keeps its square');
   await fixture('state',ids[0],'working');
@@ -109,10 +172,10 @@ const clean = scratch.cleanup(async () => {
   await until(async()=>(await page.locator('#agent-distribution [data-group="status:working"] .agent-group-count').textContent())==='4','Queued assignment retains native work');
   check(true,'A queued assignee does not hide unrelated native work');
   await scene('waiting');
-  await app.evaluate((_,q)=>globalThis.taskBoardFixture.update({queue:q},undefined,'shared'),normalQueue.concat(item('waiting',200,{reason:'no-reply'}),item('waiting',201)));await client.call('draft',ids[0],'Synthetic shared classification');
-  await until(async()=>(await page.locator('.stream-waiting-count').innerText()).includes(en?'2 waiting for you':'2 件等你'),'Shared classification excludes review');
+  await app.evaluate((_,q)=>globalThis.taskBoardFixture.update({queue:q},undefined,'shared'),normalQueue.concat(item('waiting',200,{reason:'no-reply',sentTo:actor.id,sentNative:actor.nativeId}),item('waiting',201,{sentTo:actor.id,sentNative:actor.nativeId})));await client.call('draft',ids[0],'Synthetic shared classification');
+  await until(async()=>(await page.locator('.stream-waiting-count').innerText()).includes(en?'2 to handle':'2 件待你处理'),'Shared classification excludes review');
   check((await page.locator('.stream-waiting-count').innerText()).includes(en?'1 to review':'1 件待查看'),'Shared review classification stays separate from waiting');
-  await page.locator('.task-board-toggle').click();check((await page.locator('.task-board-list .task-board-entry[data-kind="review"]').innerText()).includes(en?'To review':'待查看'),'The drop-down retains the review row without calling it waiting');await page.keyboard.press('Escape');await scene('waiting');
+  await page.locator('.task-board-toggle').click();const reviewRow=page.locator('.task-board-list .task-board-entry[data-kind="review"]');check(await reviewRow.count()===1&&(await reviewRow.innerText()).includes(en?'To review':'待查看'),'The drop-down retains the review row without calling it waiting');await page.keyboard.press('Escape');await scene('waiting');
   const trigger=page.locator('.task-board-toggle');
   const identities=()=>page.evaluate(async()=>{const x=await workspace.initial();return x.sessions.map(s=>({id:s.id,nativeId:s.nativeId,rooms:nativeWorkspaceSpaces.roomIds(s)}));});const originalIdentities=await identities();
   const returnToSpace=async()=>{if(!await page.locator('#room-nav').isVisible())await page.locator('#sidebar-toggle').click();await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page);await page.locator('#room-nav').click();await settled();};
@@ -140,7 +203,7 @@ const clean = scratch.cleanup(async () => {
   await page.keyboard.press('Escape');check(await trigger.evaluate(e=>document.activeElement===e),'Escape closes and returns to the same global trigger');
   await page.evaluate(now=>window.taskStatusClock=now+1000,base);await until(async()=>(await page.locator('.task-status-card-time').innerText()).includes('1:39'),'Existing UI clock updates the confirmation countdown');
   await page.evaluate(now=>window.taskStatusClock=now+100000,base);await until(()=>page.locator('.task-status-card-time').isHidden(),'Expired confirmation leaves the global waiting count');
-  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'3 waiting for you':'3 件等你'),'Expiration removes the separate card, preserving three non-card waiting items');
+  check((await page.locator('.stream-waiting-count').innerText()).includes(en?'3 to handle':'3 件待你处理'),'Expiration removes the separate card, preserving three non-card waiting items');
   await app.evaluate(()=>globalThis.taskStatusTest.cards=[]);await client.call('draft',ids[0],'Synthetic post-expiry projection');await settled();
   await trigger.click();await page.locator('[data-board-tab="all"]').click();await page.locator('.task-board-space').selectOption(history);check(await page.locator('.task-board-entry[data-source="space"]').count()===1,'The chosen historical queue row is unique');await page.locator('.task-board-entry[data-source="space"]').click();await page.locator('#queue-dialog').waitFor({state:'visible'});check(await page.locator('#queue-dialog').isVisible(),'Original space queue opens through its existing control');check((await page.locator('#queue-title').textContent()).includes('资料整理'),'The selected original space queue is the recipient');await page.locator('#close-queue').click();
   await page.locator('#independent-nav').click();

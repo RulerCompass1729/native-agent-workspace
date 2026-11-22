@@ -114,7 +114,7 @@
         const task = byEvent.get(row.id), target = model.originalTarget(row, task?.item);
         return (!scope || target?.sessionId === scope || row.sessionId === scope) &&
           (!query || (host.displayText(row.text, row.uiMessage) + ' ' + host.label(row)).toLocaleLowerCase().includes(query)) &&
-          (filter === 'all' || filter === 'mine' && ['decide', 'look'].includes(task?.status) || filter === 'active' && task?.status === 'active' ||
+          (filter === 'all' || filter === 'mine' && task?.status === 'decide' || filter === 'active' && task?.status === 'active' ||
             filter === 'queued' && task?.status === 'queued' || filter === 'ended' && model.ENDED.includes(task?.status));
       });
       for (const b of filters.children) { b.textContent = t(b.dataset.filter); b.setAttribute('aria-pressed', String(b.dataset.filter === filter)); }

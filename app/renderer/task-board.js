@@ -11,7 +11,7 @@
   // The same rule as the 等你 strip (task-stream.js), resolved when called: the browser loads that file after this one.
   const endedSession = session => (typeof module === 'object' && module.exports ? require('../task-stream.js') : globalThis.nativeWorkspaceTaskStream).endedSession(session);
   const kind = item => !['sent', 'queued', 'waiting', 'failed', 'done', 'cancelled'].includes(item.status) ? 'unknown'
-    : item.status === 'waiting' && ['no-reply', 'person-intervened'].includes(item.reason) ? 'review' : item.status;
+    : item.status === 'waiting' && ['no-reply', 'person-intervened', 'input-purpose-unconfirmed'].includes(item.reason) ? 'review' : item.status;
   function project(rooms, sessions, now = Date.now()) {
     const day = new Date(now), start = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime(), end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
     const members = new Map((sessions || []).map(s => [s.id, s.name]));
@@ -91,12 +91,15 @@
     if (cardRows.length || !cardsAvailable) groups.push(finish({ id: '@confirmations', source: 'confirmation', name: '', available: cardsAvailable, all: cardRows }));
     const current = groups.flatMap(p => p.current);
     unknown += current.filter(q => q.kind === 'unknown').length;
-    const cardCount = cardRows.filter(c => c.expiresAt !== null).length;
+    // Only a card the person can still act on has a deadline to show. An unverifiable card keeps
+    // its row and its unknown count, but its stored expiry is evidence, not a countdown.
+    const dueCards = cardRows.filter(c => c.kind === 'waiting' && c.expiresAt !== null);
+    const cardCount = dueCards.length;
     return { groups, historyGroups: historyGroups.concat(groups.filter(p => p.source !== 'space')), cards: cardRows, doing: current.filter(q => q.kind === 'sent').length,
       waiting: current.filter(q => q.kind === 'waiting' && q.source !== 'confirmation').length + cardCount,
       done: current.filter(q => q.kind === 'done').length, cancelled: current.filter(q => q.kind === 'cancelled').length,
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
-      nextExpiry: cardRows.reduce((value, c) => c.expiresAt !== null && (value === null || c.expiresAt < value) ? c.expiresAt : value, null), stale: input.connected === false };
+      nextExpiry: dueCards.reduce((value, c) => value === null || c.expiresAt < value ? c.expiresAt : value, null), stale: input.connected === false };
   }
   const AGENT = ['waiting', 'stuck', 'working', 'idle'], AGENT_ORDER = ['waiting', 'working', 'stuck', 'idle'];
   const SQUARE = { waiting: 'approval', stuck: 'disconnected', working: 'working', idle: 'idle' };
@@ -275,7 +278,8 @@
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
     panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
     function currentItems() {
-      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, stale: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
+      // An unverifiable card is a status to check, not an approval: keep it out of the approval's square slot.
+      const priority = q => q.source === 'confirmation' && q.kind === 'waiting' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, stale: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
       return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
     }
     function remaining(expiresAt) {
@@ -283,12 +287,13 @@
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
     function drawBar() {
-      const uncertain = status.cards.some(c => c.kind === 'unknown'), time = status.cardCount ? remaining(status.nextExpiry) : '';
-      set(cardTime, [!status.cardsAvailable ? f('cardsUnavailable') : '', status.cardCount ? f('cardChipTime', { time }) : '', uncertain ? f('cardsUnverified') : ''].filter(Boolean).join(' · '));
+      // Only a card the person can still act on gets this chip; unread and unverifiable cards are already in the warning's count.
+      const time = status.cardCount ? remaining(status.nextExpiry) : '';
+      set(cardTime, status.cardCount ? f('cardChipTime', { time }) : '');
       cardTime.hidden = !cardTime.textContent;
-      attr(cardTime, 'aria-label', status.cardCount ? f(status.cardCount === 1 ? 'cardChipLabelOne' : 'cardChipLabel', { count: status.cardCount, time }) : cardTime.textContent);
+      attr(cardTime, 'aria-label', status.cardCount ? f(status.cardCount === 1 ? 'cardChipLabelOne' : 'cardChipLabel', { count: status.cardCount, time }) : '');
       set(warning, status.stale ? f('unupdated') : status.unknown ? f('unknownChip', { count: status.unknown }) : status.failed ? f('failedChip', { count: status.failed }) : '');
-      warning.hidden = !warning.textContent; attr(warning, 'aria-label', f('unknownChipLabel', { text: warning.textContent }));
+      warning.hidden = !warning.textContent; warning.classList.toggle('failed', !status.stale && !status.unknown && status.failed > 0); attr(warning, 'aria-label', f('unknownChipLabel', { text: warning.textContent }));
       set(board, f('boardButton')); attr(toggle, 'aria-label', f('boardButton'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
     }
@@ -309,6 +314,10 @@
       else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
     }
 
+    // The waiting reasons that leave a task for the person to look at. Their text stays on the row
+    // because a dispatched row opens its session directly, without the space queue that explains it.
+    const REVIEW_REASONS = { 'no-reply': 'reasonNoReply', 'person-intervened': 'reasonIntervened', 'input-purpose-unconfirmed': 'reasonInputPurposeUnconfirmed' };
+    function reasonText(item) { const key = item.kind === 'review' ? REVIEW_REASONS[item.reason] : null; return key ? f(key) : ''; }
     function title(item, actorName) {
       if (item.source === 'confirmation') return f('confirmation');
       if (item.source === 'conversation') return actorName;
@@ -328,8 +337,8 @@
       view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
       const name = title(item, actorName); set(view.name, name); view.name.title = name;
       const value = taskTime(item, selection.sort), time = value === null ? '—' : new Intl.DateTimeFormat(doc.documentElement?.lang || undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);
-      set(view.note, [origin, actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].join(' · '));
-      set(view.state, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
+      set(view.note, [origin, reasonText(item), actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].filter(Boolean).join(' · '));
+      set(view.state, item.source === 'confirmation' ? item.kind === 'waiting' ? f('cardState') + ' · ' + remaining(item.expiresAt) : f('cardsUnverified') : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
       view.state.dataset.kind = item.kind;
       const destination = item.source === 'confirmation' ? 'Card' : item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
       set(view.action, f(['waiting', 'review', 'unknown'].includes(item.kind) ? 'action.' + item.kind + '.' + destination.toLowerCase() : 'open' + destination));

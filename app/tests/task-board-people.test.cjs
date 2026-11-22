@@ -96,7 +96,7 @@ test('a working agent card shows its state, minutes, current item with id and wh
   try {
     const card = f.person('w1');
     assert.ok(card.classList.contains('task-board-person-card'));
-    for (const part of [LONG, '在做 52 分', 'Current synthetic item', '#aaaaaaaa', '名下 2 件等你', '1 件排队']) assert.ok(card.textContent.includes(part), part);
+    for (const part of [LONG, '在做 52 分', 'Current synthetic item', '#aaaaaaaa', '名下 2 件待你处理', '1 件排队']) assert.ok(card.textContent.includes(part), part);
     assert.ok(!card.textContent.includes('second line'));
     const label = card.getAttribute('aria-label');
     for (const part of [LONG, '在做 52 分', 'Current synthetic item']) assert.ok(label.includes(part), part + ' in ' + label);
@@ -142,7 +142,7 @@ test('en: the member section has no missing or Chinese-only text', () => {
   const f = setup('en');
   try {
     const text = f.people().textContent;
-    for (const part of ['6 members', '1 needs you', '2 stuck or offline', '2 working', '1 idle', '52 min', '2 waiting for you', '1 queued', 'not counted in the header or the Needs you tab']) assert.ok(text.includes(part), part + ' in ' + text);
+    for (const part of ['6 members', '1 needs you', '2 stuck or offline', '2 working', '1 idle', '52 min', '2 to handle', '1 queued', 'not counted in the header or the Needs you tab']) assert.ok(text.includes(part), part + ' in ' + text);
     assert.ok(!/[一-鿿]/.test(text), text);
   } finally { f.board.dispose(); }
 });

@@ -94,7 +94,7 @@ function ledger() {
   checks.push({ name: 'native turn status while the question is open', ok: true, detail: s.state });
   await page.locator('#stream-waiting').waitFor();
   const lead = await page.locator('#stream-waiting .stream-waiting-lead').innerText();
-  check('等你 +1 with the question text', lead.includes('1 件等你') && lead.includes(QUESTION) && lead.includes('Native question'), lead);
+  check('等你 +1 with the question text', lead.includes('1 件待你处理') && lead.includes(QUESTION) && lead.includes('Native question'), lead);
   const viewForm = page.locator('#approval .question-form');
   check('the session view form is answerable', await viewForm.count() === 1 && await viewForm.locator('input[type=radio]').first().isEnabled());
   check('the phone home row says it needs you', (await phone()).question === true);

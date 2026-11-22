@@ -69,3 +69,7 @@ test('unknown/unavailable queues are not presented as empty and healthy', () => 
 test('the palette separates decisions, reviews, queued tasks and empty tracks', () => {
   assert.notEqual(board.COLORS.review, board.COLORS.waiting); assert.notEqual(board.COLORS.queued, board.COLORS.empty);
 });
+test('an input-purpose check is a review, not a person decision', () => {
+  const [p] = board.project([room([task('waiting', 'd'), task('waiting', 'n', { reason: 'no-reply' }), task('waiting', 'i', { reason: 'input-purpose-unconfirmed' })])], [], now);
+  assert.equal(p.counts.waiting, 1); assert.equal(p.counts.review, 2); assert.equal(p.attention, 3);
+});

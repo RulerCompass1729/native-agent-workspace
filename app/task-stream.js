@@ -7,9 +7,9 @@
   // requests, a question that does not block its turn, then things only left to look at.
   const RANK = { decide: 0, 'butler-question': 1, 'background-confirmation': 2, approval: 3, question: 4, look: 5 };
   const approvalPolicy = typeof module !== 'undefined' && module.exports ? require('./approval-policy.js') : root.nativeWorkspaceApproval;
-  // The queue's own rules (app/queue-dispatch.cjs): the waiting items that ask nothing, and the
-  // first-line markers of a decision.
-  const UNHELD_WAITING = ['person-intervened', 'no-reply'];
+  // The waiting items that ask nothing: the person stepped in, no reply came back, or an input's
+  // purpose could not be tied to its item (queue-dispatch.cjs). The last is a system check.
+  const UNHELD_WAITING = ['person-intervened', 'no-reply', 'input-purpose-unconfirmed'];
   const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
 
   // Queue events carry the task text in this form (queue-dispatch.cjs shortText).

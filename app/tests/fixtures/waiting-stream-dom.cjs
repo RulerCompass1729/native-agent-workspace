@@ -25,8 +25,8 @@ function scene(language, input) {
   return { input, observed, render, dispose: () => status.dispose(),
     advance(ms) { now += ms; status.tick(); },
     // The strip is the one place the needs-you count is shown (11-22); the task bar must not repeat it.
-    count: () => { const strip = f.doc.getElementById('stream-waiting'), m = strip.hidden ? null : /(\d+) (?:件等你(?!确认)|waiting for you)/u.exec(strip.getAttribute('aria-label')); return m ? Number(m[1]) : 0; },
-    barRepeats: () => Boolean(f.host.querySelector('.task-status-waiting')) || /等你|need you|waiting/u.test(f.host.querySelector('.task-status-chips').textContent),
+    count: () => { const strip = f.doc.getElementById('stream-waiting'), m = strip.hidden ? null : /(\d+) (?:件待你处理|to handle)/u.exec(strip.getAttribute('aria-label')); return m ? Number(m[1]) : 0; },
+    barRepeats: () => Boolean(f.host.querySelector('.task-status-waiting')) || /等你|待你处理|need you|to handle|waiting/u.test(f.host.querySelector('.task-status-chips').textContent),
     deadline: () => f.host.querySelector('.task-status-card-time').textContent,
     cardHidden: () => f.host.querySelector('.task-status-card-time').hidden,
     label: () => f.doc.getElementById('stream-waiting').getAttribute('aria-label'),

@@ -6601,6 +6601,7 @@ const QUEUE_REASONS = {
   'waiting-provider': 'queue.reason.waitingProvider',
   'no-reply': 'queue.reason.noReply',
   'person-intervened': 'queue.reason.personIntervened',
+  'input-purpose-unconfirmed': 'queue.reason.inputPurposeUnconfirmed',
   'record-missing': 'queue.reason.recordMissing',
   'send-unconfirmed': 'queue.reason.sendUnconfirmed',
   'member-missing': 'queue.reason.memberMissing',
@@ -6663,9 +6664,9 @@ function queueRow(item, memberIds) {
     name = queueMemberName(memberId);
   }
   let statusKey = 'queue.status.' + item.status;
-  // These two waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
+  // These waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
   // as in UNHELD_WAITING (queue-dispatch.cjs): a decision can still carry an earlier refusal's reason.
-  if (item.status === 'waiting' && ['person-intervened', 'no-reply'].includes(item.reason)) {
+  if (item.status === 'waiting' && ['person-intervened', 'no-reply', 'input-purpose-unconfirmed'].includes(item.reason)) {
     statusKey = 'queue.status.lookAt';
   }
   if (item.status === 'queued' && item.assignee && !memberIds.has(item.assignee)) {
@@ -6676,7 +6677,7 @@ function queueRow(item, memberIds) {
   let statusParams;
   if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled' && statusKey !== 'queue.status.cancelledBySteward') {
     // Read again when the language changes: an archived member's marker is in the person's language.
-    statusParams = () => ({ name: memberId ? queueMemberName(memberId) : '' });
+    statusParams = () => ({ name: memberId ? queueMemberName(memberId) : statusKey === 'queue.status.lookAt' ? uiText('taskBoard.unassigned') : '' });
   }
   const dialogs = item.status === 'queued' ? state.sessions.filter(s => memberIds.has(s.id) && (!item.assignee || s.id === item.assignee) && s.nativeTerminalDialog) : [];
   if (dialogs.length) { statusKey = 'state.terminalDialog'; statusParams = () => ({ title: dialogs.map(s => s.name + ' · ' + s.nativeTerminalDialog.title).join('、') }); }
