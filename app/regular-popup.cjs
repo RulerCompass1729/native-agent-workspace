@@ -1,6 +1,6 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), { randomUUID } = require('node:crypto');
-const DAILY_MICROS = 10000, RESERVE_MICROS = 7000, MAX_BYTES = 1024 * 1024;
+const DAILY_MICROS = 10000, RESERVE_MICROS = 7000, MAX_BYTES = 1024 * 1024, RUN_LIMIT = 60;
 const { SOURCE, validSource } = require('./regular-popup-source.cjs');
 const DEFAULT_CONCERN = '本地优先的软件工具';
 const AUTHORIZATION = 'public-discoveries-2026-11-18';
@@ -35,24 +35,91 @@ function suggestConcern(rooms) {
   return selected.length ? selected.join('、') : DEFAULT_CONCERN;
 }
 // The offline r2 elapsed stamp remains readable, but has no calendar-budget authority.
+function validRun(r) {
+  return known(r, ['id', 'day', 'budgetDay', 'budgetAt', 'budgetMonoMs', 'at', 'state', 'chargedMicros', 'costKnown', 'usage', 'skipReason', 'attempted', 'items']) && (r.costKnown === undefined || typeof r.costKnown === 'boolean') && (r.usage === undefined || require('./regular-popup-dsh.cjs').validUsage(r.usage) && (r.costKnown === true ? require('./regular-popup-dsh.cjs').priceUsage(r.usage) === r.chargedMicros : r.chargedMicros === RESERVE_MICROS)) && (r.skipReason === undefined || r.skipReason === 'usage-unconfirmed') && text(r.id, 80) && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && /^\d{4}-\d{2}-\d{2}$/.test(r.budgetDay) && ['budgetAt', 'budgetMonoMs'].every(k => r[k] === undefined || Number.isSafeInteger(r[k]) && r[k] >= 0) && Number.isSafeInteger(r.at) && STATES.includes(r.state) && Number.isSafeInteger(r.chargedMicros) && r.chargedMicros >= 0 && r.chargedMicros <= DAILY_MICROS && typeof r.attempted === 'boolean' && Array.isArray(r.items) && r.items.length <= 3 && r.items.every(i =>
+      known(i, ['id', 'title', 'url', 'why', 'read', 'ignored']) && text(i.id, 60) && text(i.title, 140) && validUrl(i.url) && text(i.why, 240) && typeof i.read === 'boolean' && typeof i.ignored === 'boolean');
+}
 function validState(s) {
-  return known(s, ['version', 'revision', 'authorization', 'origin', 'config', 'runs']) && [undefined, 'local', 'user'].includes(s.origin) && [undefined, null, AUTHORIZATION].includes(s.authorization) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(r =>
-    known(r, ['id', 'day', 'budgetDay', 'budgetAt', 'budgetMonoMs', 'at', 'state', 'chargedMicros', 'costKnown', 'usage', 'skipReason', 'attempted', 'items']) && (r.costKnown === undefined || typeof r.costKnown === 'boolean') && (r.usage === undefined || require('./regular-popup-dsh.cjs').validUsage(r.usage) && (r.costKnown === true ? require('./regular-popup-dsh.cjs').priceUsage(r.usage) === r.chargedMicros : r.chargedMicros === RESERVE_MICROS)) && (r.skipReason === undefined || r.skipReason === 'usage-unconfirmed') && text(r.id, 80) && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && /^\d{4}-\d{2}-\d{2}$/.test(r.budgetDay) && ['budgetAt', 'budgetMonoMs'].every(k => r[k] === undefined || Number.isSafeInteger(r[k]) && r[k] >= 0) && Number.isSafeInteger(r.at) && STATES.includes(r.state) && Number.isSafeInteger(r.chargedMicros) && r.chargedMicros >= 0 && r.chargedMicros <= DAILY_MICROS && typeof r.attempted === 'boolean' && Array.isArray(r.items) && r.items.length <= 3 && r.items.every(i =>
-      known(i, ['id', 'title', 'url', 'why', 'read', 'ignored']) && text(i.id, 60) && text(i.title, 140) && validUrl(i.url) && text(i.why, 240) && typeof i.read === 'boolean' && typeof i.ignored === 'boolean'));
+  return known(s, ['version', 'revision', 'authorization', 'origin', 'config', 'runs']) && [undefined, 'local', 'user'].includes(s.origin) && [undefined, null, AUTHORIZATION].includes(s.authorization) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(validRun);
+}
+const canonical = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+function uniqueRuns(records) {
+  const byId = new Map();
+  for (const r of records) {
+    const prior = byId.get(r.id);
+    if (prior && canonical(prior) !== canonical(r)) throw Error('storage-unavailable');
+    byId.set(r.id, r);
+  }
+  return [...byId.values()];
 }
 class FileStore {
   constructor(directory) { this.file = path.join(directory, 'regular-popup.json'); }
   read() {
     let fd;
-    try { fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); const s = fs.fstatSync(fd); if (!s.isFile() || s.nlink !== 1 || s.size > MAX_BYTES) throw Error('storage-unavailable'); return JSON.parse(fs.readFileSync(fd, 'utf8')); }
-    catch (e) { if (e.code === 'ENOENT') return null; throw Error('storage-unavailable'); }
+    try {
+      fd = fs.openSync(this.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      const stat = fs.fstatSync(fd); if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_BYTES) throw Error();
+      const value = JSON.parse(fs.readFileSync(fd, 'utf8')); if (!validState(value)) throw Error();
+      return value.runs.length > RUN_LIMIT ? this.write(value) : value;
+    }
+    catch (e) { if (e.code === 'ENOENT' && fd === undefined) return null; throw Error('storage-unavailable'); }
     finally { if (fd !== undefined) fs.closeSync(fd); }
   }
+  scanArchive(fd, month, visit) {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600) throw Error('storage-unavailable');
+    const chunk = Buffer.alloc(65536); let tail = Buffer.alloc(0), count;
+    while ((count = fs.readSync(fd, chunk, 0, chunk.length, null))) {
+      const body = Buffer.concat([tail, chunk.subarray(0, count)]); let start = 0, end;
+      while ((end = body.indexOf(10, start)) !== -1) {
+        if (end - start > MAX_BYTES) throw Error('storage-unavailable');
+        const record = JSON.parse(body.subarray(start, end).toString('utf8'));
+        if (!validRun(record) || record.budgetDay.slice(0, 7) !== month) throw Error('storage-unavailable');
+        visit(record); start = end + 1;
+      }
+      tail = body.subarray(start); if (tail.length > MAX_BYTES) throw Error('storage-unavailable');
+    }
+    // Never repair a partial append by truncating an archive; preserve main and stop.
+    if (tail.length) throw Error('storage-unavailable');
+  }
+  archivedRuns(filter) {
+    const directory = path.dirname(this.file), result = [];
+    for (const name of fs.readdirSync(directory)) {
+      const match = /^regular-popup-archive-(\d{4}-\d{2})\.jsonl$/.exec(name); if (!match) continue;
+      const fd = fs.openSync(path.join(directory, name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try { this.scanArchive(fd, match[1], r => { if (r.day === filter.day || r.budgetDay === filter.budgetDay) result.push(r); }); }
+      finally { fs.closeSync(fd); }
+    }
+    return uniqueRuns(result);
+  }
+  archive(records) {
+    const directory = path.dirname(this.file), months = new Map();
+    for (const r of uniqueRuns(records)) { const month = r.budgetDay.slice(0, 7); if (!months.has(month)) months.set(month, []); months.get(month).push(r); }
+    for (const [month, runs] of months) {
+      const file = path.join(directory, `regular-popup-archive-${month}.jsonl`);
+      const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+      try {
+        const pending = new Map(runs.map(r => [r.id, r]));
+        this.scanArchive(fd, month, r => {
+          const prior = pending.get(r.id);
+          if (prior && canonical(prior) !== canonical(r)) throw Error('storage-unavailable');
+          pending.delete(r.id);
+        });
+        for (const r of pending.values()) fs.writeFileSync(fd, JSON.stringify(r) + '\n');
+        fs.fsyncSync(fd);
+      } finally { fs.closeSync(fd); }
+    }
+    if (months.size) { const fd = fs.openSync(directory, fs.constants.O_RDONLY); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }
+  }
   write(value) {
-    const body = JSON.stringify(value); if (Buffer.byteLength(body) > MAX_BYTES) throw Error('storage-unavailable');
+    if (!validState(value)) throw Error('storage-unavailable');
+    const retained = { ...value, runs: value.runs.slice(0, RUN_LIMIT) }, body = JSON.stringify(retained);
+    if (Buffer.byteLength(body) > MAX_BYTES) throw Error('storage-unavailable');
+    this.archive(value.runs.slice(RUN_LIMIT));
     const temporary = `${this.file}.${randomUUID()}.tmp`; let fd;
     try { fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); fs.writeFileSync(fd, body); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined; fs.renameSync(temporary, this.file); }
     finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temporary); } catch {} }
+    return retained;
   }
 }
 class RegularPopup {
@@ -75,10 +142,14 @@ class RegularPopup {
   }
   save(next, popup = false) {
     if (this.error) throw Error(this.error);
-    try { if (!validState(next)) throw Error(); this.store.write(next); }
+    try { if (!validState(next)) throw Error(); const persisted = this.store.write(next); if (validState(persisted)) next = persisted; }
     catch { this.error = 'storage-unavailable'; throw Error(this.error); }
     this.data = next;
     if (!this.closed) try { this.changed(this.status(), popup); } catch {}
+  }
+  history(filter) {
+    try { return uniqueRuns([...this.data.runs.filter(r => r.day === filter.day || r.budgetDay === filter.budgetDay), ...(this.store.archivedRuns?.(filter) || [])]); }
+    catch { this.error = 'storage-unavailable'; throw Error(this.error); }
   }
   prefill(rooms) {
     if (this.closed || this.error || this.data.origin === 'user' || this.data.config.enabled ||
@@ -109,7 +180,8 @@ class RegularPopup {
     if (!this.active || this.closed || this.error || !this.permitted || !this.status().config.enabled) return;
     const at = this.now(), date = new Date(at), [h, m] = this.data.config.time.split(':').map(Number), next = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m);
     if (next.getTime() <= at) next.setDate(next.getDate() + 1);
-    const missed = !this.data.runs.some(r => r.day === this.due(at));
+    let missed;
+    try { missed = !this.history({ day: this.due(at) }).length; } catch { return; }
     this.timer = this.setTimer(() => { this.timer = null; this.tick().catch(() => {}).finally(() => this.arm()); }, missed ? 0 : Math.max(1, next.getTime() - at));
     this.timer?.unref?.();
   }
@@ -122,14 +194,14 @@ class RegularPopup {
   budgetForDay(at = this.now(), excludeId) {
     if (!Number.isSafeInteger(at) || at < 0) throw Error('clock-unavailable');
     // A budget day is the system-local date at reservation; stored dates never follow later timezone changes.
-    const budgetDay = dateKey(new Date(at)), records = this.data.runs.filter(r => r.budgetDay === budgetDay && r.id !== excludeId);
+    const budgetDay = dateKey(new Date(at)), records = this.history({ budgetDay }).filter(r => r.id !== excludeId);
     const spent = records.reduce((n, r) => n + r.chargedMicros, 0);
     const limited = spent + RESERVE_MICROS > DAILY_MICROS ? 'budget' : records.some(r => r.attempted) ? 'daily-limit' : null;
     return { budgetDay, budgetAt: at, limited, ...(limited === 'budget' && records.some(r => r.attempted && r.costKnown !== true && r.state !== 'ready') ? { skipReason: 'usage-unconfirmed' } : {}) };
   }
   async run() {
     const at = this.now(), day = this.due(at);
-    if (this.data.runs.some(r => r.day === day)) return this.status();
+    if (this.history({ day }).length) return this.status();
     const { budgetDay, limited, skipReason } = this.budgetForDay(at);
     const record = { id: randomUUID(), day, budgetDay, at, state: limited || 'fetching', chargedMicros: 0, attempted: false, items: [], ...(skipReason ? { skipReason } : {}) };
     const next = copy(this.data); next.runs.unshift(record); this.save(next);

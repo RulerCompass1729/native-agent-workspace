@@ -40,14 +40,14 @@ const clean = scratch.cleanup(async () => {
   await page.locator('#discoveries-button').waitFor();
   check('all windows stay hidden', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(w => !w.isVisible() && !w.isFocused())));
   await page.locator('#discoveries-button').click();
-  check('approved source starts unchecked and permits explicit opt-in', !await page.locator('#discoveries-enabled').isDisabled() && !await page.locator('#discoveries-enabled').isChecked());
+  check('one enabled opt-in button starts off', !await page.locator('.discoveries-activate').isDisabled() && await page.locator('.discoveries-activate').textContent() === '启用' && await page.locator('.discoveries-dialog input[type=checkbox]').count() === 0);
   check('production is off and outbound disclosure is visible', (await page.locator('#discoveries-status').textContent()).includes('关闭') && (await page.locator('.discoveries-privacy').textContent()).includes('DeepSeek'));
   await page.screenshot({ path: path.join(pictures, 'default-off.png'), scale: 'css' });
   await page.locator('.discoveries-dialog>header button').click();
   await app.evaluate(() => discoveryTest.arm());
   await page.locator('#discoveries-button').click();
-  await page.locator('#discoveries-concern').fill('我关注本地优先工具和 agent 测试。'); await page.locator('#discoveries-time').fill('09:00'); await page.locator('#discoveries-enabled').check();
-  await page.locator('.discoveries-dialog button[type=submit]').click();
+  await page.locator('#discoveries-concern').fill('我关注本地优先工具和 agent 测试。'); await page.locator('#discoveries-time').fill('09:00');
+  await page.locator('.discoveries-activate').click();
   await until(() => app.evaluate(() => discoveryTest.stats.source === 1), 'Fixture source requested by scheduled timer');
   await page.locator('.discoveries-dialog>header button').click();
   await page.locator(`.session-link[data-session-id="${id}"]`).first().click();
