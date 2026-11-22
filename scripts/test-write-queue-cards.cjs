@@ -135,8 +135,12 @@ async function run() {
     records = records.concat(resumes);
     const batch = page.locator('#messages .background-batch').filter({ has: page.getByRole('button', { name: '全部确认（5）', exact: true }) });
     await until(async () => await batch.count() === 1, 'Five create cards share one batch');
+    // Risk-free resumes of one agent group too; opening that group keeps the single-card answer path under load.
+    const resumeBatch = page.locator('#messages .background-batch').filter({ has: page.getByRole('button', { name: '全部确认（2）', exact: true }) });
+    await until(async () => await resumeBatch.count() === 1, 'Two resume cards share one batch');
     // The person confirms everything in one go: the batch, then each resume card, without waiting in between.
     await batch.getByRole('button', { name: '全部确认（5）', exact: true }).click();
+    await resumeBatch.getByRole('button', { name: '逐个看', exact: true }).click();
     for (const record of resumes) await card(record).locator('.background-controls').getByRole('button', { name: '确认', exact: true }).click();
     await until(() => records.every(r => ['complete', 'failed', 'not-executed'].includes(stored(r.id)?.state)), 'Every card reaches an outcome');
     save('receipts', records.map(r => ({ id: r.id, method: r.command?.method, state: stored(r.id).state, reason: stored(r.id).reason || null })));
