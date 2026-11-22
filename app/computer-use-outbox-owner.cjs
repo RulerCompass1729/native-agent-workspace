@@ -36,7 +36,7 @@ function pinAuthority(peer, available, spaceId, unavailable) {
     try {
       const record = peer.entry.state.sessions.find(s => s.id === original.id);
       if (!available().includes(peer.context) || peer.context.client !== client || client.control !== control ||
-          peer.entry.client !== entryClient || peer.entry.closed || control.maintenance.has(peer.entry.key) ||
+          peer.entry.client !== entryClient || peer.entry.closed || peer.entry.closing || entryClient.socket?.destroyed || control.maintenance.has(peer.entry.key) ||
           (control.generations.get(peer.entry.key) || 0) !== generation ||
           record?.nativeId !== original.nativeId || record.pid !== original.pid || record.provider !== original.provider ||
           record.archived || record.nativeContextPending || client.route(original.id).client !== entryClient) return unavailable;
@@ -49,7 +49,15 @@ function pinAuthority(peer, available, spaceId, unavailable) {
   } };
 }
 function existingTransports(contexts) {
-  const available = () => [...contexts()].filter(c => !c.win.isDestroyed() && !c.client.closing && !c.client.socket.destroyed);
+  const available = () => [...contexts()].filter(c => !c.win.isDestroyed() && !c.client.closing &&
+    (!c.client.socket.destroyed || c.client.entries.some(e => e.closed || e.client.socket?.destroyed)));
+  function select(found, reason) {
+    // Count conflicting identities before discarding dead transports.
+    const unique = new Set(found.map(f => `${f.entry.key}:${f.record.id}:${f.record.nativeId}:${f.record.pid}`));
+    const live = found.find(f => !f.entry.closed && !f.entry.closing && !f.entry.client.socket?.destroyed);
+    if (!live || unique.size !== 1) throw outboxError(reason, 'binding', FAIL);
+    return live;
+  }
   function find(predicate, reason = 'recipient-unavailable', requireNative = true) {
     const found = [];
     for (const context of available()) for (const entry of context.client.entries) {
@@ -60,16 +68,13 @@ function existingTransports(contexts) {
       }
     }
     // Several windows may observe the same thread. They must agree on identity.
-    if (!found.length || new Set(found.map(f => `${f.entry.key}:${f.record.id}:${f.record.nativeId}:${f.record.pid}`)).size !== 1) throw outboxError(reason, 'binding', FAIL);
-    return found[0];
+    return select(found, reason);
   }
   async function prepareRecipient(id, spaceId, source, grant) {
     const found = [];
     for (const context of available()) for (const entry of context.client.entries) for (const record of entry.state.sessions)
       if (record.id === id && record.provider === 'codex') found.push({ context, entry, record });
-    if (!found.length || new Set(found.map(f => `${f.entry.key}:${f.record.id}:${f.record.nativeId}:${f.record.pid}`)).size !== 1)
-      throw outboxError('recipient-unavailable', 'binding', FAIL);
-    const { context, entry, record } = found[0], bridge = context.client.control.legacyInput;
+    const { context, entry, record } = select(found, 'recipient-unavailable'), bridge = context.client.control.legacyInput;
     if (!isMember(record, spaceId) || !isMember(source, spaceId)) throw outboxError('membership-unconfirmed', 'binding', FAIL);
     if (entry.state.wakePolicy?.enabled !== true) throw outboxError('wake-policy-unavailable', 'binding', FAIL);
     if (requiresManagedWake(entry, record) && !managedOutbox(entry)) throw outboxError('wake-policy-unavailable', 'binding', FAIL);
