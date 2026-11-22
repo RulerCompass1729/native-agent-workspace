@@ -13,7 +13,7 @@ function fixture() {
   const nodes = new Map(ids.map(id => [id, { id, textContent: '', attributes: {}, setAttribute(key, value) { this.attributes[key] = value; } }]));
   const control = nodes.get('ui-language'); control.options = [{ value: 'zh' }, { value: 'en' }];
   const rail = { textContent: '' }; nodes.get('setup-button').querySelector = () => rail;
-  let accepted = 'zh', save, reviewRefreshes = 0, boardRefreshes = 0;
+  let accepted = 'zh', save, reviewRefreshes = 0, boardRefreshes = 0, distributionRefreshes = 0;
   const writes = [], observers = [], calls = [];
   const state = { sessions: [{ nativeId: 'original-native', owner: 'original-owner', liveDraft: '中文 English unsent\n{raw}' }], sharedDraft: '@original 中文 draft' };
   const document = { activeElement: control };
@@ -22,18 +22,18 @@ function fixture() {
     subscribe: fn => { observers.push(fn); return () => {}; } } };
   // Nothing is open (selected ''), so the window title an archived session would carry is not repainted.
   const context = vm.createContext({ selected: '', current: () => null, ui, state, document, $: id => { assert.ok(nodes.has(id), 'Locale-only control must not reach another surface'); return nodes.get(id); }, uiText: ui.language.text, activityStream: undefined,
-    toast() {}, updateTaskBoard() { boardRefreshes++; }, butlerReviewView: { refresh() { reviewRefreshes++; } }, api: new Proxy({}, { get(_target, key) { if (key === 'onLocale') return () => () => {}; calls.push(key); throw Error('Unexpected native/product API'); } }), disposers: [] });
+    toast() {}, updateTaskBoard() { boardRefreshes++; }, updateAgentDistribution() { distributionRefreshes++; }, butlerReviewView: { refresh() { reviewRefreshes++; } }, api: new Proxy({}, { get(_target, key) { if (key === 'onLocale') return () => () => {}; calls.push(key); throw Error('Unexpected native/product API'); } }), disposers: [] });
   vm.runInContext(renderer.slice(begin, end), context);
   const hook = renderer.indexOf("$('ui-language').onchange =");
   const hookEnd = renderer.indexOf('for (const input of document.querySelectorAll', hook);
   assert.ok(hook > 0 && hookEnd > hook);
   vm.runInContext(renderer.slice(hook, hookEnd), context);
-  return { context, control, nodes, document, state, writes, calls, reviewRefreshes: () => reviewRefreshes, boardRefreshes: () => boardRefreshes, save: () => save, get accepted() { return accepted; }, change: value => vm.runInContext(`changeInterfaceLanguage(${JSON.stringify(value)})`, context) };
+  return { context, control, nodes, document, state, writes, calls, reviewRefreshes: () => reviewRefreshes, boardRefreshes: () => boardRefreshes, distributionRefreshes: () => distributionRefreshes, save: () => save, get accepted() { return accepted; }, change: value => vm.runInContext(`changeInterfaceLanguage(${JSON.stringify(value)})`, context) };
 }
 
 test('language display refresh updates the task board exactly once', () => {
-  const f = fixture(), before = f.boardRefreshes();
-  f.context.renderInterfaceLanguage(); assert.equal(f.boardRefreshes(), before + 1);
+  const f = fixture(), before = f.boardRefreshes(), squares = f.distributionRefreshes();
+  f.context.renderInterfaceLanguage(); assert.equal(f.boardRefreshes(), before + 1); assert.equal(f.distributionRefreshes(), squares + 1);
 });
 
 test('pending language selection retains accepted display, focus, native identity and drafts without repeated writes', async () => {

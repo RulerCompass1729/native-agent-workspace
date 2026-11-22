@@ -139,10 +139,13 @@
     let mode = 'flat';
     const rows = new Map(), groups = new Map(), tabs = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
-    const track = make('span', 'task-status-track'); attr(track, 'aria-hidden', 'true');
-    const doing = make('span', 'task-status-doing'), waiting = make('span', 'task-status-waiting'), cardTime = make('span', 'task-status-card-time'), done = make('span', 'task-status-done'), warning = make('span', 'task-status-warning');
-    const queued = make('span', 'task-status-queued'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
-    toggle.append(track, doing, waiting, cardTime, queued, done, warning, chevron);
+    // Things to act on, most urgent first; each opens where it is handled (11-22). Progress counts live in the panel.
+    const chips = make('span', 'task-status-chips');
+    // 等你 is the waiting strip's chip (activity-stream.js), so its count is not repeated here.
+    const cardTime = control(openCard, 'task-status-card-time task-status-chip');
+    const warning = control(() => open(status.unknown ? 'unknown' : status.failed ? 'failed' : 'active'), 'task-status-warning task-status-chip');
+    const board = make('span', 'task-status-board'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
+    chips.append(cardTime, warning); toggle.append(board, chevron);
     const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; panel.dataset.mode = 'full';
     attr(panel, 'popover', 'auto'); attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'popovertarget', panel.id); attr(toggle, 'aria-controls', panel.id);
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
@@ -177,7 +180,7 @@
     const moreLine = make('div', 'task-board-more-line'), shown = make('span'), more = control(() => { if (!more.hasAttribute('aria-disabled')) { limit += 10; drawPanel(); } }, 'task-board-more');
     moreLine.append(shown, more);
     const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
-    panel.append(heading, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(toggle, panel);
+    panel.append(heading, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(chips, toggle, panel);
     function options(select, values, name) {
       const previous = select.value;
       move(select, values.map(value => { let o = [...select.options].find(o => o.value === value); if (!o) { o = make('option'); o.value = value; } set(o, name(value)); return o; }));
@@ -217,12 +220,13 @@
       const width = Math.max(1, Math.min(1120, win.innerWidth - (win.innerWidth <= 600 ? 0 : 32)));
       Object.assign(panel.style, { left: Math.max(0, (win.innerWidth - width) / 2) + 'px', top: top + 'px', width: width + 'px', maxHeight: Math.max(1, Math.min(780, win.innerHeight - top - 12)) + 'px' });
     }
-    function open() {
+    function open(tab) {
       if (disposed) return;
       if (!opened) {
         Object.assign(selection, { tab: 'active', search: '', sort: 'recent', descending: true, scope: 'all', space: 'all' });
         mode = 'flat'; order = []; limit = 10; search.value = ''; list.scrollTop = 0;
       }
+      if (TABS.includes(tab)) selection.tab = tab;
       opened = true; panel.hidden = false; drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
     }
     function closed(restore = false) {
@@ -242,23 +246,18 @@
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
     function drawBar() {
-      const count = waitingCount ?? status.waiting - status.cardCount;
-      set(doing, status.stale ? f('unupdated') : f('doingCount', { count: status.doing }));
-      set(waiting, status.stale ? '' : f(status.unknown ? count ? 'waitingUnknown' : 'waitingUnavailable' : 'waitingCount', { count }));
-      waiting.hidden = status.stale; waiting.classList.toggle('needs-person', count > 0);
-      const uncertain = status.cards.some(c => c.kind === 'unknown');
-      set(cardTime, [!status.cardsAvailable ? f('cardsUnavailable') : '', status.cardCount ? f(status.cardCount === 1 ? 'cardDeadlineOne' : 'cardDeadline', { count: status.cardCount, time: remaining(status.nextExpiry) }) : '', uncertain ? f('cardsUnverified') : ''].filter(Boolean).join(' · '));
+      const uncertain = status.cards.some(c => c.kind === 'unknown'), time = status.cardCount ? remaining(status.nextExpiry) : '';
+      set(cardTime, [!status.cardsAvailable ? f('cardsUnavailable') : '', status.cardCount ? f('cardChipTime', { time }) : '', uncertain ? f('cardsUnverified') : ''].filter(Boolean).join(' · '));
       cardTime.hidden = !cardTime.textContent;
-      set(done, status.stale ? '' : f('queueDoneToday', { count: status.done })); done.hidden = status.stale;
-      set(warning, status.unknown ? f('unknownCount', { count: status.unknown }) : status.failed ? f('failedCount', { count: status.failed }) : ''); warning.hidden = !warning.textContent;
-      const items = currentItems(), cap = win.innerWidth <= 1000 ? 8 : 20;
-      track.hidden = !items.length || status.stale;
-      const cells = items.slice(0, cap).map(item => { let cell = [...track.children].find(c => c.dataset.itemKey === item.key); if (!cell) cell = make('i'); cell.className = 'task-status-square ' + (item.source === 'confirmation' ? 'confirmation' : item.kind); cell.dataset.itemKey = item.key; return cell; });
-      if (items.length > cap) { let more = track.querySelector('.task-status-more'); if (!more) more = make('span', 'task-status-more'); set(more, status.unknown ? '…' : '+' + (items.length - cap)); cells.push(more); }
-      move(track, cells);
-      const queuedCount = items.filter(q => q.kind === 'queued').length; set(queued, f('queuedCount', { count: queuedCount })); queued.hidden = !queuedCount || status.stale;
-      attr(toggle, 'aria-label', [doing, waiting, cardTime, queued, done, warning].filter(e => !e.hidden).map(e => e.textContent).join(' · ') + ' · ' + f('expand'));
+      attr(cardTime, 'aria-label', status.cardCount ? f(status.cardCount === 1 ? 'cardChipLabelOne' : 'cardChipLabel', { count: status.cardCount, time }) : cardTime.textContent);
+      set(warning, status.stale ? f('unupdated') : status.unknown ? f('unknownChip', { count: status.unknown }) : status.failed ? f('failedChip', { count: status.failed }) : '');
+      warning.hidden = !warning.textContent; attr(warning, 'aria-label', f('unknownChipLabel', { text: warning.textContent }));
+      set(board, f('boardButton')); attr(toggle, 'aria-label', f('boardButton'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
+    }
+    function openCard() {
+      const card = currentItems().find(q => q.source === 'confirmation' && q.kind === 'waiting');
+      if (card) activate(card.key); else open('waiting');
     }
     function activate(key) {
       const item = data.flatMap(p => p.all).find(q => q.key === key);

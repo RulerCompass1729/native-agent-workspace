@@ -41,12 +41,12 @@
 /* The row's state marks (styles.css, T-142), on the card's own ring colour. */
 #naw-hover-card .agent-icon>.state-dot{--ring:var(--raised);position:absolute;top:-2px;right:-2px;width:8px;height:8px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 1.5px var(--ring)}
 #naw-hover-card .hover-card-members .agent-icon>.state-dot{width:7px;height:7px}
-#naw-hover-card .agent-icon>.state-dot.working{background:radial-gradient(circle,#b78c42 0 1.3px,var(--ring) 1.3px 2.1px,#b78c42 2.1px)}
-#naw-hover-card .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 1.5px #5b7fa6}
-#naw-hover-card .agent-icon>.state-dot:is(.ended,.disconnected,.recoverable){background:var(--ring);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 2px #868980}
-#naw-hover-card .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed #6c7266}
+#naw-hover-card .agent-icon>.state-dot.working{background:radial-gradient(circle,var(--agent-color) 0 1.3px,var(--ring) 1.3px 2.1px,var(--agent-color) 2.1px)}
+#naw-hover-card .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,var(--agent-color) 50%,var(--ring) 50%);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 1.5px var(--agent-color)}
+#naw-hover-card .agent-icon>.state-dot:is(.ended,.disconnected,.recoverable){background:var(--ring);box-shadow:0 0 0 1.5px var(--ring),inset 0 0 0 2px var(--agent-color)}
+#naw-hover-card .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed var(--agent-color)}
 #naw-hover-card .agent-icon>.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
-#naw-hover-card .agent-icon>.state-dot:is(.approval,.error){background:#b26345;border:0;box-shadow:0 0 0 1.5px var(--ring),0 0 0 3px #b26345}
+#naw-hover-card .agent-icon>.state-dot:is(.approval,.error){background:var(--agent-color);border:0;box-shadow:0 0 0 1.5px var(--ring),0 0 0 3px var(--agent-color)}
 
 /* Only space headers put the name and member count on one line when they fit. */
 #naw-hover-card .hover-card-head.hover-card-space{align-items:center;gap:7px}

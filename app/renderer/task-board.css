@@ -1,26 +1,12 @@
 /* The global status shares the existing header row. */
-.task-board{--task-status-square-size:8px;flex:none;min-width:0;--task-board-error:#b03938}
+.task-board{display:flex;align-items:center;gap:6px;flex:none;min-width:0;--task-board-error:#b03938}
 body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-status-button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:12px;border:0;background:transparent;padding:4px 6px;min-height:28px}
 .task-status-button>span{flex:none}
-.task-status-track{display:flex;align-items:center;gap:3px;width:auto;height:14px;flex:none}
-.task-status-square{display:block;width:var(--task-status-square-size);height:var(--task-status-square-size);border-radius:1px;flex:none;background:var(--muted)}
-.task-status-square.sent{background:#5c8fc1}.task-status-square.waiting{background:var(--approval-ink)}
-.task-status-square.confirmation{background:repeating-linear-gradient(135deg,var(--approval-ink) 0 1px,transparent 1px 3px);outline:1px solid var(--approval-ink);outline-offset:1px}
-.task-status-square.unknown{background:transparent;outline:1px dashed var(--muted);outline-offset:1px}
-.task-status-more{font-size:11px;color:var(--muted)}.task-status-queued{color:var(--muted)}
 .task-status-chevron::before{content:none!important}.task-status-chevron{color:var(--muted)}.task-status-button[aria-expanded=true] .task-status-chevron{transform:rotate(180deg)}
-.task-status-waiting.needs-person{font-weight:700;color:var(--approval-ink);background:var(--panel);border-radius:4px;padding:2px 4px}
-.task-status-card-time,.task-status-warning{color:var(--approval-ink);font-weight:650}
-.task-status-done{color:var(--muted)}
-.task-status-button>span:not(.task-status-track)+span::before{content:'·';padding-right:6px;color:var(--muted)}
-#header.compact-room{grid-template-columns:minmax(128px,1fr) auto auto auto}
-.compact-room #task-board{grid-column:3;grid-row:1}
-.compact-room #header-actions{grid-column:4}
 #header:not(.compact-room) #task-board{margin-left:auto}
-.compact-session .header-identity{order:0}.compact-session #session-toolbar{order:1}.compact-session #task-board{order:2}.compact-session #header-actions{order:3}
 .task-board-card-link{border:0;background:transparent;text-align:left;padding:0;text-decoration:underline;color:var(--ink)}
-@media(max-width:1050px){.task-status-button{font-size:11px;gap:5px;padding:3px 4px}.task-status-button>span:not(.task-status-track)+span::before{padding-right:4px}}
+@media(max-width:1050px){.task-status-button{font-size:11px;gap:5px;padding:3px 4px}}
 .task-board-panel{position:fixed;inset:auto;margin:0;padding:0;max-width:none;max-height:none;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--ink);box-shadow:0 16px 48px #1c24212b;overscroll-behavior:contain;font-size:13px;box-sizing:border-box}
 .task-board-panel *{box-sizing:border-box}
 .task-board-panel:popover-open{display:flex}
@@ -76,5 +62,5 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-list:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
 @media(max-width:1000px){.task-board-controls{grid-template-columns:minmax(200px,1fr) minmax(160px,210px)}.task-board-field>span{display:none}.task-board-results>.task-board-field>span{display:inline}.task-board-heading{padding-top:10px}.task-board-entry{padding-block:9px;min-height:61px}}
 @media(max-width:600px){.task-board-panel{border-radius:0;border-inline:0}.task-board-heading{padding:10px 14px 8px;gap:8px}.task-board-heading h2{font-size:19px}.task-board-heading>span{font-size:12px}.task-board-tabs{padding-inline:6px}.task-board-tab{padding-inline:9px}.task-board-controls{grid-template-columns:minmax(0,1fr) minmax(0,1fr);padding:10px 14px 6px}.task-board-search-field,.task-board-controls>.task-board-field:last-child{grid-column:1/-1}.task-board-controls input,.task-board-controls select,.task-board-direction{height:38px;min-height:38px}.task-board-results{padding-inline:14px;gap:6px;flex-wrap:wrap}.task-board-query-hint,.task-board-availability{padding-inline:14px}.task-board-entry{grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;padding:10px 14px;min-height:86px}.task-board-row-action{grid-column:1/-1;justify-self:end}.task-board-more-line{padding:9px 14px;gap:6px;flex-wrap:wrap}.task-board-more{min-height:44px}.task-board-footer{padding:8px 14px}.task-board-group h3{padding-inline:14px}}
-@media(max-width:1000px){.compact-room .header-identity{flex-wrap:wrap;row-gap:0}.compact-room h1{flex:none;max-width:100%}.task-status-button{display:grid;grid-template-columns:repeat(7,max-content);grid-template-rows:calc(var(--task-status-square-size) + 3px) auto;row-gap:2px;column-gap:4px;padding-block:2px}.task-status-button>span{grid-row:2}.task-status-button>.task-status-track{grid-row:1;grid-column:1/4;justify-self:start;height:calc(var(--task-status-square-size) + 2px)}.task-status-more{line-height:10px}.task-status-button>.task-status-warning{grid-row:1;grid-column:4/-1;justify-self:end}}
+@media(max-width:1000px){.compact-room .header-identity{flex-wrap:wrap;row-gap:0}.compact-room h1{flex:none;max-width:100%}}
 @media(max-width:600px){.task-board-tabs-hint{display:block;padding-inline:14px}.task-board-state-help{margin-inline:14px}}

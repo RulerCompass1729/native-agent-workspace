@@ -418,7 +418,7 @@ test('PF03: an open activity stream changes heading and existing records without
  f.$('header').before=child=>f.root.insertBefore(child,f.$('header'));
  f.$('ui-language').options=[];f.$('setup-button').append(Object.assign(doc.createElement('span'),{className:'rail-label'}));
  let taskBoardRefreshes=0;
- Object.assign(f.context,{changingLanguage:false,languageFailed:false,languageWarning:null,updateTaskBoard(){taskBoardRefreshes++;}});
+ Object.assign(f.context,{changingLanguage:false,languageFailed:false,languageWarning:null,updateTaskBoard(){taskBoardRefreshes++;},updateAgentDistribution(){}});
  const raw='RAW Git body 中文 <native>{key}';f.rooms[0].messages[0].text=raw;
  const key='notice.activity.preparingGit',event={id:'localized-record',time:Date.UTC(2026,10,15,12),text:locale.format('zh',key),uiMessage:{version:1,key,params:{}}};f.rooms[0].events.push(event);
  f.context.nativeWorkspaceTaskStream=require('../task-stream.js');f.context.nativeWorkspaceDisclosure=require('../renderer/disclosure-list.js');
