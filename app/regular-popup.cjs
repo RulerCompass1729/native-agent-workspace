@@ -1,7 +1,8 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), { randomUUID } = require('node:crypto');
 const DAILY_MICROS = 10000, RESERVE_MICROS = 7000, MAX_BYTES = 1024 * 1024;
-const SOURCE = 'https://github.com/trending';
+const { SOURCE, validSource } = require('./regular-popup-source.cjs');
+const DEFAULT_CONCERN = '本地优先的软件工具';
 const AUTHORIZATION = 'public-discoveries-2026-11-18';
 const STATES = ['fetching', 'generating', 'ready', 'source-failed', 'unconfirmed', 'budget', 'daily-limit', 'cancelled', 'pricing-paused'];
 const copy = value => structuredClone(value);
@@ -13,10 +14,29 @@ function validUrl(value) {
   catch { return false; }
 }
 function emptyState() { return { version: 1, revision: 0, config: { enabled: false, concern: '', time: '09:00' }, runs: [] }; }
-function validConfig(c) { return known(c, ['enabled', 'concern', 'time']) && typeof c.enabled === 'boolean' && text(c.concern, 200) && typeof c.time === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(c.time) && (!c.enabled || c.concern.trim().length > 0); }
+function validConfig(c) { return known(c, ['enabled', 'concern', 'time', 'source']) && (c.source === undefined || validSource(c.source)) && typeof c.enabled === 'boolean' && text(c.concern, 200) && typeof c.time === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(c.time) && (!c.enabled || c.concern.trim().length > 0); }
+function suggestConcern(rooms) {
+  const topics = [
+    ['AI agent 管理工具', /\b(?:naw|agents?|codex|claude)\b|智能体/i],
+    ['多模型协作', /协作|多.?模型|多.?agent|multi.?agent/i],
+    ['终端与桌面工具', /终端|桌面|\b(?:terminal|desktop|tui|cli)\b/i],
+    ['本地优先工具', /本地|离线|隐私|local.first|offline/i],
+    ['软件开发与测试', /开发|测试|调试|断线|压缩续接|debug|testing/i],
+  ];
+  const titles = [];
+  for (const room of Array.isArray(rooms) ? rooms.slice(0, 64) : []) {
+    if (!room || room.archived) continue;
+    if (typeof room.name === 'string') titles.push(room.name.slice(0, 200));
+    for (const item of Array.isArray(room.queue) ? room.queue.slice(-20) : [])
+      if (typeof item?.text === 'string') titles.push(item.text.split(/[\r\n\u2028\u2029]/, 1)[0].slice(0, 240));
+  }
+  // Privacy boundary: no input substring is copied into the outgoing concern.
+  const selected = topics.filter(([, pattern]) => titles.some(title => pattern.test(title))).slice(0, 3).map(([label]) => label);
+  return selected.length ? selected.join('、') : DEFAULT_CONCERN;
+}
 // The offline r2 elapsed stamp remains readable, but has no calendar-budget authority.
 function validState(s) {
-  return known(s, ['version', 'revision', 'authorization', 'config', 'runs']) && [undefined, null, AUTHORIZATION].includes(s.authorization) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(r =>
+  return known(s, ['version', 'revision', 'authorization', 'origin', 'config', 'runs']) && [undefined, 'local', 'user'].includes(s.origin) && [undefined, null, AUTHORIZATION].includes(s.authorization) && s.version === 1 && Number.isSafeInteger(s.revision) && s.revision >= 0 && validConfig(s.config) && Array.isArray(s.runs) && s.runs.every(r =>
     known(r, ['id', 'day', 'budgetDay', 'budgetAt', 'budgetMonoMs', 'at', 'state', 'chargedMicros', 'costKnown', 'usage', 'skipReason', 'attempted', 'items']) && (r.costKnown === undefined || typeof r.costKnown === 'boolean') && (r.usage === undefined || require('./regular-popup-dsh.cjs').validUsage(r.usage) && (r.costKnown === true ? require('./regular-popup-dsh.cjs').priceUsage(r.usage) === r.chargedMicros : r.chargedMicros === RESERVE_MICROS)) && (r.skipReason === undefined || r.skipReason === 'usage-unconfirmed') && text(r.id, 80) && /^\d{4}-\d{2}-\d{2}$/.test(r.day) && /^\d{4}-\d{2}-\d{2}$/.test(r.budgetDay) && ['budgetAt', 'budgetMonoMs'].every(k => r[k] === undefined || Number.isSafeInteger(r[k]) && r[k] >= 0) && Number.isSafeInteger(r.at) && STATES.includes(r.state) && Number.isSafeInteger(r.chargedMicros) && r.chargedMicros >= 0 && r.chargedMicros <= DAILY_MICROS && typeof r.attempted === 'boolean' && Array.isArray(r.items) && r.items.length <= 3 && r.items.every(i =>
       known(i, ['id', 'title', 'url', 'why', 'read', 'ignored']) && text(i.id, 60) && text(i.title, 140) && validUrl(i.url) && text(i.why, 240) && typeof i.read === 'boolean' && typeof i.ignored === 'boolean'));
 }
@@ -50,7 +70,7 @@ class RegularPopup {
     const s = copy(this.data);
     if (this.requireAuthorization && s.authorization !== AUTHORIZATION) s.config.enabled = false;
     for (const r of s.runs) if (['fetching', 'generating'].includes(r.state) && !this.flight) r.state = r.attempted ? 'unconfirmed' : 'cancelled';
-    return { ...s, source: SOURCE, allowed: this.permitted, error: this.error, dailyMicros: DAILY_MICROS,
+    return { ...s, source: s.config.source || SOURCE, suggestion: s.origin === 'local' ? s.config.concern === DEFAULT_CONCERN ? 'generic' : 'local' : null, allowed: this.permitted, error: this.error, dailyMicros: DAILY_MICROS,
       unread: s.runs.reduce((n, r) => n + r.items.filter(i => !i.read && !i.ignored).length, 0) };
   }
   save(next, popup = false) {
@@ -60,11 +80,18 @@ class RegularPopup {
     this.data = next;
     if (!this.closed) try { this.changed(this.status(), popup); } catch {}
   }
+  prefill(rooms) {
+    if (this.closed || this.error || this.data.origin === 'user' || this.data.config.enabled ||
+        this.data.origin === undefined && (this.data.config.concern.trim() || this.data.revision > 0)) return this.status();
+    const concern = suggestConcern(rooms); if (this.data.origin === 'local' && this.data.config.concern === concern) return this.status();
+    const next = copy(this.data); next.config = { ...next.config, concern, source: SOURCE }; next.origin = 'local'; next.revision++;
+    this.save(next); return this.status();
+  }
   configure(config) {
     if (!validConfig(config)) throw Error('invalid-config');
     if (config.enabled && !this.permitted) throw Error('approval-required');
     if (this.closed) throw Error('closed');
-    const next = copy(this.data); next.config = copy(config); if (this.requireAuthorization) next.authorization = config.enabled ? AUTHORIZATION : null; next.revision++; this.save(next); this.abort?.abort(); this.arm(); return this.status();
+    const next = copy(this.data); next.config = copy(config); next.origin = 'user'; if (this.requireAuthorization) next.authorization = config.enabled ? AUTHORIZATION : null; next.revision++; this.save(next); this.abort?.abort(); this.arm(); return this.status();
   }
   mark(runId, itemId, action) {
     if (!['read', 'ignored'].includes(action)) throw Error('invalid-action');
@@ -112,7 +139,7 @@ class RegularPopup {
     const finish = (state, extra = {}, popup = false) => { const next = copy(this.data), r = next.runs.find(r => r.id === record.id); Object.assign(r, extra, { state }); this.save(next, popup); return this.status(); };
     let source;
     try {
-      source = await this.readSource({ url: SOURCE, signal: this.abort.signal });
+      source = await this.readSource({ url: this.data.config.source || SOURCE, signal: this.abort.signal });
       if (!Array.isArray(source) || source.length > 30 || !source.every(i => known(i, ['id', 'title', 'description', 'url']) && typeof i.id === 'string' && /^[a-z0-9-]{1,60}$/.test(i.id) && text(i.title, 140) && text(i.description, 400) && validUrl(i.url)) || new Set(source.map(i => i.id)).size !== source.length || Buffer.byteLength(JSON.stringify(source)) > 15000) throw Error();
     } catch { return finish(current() ? 'source-failed' : 'cancelled'); }
     if (!current()) return finish('cancelled');
@@ -157,4 +184,4 @@ function create({ directory, store, changed, notify } = {}) {
   const dispose = engine.dispose.bind(engine); engine.dispose = () => { dispose(); transport?.close(); };
   return engine;
 }
-module.exports = { RegularPopup, create, emptyState, DAILY_MICROS, SOURCE, FileStore };
+module.exports = { RegularPopup, create, emptyState, DAILY_MICROS, SOURCE, FileStore, suggestConcern };

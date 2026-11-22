@@ -199,7 +199,7 @@ test('the person-only Main handler rejects background callers before reading or 
   const fs = require('node:fs'), vm = require('node:vm'), source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
   const start = source.indexOf("  register('discoveries',"), end = source.indexOf("  register('connectionUpdates',", start); let handler, calls = 0;
   vm.runInNewContext(source.slice(start, end), { register: (_, fn) => handler = fn, isCurrentHumanContext: c => !c.background,
-    uiError: code => Error(code), discoveries: { status: () => calls++, configure: () => calls++, mark: () => calls++ } });
+    uiError: code => Error(code), roomState: { value: {}, spaces: { rooms: [] } }, discoveries: { prefill: () => calls++, configure: () => calls++, mark: () => calls++ } });
   for (const action of ['status', 'configure', 'mark']) assert.throws(() => handler({ background: true }, action), /personOnly/);
   assert.equal(calls, 0); handler({ background: false }, 'status'); assert.equal(calls, 1);
 });
