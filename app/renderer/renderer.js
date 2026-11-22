@@ -3719,6 +3719,14 @@ function sidebarPresentation(record) {
   return { compact: compact + goalSuffix, full: full + goalSuffix, tone, workTone: childTone, marker, waiting: live && (waiting || record.state === 'approval'),
     detail: Boolean(goal.text || waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
 }
+function sidebarRailLabel(record) {
+  const p = sidebarPresentation(record), group = window.nativeWorkspaceAgentDistribution.group(p);
+  const ended = record.state === 'ended' && !disconnected && !record.backendUnavailable && !record.transportDisconnected && !record.nativeContextPending;
+  const key = p.tone === 'disconnected' ? ended ? 'ended' : 'unverified' : group === 'waiting' ? 'needsYou'
+    : p.workTone === 'goal-stopped' ? 'paused' : p.workTone === 'bg-unknown' ? 'unverified'
+    : group === 'stuck' ? 'stuck' : p.workTone === 'bg-work' ? 'background' : group === 'working' ? 'working' : 'ready';
+  return uiText('sidebar.rail.' + key);
+}
 function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
   const notice = backendVersionNotice(record, state.appVersion), provider = providerName(record.provider);
@@ -3749,6 +3757,7 @@ function renderVersions() {
   ui.display.attribute(control, 'aria-label', 'version.copyAria', () => ({ version: version() }));
   ui.display.attribute(control, 'title', 'version.copyTitle', () => ({ version: version() }));
   const summary = backendVersionSummary(state.sessions, state.appVersion), action = $('backend-version-summary');
+  ui.display.attribute(action, 'aria-description', 'sidebar.rail.versions');
   // Sessions an unfinished move ended keep the control reachable even with no old backend left.
   const ended = Array.isArray(state.switchEnded) ? state.switchEnded.length : 0;
   action.hidden = summary.count === 0 && !ended;
@@ -4013,13 +4022,14 @@ function renderSessions() {
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
       metadata.append(badges, status, time); label.append(name, version, shortId, metadata);
       // T-142: the status mark sits on the avatar's top-right corner, where a glance finds it.
-      const avatar = icon(record, false); avatar.append(dot); link.append(avatar, label, marker);
+      const avatar = icon(record, false), railStatus = node('span', undefined, 'sidebar-rail-status');
+      railStatus.setAttribute('aria-hidden', 'true'); avatar.append(dot); link.append(avatar, label, marker, railStatus);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }, key); });
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
-      element.append(link, more); row = { element, link, more, avatar, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
+      element.append(link, more); row = { element, link, more, avatar, name, shortId, badges, status, dot, marker, railStatus, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = () => memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
@@ -4054,6 +4064,7 @@ function renderSessions() {
     const timeText = sessionActivityTime(record); if (row.time.textContent !== timeText) row.time.textContent = timeText;
     row.dot.className = window.nativeWorkspaceAgentDistribution.look(presentation); row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; row.element.classList.toggle('has-status-detail', presentation.detail);
+    ui.display.computed(row.railStatus, 'text', () => sidebarRailLabel(record));
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);

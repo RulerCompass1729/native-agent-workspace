@@ -13,7 +13,7 @@ function harness(record, connected = true) {
   const more = { isConnected: true, disabled: false, focus() {}, setAttribute() {}, getClientRects: () => [1], getBoundingClientRect: () => ({ left: 0, top: 0 }) };
   const currentRow = { more, spaceId: undefined }, ctx = { ...displayFixture, disconnected: !connected, state: { sessions: records, rooms: [], capabilities: ['agentWakeV1', 'observe'], appVersion: '0.1.0-alpha.157' },
     ui: { ...displayFixture.ui, menu: options => { menus.push(options); return Object.assign(() => options.onClose(), { update: items => updates.push(items) }); } },
-    window: { workspace: { copy: value => copied.push(value), archiveSession: () => actions.push('archive'), wakePolicy: () => actions.push('wake'), continueConnection: () => actions.push('continue'), newWindow: () => actions.push('window') }, nativeWorkspaceFleet: fleet, nativeWorkspaceCollaboration: collaboration },
+    window: { workspace: { copy: value => copied.push(value), archiveSession: () => actions.push('archive'), wakePolicy: () => actions.push('wake'), continueConnection: () => actions.push('continue'), newWindow: () => actions.push('window') }, nativeWorkspaceFleet: fleet, nativeWorkspaceCollaboration: collaboration, nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js') },
     allSpaces: () => ctx.state.rooms, inSpace: (s, id) => (s.roomIds || []).includes(id),
     contentMenu: null, sessionMenu: null, roomMenu: null, sessionRows: new Map([[record.id, currentRow]]), sessionRow: () => currentRow,
     sidebarSessions: () => records, orderedMembers: () => records, attempt: fn => fn(), focusSessionAction: () => {},
@@ -21,9 +21,31 @@ function harness(record, connected = true) {
     addToSpace: () => actions.push('join'), detach: () => actions.push('leave'), toast() {} };
   ctx.spaceName ??= room => room?.name; vm.createContext(ctx);
   vm.runInContext(source.slice(0, source.indexOf('\nlet state, owner,')) + '\n' + section('function sessionTime(', '\nfunction renderDraftRecovery(') + '\n' + section('function versionValue(', '\nfunction appVersionReport(') + '\n' + section('function sessionShortId(', '\nasync function moveSidebarSession(') + '\n' + section('function sessionMenuModel(', '\nfunction memberMenuKey('), ctx);
-  return { ctx, copied, actions, menus, updates, records, record, present: () => ctx.sidebarPresentation(record), details: () => ctx.sidebarDetails(record), open: () => ctx.openSessionMenu(record.id) };
+  return { ctx, copied, actions, menus, updates, records, record, language: displayFixture.setLanguage, present: () => ctx.sidebarPresentation(record), details: () => ctx.sidebarDetails(record), open: () => ctx.openSessionMenu(record.id) };
 }
 const child = (id, kind, stale = false) => ({ event: 'subAgentActivity', nativeId: id, kind, stale });
+
+test('rail words distinguish ready, work, human input and uncertain children without changing records', () => {
+  for (const [patch, expected] of [[{}, '就绪'], [{ state: 'working' }, '在做'], [{ nativeInputRequired: true }, '等你'], [{ fleet: [child('unknown', 'interacted')] }, '待核实']]) {
+    const record = row(patch), before = JSON.stringify(record), h = harness(record);
+    assert.equal(h.ctx.sidebarRailLabel(record), expected); assert.equal(JSON.stringify(record), before);
+    assert.ok(h.details().includes(record.name));
+  }
+});
+test('rail words never call unavailable or unreported sessions ready, and keep known endings', () => {
+  for (const patch of [{ backendUnavailable: true }, { transportDisconnected: true }, { nativeContextPending: true }, { state: 'future-native-state' }]) {
+    const h = harness(row(patch)); assert.equal(h.ctx.sidebarRailLabel(h.record), '待核实');
+  }
+  const ended = harness(row({ state: 'ended' })); assert.equal(ended.ctx.sidebarRailLabel(ended.record), '已结束');
+  ended.ctx.disconnected = true; assert.equal(ended.ctx.sidebarRailLabel(ended.record), '待核实');
+});
+test('rail words preserve background work and localize from the current language', () => {
+  const record = row({ provider: 'claude', background: 2, backgroundKinds: ['shell'], backgroundAt: Date.now() }), h = harness(record);
+  assert.equal(h.ctx.sidebarRailLabel(record), '后台');
+  h.language('en');
+  assert.equal(h.ctx.sidebarRailLabel(record), 'BG');
+  record.nativeInputRequired = true; assert.equal(h.ctx.sidebarRailLabel(record), 'You');
+});
 
 test('a ready root with mixed children keeps both counts; children are work, not a call for the person (T-145)', () => {
   const s = row({ fleet: [child('running', 'started'), child('unknown', 'interacted')] }), before = JSON.stringify(s), p = harness(s).present();
@@ -199,4 +221,17 @@ test('the header square groups a session exactly where the waiting strip counts 
     assert.equal(group(p) === 'waiting', needsApproval(record), JSON.stringify(patch));
   }
   assert.equal(group(harness(row({ state: 'approval' }), false).present()), 'stuck', 'A disconnected session is not counted as waiting');
+});
+
+
+test('rail words use the header waiting group and distinguish failure and exhausted recovery', () => {
+  const recovery = { nativeId: 'synthetic-native', turnId: 'failed', status: 'exhausted', attempt: 3, reason: 'capacity' };
+  for (const patch of [{ state: 'error' }, { capacityRecovery: recovery }]) {
+    const h = harness(row(patch)), p = h.present();
+    assert.equal(p.tone, 'approval'); assert.equal(h.ctx.window.nativeWorkspaceAgentDistribution.group(p), 'stuck');
+    assert.equal(h.ctx.sidebarRailLabel(h.record), '卡住'); h.language('en'); assert.equal(h.ctx.sidebarRailLabel(h.record), 'Stuck');
+    h.record.nativeInputRequired = true;
+    assert.equal(h.ctx.window.nativeWorkspaceAgentDistribution.group(h.present()), 'waiting');
+    assert.equal(h.ctx.sidebarRailLabel(h.record), 'You');
+  }
 });
