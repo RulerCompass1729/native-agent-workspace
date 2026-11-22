@@ -51,11 +51,13 @@ function pinAuthority(peer, available, spaceId, unavailable) {
 function existingTransports(contexts) {
   const available = () => [...contexts()].filter(c => !c.win.isDestroyed() && !c.client.closing &&
     (!c.client.socket.destroyed || c.client.entries.some(e => e.closed || e.client.socket?.destroyed)));
-  function select(found, reason) {
+  function select(found, reason, requireNative = false) {
     // Count conflicting identities before discarding dead transports.
     const unique = new Set(found.map(f => `${f.entry.key}:${f.record.id}:${f.record.nativeId}:${f.record.pid}`));
-    const live = found.find(f => !f.entry.closed && !f.entry.closing && !f.entry.client.socket?.destroyed);
-    if (!live || unique.size !== 1) throw outboxError(reason, 'binding', FAIL);
+    if (unique.size !== 1) throw outboxError(reason, 'binding', FAIL);
+    const live = found.find(f => !f.entry.closed && !f.entry.closing && !f.entry.client.socket?.destroyed &&
+      (!requireNative || f.native?.connected && !f.native.closed && (f.native.adapter || f.root.managed) || f.root?.retainedReader && !f.root.disposed));
+    if (!live) throw outboxError(reason, 'binding', FAIL);
     return live;
   }
   function find(predicate, reason = 'recipient-unavailable', requireNative = true) {
@@ -63,12 +65,11 @@ function existingTransports(contexts) {
     for (const context of available()) for (const entry of context.client.entries) {
       for (const record of entry.state.sessions) if (predicate(record)) {
         const bridge = context.client.control.legacyInput, root = bridge?.outboxTarget?.(record) || bridge?.target(record), native = root?.native;
-        if (!requireNative || native?.connected && !native.closed && (native.adapter || root.managed) || root?.retainedReader && !root.disposed)
-          found.push({ context, entry, record, bridge, native, root });
+        found.push({ context, entry, record, bridge, native, root });
       }
     }
     // Several windows may observe the same thread. They must agree on identity.
-    return select(found, reason);
+    return select(found, reason, requireNative);
   }
   async function prepareRecipient(id, spaceId, source, grant) {
     const found = [];

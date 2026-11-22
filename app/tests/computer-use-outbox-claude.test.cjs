@@ -106,6 +106,31 @@ test('authenticated original Claude uses the actual Main outbox binding and a co
   assert.equal((await f.request().result).status, 'not-sent');
   assert.deepEqual(f.counts, { forwards: 1, views: 1, closes: 1 });
 });
+test('a closed unrelated backend keeps the original authenticated Claude caller usable', async t => {
+  const f = await fixture(t), client = f.deps.contexts()[0].client;
+  client.entries.push({ key: 'closed-unrelated', closed: true, client: { socket: { destroyed: true } }, state: { sessions: [] } });
+  client.socket.destroyed = true;
+  const result = await f.request().result;
+  assert.equal(result.status, 'staged'); assert.equal(result.receipt.nativeReceived, true);
+  assert.deepEqual(f.counts, { forwards: 1, views: 1, closes: 1 });
+});
+test('closed conflicting Claude caller facts refuse before allocating any outbox or input', async t => {
+  const f = await fixture(t), client = f.deps.contexts()[0].client;
+  client.entries.push({ key: 'closed-conflicting-backend', closed: true, client: { socket: { destroyed: true } },
+    state: { sessions: [{ ...f.records[0], id: 'closed-conflicting-caller', pid: process.pid + 1000 }] } });
+  client.socket.destroyed = true;
+  const result = await f.request().result;
+  assert.notEqual(result.status, 'staged');
+  assert.deepEqual(f.counts, { forwards: 0, views: 0, closes: 0 });
+});
+test('the same Claude identity on a closed channel does not mask its live original channel', async t => {
+  const f = await fixture(t), client = f.deps.contexts()[0].client;
+  client.entries.unshift({ ...client.entries[0], closed: true, client: { socket: { destroyed: true } } });
+  client.socket.destroyed = true;
+  const result = await f.request().result;
+  assert.equal(result.status, 'staged'); assert.equal(result.receipt.nativeReceived, true);
+  assert.deepEqual(f.counts, { forwards: 1, views: 1, closes: 1 });
+});
 test('wrong token, lease, epoch, prompt and native turn cannot allocate an outbox', async t => {
   const f = await fixture(t);
   assert.equal((await f.request({}, 'wrong-token').result).code, 403);
