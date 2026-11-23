@@ -256,8 +256,9 @@ function updateTaskBoard() {
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
     sessions: state.sessions.map(s => {
       let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
-      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected);
+      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected), presentation = sidebarPresentation(s), { look, group } = window.nativeWorkspaceAgentDistribution;
       return { id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
+        look: look(presentation), agentStatus: group(presentation), statusText: presentation.compact,
         transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
         approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
         claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),

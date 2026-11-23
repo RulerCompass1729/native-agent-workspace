@@ -133,13 +133,17 @@
   // Everything that waits for the person, across the spaces, in the order the strip shows it.
   // rooms: the spaces' records; sessions: display sessions; confirmations: main's pending cards;
   // butlerId: the designated butler's session; roomOf(sessionId): the space a member is in, or ''.
+  // 旧派单 (11-23): the session a decision came from was archived (NAW archives rotated sessions) or ended.
+  // A session missing from the list stays 等你: it may only not be loaded yet.
+  const endedSession = session => Boolean(session && (session.archived || session.state === 'ended'));
   function waitingItems({ rooms = [], sessions = [], confirmations = [], butlerId = '', roomOf = () => '', nameOf = () => '', now = Date.now() } = {}) {
     const live = new Map(sessions.filter(s => s && !s.archived).map(s => [s.id, s]));
+    const ended = new Set(sessions.filter(endedSession).map(s => s.id));
     const list = [];
     for (const room of rooms) {
       if (!room || room.archived) continue;
       for (const task of roomTasks(room, { nameOf }).tasks) {
-        if (!NEEDS_YOU.includes(task.status)) continue;
+        if (!NEEDS_YOU.includes(task.status) || task.status === 'decide' && ended.has(task.ownerId)) continue;
         list.push({ id: `queue:${room.id}:${task.id}`, kind: task.status, title: task.question || task.title, lookReason: task.lookReason,
           actorId: task.ownerId, actorName: task.ownerName, roomId: room.id, itemId: task.id, time: task.time });
       }
@@ -182,7 +186,7 @@
     return { sessionId, nativeId: row.nativeId || '', messageId: row.sharedStream ? row.nativeMessageId || '' :
       row.role === 'human' ? row.deliveries?.find(d => d.recipientId === sessionId)?.id || row.id || '' : '' };
   }
-  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, roomTasks, speech, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
+  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, endedSession, roomTasks, speech, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.nativeWorkspaceTaskStream = api;
 })(globalThis);

@@ -5,9 +5,11 @@
 })(typeof window === 'undefined' ? globalThis : window, function () {
   'use strict';
   const BAR_HEIGHT = 0;
-  const COLORS = { sent: '#5c8fc1', queued: '#858276', waiting: '#e9b05b', review: '#b39b6a', failed: '#c95751', unknown: '#8a70a4', done: '#62916b', cancelled: '#aeb5aa', empty: '#eef0eb' };
-  const KINDS = ['sent', 'queued', 'waiting', 'review', 'failed', 'unknown', 'done', 'cancelled'];
-  const PRIORITY = ['waiting', 'failed', 'unknown', 'review', 'sent', 'queued', 'done', 'cancelled'];
+  const COLORS = { sent: '#5c8fc1', queued: '#858276', waiting: '#e9b05b', review: '#b39b6a', stale: '#9c9483', failed: '#c95751', unknown: '#8a70a4', done: '#62916b', cancelled: '#aeb5aa', empty: '#eef0eb' };
+  const KINDS = ['sent', 'queued', 'waiting', 'review', 'stale', 'failed', 'unknown', 'done', 'cancelled'];
+  const PRIORITY = ['waiting', 'failed', 'unknown', 'review', 'stale', 'sent', 'queued', 'done', 'cancelled'];
+  // The same rule as the 等你 strip (task-stream.js), resolved when called: the browser loads that file after this one.
+  const endedSession = session => (typeof module === 'object' && module.exports ? require('../task-stream.js') : globalThis.nativeWorkspaceTaskStream).endedSession(session);
   const kind = item => !['sent', 'queued', 'waiting', 'failed', 'done', 'cancelled'].includes(item.status) ? 'unknown'
     : item.status === 'waiting' && ['no-reply', 'person-intervened'].includes(item.reason) ? 'review' : item.status;
   function project(rooms, sessions, now = Date.now()) {
@@ -42,14 +44,15 @@
     let unknown = 0;
     const finish = p => {
       const current = p.all.filter(q => q.current), counts = Object.fromEntries(KINDS.map(k => [k, current.filter(q => q.kind === k).length]));
-      return { ...p, current, counts, transit: counts.sent + counts.queued + counts.waiting + counts.review, attention: counts.waiting + counts.review + counts.failed + counts.unknown };
+      return { ...p, current, counts, transit: counts.sent + counts.queued + counts.waiting + counts.review, attention: counts.waiting + counts.review + counts.stale + counts.failed + counts.unknown };
     };
     const historyGroups = project(input.rooms, input.sessions, now).map(p => {
       const statusExcluded = p.archived && p.available && !p.all.some(q => !['done', 'cancelled'].includes(q.kind));
       if (!p.available && !statusExcluded) unknown++;
       return finish({ ...p, statusExcluded, source: 'space', all: p.all.map(q => {
         const member = sessions.get(q.memberKey);
-        const k = q.kind === 'sent' ? !fresh(member, input.connected !== false) ? 'unknown' : needsHuman(member) ? 'waiting' : uncertainIdle(member) ? 'unknown' : 'sent' : q.kind;
+        const k = q.kind === 'sent' ? !fresh(member, input.connected !== false) ? 'unknown' : needsHuman(member) ? 'waiting' : uncertainIdle(member) ? 'unknown' : 'sent'
+          : q.kind === 'waiting' && endedSession(member) ? 'stale' : q.kind;
         return { ...q, kind: k, source: 'space' };
       }) });
     });
@@ -95,7 +98,38 @@
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
       nextExpiry: cardRows.reduce((value, c) => c.expiresAt !== null && (value === null || c.expiresAt < value) ? c.expiresAt : value, null), stale: input.connected === false };
   }
-  const TABS = ['active', 'waiting', 'sent', 'queued', 'review', 'unknown', 'failed', 'done', 'cancelled', 'all'];
+  const AGENT = ['waiting', 'stuck', 'working', 'idle'], AGENT_ORDER = ['waiting', 'working', 'stuck', 'idle'];
+  const SQUARE = { waiting: 'approval', stuck: 'disconnected', working: 'working', idle: 'idle' };
+  const RUNNING = ['idle', 'working', 'approval', 'background', 'starting', 'error'], CURRENT = { sent: 0, waiting: 1, unknown: 2, review: 3 };
+  // The board's member section (11-23): every member of every open space, then conversations outside them that are running.
+  // look/agentStatus/statusText are the header square's own (renderer.js); without them the board's own judgments decide.
+  function people(input, status, now = Date.now()) {
+    const all = (input.sessions || []).filter(Boolean), sessions = all.filter(s => !s.archived), connected = input.connected !== false;
+    const agent = s => AGENT.includes(s.agentStatus) ? s.agentStatus : !fresh(s, connected) ? 'stuck' : needsHuman(s) ? 'waiting' : observedWork(s) ? 'working' : 'idle';
+    const order = list => list.sort((a, b) => AGENT_ORDER.indexOf(a.status) - AGENT_ORDER.indexOf(b.status));
+    function entry(s, items) {
+      const mine = items.filter(q => q.source === 'space' && q.memberKey === s.id), state = agent(s);
+      const item = mine.filter(q => Object.hasOwn(CURRENT, q.kind)).sort((a, b) => CURRENT[a.kind] - CURRENT[b.kind] || (b.sentAt ?? 0) - (a.sentAt ?? 0))[0] || null;
+      return { id: s.id, nativeId: s.nativeId, name: s.name || '', status: state, look: typeof s.look === 'string' && s.look ? s.look : 'state-dot ' + SQUARE[state],
+        statusText: typeof s.statusText === 'string' ? s.statusText : '', item: item && { id: item.id, text: item.text, kind: item.kind },
+        minutes: item?.kind === 'sent' && Number.isFinite(item.sentAt) ? Math.max(0, Math.floor((now - item.sentAt) / 60000)) : null,
+        waiting: mine.filter(q => q.kind === 'waiting').length, queued: mine.filter(q => q.kind === 'queued').length, card: state === 'waiting' || state === 'working' };
+    }
+    const groups = [], listed = new Set();
+    for (const p of status.historyGroups) {
+      if (p.source !== 'space' || p.archived) continue;
+      const members = order(sessions.filter(s => Array.isArray(s.roomIds) && s.roomIds.includes(p.id)).map(s => entry(s, p.all)));
+      for (const m of members) listed.add(m.id);
+      const stale = p.all.filter(q => q.kind === 'stale').length;
+      if (members.length || stale) groups.push({ id: p.id, name: p.name, members, stale });
+    }
+    const alone = order(sessions.filter(s => !listed.has(s.id) && Array.isArray(s.roomIds) && RUNNING.includes(s.state)).map(s => entry(s, [])));
+    if (alone.length) groups.push({ id: '@independent', name: '', members: alone, stale: 0 });
+    const unique = new Map(groups.flatMap(g => g.members).map(m => [m.id, m.status]));
+    return { groups, total: unique.size, counts: Object.fromEntries(AGENT.map(k => [k, [...unique.values()].filter(v => v === k).length])),
+      excluded: { archived: all.length - sessions.length, other: sessions.length - unique.size } };
+  }
+  const TABS = ['active', 'waiting', 'sent', 'queued', 'review', 'stale', 'unknown', 'failed', 'done', 'cancelled', 'all'];
   const timestamp = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 8640000000000000 ? value : null;
   function taskTime(item, sort) {
     if (sort === 'create') return timestamp(item.createdAt);
@@ -180,7 +214,10 @@
     const moreLine = make('div', 'task-board-more-line'), shown = make('span'), more = control(() => { if (!more.hasAttribute('aria-disabled')) { limit += 10; drawPanel(); } }, 'task-board-more');
     moreLine.append(shown, more);
     const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
-    panel.append(heading, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(chips, toggle, panel);
+    const crew = make('section', 'task-board-people'), crewSummary = make('p', 'task-board-people-summary'), crewSpaces = make('div', 'task-board-people-spaces');
+    const crewExcluded = make('p', 'task-board-people-excluded'), personViews = new Map(), spaceViews = new Map();
+    crew.append(crewSummary, crewSpaces, crewExcluded);
+    panel.append(heading, crew, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(chips, toggle, panel);
     function options(select, values, name) {
       const previous = select.value;
       move(select, values.map(value => { let o = [...select.options].find(o => o.value === value); if (!o) { o = make('option'); o.value = value; } set(o, name(value)); return o; }));
@@ -191,7 +228,7 @@
       set(h2, f('title')); set(caption, f('global')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(tablist, 'aria-label', f('filter'));
       set(tabHint, f('tabsHint'));
-      stateHelp.hidden = !['waiting', 'review', 'unknown'].includes(selection.tab);
+      stateHelp.hidden = !['waiting', 'review', 'stale', 'unknown'].includes(selection.tab);
       set(stateHelp, stateHelp.hidden ? '' : f('stateHelp.' + selection.tab));
       if (stateHelp.hidden) list.removeAttribute('aria-describedby'); else attr(list, 'aria-describedby', stateHelp.id);
       for (const [key, e] of labels) set(e, f(key));
@@ -238,7 +275,7 @@
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
     panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
     function currentItems() {
-      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
+      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, stale: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
       return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
     }
     function remaining(expiresAt) {
@@ -266,7 +303,7 @@
         if (!item.target || item.expiresAt !== null && item.expiresAt <= now()) { update(); return; }
         close(false); onConfirmation?.(item.target); return;
       }
-      const session = (item.source !== 'space' || item.actualRecipient) && input.sessions?.find(s => s.id === item.memberKey && !s.archived);
+      const session = item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && input.sessions?.find(s => s.id === item.memberKey && !s.archived);
       close(false);
       if (session && onSession) onSession(session.id, session.nativeId);
       else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
@@ -294,16 +331,74 @@
       set(view.note, [origin, actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].join(' · '));
       set(view.state, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
       view.state.dataset.kind = item.kind;
-      const destination = item.source === 'confirmation' ? 'Card' : (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
+      const destination = item.source === 'confirmation' ? 'Card' : item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
       set(view.action, f(['waiting', 'review', 'unknown'].includes(item.kind) ? 'action.' + item.kind + '.' + destination.toLowerCase() : 'open' + destination));
       return view.element;
+    }
+    function openPerson(id) {
+      const session = input.sessions?.find(s => s.id === id && !s.archived);
+      close(false); if (session) onSession?.(session.id, session.nativeId);
+    }
+    function square(look) { const e = make('span', look + ' task-board-person-square'); attr(e, 'aria-hidden', 'true'); return e; }
+    function person(m, spaceId) {
+      const key = JSON.stringify([spaceId, m.id]);
+      let b = personViews.get(key);
+      if (!b) { b = control(() => openPerson(b.dataset.personId), ''); b.dataset.personId = m.id; personViews.set(key, b); }
+      b.className = 'task-board-person ' + (m.card ? 'task-board-person-card' : 'task-board-person-strip'); b.dataset.agentStatus = m.status;
+      const label = text('distribution.status.' + m.status), stateText = !m.card ? m.statusText || label : m.minutes === null ? label : f('people.minutes', { state: label, minutes: m.minutes });
+      const name = make('span', 'task-board-person-name'), state = make('span', 'task-board-person-state'), parts = [square(m.look), name, state];
+      name.textContent = m.name; state.textContent = stateText;
+      let detail = '';
+      if (m.card) {
+        const line = make('span', 'task-board-person-item');
+        if (m.item) {
+          const words = m.item.text.split(/\r?\n/).map(v => v.trim()).find(Boolean) || f('untitled', { id: m.item.id.slice(0, 8) }), id = make('span', 'task-board-person-id');
+          line.textContent = words + ' '; id.textContent = '#' + m.item.id.slice(0, 8); line.append(id); detail = words + ' #' + m.item.id.slice(0, 8);
+        } else { line.textContent = m.statusText; detail = m.statusText; }
+        parts.push(line);
+        if (m.waiting || m.queued) {
+          const counts = make('span', 'task-board-person-counts');
+          if (m.waiting) { const e = make('span', 'task-board-person-waiting'); e.textContent = f('people.waiting', { count: m.waiting }); counts.append(e); }
+          if (m.queued) { const e = make('span'); e.textContent = f('people.queued', { count: m.queued }); counts.append(e); }
+          parts.push(counts);
+        }
+      }
+      b.replaceChildren(...parts); attr(b, 'aria-label', [m.name, stateText, detail].filter(Boolean).join(' · '));
+      return b;
+    }
+    function drawPeople() {
+      const view = people(input, status, now()), total = make('strong');
+      total.textContent = f(view.total === 1 ? 'people.totalOne' : 'people.total', { count: view.total });
+      crewSummary.replaceChildren(total, ...AGENT.filter(k => view.counts[k]).map(k => {
+        const e = make('span', 'task-board-people-count'), words = make('span'); words.textContent = view.counts[k] + ' ' + text('distribution.status.' + k);
+        e.append(square('state-dot ' + SQUARE[k]), words); return e;
+      }));
+      const used = new Set();
+      move(crewSpaces, view.groups.map(g => {
+        let v = spaceViews.get(g.id);
+        if (!v) {
+          v = { element: make('section', 'task-board-people-space'), heading: make('h3'), cards: make('div', 'task-board-people-cards'), strips: make('div', 'task-board-people-strips'), stale: control(() => chooseTab('stale'), 'task-board-people-stale') };
+          v.element.dataset.peopleSpace = g.id; spaceViews.set(g.id, v);
+        }
+        set(v.heading, f('people.space', { name: g.id === '@independent' ? f('independent') : g.name, count: g.members.length }));
+        const cards = g.members.filter(m => m.card).map(m => person(m, g.id)), strips = g.members.filter(m => !m.card).map(m => person(m, g.id));
+        for (const node of [...cards, ...strips]) used.add(node);
+        move(v.cards, cards); move(v.strips, strips); set(v.stale, g.stale ? f(g.stale === 1 ? 'people.staleOne' : 'people.stale', { count: g.stale }) : '');
+        move(v.element, [v.heading, ...(cards.length ? [v.cards] : []), ...(strips.length ? [v.strips] : []), ...(g.stale ? [v.stale] : [])]);
+        return v.element;
+      }));
+      for (const [key, node] of personViews) if (!used.has(node)) personViews.delete(key);
+      for (const [key, v] of spaceViews) if (!view.groups.some(g => g.id === key)) spaceViews.delete(key);
+      crewExcluded.hidden = !view.excluded.archived && !view.excluded.other;
+      set(crewExcluded, crewExcluded.hidden ? '' : f('people.excluded', view.excluded));
+      attr(crew, 'aria-label', f('people.title'));
     }
     function drawPanel() {
       if (!opened) return;
       const focused = doc.activeElement, inside = list.contains(focused), scroll = list.scrollTop;
       const first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
       const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : 0;
-      translate();
+      translate(); drawPeople();
       const pool = data.flatMap(p => p.all.map(q => ({ ...q, spaceName: p.name, memberName: q.memberName || input.sessions?.find(s => s.id === q.memberKey)?.name || '' }))), result = selectTasks(pool, selection, now());
       for (const [value, button] of tabs) {
         set(button, f('count', { status: f(value === 'active' ? 'activeTab' : value === 'all' ? 'allTab' : ['sent', 'waiting', 'failed'].includes(value) ? 'tab.' + value : 'status.' + value), count: result.counts[value] }));
@@ -349,7 +444,7 @@
       if (disposed) return;
       input = next; status = overview(input, now()); day = new Date(now()).toDateString();
       data = status.historyGroups.map(p => ({ ...p, name: p.source === 'conversation' ? f('independent') : p.source === 'confirmation' ? f('confirmations') : p.archived ? f('archivedName', { name: p.name }) : p.name }));
-      const nextSignature = JSON.stringify([data, status, input.connected, day, f('title')]);
+      const nextSignature = JSON.stringify([data, status, input.sessions, input.connected, day, Math.floor(now() / 60000), f('title')]);
       if (signature === nextSignature) return; signature = nextSignature; translate(); drawBar(); drawPanel();
     }
     function tick() {
@@ -364,5 +459,5 @@
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); } };
   }
-  return { BAR_HEIGHT, COLORS, kind, project, overview, selectTasks, bind };
+  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, bind };
 });

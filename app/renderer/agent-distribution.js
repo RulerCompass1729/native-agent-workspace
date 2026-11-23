@@ -63,13 +63,39 @@
     let mode = MODES.includes(initial) ? initial : 'status', entries = [], excluded = { archived: 0, other: 0 }, signature = '';
     const strip = make('div', 'agent-strip'); strip.setAttribute('role', 'group');
     const toggle = make('button', 'agent-strip-toggle'); toggle.type = 'button'; toggle.textContent = '⌄';
+    // Squares that do not fit hide from the end behind +N (11-23: not 「…」); the panel and the task board list everyone.
+    const more = make('button', 'agent-strip-more'); more.type = 'button'; more.hidden = true;
     const panel = make('section', 'agent-strip-panel'); panel.id = 'agent-strip-panel'; panel.hidden = true;
     panel.setAttribute('popover', 'auto'); toggle.setAttribute('aria-controls', panel.id); toggle.setAttribute('aria-expanded', 'false');
-    host.classList.add('agent-distribution'); host.append(strip, toggle, panel);
+    host.classList.add('agent-distribution'); host.append(strip, more, toggle, panel);
     const open = () => { draw(true); panel.hidden = false; if (!panel.matches(':popover-open')) panel.showPopover({ source: toggle }); place(); toggle.setAttribute('aria-expanded', 'true'); };
     const close = () => { if (panel.matches(':popover-open')) panel.hidePopover(); };
     panel.addEventListener('toggle', () => { const shown = panel.matches(':popover-open'); panel.hidden = !shown; toggle.setAttribute('aria-expanded', String(shown)); });
     toggle.onclick = () => panel.matches(':popover-open') ? close() : open();
+    more.onclick = () => open();
+    // While cut, the host takes the header's free space (CSS), so a neighbour that shrinks resizes it and the
+    // observer refits; without that the hidden squares stayed hidden after the space came back.
+    // Geometry, not scrollWidth: each square's wider hit area (::after) overflows the strip by 2px with nothing cut.
+    const over = () => (strip.lastElementChild?.getBoundingClientRect().right ?? 0) > strip.getBoundingClientRect().right + 1;
+    function fit() {
+      const cells = strip.querySelectorAll('.agent-cell');
+      for (const cell of cells) cell.hidden = false;
+      more.hidden = true; host.classList.add('agent-distribution-cut');
+      if (host.hidden || !over()) { host.classList.remove('agent-distribution-cut'); return; }
+      more.hidden = false; more.textContent = '+' + cells.length;
+      let hidden = 0;
+      for (let i = cells.length - 1; i > 0 && over(); i--) { cells[i].hidden = true; hidden++; }
+      more.textContent = '+' + hidden; more.title = t('more', { count: hidden }); more.setAttribute('aria-label', more.title);
+    }
+    let fitQueued = false;
+    const refit = () => {
+      if (fitQueued) return;
+      fitQueued = true;
+      const run = () => { fitQueued = false; fit(); }, win = doc.defaultView;
+      if (win?.requestAnimationFrame) win.requestAnimationFrame(run); else (win || globalThis).setTimeout(run, 0);
+    };
+    doc.defaultView?.addEventListener?.('resize', refit);
+    if (doc.defaultView?.ResizeObserver) { const watch = new doc.defaultView.ResizeObserver(refit); watch.observe(host); if (host.parentElement) watch.observe(host.parentElement); }
     function place() {
       const r = toggle.getBoundingClientRect(), width = Math.min(340, innerWidth - 16);
       panel.style.width = width + 'px';
@@ -100,6 +126,7 @@
       toggle.setAttribute('aria-label', t('open', { mode: t('mode.' + mode) }));
       toggle.title = t('open', { mode: t('mode.' + mode) });
       host.hidden = !entries.length;
+      fit();
     }
     function drawPanel(groups) {
       const head = make('div', 'agent-strip-modes'); head.setAttribute('role', 'radiogroup'); head.setAttribute('aria-label', t('modes'));
