@@ -560,3 +560,39 @@ test('the record takes a wake line only as NAW writes it', () => {
     assert.throws(() => stewardRecords.check(bad), /Invalid steward record line/u);
   }
 });
+
+// Brief s28-steward-stuck-20261123 (2026-11-23): at 04:52Z the butler read its wake state, found no block and said
+// the wake path was clear; NAW had restarted for the 286 install at 04:47Z, so the rotation block it still held was
+// under ten minutes old and not shown.
+test('the butler reading its own wake hears a held wake at once, also right after a restart; the person after ten minutes', t => {
+  const env = fixture(t); env.wake.set(true); env.ledger.ingest(failure(1));
+  env.wake.skip('rotation-control-unresolved'); env.clock.now += 600000; env.wake.skip('rotation-control-unresolved');
+  assert.equal(env.wake.view().blocked.reason, 'rotation-control-unresolved');
+  const reopened = env.open(), since = env.clock.now + 1000;
+  env.clock.now = since; reopened.skip('rotation-control-unresolved');
+  env.clock.now += 4 * 60000; reopened.skip('rotation-control-unresolved');
+  assert.equal(reopened.view().blocked, undefined, 'the person: not yet ten minutes');
+  assert.deepEqual(reopened.view({ held: true }).blocked, { since, reason: 'rotation-control-unresolved', minutes: 4 });
+  assert.equal(env.sends.length, 0);
+  const idle = fixture(t); idle.wake.set(true);
+  assert.equal(idle.wake.view({ held: true }).blocked, undefined, 'nothing held, nothing said');
+  idle.wake.set(false); idle.ledger.ingest(failure(2)); idle.wake.skip('not-idle');
+  assert.equal(idle.wake.view({ held: true }).blocked, undefined, 'off: nothing said');
+});
+
+test('a held wake stays said while nothing can be read to say whether a wake is due', t => {
+  const env = fixture(t); env.wake.set(true); env.ledger.ingest(failure(1));
+  env.wake.skip('rotation-control-unresolved'); env.clock.now += 600000; env.wake.skip('rotation-control-unresolved');
+  const ledger = env.ledger; env.ledger = null;
+  assert.equal(env.wake.due(), false);
+  assert.equal(env.wake.view().blocked.reason, 'rotation-control-unresolved');
+  assert.equal(env.wake.view({ held: true }).blocked.reason, 'rotation-control-unresolved');
+  env.ledger = ledger;
+});
+
+test('only the butler\'s own read through NAW asks for the held wake at once', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
+  const handler = source.slice(source.indexOf("register('stewardWake'"), source.indexOf("register('stewardWake'") + 1600);
+  assert.match(handler, /stewardWake\.view\(\{ held: c\.background === true \}\)/u);
+  assert.equal((source.match(/view\(\{ held:/gu) || []).length, 1, 'banners and the phone keep the ten minutes');
+});
