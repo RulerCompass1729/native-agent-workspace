@@ -915,6 +915,17 @@ function reportRefusal($, reason) {
   if (stopped || !rootBinding) return;
   request($, '/control-refused', { reason }, undefined).catch(() => {});
 }
+// A workspace_message refused here: only the recipient, once per prompt and recipient, so one to the butler still
+// reaches it as an event (R119, r4). Never awaited; the refusal is the same either way.
+const unboundReports = new Set();
+function reportUnbound($, recipientId, promptId) {
+  if (stopped || !rootBinding || typeof recipientId !== 'string' || !recipientId || recipientId.length > 100) return;
+  const key = JSON.stringify([promptId || null, recipientId]);
+  if (unboundReports.has(key)) return;
+  if (unboundReports.size >= 100) unboundReports.clear();
+  unboundReports.add(key);
+  request($, '/addressed-refused', { recipientId }, undefined).catch(() => {});
+}
 
 export function register(on) {
   on('tool.describe', { tool: 'mcp__native_workspace__workspace_control' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
@@ -973,7 +984,11 @@ export function register(on) {
     // one) still sees the last prompt here. Only the one turn that prompt
     // started may stage a message, as for sharing a reply (T-100).
     if (!addressedTool || stopped || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
-      next.origin?.plugin !== 'engine' || e.tool_use_id === undefined) return { deny: '没有本原生主会话的定向协作授权。' };
+      next.origin?.plugin !== 'engine' || e.tool_use_id === undefined) {
+      // A subagent's call is its own; only the main conversation's is told.
+      if (!e.agentId && next.origin?.plugin === 'engine') reportUnbound($, e.recipient_id, promptId);
+      return { deny: '没有本原生主会话的定向协作授权。' };
+    }
     const args = { recipient_id: e.recipient_id, message: e.message };
     // Let Claude run the real MCP call: PreToolUse, configured rules, native
     // approval and any managed hooks all remain on the execution path.

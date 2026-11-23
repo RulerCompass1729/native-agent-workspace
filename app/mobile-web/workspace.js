@@ -177,6 +177,8 @@
     words.en.offline = words.en.phoneOffline = words.en.autoReconnect;
     Object.assign(words.zh, { healthUnknown: '告警状态未核实', wakeStalled: '大管家未能叫醒', tokenAnomaly: '用量状态异常', sourceDisconnected: '本机服务已断开' });
     Object.assign(words.en, { healthUnknown: 'Alert status unverified', wakeStalled: 'Butler could not be awakened', tokenAnomaly: 'Usage status needs attention', sourceDisconnected: 'Local service disconnected' });
+    Object.assign(words.zh, { wakeStepUpdate: '请在电脑上更新它的后台', wakeStepRelease: '请在电脑上放弃它的交接' });
+    Object.assign(words.en, { wakeStepUpdate: 'Update its backend on the computer', wakeStepRelease: 'Discard its handoff on the computer' });
     words.zh.bellNote='数量来自桌面同一份提醒。敏感卡需逐张系统验证；未启用或不支持的操作请回 Mac。';
     words.en.bellNote='The count uses the same desktop reminders. Sensitive cards require individual system verification; use the Mac when not enabled or supported.';
     client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: state => {
@@ -660,7 +662,10 @@
       const status = node('span', disconnected && !authorizationRejected ? t('autoReconnect') : locked ? t('locked') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; status.setAttribute('role','status'); el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
       if (!pendingPair && view?.reminders) {
         const health = view.reminders.health, keys = { 'steward-wake-stalled': 'wakeStalled', 'token-anomaly': 'tokenAnomaly', 'service-disconnected': 'sourceDisconnected' };
-        const alerts = Array.isArray(health?.alerts) ? [...new Set(health.alerts.map(a => keys[a?.code]).filter(Boolean))] : [];
+        // The butler's own handoff needs the person's step, which only the computer offers.
+        const steps = { release: 'wakeStepRelease', 'update-backend': 'wakeStepUpdate' };
+        const said = a => [keys[a?.code], a?.code === 'steward-wake-stalled' && Object.hasOwn(steps, a.step) ? steps[a.step] : null];
+        const alerts = Array.isArray(health?.alerts) ? [...new Set(health.alerts.flatMap(said).filter(Boolean))] : [];
         el('connection').classList.toggle('health-attention', alerts.length > 0);
         if (health?.available !== true || !Array.isArray(health.alerts) || health.alerts.some(a => !keys[a?.code])) alerts.push('healthUnknown');
         if (alerts.length) {

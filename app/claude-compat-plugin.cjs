@@ -33,6 +33,8 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set([
+    // Exact 3405e65e compatibility copy before a refused workspace_message was reported for the butler.
+    'f96af19e64b8b7efe02dd813b9d584c0367b75e2afa27bb7b64fcad89950be1e',
     // Exact 6a4b015c (alpha.286) compatibility copy before a refused root call was reported to NAW.
     '697dd950a622376d572e7f5dfea291162598cab3b277c3da0f3a5a14db1e75d5',
     // Exact main bbbd56fe compatibility copy before a compacted turn's own next step restored its authorization.

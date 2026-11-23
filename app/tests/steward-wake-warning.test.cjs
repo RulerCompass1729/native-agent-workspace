@@ -6,9 +6,10 @@ const locale = require('../ui-locale.js'), messages = require('../ui-messages.js
 
 test('a desktop warning persists, follows state and language, opens the existing log without taking focus', () => {
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('  // A saved full-page records view', start);
-  const p = { textContent: '' }, button = { textContent: '' }, box = { hidden: true, querySelector: tag => tag === 'p' ? p : button };
+  const p = { textContent: '' }, button = { textContent: '' }, step = { hidden: true }, parts = { p, '.steward-wake-step': step, '.steward-wake-record': button };
+  const box = { hidden: true, querySelector: selector => parts[selector] };
   let opens = 0;
-  const context = vm.createContext({ state: {}, rendering: false, $: () => box, stewardSteps: { open: () => { opens++; } }, uiText: (k, v) => locale.format('zh', k, v) });
+  const context = vm.createContext({ state: {}, rendering: false, disconnected: false, $: () => box, stewardSteps: { open: () => { opens++; } }, uiText: (k, v) => locale.format('zh', k, v) });
   vm.runInContext(source.slice(start, end) + '\n}', context);
   context.render(); assert.equal(box.hidden, true);
   for (const language of ['zh', 'en']) {
@@ -19,6 +20,7 @@ test('a desktop warning persists, follows state and language, opens the existing
     assert.match(p.textContent, /12/u);
     assert.ok(p.textContent.includes(locale.format(language, 'stewardWake.reason.source-unavailable')));
     assert.equal(button.textContent, locale.format(language, 'stewardWake.openRecord'));
+    assert.equal(step.hidden, true, 'no step of the person\'s for an ordinary reason');
     button.onclick();
     context.render(); assert.equal(box.hidden, false);
     context.state = { stewardWakeStatus: null }; context.render(); assert.equal(box.hidden, true);
@@ -44,7 +46,7 @@ test('a disconnected backend cannot hide a wake alert: the existing page receive
 
 test('the warning is a live status with a native keyboard button and every fixed reason is bilingual', () => {
   const html = fs.readFileSync(path.join(root, 'app/renderer/index.html'), 'utf8');
-  assert.match(html, /<aside id="steward-wake-warning"[^>]*role="status"[^>]*hidden><p><\/p><button type="button"/u);
+  assert.match(html, /<aside id="steward-wake-warning"[^>]*role="status"[^>]*hidden><p><\/p><div class="steward-wake-actions"><button type="button" class="steward-wake-step primary" hidden><\/button><button type="button" class="steward-wake-record"/u);
   for (const reason of require('../steward-wake.cjs').BLOCK_REASONS) for (const language of ['zh', 'en']) {
     assert.ok(messages[language][`stewardWake.reason.${reason}`], `${language} ${reason}`);
   }

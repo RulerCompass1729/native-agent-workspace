@@ -353,6 +353,8 @@ test('every sentence exists in both languages, and the words say what the design
     'reading.stewardWake', 'stewardWake.openRecord', 'stewardWake.stalled',
     // The butler's own handoff holding its wakes (R117); checked in steward-own-handoff.test.cjs.
     'stewardWake.ownHandoff.release', 'stewardWake.ownHandoff.update-backend', 'stewardWake.ownHandoff.action',
+    // The banner's own step for it and the undelivered count (R129); checked in steward-wake-banner-step.test.cjs.
+    'stewardWake.ownHandoffButton.release', 'stewardWake.ownHandoffButton.update-backend', 'stewardWake.withUndelivered',
     ...require('../steward-wake.cjs').BLOCK_REASONS.map(reason => `stewardWake.reason.${reason}`)];
   for (const language of ['zh', 'en']) assert.deepEqual(Object.keys(messages[language]).filter(name => /steward/i.test(name) && !name.startsWith('stewardRecord.')).sort(), [...keys].sort(), language);
   for (const name of keys) assert.equal(/[一-鿿]/.test(messages.en[name]), false, name);

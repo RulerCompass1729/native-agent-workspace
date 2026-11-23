@@ -766,6 +766,8 @@ class Workspace extends EventEmitter {
       runtime.controlRefusal = { count: (runtime.controlRefusal?.count || 0) + 1, at: Date.now(), reason };
       this.changed(); return true;
     };
+    // A workspace_message its plugin refused the same way: the recipient only (R119, r4).
+    runtime.addressedRefused = recipientId => this.runtimes.get(s.id) === runtime && wake.unbound(this, s, runtime, recipientId);
     const on = (event, handler) => runtime.on(event, (...args) => {
       if (this.runtimes.get(s.id) === runtime) handler(...args);
     });

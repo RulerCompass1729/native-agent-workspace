@@ -2086,6 +2086,8 @@ class QueueDispatcher {
     this.versionNotices = options.versionNotices || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
+    // finishDeferrals: one try per episode and backend version a run.
+    this.deferralsTried = new Set();
     this.chainsCache = null;
     this.restoreTrustIsolation();
     // B6: the engine is built last, for a dispatcher that is complete. One that cannot be built
@@ -2337,6 +2339,16 @@ class QueueDispatcher {
       }
     }
     return ids;
+  }
+
+  // The sessions `id` continued from through done rotations, nearest first. A kept session goes on as itself.
+  continuedFrom(id) {
+    const ids = [], seen = new Set([id]);
+    for (let at = id; ;) {
+      const entry = this.log.findLast(e => e.event === 'done' && e.new?.id === at && typeof e.old?.id === 'string');
+      if (!entry || seen.has(entry.old.id)) return ids;
+      seen.add(entry.old.id); ids.push(entry.old.id); at = entry.old.id;
+    }
   }
 
   rotationChains() {
@@ -2794,6 +2806,7 @@ class QueueDispatcher {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
+    if (await this.finishDeferrals(current.snapshot)) current = this.view();
     const sample = await this.memory(current.snapshot.sessions, current.now);
     const steward = this.stewardOutside(current.snapshot.sessions);
     const handedOff = this.handedOff();
@@ -3621,6 +3634,43 @@ class QueueDispatcher {
     this.appendLog('waiting', record, { reason: 'person-active' });
     this.roomState.rotationEvent(record.roomIds, 'deferred', this.label(oldId, record.name));
     await this.broadcast();
+  }
+
+  // Before alpha.284 (a73629ca) a deferral for the person dropped its record and left the backend episode invalid,
+  // which then held the session for good: the butler from 11-19 21:13 PT, through every restart (R129). Its own log
+  // still says what NAW did: the request, then the deferral, nothing after. Ended here as deferRotation ends one now,
+  // on a backend that can; any other invalid episode stays the person's to release.
+  async finishDeferrals(snapshot) {
+    let changed = false;
+    for (const s of snapshot?.sessions || []) {
+      const episode = s?.rotationEpisode;
+      if (episode?.state !== 'invalid' || episode.nativeId !== s.nativeId || s.archived || Object.hasOwn(this.rotations, s.id) ||
+          Object.hasOwn(this.rejectedRotations, s.id) || this.faultedRotations.has(s.id)) continue;
+      const input = (s.messages || []).find(m => m?.id === episode.tag), purpose = input?.dispatchPurpose;
+      if (!input || input.dispatchItem !== `rotation:${s.id}` || purpose?.kind !== 'rotation-request' || purpose.epoch !== episode.epoch ||
+          purpose.nativeId !== s.nativeId || !Number.isSafeInteger(input.time)) continue;
+      const after = this.log.filter(e => e.old?.id === s.id && e.old.nativeId === s.nativeId && e.time >= input.time);
+      if (after[0]?.event !== 'requested' || after[1]?.event !== 'waiting' || after[1].reason !== 'person-active' ||
+          after.slice(1).some(e => e.event !== 'waiting')) continue;
+      let entry;
+      try { entry = this.client.route(s.id); } catch { continue; }
+      const version = entry?.state?.runtimeVersion;
+      // An older backend has no such step: the person updates it first (the banner's button).
+      if (releaseBackendOutdated(version)) continue;
+      const key = JSON.stringify([s.id, episode.epoch, episode.tag, version ?? null]);
+      if (this.deferralsTried.has(key)) continue;
+      this.deferralsTried.add(key);
+      try {
+        const result = await withTimeout(entry.client.call('invalidateRotation', s.id, s.nativeId, episode.epoch,
+          { tag: episode.tag, reason: 'person-active' }), CALL_TIMEOUT_MS, 'invalidate-timeout');
+        if (result?.epoch === episode.epoch && result.tag === episode.tag && result.state === 'released') {
+          this.appendLog('waiting', { oldId: s.id, oldNativeId: s.nativeId, name: this.name(s), roomIds: roomIds(s) }, { reason: 'person-active', finished: true });
+          changed = true;
+        }
+      } catch { /* Left as it is: the person's step still ends it. */ }
+    }
+    if (changed) await this.broadcast();
+    return changed;
   }
 
   // A bounded record per changed wait. It never rests, stops or replaces the

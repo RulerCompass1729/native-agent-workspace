@@ -219,3 +219,32 @@ test('staged before main restarts, failed after: one event at the failure time',
     assert.deepEqual(f.events(restarted).map(e => e.payload.title), [new Date(failedAt).toISOString()], name);
   }
 });
+
+// r4 (the brief's three not-sent reasons, 11-23): 「收件方已不是登记时的那个会话」 is an event too, and one to the session
+// the butler continued from is the current butler's.
+test('the butler changed after the message was staged: one event with that code, nothing sent', async t => {
+  const f = await fixture(t);
+  f.ra.emit('state', 'idle'); f.start('changed'); await f.call('Secret staged.', 'call-changed');
+  assert.equal(f.rows().at(-1).wake.status, 'staged');
+  f.target.get(f.b).controlRevision = (f.target.get(f.b).controlRevision || 0) + 1;
+  await f.finish();
+  assert.equal(f.writes.length, 0);
+  f.observe();
+  assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:recipient-identity-changed']);
+  assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret staged'));
+});
+
+test('a message to the session the butler continued from is recorded for the current butler; without that link, none', async t => {
+  const f = await fixture(t, { designate: false });
+  f.ra.emit('state', 'idle'); f.start('person'); f.source.get(f.a).controlRevision = (f.source.get(f.a).controlRevision || 0) + 1;
+  assert.ok((await f.call('Secret to the old session.', 'call-old')).error);
+  await f.finish();
+  const next = () => ({ sessionId: 'butler-next', nativeId: 'native-butler-next' }), sessions = f.source.snapshot().sessions;
+  f.main.ingress.observeWakeUndelivered(sessions, { steward: next });
+  assert.deepEqual(f.events(), [], 'another session, as before');
+  f.main.ingress.observeWakeUndelivered(sessions, { steward: next, formerly: () => { throw Error('unreadable'); } });
+  assert.deepEqual(f.events(), [], 'an unreadable rotation log is the current session alone');
+  f.main.ingress.observeWakeUndelivered(sessions, { steward: next, formerly: id => id === 'butler-next' ? [f.b] : [] });
+  assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:turn-revoked-by-human']);
+  assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret to the old'));
+});

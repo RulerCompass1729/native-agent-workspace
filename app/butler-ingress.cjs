@@ -309,17 +309,20 @@ class ButlerIngress {
   // stewardWake path). Only the sender, the outcome with its code, and the time; never the message. Rows come from any
   // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
   // Only failures since this intake started: the history before it is not announced again.
-  observeWakeUndelivered(sessions = [], { steward } = {}) {
+  // `formerly(id)`: the sessions the butler continued from (done rotations); one to those is the current butler's too.
+  observeWakeUndelivered(sessions = [], { steward, formerly } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
+    let earlier = []; try { earlier = formerly?.(current.sessionId) || []; } catch { /* The current session alone. */ }
+    const butler = new Set([current.sessionId, ...(Array.isArray(earlier) ? earlier : []).filter(id => typeof id === 'string' && id)]);
     for (const s of Array.isArray(sessions) ? sessions : []) {
-      if (typeof s?.id !== 'string' || !s.id || s.id === current.sessionId) continue;
+      if (typeof s?.id !== 'string' || !s.id || butler.has(s.id)) continue;
       for (const row of Array.isArray(s.messages) ? s.messages : []) {
         const failed = undeliveredRow(row);
-        if (failed && row.wake.recipientId === current.sessionId && row.wake.senderId === s.id) this.undeliveredWake(s.id, row.id, failed);
+        if (failed && butler.has(row.wake.recipientId) && row.wake.senderId === s.id) this.undeliveredWake(s.id, row.id, failed);
       }
       for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
-        if (entry?.recipientId !== current.sessionId) continue;
+        if (!butler.has(entry?.recipientId)) continue;
         const code = isCode(entry.sourceIssue) ? entry.sourceIssue : keyCode(entry.key);
         this.undeliveredWake(s.id, entry.id, { outcome: 'not-sent', code, at: entry.at });
       }

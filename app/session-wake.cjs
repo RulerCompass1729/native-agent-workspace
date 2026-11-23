@@ -219,12 +219,15 @@ function stewardLimit(taken, recipient) {
 const UNDELIVERED_KEPT = 20;
 function undelivered(w, s, r, args, error) {
   const recipientId = args?.recipient_id;
-  if (!r || typeof recipientId !== 'string' || !recipientId || recipientId.length > 100 || recipientId === s?.id) return;
+  if (!r || typeof recipientId !== 'string' || !recipientId || recipientId.length > 100 || recipientId === s?.id) return false;
   const entry = { id: randomUUID(), at: Date.now(), recipientId, key: error?.uiMessage?.key || null };
   if (error?.sourceIssue) entry.sourceIssue = error.sourceIssue;
   r.wakeUndelivered = [...(r.wakeUndelivered || []), entry].slice(-UNDELIVERED_KEPT);
   try { w.changed?.(s?.id); } catch { /* Shown with the next state. */ }
+  return true;
 }
+// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4).
+function unbound(w, s, r, recipientId) { return undelivered(w, s, r, { recipient_id: recipientId }, { sourceIssue: 'root-turn-unbound' }); }
 function stage(w, s, r, native, args) {
   try { return stageCall(w, s, r, native, args); }
   catch (error) { undelivered(w, s, r, args, error); throw error; }
@@ -586,4 +589,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

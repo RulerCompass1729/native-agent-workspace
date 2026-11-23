@@ -107,9 +107,23 @@ class StewardWake {
   view({ held = false } = {}) {
     const on = this.active(), blocked = on && this.blocked?.reason && (this.blocked.visible || held) ? {
       since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
-      ...(this.blocked.step ? { step: this.blocked.step } : {}),
+      ...(this.blocked.step ? { step: this.blocked.step, ...this.undelivered() } : {}),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };
+  }
+  // While the person's step holds it: the messages to the butler NAW recorded as not delivered since its last wake
+  // (butler-ingress.cjs observeWakeUndelivered). Their text was never kept, so they are not waiting to be read.
+  undelivered() {
+    try {
+      let position = from(this.latest(), this.state.woken), count = 0;
+      for (let page = 0; page < 20; page++) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100);
+        count += events.filter(e => e.kind === 'blocked' && e.payload?.reason === 'wake-undelivered').length;
+        if (!more) return count ? { undelivered: count } : {};
+        position = through;
+      }
+      return count ? { undelivered: count, undeliveredMore: true } : {};
+    } catch { return {}; }
   }
   clearBlocked() {
     const visible = this.blocked?.visible; this.blocked = null;

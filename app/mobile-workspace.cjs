@@ -10,6 +10,7 @@ const { confirmationSummary } = require('./confirmation-inbox.cjs');
 const { tempSummary } = require('./temp-reminders.cjs');
 const { currentTarget } = require('./mobile-session.cjs');
 const { storedQueueSource } = require('./butler-ingress.cjs');
+const { HOLD_STEPS } = require('./steward-wake.cjs');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -17,7 +18,9 @@ const text = (s, limit = 65536) => typeof s === 'string' ? s.slice(0, limit) : '
 function healthSummary(wake, reasons) {
   if (!Array.isArray(reasons) || !reasons.length || !wake || typeof wake.on !== 'boolean' || wake.failed !== false ||
       wake.blocked && !reasons.includes(wake.blocked.reason)) return { available: false, alerts: [] };
-  return { available: true, alerts: wake.blocked ? [{ code: 'steward-wake-stalled' }] : [] };
+  // The person's step when only that ends the hold, one of two fixed codes: the phone says to take it on the computer.
+  const step = HOLD_STEPS.includes(wake.blocked?.step) ? { step: wake.blocked.step } : {};
+  return { available: true, alerts: wake.blocked ? [{ code: 'steward-wake-stalled', ...step }] : [] };
 }
 // cards: the confirmation ids this view can show. Other background operations and rows with no text
 // are not messages; on the phone they only took row slots as "earlier messages not shown" notes.

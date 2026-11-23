@@ -3320,6 +3320,10 @@ function rotationReleaseAction(record) {
   return [{ id: 'rotation-release', label: uiText('queue.releaseRotation', { name: (record.name || record.id) }),
     labelKey: 'queue.releaseRotation', labelParams: { name: (record.name || record.id) } }];
 }
+// Also the butler's wake banner's step (renderStewardWakeWarning).
+function backendUpdateAction(record) {
+  return record && backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
+}
 async function releaseSessionRotation(record) {
   const episode = record.rotationEpisode;
   await api.spaceAction('shared', 'releaseRotation', [record.id, record.nativeId, episode.epoch, episode.tag, 'discard-unresolved-handoff']);
@@ -5335,14 +5339,29 @@ function renderStewardWakeWarning(wakeBlock) {
   if (wakeWarning) {
     wakeWarning.hidden = !wakeBlock;
     if (wakeBlock) {
-      // The butler's own handoff: only the person's step in its sidebar menu ends it (steward-wake.cjs hold).
+      // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
       const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId), name = butler?.name || butler?.id;
       const action = name ? uiText('queue.releaseRotation', { name }) : '';
-      wakeWarning.querySelector('p').textContent = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release'
-        ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
+      const own = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release';
+      const item = !own ? null : wakeBlock.step === 'release' ? rotationReleaseAction(butler)[0] : backendUpdateAction(butler)[0];
+      const text = item ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
+        : own ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
         : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason: uiText(`stewardWake.reason.${wakeBlock.reason}`) });
-      wakeWarning.querySelector('button').textContent = uiText('stewardWake.openRecord');
-      wakeWarning.querySelector('button').onclick = () => stewardSteps?.open();
+      const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
+      wakeWarning.querySelector('p').textContent = undelivered
+        ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;
+      const step = wakeWarning.querySelector('.steward-wake-step');
+      step.hidden = !item; step.textContent = item?.label || ''; step.disabled = disconnected;
+      // The same calls as its sidebar menu items, on the record as it is when clicked.
+      step.onclick = () => {
+        const record = state?.sessions?.find(s => s.id === butler?.id);
+        if (disconnected || !record) return;
+        if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) attempt(() => releaseSessionRotation(record));
+        else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) attempt(() => updateSessionBackend(record.id));
+      };
+      const log = wakeWarning.querySelector('.steward-wake-record');
+      log.textContent = uiText('stewardWake.openRecord');
+      log.onclick = () => stewardSteps?.open();
     }
   }
 }
