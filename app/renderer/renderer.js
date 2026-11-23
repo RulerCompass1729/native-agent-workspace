@@ -5401,7 +5401,7 @@ function render() {
     $('alert').hidden = !warning(); ui.display.computed($('alert'), 'text', warning);
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
-    renderSessions(); renderCreateSpaces();
+    renderSessions(); renderResumeAll(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
     updateTaskBoard();
     if ($('session-chain-dialog').open) renderSessionChain();
@@ -7327,6 +7327,139 @@ $('invite-dialog').addEventListener('close', () => {
   if (origin?.revision === selectionRevision && selected === 'room') focusMemberAction(origin.anchor);
 });
 $('close-invite').onclick = () => $('invite-dialog').close();
+// Resume every session awaiting recovery (the person, 2026-11-23: 「有没有法子让我一键恢复所有会话」). The click is the
+// person's own action, as the header's single Resume is: each chosen session takes that same api.resume, two at a time.
+// `finished`: the last run, until state shows its resumed sessions no longer waiting (its reply can come first).
+const resumeAll = { run: null, finished: null, listed: [], unchecked: new Set() };
+function resumeAllCandidates() {
+  if (!state) return [];
+  const all = window.nativeWorkspaceResumeAll.eligible(state.sessions, canResume), stale = s => resumeAll.finished?.row(s.id)?.state === 'done';
+  if (!all.some(stale)) resumeAll.finished = null;
+  return all.filter(s => !stale(s));
+}
+function resumeAllProgress() {
+  if (!resumeAll.run) return ['resumeAll.bar', { count: resumeAllCandidates().length }];
+  const { done, total, failed } = resumeAll.run.counts();
+  return failed ? ['resumeAll.progressFailed', { done, total, failed }] : ['resumeAll.progress', { done, total }];
+}
+function renderResumeAll() {
+  const bar = $('resume-all'), visible = Boolean(resumeAll.run) || !disconnected && resumeAllCandidates().length >= 2;
+  bar.hidden = !visible;
+  if (visible) {
+    const [key, params] = resumeAllProgress();
+    ui.display.text($('resume-all-label'), key, params);
+    ui.display.attribute($('resume-all-open'), 'aria-label', key, params);
+    ui.display.attribute($('resume-all-open'), 'title', key, params);
+  }
+  if ($('resume-all-dialog').open) renderResumeAllDialog();
+}
+const resumeAllFacts = s => [allSpaces().filter(r => !r.archived && inSpace(s, r.id)).map(spaceName).filter(Boolean).join(', '), sessionActivityTime(s)].filter(Boolean).join(' · ');
+function resumeAllRow(id) {
+  const s = state.sessions.find(record => record.id === id), name = s ? participantLabel(s, state.sessions) : id;
+  const row = node('li', undefined, 'resume-all-row'), label = node('label'), box = node('input'), icon = node('span', undefined, 'agent-icon small');
+  row.dataset.resumeSession = id;
+  box.type = 'checkbox'; box.checked = !resumeAll.unchecked.has(id);
+  box.addEventListener('change', () => { if (box.checked) resumeAll.unchecked.delete(id); else resumeAll.unchecked.add(id); renderResumeAllDialog(); });
+  if (s) paintVendorMark(icon, s);
+  icon.setAttribute('aria-hidden', 'true');
+  const title = node('span', name, 'resume-all-name');
+  title.append(node('small', s ? resumeAllFacts(s) : ''));
+  label.append(box, icon, title);
+  const retry = uiButton('common.retry', () => resumeAllRetry(id), 'small resume-all-retry');
+  ui.display.attribute(retry, 'aria-label', 'resumeAll.retryName', { name });
+  retry.hidden = true;
+  const reason = node('p', undefined, 'resume-all-reason');
+  reason.hidden = true;
+  row.append(label, node('span', undefined, 'resume-all-status'), retry, reason);
+  return row;
+}
+function updateResumeAllRow(row) {
+  const entry = resumeAll.run?.row(row.dataset.resumeSession), status = row.querySelector('.resume-all-status'), reason = row.querySelector('.resume-all-reason');
+  const failed = entry?.state === 'failed';
+  if (row.dataset.resumeState === (entry?.state || '') && !failed) return;
+  row.dataset.resumeState = entry?.state || '';
+  if (entry) ui.display.text(status, 'resumeAll.state.' + entry.state);
+  else { ui.display.unbind(status); status.textContent = ''; }
+  row.querySelector('.resume-all-retry').hidden = !failed;
+  reason.hidden = !failed;
+  if (failed) ui.showError(reason, entry.error);
+  else { ui.display.unbind(reason); reason.textContent = ''; }
+}
+function renderResumeAllDialog() {
+  const run = resumeAll.run, pending = run?.counts().pending, chosen = resumeAll.listed.filter(id => !resumeAll.unchecked.has(id)).length;
+  $('resume-all-select-all').hidden = $('resume-all-select-none').hidden = Boolean(run);
+  for (const box of $('resume-all-list').querySelectorAll('input[type="checkbox"]')) box.disabled = Boolean(run);
+  const progress = $('resume-all-progress'), start = $('resume-all-start'), cancel = $('resume-all-cancel');
+  if (run) ui.display.text(progress, ...resumeAllProgress());
+  else { ui.display.unbind(progress); progress.textContent = ''; }
+  start.hidden = Boolean(pending);
+  if (!run) { ui.display.text(start, 'resumeAll.start', { count: chosen }); start.disabled = !chosen || disconnected; }
+  else { ui.display.text(start, 'common.done'); start.disabled = false; }
+  ui.display.text(cancel, run ? 'common.close' : 'common.cancel');
+  cancel.hidden = Boolean(run) && !pending;
+  for (const row of $('resume-all-list').children) updateResumeAllRow(row);
+}
+// A session already back (resumed elsewhere meanwhile) counts as done; one that changed otherwise is not touched.
+async function resumeAllOne(id) {
+  const s = state?.sessions.find(record => record.id === id);
+  if (s && nativeUsable(s)) return;
+  if (!s || s.archived || !canResume(s)) throw uiError('error.resumeAllChanged');
+  await api.resume(id);
+}
+function settleResumeAll(run, finished) {
+  finished.then(({ done, failed }) => {
+    if (resumeAll.run !== run || failed) { renderResumeAll(); return; }
+    resumeAll.run = null; resumeAll.finished = run;
+    if ($('resume-all-dialog').open) $('resume-all-dialog').close();
+    toastMessage(done === 1 ? 'resumeAll.finishedOne' : 'resumeAll.finished', { count: done });
+    renderResumeAll();
+  });
+}
+function startResumeAll() {
+  const ids = resumeAll.listed.filter(id => !resumeAll.unchecked.has(id));
+  if (resumeAll.run || disconnected || !ids.length) return;
+  const run = window.nativeWorkspaceResumeAll.create({ resumeOne: resumeAllOne, onChange: () => { if (resumeAll.run === run) renderResumeAll(); } });
+  resumeAll.run = run;
+  settleResumeAll(run, run.add(ids));
+  renderResumeAll();
+  $('resume-all-cancel').focus();
+}
+function resumeAllRetry(id) {
+  const run = resumeAll.run;
+  if (!run || run.row(id)?.state !== 'failed' || disconnected) return;
+  settleResumeAll(run, run.retry(id));
+  renderResumeAll();
+  $('resume-all-cancel').focus();
+}
+function openResumeAll() {
+  if ($('resume-all-dialog').open) return;
+  contentMenu?.close(); sessionMenu?.close();
+  if (resumeAll.run) resumeAll.listed = resumeAll.run.ids();
+  else { resumeAll.listed = resumeAllCandidates().map(s => s.id); resumeAll.unchecked.clear(); }
+  if (!resumeAll.listed.length) return;
+  $('resume-all-list').replaceChildren(...resumeAll.listed.map(resumeAllRow));
+  openTransientDialog('resume-all-dialog');
+  renderResumeAllDialog();
+}
+function checkAllResume(checked) {
+  if (resumeAll.run) return;
+  for (const id of resumeAll.listed) { if (checked) resumeAll.unchecked.delete(id); else resumeAll.unchecked.add(id); }
+  for (const box of $('resume-all-list').querySelectorAll('input[type="checkbox"]')) box.checked = checked;
+  renderResumeAllDialog();
+}
+$('resume-all-open').addEventListener('click', () => attempt(openResumeAll));
+$('resume-all-select-all').addEventListener('click', () => checkAllResume(true));
+$('resume-all-select-none').addEventListener('click', () => checkAllResume(false));
+$('resume-all-start').addEventListener('click', () => {
+  if (!resumeAll.run) { startResumeAll(); return; }
+  resumeAll.run = null; $('resume-all-dialog').close(); renderResumeAll();
+});
+$('resume-all-cancel').addEventListener('click', () => $('resume-all-dialog').close());
+$('resume-all-dialog').addEventListener('close', () => {
+  if ($('resume-all-dialog').open) return;
+  $('resume-all-list').replaceChildren();
+  if (!$('resume-all').hidden) $('resume-all-open').focus();
+});
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('share-dialog').onclose = () => {
   if ($('share-dialog').open) return;
