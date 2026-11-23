@@ -370,7 +370,7 @@
       const view = people(input, status, now()), total = make('strong');
       total.textContent = f(view.total === 1 ? 'people.totalOne' : 'people.total', { count: view.total });
       crewSummary.replaceChildren(total, ...AGENT.filter(k => view.counts[k]).map(k => {
-        const e = make('span', 'task-board-people-count'), words = make('span'); words.textContent = view.counts[k] + ' ' + text('distribution.status.' + k);
+        const e = make('span', 'task-board-people-count'), words = make('span'); words.textContent = f('people.count.' + k + (view.counts[k] === 1 ? 'One' : ''), { count: view.counts[k] });
         e.append(square('state-dot ' + SQUARE[k]), words); return e;
       }));
       const used = new Set();

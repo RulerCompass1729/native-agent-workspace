@@ -116,8 +116,15 @@ const CREW = [
     check(b.list >= b.listMin - 1, `${tag}: the task list keeps its minimum height (${b.list}px of ${Math.round(b.listMin)}px)`);
     const reach = await page.evaluate(() => { const panel = document.getElementById('task-board-panel'), list = panel.querySelector('.task-board-list');
       panel.scrollTop = panel.scrollHeight; const r = list.getBoundingClientRect(), p = panel.getBoundingClientRect(), shown = Math.min(r.bottom, p.bottom) - Math.max(r.top, p.top);
-      const head = panel.querySelector('.task-board-heading').getBoundingClientRect(); panel.scrollTop = 0; return { shown, headTop: head.top - p.top, list: list.clientHeight }; });
+      const head = panel.querySelector('.task-board-heading').getBoundingClientRect(), people = [...panel.querySelectorAll('.task-board-person')];
+      // Park a member just under the sticky heading, then focus it: it must not stay covered.
+      const target = people[Math.floor(people.length / 2)], heading = panel.querySelector('.task-board-heading');
+      panel.scrollTop = 0; panel.scrollTop = target.getBoundingClientRect().top - panel.getBoundingClientRect().top - 4;
+      const parked = target.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
+      target.focus(); const focusTop = target.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
+      panel.scrollTop = 0; return { shown, headTop: head.top - p.top, list: list.clientHeight, focused: document.activeElement === target, parked, focusTop }; });
     check(reach.shown >= reach.list - 2 && Math.abs(reach.headTop) <= 2, `${tag}: scrolling the board shows the whole task list, the heading stays on top (${Math.round(reach.shown)}/${reach.list}px)`);
+    check(reach.focused && reach.focusTop >= -1, `${tag}: a member focused under the sticky heading scrolls out from under it (${Math.round(reach.parked)}px → ${Math.round(reach.focusTop)}px)`);
     await page.keyboard.press('Escape'); await settled();
   }
   await page.locator('.task-board-toggle').click();
@@ -130,11 +137,14 @@ const CREW = [
   const room = width => page.evaluate(w => { document.getElementById('agent-distribution').style.maxWidth = w; }, width);
   const strip = () => page.evaluate(() => { const host = document.getElementById('agent-distribution'), more = host.querySelector('.agent-strip-more'), cells = [...host.querySelectorAll('.agent-cell')];
     const shown = cells.filter(c => !c.hidden), right = host.querySelector('.agent-strip').getBoundingClientRect().right;
-    return { hidden: cells.length - shown.length, more: more.hidden ? null : more.textContent, label: more.getAttribute('aria-label') || '', inside: (shown.pop()?.getBoundingClientRect().right ?? 0) <= right + 1 }; });
+    const orphans = [...host.querySelectorAll('.agent-group')].filter(g => !g.hidden && ![...g.querySelectorAll('.agent-cell')].some(c => !c.hidden)).length;
+    return { orphans, hidden: cells.length - shown.length, more: more.hidden ? null : more.textContent, label: more.getAttribute('aria-label') || '', inside: (shown.pop()?.getBoundingClientRect().right ?? 0) <= right + 1 }; });
   const settle = async (want, name) => { try { await until(async () => want(await strip()), name); } catch { /* reported by the check */ } return strip(); };
   await room('220px');
   const cut = await settle(x => x.hidden > 0, 'Strip cut');
+  if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-people-plusn.png`) });
   check(cut.hidden > 0 && cut.more === '+' + cut.hidden && cut.label.includes(String(cut.hidden)) && cut.inside, `With less room, the squares that do not fit become +${cut.hidden} and none is half cut`);
+  check(cut.orphans === 0, `No group count is left without squares beside +N (${cut.orphans})`);
   await page.locator('#agent-distribution .agent-strip-more').click();
   check(await page.locator('#agent-distribution .agent-strip-panel').isVisible(), '+N opens the full agent list');
   await page.keyboard.press('Escape'); await room('');

@@ -7,7 +7,7 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 #header:not(.compact-room) #task-board{margin-left:auto}
 .task-board-card-link{border:0;background:transparent;text-align:left;padding:0;text-decoration:underline;color:var(--ink)}
 @media(max-width:1050px){.task-status-button{font-size:11px;gap:5px;padding:3px 4px}}
-.task-board-panel{position:fixed;inset:auto;margin:0;padding:0;max-width:none;max-height:none;flex-direction:column;min-width:0;min-height:0;overflow:hidden auto;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--ink);box-shadow:0 16px 48px #1c24212b;overscroll-behavior:contain;font-size:13px;box-sizing:border-box}
+.task-board-panel{position:fixed;inset:auto;margin:0;padding:0;max-width:none;max-height:none;flex-direction:column;min-width:0;min-height:0;overflow:hidden auto;scroll-padding-top:64px;background:var(--surface);border:1px solid var(--border);border-radius:10px;color:var(--ink);box-shadow:0 16px 48px #1c24212b;overscroll-behavior:contain;font-size:13px;box-sizing:border-box}
 .task-board-panel *{box-sizing:border-box}
 .task-board-panel:popover-open{display:flex}
 .task-board-panel::backdrop{background:transparent;overflow:hidden;overscroll-behavior:contain}

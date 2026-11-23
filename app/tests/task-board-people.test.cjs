@@ -84,7 +84,7 @@ test('the open board starts with every agent, grouped by space, above the task t
     assert.deepEqual(f.ids(f.space('ops')), ['i1']);
     assert.deepEqual(f.ids(f.space('@independent')), ['solo'], 'an independent conversation that is not running is not listed');
     const summary = people.querySelector('.task-board-people-summary').textContent;
-    for (const part of ['成员 6', '1 等你', '2 卡住或断开', '2 在做', '1 空闲']) assert.ok(summary.includes(part), part + ' in ' + summary);
+    for (const part of ['成员 6', '1 个等你', '2 个卡住或断开', '2 个在做', '1 个空闲']) assert.ok(summary.includes(part), part + ' in ' + summary);
     assert.ok(people.querySelector('.task-board-people-excluded').textContent.includes('已归档 1'));
     assert.ok(!f.host.textContent.includes('至少'));
     assert.ok(!people.textContent.includes('…'), 'nothing in the member section is cut');
@@ -118,6 +118,8 @@ test('the old-dispatch line in a space opens their tab', () => {
   try {
     const line = f.space('dev').querySelector('.task-board-people-stale');
     assert.ok(line.textContent.includes('旧派单 2 件'), line.textContent);
+    // The summary above counts agents, never items: name the counts these really leave.
+    assert.ok(line.textContent.includes('不计入顶栏和「等你」标签的件数') && !line.textContent.includes('上面'), line.textContent);
     assert.equal(f.space('ops').querySelector('.task-board-people-stale'), null);
     line.fire('click');
     assert.equal(f.host.querySelector('[data-board-tab="stale"]').getAttribute('aria-selected'), 'true');
@@ -139,7 +141,7 @@ test('en: the member section has no missing or Chinese-only text', () => {
   const f = setup('en');
   try {
     const text = f.people().textContent;
-    for (const part of ['6 members', '52 min', '2 waiting for you', '1 queued']) assert.ok(text.includes(part), part + ' in ' + text);
+    for (const part of ['6 members', '1 needs you', '2 stuck or offline', '2 working', '1 idle', '52 min', '2 waiting for you', '1 queued', 'not counted in the header or the Needs you tab']) assert.ok(text.includes(part), part + ' in ' + text);
     assert.ok(!/[一-鿿]/.test(text), text);
   } finally { f.board.dispose(); }
 });
@@ -166,7 +168,9 @@ test('the header shows +N for squares that do not fit, and every square comes ba
   // Geometry stand-ins: the strip ends at `room`; its last group ends after the visible squares, plus a 2px hit-area overhang.
   const need = () => strip.querySelectorAll('.agent-cell').filter(c => !c.hidden).length * 13 + 40;
   Object.defineProperty(strip, 'getBoundingClientRect', { value: () => ({ left: 0, right: room }) });
-  Object.defineProperty(strip, 'lastElementChild', { get: () => ({ getBoundingClientRect: () => ({ right: need() }) }) });
+  const proto = Object.getPrototypeOf(strip), base = proto.getBoundingClientRect;
+  proto.getBoundingClientRect = function () { return this.classList.contains('agent-group') ? { left: 0, right: this.hidden ? 0 : need() } : base.call(this); };
+  try {
   Object.defineProperty(strip, 'scrollWidth', { get: () => need() + 2 });
   Object.defineProperty(strip, 'clientWidth', { get: () => Math.min(room, need()) });
   const entries = Array.from({ length: 25 }, (_, i) => ({ id: 'e' + i, name: 'E' + i, look: 'state-dot ' + (i < 5 ? 'working' : 'approval'), status: i < 5 ? 'working' : 'waiting', statusText: '', model: '', rooms: [] }));
@@ -175,6 +179,11 @@ test('the header shows +N for squares that do not fit, and every square comes ba
   const more = host.querySelector('.agent-strip-more'), hidden = () => host.querySelectorAll('.agent-cell').filter(c => c.hidden).length;
   assert.equal(more.hidden, false); assert.equal(more.textContent, '+' + hidden()); assert.ok(hidden() > 0);
   assert.ok(!host.textContent.includes('…'));
+  const orphans = () => host.querySelectorAll('.agent-group').filter(g => !g.hidden && g.querySelectorAll('.agent-cell').every(c => c.hidden)).length;
+  assert.equal(host.querySelector('[data-group="status:working"]').hidden, true, 'all five 在做 squares are cut, so their group goes too');
+  assert.equal(orphans(), 0, 'no group count is left without squares beside +N');
   room = 1000; f.win.fire('resize'); f.tick(0);
   assert.equal(hidden(), 0); assert.equal(more.hidden, true, 'the 2px hit-area overhang alone does not make a +N');
+  assert.equal(host.querySelectorAll('.agent-group').filter(g => g.hidden).length, 0, 'every group comes back');
+  } finally { proto.getBoundingClientRect = base; }
 });

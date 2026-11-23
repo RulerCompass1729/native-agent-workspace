@@ -76,15 +76,21 @@
     // While cut, the host takes the header's free space (CSS), so a neighbour that shrinks resizes it and the
     // observer refits; without that the hidden squares stayed hidden after the space came back.
     // Geometry, not scrollWidth: each square's wider hit area (::after) overflows the strip by 2px with nothing cut.
-    const over = () => (strip.lastElementChild?.getBoundingClientRect().right ?? 0) > strip.getBoundingClientRect().right + 1;
+    const over = () => ([...strip.children].filter(g => !g.hidden).at(-1)?.getBoundingClientRect().right ?? 0) > strip.getBoundingClientRect().right + 1;
     function fit() {
       const cells = strip.querySelectorAll('.agent-cell');
       for (const cell of cells) cell.hidden = false;
+      for (const group of strip.children) group.hidden = false;
       more.hidden = true; host.classList.add('agent-distribution-cut');
       if (host.hidden || !over()) { host.classList.remove('agent-distribution-cut'); return; }
       more.hidden = false; more.textContent = '+' + cells.length;
       let hidden = 0;
-      for (let i = cells.length - 1; i > 0 && over(); i--) { cells[i].hidden = true; hidden++; }
+      for (let i = cells.length - 1; i > 0 && over(); i--) {
+        cells[i].hidden = true; hidden++;
+        // A group whose squares are all cut goes too, so no bare count sits beside +N.
+        const group = cells[i].parentElement?.parentElement;
+        if (group && [...group.querySelectorAll('.agent-cell')].every(c => c.hidden)) group.hidden = true;
+      }
       more.textContent = '+' + hidden; more.title = t('more', { count: hidden }); more.setAttribute('aria-label', more.title);
     }
     let fitQueued = false;
