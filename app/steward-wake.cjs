@@ -100,8 +100,11 @@ class StewardWake {
     return same(this.state.designation, designated);
   }
   // How it stands, for the person or the butler: whether it is on, and when NAW last tried to wake the butler.
-  view() {
-    const on = this.active(), blocked = on && this.due() && this.blocked?.visible ? {
+  // A held wake is said whether or not anything is due now. The person sees it after STALL_MS; `held` (the butler's
+  // own read) says it at once: after the 286 install restart, the butler read none for ten minutes and took the
+  // rotation block as cleared (2026-11-23 04:52Z).
+  view({ held = false } = {}) {
+    const on = this.active(), blocked = on && this.blocked?.reason && (this.blocked.visible || held) ? {
       since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };

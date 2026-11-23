@@ -2353,7 +2353,7 @@ async function boot() {
     // Written after the switch is off: a line that cannot be written does not keep wakes on.
     let wasOn = false; try { wasOn = !c.background && on === false && stewardWake.view().on; } catch { wasOn = false; }
     let state;
-    try { state = on === undefined ? stewardWake.view() : stewardWake.set(on); }
+    try { state = on === undefined ? stewardWake.view({ held: c.background === true }) : stewardWake.set(on); }
     catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
     if (wasOn && !state.on) try { stewardRecord?.wakeOff(); } catch { /* The record shows that a line could not be written. */ }
     return state;
