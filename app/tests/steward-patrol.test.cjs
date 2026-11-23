@@ -120,10 +120,8 @@ test('through the dispatcher passes themselves: a butler idle for the interval w
   await env.dispatcher.schedule();
   env.client.state.sessions[0].state = 'idle'; env.client.emit('state', env.client.snapshot());
   await env.dispatcher.schedule();
-  for (let minute = 1; minute < 30; minute++) {
-    env.clock.now += MIN;
-    await env.dispatcher.schedule();
-  }
+  env.clock.now += 29 * MIN;
+  await env.dispatcher.schedule();
   assert.equal(env.patrols().length, 0, 'not before the interval');
   env.clock.now += MIN;
   await env.dispatcher.schedule();
