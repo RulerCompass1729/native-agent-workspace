@@ -3984,6 +3984,61 @@ test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its nex
   assert.deepEqual(plan(idle, [heavy]), []);
 });
 
+// 11-23: nobody was rotated for 14 hours. The four kinds added on 11-19 were not named beside person-intervened
+// and no-reply, so each counted as a decision its member had asked.
+const WAITING_KINDS = [
+  'person-intervened',
+  'no-reply',
+  'input-purpose-unconfirmed',
+  'rotation-control-unresolved',
+  'native-turn-failed',
+  'usage-limit-exceeded',
+];
+const COMPACTED = { compactions: new Map([['a', 3]]) };
+const ROTATE_COMPACTED = [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }];
+
+for (const reason of WAITING_KINDS) {
+  test(`rotation-stalled 11-23: an item NAW left waiting as ${reason} does not keep its member's session`, () => {
+    const left = sentItem({ status: 'waiting', reason });
+    const queued = [{ id: 'shared', name: 'Team', queue: [left, item('2')] }];
+    assert.deepEqual(plan(queued, [member('a')], COMPACTED), ROTATE_COMPACTED, 'before its next item');
+    const idle = [{ id: 'shared', name: 'Team', queue: [left] }];
+    const quiet = member('a', { lastActivityAt: NOW - 30 * 60000 });
+    assert.deepEqual(plan(idle, [quiet], COMPACTED), ROTATE_COMPACTED, 'after thirty quiet minutes');
+  });
+}
+
+test('rotation-stalled 11-23: a decision the member asked still keeps its session, alone or beside such an item', () => {
+  const decision = sentItem({ status: 'waiting' });
+  const refusedOnce = sentItem({ status: 'waiting', reason: 'Synthetic draft refusal' });
+  const unverified = item('0', { status: 'waiting', reason: 'input-purpose-unconfirmed', sentTo: 'a', sentAt: NOW - 60000, tag: 't0', control: 0 });
+  const next = [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true }];
+  const quiet = member('a', { lastActivityAt: NOW - 30 * 60000 });
+  for (const open of [[decision], [refusedOnce], [unverified, decision]]) {
+    const queued = [{ id: 'shared', name: 'Team', queue: [...open, item('2')] }];
+    assert.deepEqual(plan(queued, [member('a')], COMPACTED), next);
+    const idle = [{ id: 'shared', name: 'Team', queue: open }];
+    assert.deepEqual(plan(idle, [quiet], COMPACTED), []);
+  }
+});
+
+test('rotation-stalled 11-23: every waiting kind the planner sets is named in PLANNER_WAITING', () => {
+  // A kind added to the settle step without being named counts as a decision and stops rotation again.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'queue-dispatch.cjs'), 'utf8');
+  const step = source.slice(source.indexOf('// 1) Settle items already sent.'), source.indexOf('// 2) Send the next queued item'));
+  const found = new Set();
+  for (const branch of step.split("status = 'waiting';").slice(1)) {
+    const body = branch.split('} else if')[0];
+    for (const assignment of body.matchAll(/reason = ([^;]*);/g)) {
+      for (const literal of assignment[1].matchAll(/'([^']+)'/g)) {
+        found.add(literal[1]);
+      }
+    }
+  }
+  const named = [...(rules.PLANNER_WAITING || [])].sort();
+  assert.deepEqual([...found].sort(), named, 'name each new kind in PLANNER_WAITING; an empty scan means the settle step moved');
+});
+
 test('794d3cd7: a successor resting its day is still rotated for its own compactions; an old kept, failed or held one is not', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
   const successor = { phase: 'kept', keptAt: NOW - HOUR, oldNativeId: 'native-a', name: 'Agent a', roomIds: ['shared'], successorOf: 'old' };

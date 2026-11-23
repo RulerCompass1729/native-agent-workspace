@@ -40,12 +40,20 @@ function holdsMember(item) {
   return Boolean(item) && item.status === 'sent';
 }
 // Whether an item asks the person to decide, until they handle it. The person answers in the member's own
-// session, so that session is not replaced while one is open (asking in planDispatch). A decision is settled
-// without a reason, but one saved by an older build can still carry an earlier refusal's (queueRequeue kept
-// it through the send; queueMarkSent now drops it), so the two kinds above are named rather than told apart
-// by having a reason.
+// session, so what that member is sent meanwhile is marked (asking in planDispatch); keepsSession decides
+// whether the session is replaced. A decision is settled without a reason, but one saved by an older build
+// can still carry an earlier refusal's (queueRequeue kept it through the send; queueMarkSent now drops it),
+// so the two kinds above are named rather than told apart by having a reason.
 function asksPerson(item) {
   return Boolean(item) && item.status === 'waiting' && !UNHELD_WAITING.includes(item.reason);
+}
+// The waiting kinds the planner itself sets when it settles an item; a decision has none. The member asked the
+// person nothing in any of them, so none keeps its session from being replaced. The last four came on 11-19
+// unnamed and counted as decisions: nobody holding one was rotated for 14 hours (11-23).
+const PLANNER_WAITING = [...UNHELD_WAITING, 'input-purpose-unconfirmed', 'rotation-control-unresolved', 'native-turn-failed', 'usage-limit-exceeded'];
+// Whether an open item keeps its member's session: a decision, which the person answers there.
+function keepsSession(item) {
+  return Boolean(item) && item.status === 'waiting' && !PLANNER_WAITING.includes(item.reason);
 }
 // A member must stay idle this long before NAW sends, so a turn-end report can settle.
 const IDLE_SETTLE_MS = 8000;
@@ -832,7 +840,7 @@ function rotationReason(session, now, options, rotations) {
     return null;
   }
   // A decision it asked is still open: the person answers it here. It keeps working and is rotated later.
-  if (options.asking && options.asking.has(session.id)) {
+  if (options.decisionOpen && options.decisionOpen.has(session.id)) {
     return null;
   }
   // The person used it while it was being rotated: it waits until it is quiet again (see personDeferred).
@@ -978,8 +986,10 @@ function planDispatch(input) {
   const quietCompactMs = input.quietCompactMs ?? QUIET_COMPACT_MS;
   const rotationOptions = {
     blockedRotations: input.blockedRotations,
-    // Filled in step 1: members with a decision open (asksPerson).
+    // Filled in step 1: members whose next item is marked afterDecision (asksPerson), and those whose
+    // session an open decision keeps (keepsSession).
     asking: new Set(),
+    decisionOpen: new Set(),
     contentLimits,
     compactions: input.compactions,
     compactLimit: input.compactLimit ?? COMPACT_LIMIT,
@@ -1058,6 +1068,9 @@ function planDispatch(input) {
     for (const item of room.queue || []) {
       if (item.sentTo && asksPerson(item)) {
         rotationOptions.asking.add(item.sentTo);
+      }
+      if (item.sentTo && keepsSession(item)) {
+        rotationOptions.decisionOpen.add(item.sentTo);
       }
       if (item.status !== 'sent') {
         continue;
@@ -4011,6 +4024,7 @@ module.exports = {
   QUIET_BEFORE_ROTATE_MS,
   COMPACT_LIMIT,
   QUIET_COMPACT_MS,
+  PLANNER_WAITING,
   rotationSubjects,
   NOT_SENT_ATTEMPTS,
   NATIVE_DRAFT_KEY,
