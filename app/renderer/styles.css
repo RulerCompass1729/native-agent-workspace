@@ -911,6 +911,28 @@ header h1, header p { overflow-wrap: anywhere; }
 .background-details { margin-top:6px; }
 .background-details > summary { width:max-content; max-width:100%; color:var(--muted); cursor:pointer; }
 .background-details > pre { max-height:240px; margin:4px 0 0; padding:8px; overflow:auto; border-radius:4px; background:var(--panel); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* A merged card's row opens to the single card's own details. */
+.background-batch-details { margin:0; flex:1 1 100%; min-width:0; }
+.background-batch-details > summary.background-batch-summary { width:auto; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; color:inherit; list-style:none; }
+.background-batch-details > summary.background-batch-summary::-webkit-details-marker { display:none; }
+.background-batch-details > summary.background-batch-summary::before { content:"▸"; color:var(--muted); width:1em; flex:none; }
+.background-batch-details[open] > summary.background-batch-summary::before { content:"▾"; }
+.background-batch-details > pre { margin-left:1.4em; }
+.background-batch-remaining { color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+/* The input box's timer sits on its top-right edge, like the reading list's jump pill. */
+.session-timers-anchor { position:relative; height:0; width:calc(100% - 32px); max-width:830px; margin:0 auto; z-index:5; }
+.session-timers { position:absolute; right:14px; bottom:-12px; display:flex; gap:4px; align-items:center; }
+.session-timer, .session-timer-more { font-size:12px; line-height:1.4; padding:2px 10px; min-height:0; border-radius:999px; font-variant-numeric:tabular-nums; white-space:nowrap; box-shadow:0 1px 4px #10251014; }
+.session-timer[data-kind="countdown"] { background:var(--warning,#9a6700); border-color:var(--warning,#9a6700); color:#fff; }
+.session-timer[data-kind="running"] { background:var(--raised); color:var(--ink); }
+.session-timer[data-kind="running"]::before { content:""; display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--green); margin-right:6px; vertical-align:1px; }
+.session-timer[data-kind="expired"] { background:var(--raised); color:var(--muted); }
+.session-timer-more { padding:2px 8px; background:var(--raised); }
+.session-timer-list { position:absolute; right:0; bottom:calc(100% + 6px); min-width:280px; max-width:min(420px, calc(100vw - 48px)); display:grid; gap:2px; padding:4px; background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 8px 28px #10251024; }
+.session-timer-row { display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; text-align:left; border:0; background:transparent; padding:6px 8px; font-size:12px; border-radius:6px; }
+.session-timer-row-time { font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:600; }
+.session-timer-row[data-kind="countdown"] .session-timer-row-time { color:var(--warning,#9a6700); }
+.session-timer-row-title { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .background-buttons { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .background-buttons button { white-space:nowrap; }
 /* Match the approved rendered preview, including the existing DSH-scoped dimensions. */

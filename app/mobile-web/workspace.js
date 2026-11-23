@@ -107,6 +107,13 @@
   Object.assign(words.en, { registerKey: 'Register an approval passkey', registrationCode: 'Six-digit code shown on the Mac', registerHelp: 'Start registration on the Mac. Then compare public-key fingerprints and confirm and enable it on the Mac.', registrationReady: 'Compare the fingerprint and confirm on the Mac. Phone approvals remain disabled.', verifyPhone: 'Each card requires system user verification. Pairing alone cannot approve.', verifyFailed: 'Not completed or outcome unconfirmed. Check the receipt or Mac; nothing is resent.' });
   Object.assign(words.zh, { receiptTitle: '回执', receiptSend: '发给', receiptAnswer: '回答', receiptTime: '发起', receiptTimeUnknown: '时间未记录', receiptMissing: '原任务内容未保存，请回 Mac 核对', receiptHidden: '关联内容已不在本次授权范围内，请回 Mac 核对', receiptFull: '查看完整原输入', receiptExcerpt: '查看已保存片段', receiptHelp: '移除回执不会撤回消息或任务。', removeReceipt: '移除此条回执', unsentDraft: '未发送的草稿', taskAdded: '任务已添加', taskCancelled: '任务已取消', taskHandled: '任务已标为处理', reminderAcknowledged: '提醒已确认', receiptOperations: '操作记录', receiptSteward: '大管家记录', answerPending: '回答已写入；原生处理仍待确认', messageNotSent: '未发送，草稿保留' });
   Object.assign(words.en, { receiptTitle: 'Receipts', receiptSend: 'To', receiptAnswer: 'Answer to', receiptTime: 'started', receiptTimeUnknown: 'Time not saved', receiptMissing: 'Original task was not saved; check on the Mac', receiptHidden: 'Associated content is outside this grant; check on the Mac', receiptFull: 'View full original input', receiptExcerpt: 'View saved excerpt', receiptHelp: 'Removing a receipt keeps the message or task.', removeReceipt: 'Remove receipt', unsentDraft: 'Unsent draft', taskAdded: 'Task added', taskCancelled: 'Task cancelled', taskHandled: 'Task marked handled', reminderAcknowledged: 'Reminder acknowledged', receiptOperations: 'Operations record', receiptSteward: 'Butler record', answerPending: 'Answer written; native processing is still unconfirmed', messageNotSent: 'Not sent; draft kept' });
+  // The desktop's own batch and timer words (ui-messages.js background.batch.* / background.timer.*).
+  Object.assign(words.zh, { batchTitle: '{action} · {count} 项', confirmAll: '全部确认（{count}）', confirmNext: '确认下一项（{index}/{count}）',
+    timerCountdown: '等你确认 · 剩余 {time}', timerCountdownName: '等你确认，剩余 {minutes} 分 {seconds} 秒，跳到这条消息', timerCountdownSecondsName: '等你确认，剩余 {seconds} 秒，跳到这条消息',
+    timerMore: '+{count}', timerMoreName: '还有 {count} 个计时' });
+  Object.assign(words.en, { batchTitle: '{action} · {count} items', confirmAll: 'Confirm all ({count})', confirmNext: 'Confirm next ({index}/{count})',
+    timerCountdown: 'Waiting for confirmation · {time} left', timerCountdownName: 'Waiting for confirmation, {minutes} min {seconds} s left. Jump to this message', timerCountdownSecondsName: 'Waiting for confirmation, {seconds} s left. Jump to this message',
+    timerMore: '+{count}', timerMoreName: 'Other timers: {count}' });
   function mount() {
     const d = global.document, el = id => d.getElementById(id);
     let pairSecret=global.location.hash.startsWith('#pair=')?global.location.hash.slice(6):undefined;
@@ -115,6 +122,7 @@
     const storage = { getItem: k => global.localStorage.getItem(k), setItem: (k, v) => global.localStorage.setItem(k, v) };
     let answeredQuestion = null, currentToast = null;
     const t = key => words[lang][key] || key;
+    const f = (key, values) => t(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name]));
     words.zh.loadingBody = '正在读取对话内容…'; words.en.loadingBody = 'Loading this conversation…';
     const node = (tag, value, cls) => { const n = d.createElement(tag); if (value !== undefined) n.textContent = value; if (cls) n.className = cls; return n; };
     const paths = { home: 'm3 10 9-7 9 7v10H3Z M9 20v-7h6v7', space: 'M3 4h8v7H3z M13 4h8v7h-8z M3 13h8v7H3z M13 13h8v7h-8z', queue: 'M4 4h16v16H4Z M8 8h8 M8 12h8 M8 16h5', bell: 'M6 9a6 6 0 0 1 12 0c0 7 3 7 3 8H3c0-1 3-1 3-8Z M10 21h4', back: 'm14 5-7 7 7 7', menu: 'M5 12h.01 M12 12h.01 M19 12h.01' };
@@ -327,6 +335,9 @@
     // owner: the session whose chat this is; its replies carry no name of their own.
     function thread(rows, container, owner) {
       for (const m of rows || []) {
+        const card = m.kind === 'background-operation' ? view.confirmations.find(c => c.id === m.confirmationId) : null, members = card && batchOf(card);
+        // A merged batch is one card, drawn on its newest member as on the desktop.
+        if (members && members.at(-1) !== card) continue;
         // A user row with a name was written by NAW or another agent (NAW 派活, a space), as the Mac labels it.
         const human = m.role === 'human' || m.role === 'user' && !m.name, article = node('article', undefined, 'message' + (human ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
         const s = (m.role === 'assistant' && owner) || view.sessions.find(s => s.name === m.name) || (m.role === 'assistant' ? { provider: 'codex' } : {});
@@ -335,7 +346,7 @@
         if (at && Number.isFinite(at.getTime())) { const time = node('time', at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })); time.dateTime = at.toISOString(); author.append(time); }
         else author.append(node('span', t('receiptTimeUnknown'), 'message-time-unknown'));
         const bubble = node('div', m.text || '', 'bubble');
-        if (m.kind === 'background-operation') { const card = view.confirmations.find(c => c.id === m.confirmationId); if (card) { bubble.replaceChildren(node('strong', card.title), link(t('review') + ' ›', 'confirm/' + encodeURIComponent(card.id), 'text-link')); } }
+        if (card) { article.dataset.confirmationId = card.id; bubble.replaceChildren(node('strong', members ? batchTitle(members) : card.title), link(t('review') + ' ›', members ? batchPath(members) : 'confirm/' + encodeURIComponent(card.id), 'text-link')); }
         if (m.attachments || m.textOmitted) bubble.append(node('p', t('omit'), 'small-note'));
         body.append(author, bubble); if (!human) article.append(avatar(s)); article.append(body); container.append(article);
       }
@@ -484,18 +495,100 @@
         });
       }); el('content').append(form); receipts(el('content'), { sessionId: route.nativeId });
     }
+    const cardNow = () => view.syncedAt + (global.performance.now() - lastReceived);
+    const cardExpired = card => card.disposition === 'expired' || card.state === 'confirmation-required' && card.expiresAt !== null && card.expiresAt <= cardNow();
+    const clockTime = at => new Date(at).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en');
+    // A presentation deadline alone is not a backend receipt. F's explicit
+    // expired disposition can say not-executed; a locally elapsed deadline
+    // asks the person to check the Mac instead of inventing that outcome.
+    function cardState(card, expired) {
+      return card.afterStart && (card.disposition || card.state === 'cancelled') ? (lang === 'zh' ? '后续未执行；此前步骤的结果请回 Mac 核对' : 'Remaining work not executed; check earlier results on the Mac') : expired ? card.disposition === 'expired' ? t('expired') : lang === 'zh' ? '已过期 · 请回 Mac 核对' : 'Expired · Check on the Mac' : card.disposition === 'invalidated' ? t('invalidated') : card.state === 'confirmation-required' ? t('pending') : t(({ received: 'submitted', 'not-executed': 'not-sent' })[card.state] || card.state);
+    }
+    // The single card's facts; each row of a merged card opens to this same list.
+    function cardFacts(card) {
+      const facts = node('dl', undefined, 'facts');
+      for (const [key, value] of [['scope', card.detail], ['from', card.actorName], ['duration', card.expiresAt ? clockTime(card.expiresAt) : t('verifyDeadline')]]) { const row = node('div'); row.append(node('dt', t(key)), node('dd', value)); facts.append(row); }
+      return facts;
+    }
+    // Batches the person started confirming here, by member ids. A member that runs leaves the service's waiting
+    // batch; this keeps the batch one card until the page reloads (the desktop keeps its own the same way).
+    const startedBatches = new Map();
+    function batchOf(card) {
+      const ids = startedBatches.get(card.id) || (card.batch ? view.confirmations.filter(c => c.batch === card.batch).map(c => c.id) : null);
+      const members = ids?.map(id => view.confirmations.find(c => c.id === id)).filter(Boolean);
+      return members?.length > 1 ? members : null;
+    }
+    const batchPath = members => 'confirm/batch/' + members.map(c => encodeURIComponent(c.id)).join(',');
+    const batchTitle = members => f('batchTitle', { action: members[0].batchTitles?.[lang] || members[0].titles?.[lang] || members[0].title, count: members.length });
+    function scheduleExpiry(cards) {
+      const next = cards.filter(c => !cardExpired(c) && c.expiresAt).map(c => c.expiresAt).sort((a, b) => a - b)[0];
+      if (next) expiryTimer = global.setTimeout(paint, Math.max(1, Math.min(2147483647, next - cardNow())));
+    }
+    function confirmationList() {
+      heading('confirm');
+      const shown = new Set();
+      for (const c of view.confirmations) {
+        if (shown.has(c.id)) continue;
+        const members = batchOf(c);
+        for (const m of members || [c]) shown.add(m.id);
+        el('content').append(members ? link(batchTitle(members), batchPath(members), 'link-row') : link(c.titles?.[lang] || c.title, 'confirm/' + encodeURIComponent(c.id), 'link-row'));
+      }
+      if (!view.confirmations.length) el('content').append(node('p', t('noData')));
+    }
+    const openRows = new Set();
+    // One verification per card, as on its own page: each tap approves the next waiting member in order.
+    function batchConfirmation() {
+      const members = route.batch.map(id => view.confirmations.find(c => c.id === id)).filter(Boolean);
+      if (!members.length) { confirmationList(); return; }
+      const box = node('article', undefined, 'card-detail batch-detail'), waiting = members.filter(c => c.state === 'confirmation-required' && !cardExpired(c));
+      const deadlines = new Set(waiting.map(c => c.expiresAt)), soonest = waiting.map(c => c.expiresAt).filter(Boolean).sort((a, b) => a - b)[0];
+      box.dataset.confirmationId = members.at(-1).id;
+      box.append(node('p', members[0].actorName, 'source'), node('h1', batchTitle(members)));
+      if (waiting.length) box.append(node('p', t('pending') + (soonest ? ' · ' + t('duration') + ' ' + clockTime(soonest) : ''), 'quiet'));
+      const rows = node('ol', undefined, 'batch-rows');
+      for (const card of members) {
+        const expired = cardExpired(card), li = node('li'), details = node('details'), summary = node('summary');
+        li.dataset.confirmationId = card.id;
+        details.open = openRows.has(card.id);
+        details.addEventListener('toggle', () => { if (details.open) openRows.add(card.id); else openRows.delete(card.id); });
+        summary.append(node('span', card.targetName || card.summary?.target || card.title, 'batch-target'), node('span', cardState(card, expired), expired ? 'batch-state sync-error' : 'batch-state'));
+        if (deadlines.size > 1 && waiting.includes(card)) summary.append(node('span', t('duration') + ' ' + clockTime(card.expiresAt), 'batch-time'));
+        details.append(summary, cardFacts(card), link(t('review') + ' ›', 'confirm/' + encodeURIComponent(card.id), 'text-link'));
+        li.append(details);
+        const receipt = passkeys.pending.find(p => p.id === card.id && p.status === 'unconfirmed');
+        if (receipt) li.append(button(t('receipt'), async () => { try { const result = await passkeys.receipt(client.state.session, receipt); toast(result.status); } catch { toast('verifyFailed'); } await refresh(); }));
+        rows.append(li);
+      }
+      box.append(rows);
+      const next = waiting[0], index = members.indexOf(next) + 1, unconfirmed = passkeys.pending.some(p => p.status === 'unconfirmed' && members.some(c => c.id === p.id));
+      const approve = button(index > 1 ? f('confirmNext', { index, count: members.length }) : f('confirmAll', { count: members.length }), async () => {
+        approve.disabled = true;
+        const ids = members.map(c => c.id);
+        for (const id of ids) startedBatches.set(id, ids);
+        try { const result = await passkeys.decide(client.state.session, next, 'approve'); toast(result.status); }
+        catch (error) { toast(error?.code === 'MOBILE_PAIR_LIMIT' ? 'pairLimit' : 'verifyFailed'); }
+        await refresh();
+      }, 'primary');
+      approve.id = 'consent-batch';
+      approve.disabled = !next?.canDecide || unconfirmed || passkeys.busy;
+      // Nothing left to answer: the rows carry each card's own result.
+      if (next) {
+        const buttons = node('div', undefined, 'confirm-actions');
+        buttons.append(approve);
+        box.append(buttons, node('p', t(next.canDecide ? 'verifyPhone' : 'verifyMac'), 'auth-note'));
+      }
+      el('content').append(box, link(t('back') + ' ›', 'chat/' + encodeURIComponent(members[0].sessionId), 'link-row'));
+      scheduleExpiry(waiting);
+    }
     function confirmation() {
       if (route.nativeId) { nativeQuestion(); return; }
+      if (route.batch) { batchConfirmation(); return; }
       const card = view.confirmations.find(c => c.id === route.id);
-      if (!card) { heading('confirm'); for (const c of view.confirmations) el('content').append(link(c.titles?.[lang] || c.title, 'confirm/' + encodeURIComponent(c.id), 'link-row')); if (!view.confirmations.length) el('content').append(node('p', t('noData'))); return; }
-      const box = node('article', undefined, 'card-detail'), expired = card.disposition === 'expired' || card.state === 'confirmation-required' && card.expiresAt !== null && card.expiresAt <= view.syncedAt + (global.performance.now() - lastReceived);
+      if (!card) { confirmationList(); return; }
+      const box = node('article', undefined, 'card-detail'), expired = cardExpired(card);
       box.dataset.confirmationId = card.id;
-      // A presentation deadline alone is not a backend receipt. F's explicit
-      // expired disposition can say not-executed; a locally elapsed deadline
-      // asks the person to check the Mac instead of inventing that outcome.
-      const stateLabel = card.afterStart && (card.disposition || card.state === 'cancelled') ? (lang === 'zh' ? '后续未执行；此前步骤的结果请回 Mac 核对' : 'Remaining work not executed; check earlier results on the Mac') : expired ? card.disposition === 'expired' ? t('expired') : lang === 'zh' ? '已过期 · 请回 Mac 核对' : 'Expired · Check on the Mac' : card.disposition === 'invalidated' ? t('invalidated') : card.state === 'confirmation-required' ? t('pending') : t(({ received: 'submitted', 'not-executed': 'not-sent' })[card.state] || card.state);
-      box.append(node('p', card.actorName, 'source'), node('h1', card.titles?.[lang] || card.title), node('p', stateLabel, expired ? 'sync-error' : 'quiet'));
-      const facts = node('dl', undefined, 'facts'); for (const [key, value] of [['scope', card.detail], ['from', card.actorName], ['duration', card.expiresAt ? new Date(card.expiresAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en') : t('verifyDeadline')]]) { const row = node('div'); row.append(node('dt', t(key)), node('dd', value)); facts.append(row); } box.append(facts);
+      box.append(node('p', card.actorName, 'source'), node('h1', card.titles?.[lang] || card.title), node('p', cardState(card, expired), expired ? 'sync-error' : 'quiet'));
+      box.append(cardFacts(card));
       const pending = passkeys.pending.find(p => p.id === card.id && p.status === 'unconfirmed');
       const buttons = node('div', undefined, 'confirm-actions');
       for (const key of ['deny', 'approve']) {
@@ -510,7 +603,7 @@
       box.append(buttons, node('p', t(card.canDecide ? 'verifyPhone' : 'verifyMac'), 'auth-note'));
       if (pending) box.append(button(t('receipt'), async () => { try { const result = await passkeys.receipt(client.state.session, pending); toast(result.status); } catch { toast('verifyFailed'); } await refresh(); }));
       el('content').append(box, link(t('back') + ' ›', 'chat/' + encodeURIComponent(card.sessionId), 'link-row'));
-      if (!expired && card.expiresAt) expiryTimer = global.setTimeout(paint, Math.max(1, Math.min(2147483647, card.expiresAt - view.syncedAt - (global.performance.now() - lastReceived))));
+      if (!expired) scheduleExpiry([card]);
     }
     function registerPasskey() {
       const form = node('form', undefined, 'auth-form'), label = node('label', t('registrationCode')), input = node('input');
@@ -587,10 +680,70 @@
     global.visualViewport?.addEventListener('scroll', composeSpace);
     d.addEventListener('focusin', composeSpace);
     d.addEventListener('focusout', composeSpace);
+    let timerClock = 0, timerShape = '';
+    // This chat's confirmation deadlines beside its input box, from the view the page already holds; a batch is one.
+    // A locally elapsed deadline is not a receipt (see cardState), so a timer leaves at zero instead of saying expired.
+    function chatTimers() {
+      if (route?.page !== 'chat' || !view) return [];
+      const now = cardNow(), seen = new Set(), out = [];
+      for (const card of view.confirmations) {
+        if (seen.has(card.id) || card.sessionId !== route.id) continue;
+        const members = batchOf(card) || [card];
+        for (const m of members) seen.add(m.id);
+        const waiting = members.filter(c => c.state === 'confirmation-required' && !c.disposition && Number.isSafeInteger(c.expiresAt) && c.expiresAt > now);
+        if (!waiting.length) continue;
+        out.push({ target: members.at(-1).id, path: members.length > 1 ? batchPath(members) : 'confirm/' + encodeURIComponent(card.id),
+          title: members.length > 1 ? batchTitle(members) : card.titles?.[lang] || card.title, at: Math.min(...waiting.map(c => c.expiresAt)) });
+      }
+      return out.sort((a, b) => a.at - b.at);
+    }
+    function timerLabel(item) {
+      const left = Math.max(0, Math.ceil((item.at - cardNow()) / 1000)), minutes = Math.floor(left / 60), seconds = left % 60;
+      return { text: f('timerCountdown', { time: minutes + ':' + String(seconds).padStart(2, '0') }),
+        name: minutes ? f('timerCountdownName', { minutes, seconds }) : f('timerCountdownSecondsName', { seconds }) };
+    }
+    function jumpTo(item) {
+      const target = [...el('content').querySelectorAll('article[data-confirmation-id]')].find(a => a.dataset.confirmationId === item.target);
+      if (!target) { global.location.hash = '#' + lang + '/' + item.path; return; }
+      target.scrollIntoView({ block: 'center' });
+      target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash');
+      global.setTimeout(() => target.classList.remove('flash'), 1600);
+    }
+    // Rebuilt only when the timers change; the one-second tick rewrites the chip's text.
+    function renderTimers() {
+      const box = el('phone-timers'), items = box ? chatTimers() : [], shape = JSON.stringify(items.map(i => i.target));
+      if (box && shape !== timerShape) {
+        timerShape = shape; box.replaceChildren();
+        if (items.length) {
+          const main = node('button', undefined, 'phone-timer'); main.type = 'button'; main.addEventListener('click', () => jumpTo(items[0])); box.append(main);
+          if (items.length > 1) {
+            const more = node('button', f('timerMore', { count: items.length - 1 }), 'phone-timer-more'); more.type = 'button';
+            more.setAttribute('aria-label', f('timerMoreName', { count: items.length - 1 }));
+            more.addEventListener('click', () => {
+              const list = node('div', undefined, 'phone-timer-list');
+              for (const item of chatTimers().slice(1)) {
+                const row = node('button', timerLabel(item).text + ' · ' + item.title); row.type = 'button';
+                row.addEventListener('click', () => { el('dialog').close(); jumpTo(item); }); list.append(row);
+              }
+              dialog(f('timerMoreName', { count: items.length - 1 }), list);
+            });
+            box.append(more);
+          }
+        }
+      }
+      if (box) box.hidden = !items.length;
+      if (items.length) {
+        const label = timerLabel(items[0]), main = box.firstChild;
+        if (main.textContent !== label.text) main.textContent = label.text;
+        if (main.getAttribute('aria-label') !== label.name) main.setAttribute('aria-label', label.name);
+      }
+      if (items.length && !timerClock) timerClock = global.setInterval(renderTimers, 1000);
+      if (!items.length && timerClock) { global.clearInterval(timerClock); timerClock = 0; }
+    }
     function updateCompose() {
       if (!client) return;
       const active = !locked && route?.page === 'chat' && client.state.session?.sessions.some(s => s.id === route.id && s.available !== false) && view?.sessions.some(s => s.id === route.id); el('compose').hidden = !active; d.body.classList.toggle('with-compose', Boolean(active)); composeSpace();
-      if (!active) { composeKey = ''; el('compose').replaceChildren(); return; }
+      if (!active) { composeKey = ''; el('compose').replaceChildren(); renderTimers(); return; }
       if (composeKey !== route.id) {
         composeKey = route.id; el('compose').replaceChildren(); const inner = node('div', undefined, 'compose-inner'), label = node('label', t('unsentDraft'), 'quiet'), input = node('textarea'); input.id = 'message'; input.name = 'text'; input.maxLength = 16000; input.placeholder = t('message'); label.htmlFor = input.id;
         input.addEventListener('input', () => { try { client.setDraft(input.value); } catch { toast('storage'); } }); const tools = node('div', undefined, 'compose-tools'), send = node('button', t('send'), 'primary'); send.id = 'send-message'; send.type = 'submit';
@@ -603,7 +756,9 @@
           if (touch && touch.clientX >= rect.left && touch.clientX <= rect.right && touch.clientY >= rect.top && touch.clientY <= rect.bottom) send.click();
         }, { passive: false });
         send.addEventListener('touchcancel', () => { touchSend = false; });
-        const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send); inner.append(label, input, tools); el('compose').append(inner);
+        const note = node('span', t('draft'), 'small-note'); note.id = 'compose-note'; tools.append(note, send);
+        const timers = node('div', undefined, 'phone-timers'); timers.id = 'phone-timers'; timers.hidden = true; timerShape = '';
+        inner.append(timers, label, input, tools); el('compose').append(inner);
       }
       const input = el('message'), state = client.state; if (input.value !== state.draft) input.value = state.draft;
       // Mode and refusal reason come from mobile-session.cjs read(); the phone does not guess them.
@@ -620,6 +775,7 @@
         : !row.canSend ? 'blocked-notReady' : 'draft';
       el('compose-note').textContent = t(note);
       el('send-message').disabled = disconnected || state.busy || state.storageError || !state.row?.canSend || state.selected !== route.id || !state.draft.trim() || waiting;
+      renderTimers();
       composeSpace();
     }
     let acknowledgedMessages = 0;
@@ -685,7 +841,7 @@
       updateCompose();
       if (stick) scrollToLatest();
     }
-    const routeKey = () => JSON.stringify([lang, route?.page, route?.id, route?.nativeId]);
+    const routeKey = () => JSON.stringify([lang, route?.page, route?.id, route?.nativeId, route?.batch]);
     const workspacePath = () => '/mobile/workspace/' + (route?.page === 'chat' && route.id ? 'session/' + encodeURIComponent(route.id)
       : route?.page === 'space' && route.id ? 'room/' + encodeURIComponent(route.id) : 'summary');
     let refreshRead;
@@ -734,7 +890,8 @@
         }
         if (ticket !== navigation) return;
         const parts = global.location.hash.slice(1).split('/'); lang = parts[0] === 'en' ? 'en' : 'zh';
-        route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null };
+        route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null,
+          batch: parts[1] === 'confirm' && parts[2] === 'batch' && parts[3] ? parts[3].split(',').map(decodeURIComponent) : null };
         d.documentElement.dataset.page = route.page;
         d.documentElement.dataset.route = global.location.hash;
         if (view) {
@@ -771,7 +928,7 @@
     d.addEventListener('visibilitychange', wake); global.addEventListener('online', wake); global.addEventListener('offline', offline);
     global.addEventListener('pagehide', hide); global.addEventListener('pageshow', show);
     client.ready = (async () => { await started; await scheduleNavigate(); })().finally(() => recovery.start()); paint();
-    return { client, actions, refresh, navigate, dispose() { hide(); d.removeEventListener('visibilitychange', wake);
+    return { client, actions, refresh, navigate, dispose() { hide(); global.clearInterval(timerClock); d.removeEventListener('visibilitychange', wake);
       global.removeEventListener('online', wake); global.removeEventListener('offline', offline); global.removeEventListener('pagehide', hide); global.removeEventListener('pageshow', show); global.removeEventListener('hashchange', scheduleNavigate); } };
   }
   const exported = { createWorkspaceActions, ACTION_KEY, mount, receiptVisible };

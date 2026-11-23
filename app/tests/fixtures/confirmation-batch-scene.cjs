@@ -10,6 +10,7 @@ async function fixture(failB = false) {
   const hold = new Promise(resolve => { release = resolve; }), entered = [], effects = [];
   const sessions = [{ ...actor, state: 'idle', roomIds: [] }, ...['A', 'B', 'C'].map(id => ({
     id, nativeId: 'native-' + id, name: 'Target ' + id, provider: 'codex', state: 'idle', roomIds: [],
+    terminalState: { alive: true, epoch: 'epoch-' + id, observationIndex: 1 },
   }))];
   const c = { background: true, view: { selected: actor.id, draft: '' }, confirmationActors: () => [actor],
     checkActor: async () => {}, client: { snapshot: () => ({ sessions }), close() {} }, win: { destroy() {} },
@@ -19,14 +20,22 @@ async function fixture(failB = false) {
       entered.push(id); if (id === 'A') await hold;
       effects.push(id);
       if (id === 'B' && failB) throw Error('Synthetic archive side effect happened; receipt not confirmed');
+    }], ['input', async (_context, id, text) => {
+      entered.push(id); if (id === 'A') await hold;
+      effects.push(id + ':' + text);
     }]]),
-    confirmation: () => ({ message: 'Archive?', buttons: ['Cancel', 'Archive'], cancelId: 0 }),
+    confirmation: (_actor, args) => args.method === 'input'
+      ? { message: 'Input?', detail: JSON.stringify({ method: 'input', arguments: args.arguments }, null, 2), buttons: ['Cancel', 'Confirm'], cancelId: 0 }
+      : { message: 'Archive?', buttons: ['Cancel', 'Archive'], cancelId: 0 },
     audit: () => {}, confirmationFingerprint: row => c.fingerprint(row.command),
   });
   const ask = async id => assert.equal((await control.call({ sender: actor, identity, valid: () => true }, {
     action: 'invoke', operation_id: id, method: 'archiveSession', arguments: [id],
   })).state, 'confirmation-required');
-  return { control, c, entered, effects, release, ask, bump: () => { revision++; },
+  const askInput = async (id, target, text) => assert.equal((await control.call({ sender: actor, identity, valid: () => true }, {
+    action: 'invoke', operation_id: id, method: 'input', arguments: [target, text],
+  })).state, 'confirmation-required');
+  return { control, c, entered, effects, release, ask, askInput, bump: () => { revision++; },
     cards: () => control.confirmations({ sessions, rooms: [] }),
     async cleanup() { release(); await control.close(); fs.rmSync(dir, { recursive: true }); },
   };
