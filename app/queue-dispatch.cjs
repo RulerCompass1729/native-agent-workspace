@@ -448,6 +448,10 @@ function sessionReady(session, wakePolicy) {
   if (children.running) {
     return { ready: false, reason: 'team-running' };
   }
+  // Its backend waits to be moved (quiet-windows.cjs): no new work there until the window closes.
+  if (session.quietWindow) {
+    return { ready: false, reason: 'quiet-window' };
+  }
   return { ready: true, reason: '' };
 }
 
@@ -1309,7 +1313,7 @@ function rotationCauseKey(code) {
 
 const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-needed', 'automatic-messages-off', 'paused',
   'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
-  'team-running', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
+  'team-running', 'quiet-window', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
   'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
 const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
   'handoff-request-timeout', 'handoff-unconfirmed', 'old-session-missing', 'new-session-missing',
@@ -2084,6 +2088,8 @@ class QueueDispatcher {
     this.answerNotices = options.answerNotices || null;
     // What a restart brought, owed to the queue secretary (version-events.cjs), or null; sent as answers are.
     this.versionNotices = options.versionNotices || null;
+    // Migration quiet windows (quiet-windows.cjs), or null: their sessions get no new item or NAW message.
+    this.quietWindows = options.quietWindows || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
     // finishDeferrals: one try per episode and backend version a run.
@@ -2670,6 +2676,9 @@ class QueueDispatcher {
     const snapshot = this.roomState.apply(this.client.snapshot());
     if (this.observePersonActions) this.observePersonActions(snapshot);
     const now = this.now();
+    // Copies (room-state.cjs apply): marking them changes nothing a backend holds.
+    const quiet = this.quietWindows ? this.quietWindows.sessionIds(now) : null;
+    if (quiet && quiet.size) for (const session of snapshot.sessions) if (quiet.has(session.id)) session.quietWindow = quiet.get(session.id);
     for (const session of snapshot.sessions) {
       // A live control needs an idle clock; this does not grant delivery readiness.
       const ownRequest = this.rotations[session.id];

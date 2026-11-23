@@ -117,6 +117,15 @@ class VersionEvents {
     this.emit(failed && !moved && !gone ? 'backend-move-failed' : 'backend-moved', `【NAW 版本】后台迁移（${this.version}）：\n${lines.join('\n')}\n${rest}`,
       `moved:${moved},gone:${gone},failed:${failed},behind:${this.watch.size}`);
   }
+  // A migration's quiet window (quiet-windows.cjs) reached its deadline before the move: dispatch and automatic
+  // messages there resume, and NAW opens none for that backend for two hours.
+  quietWindowTimedOut(window) {
+    const key = typeof window?.scope === 'string' ? window.scope.replace(/^backend:/u, '') : '';
+    const waited = token(window?.waited) ? window.waited : 'unknown';
+    const at = Number.isSafeInteger(window?.deadline) ? iso(window.deadline) : iso(this.now());
+    this.emit('quiet-window-timeout', `【NAW 版本】后台 ${short(key)} 迁移前的安静窗口到了截止时间（${at}），还没迁成：已恢复派活和自动消息；2 小时内不再为它开窗。`,
+      `backend:${short(key)},waited:${waited}`);
+  }
   emit(reason, text, outcome) {
     const at = this.now(), eventId = `version-change:${hash([this.version, this.at, this.sequence++])}`;
     try {

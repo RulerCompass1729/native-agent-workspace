@@ -101,7 +101,7 @@ test('B2: production startup keeps directory migration closed even when the test
   for (const [backgroundTest, flag, enabled] of [[false, undefined, false], [false, '1', false], [true, undefined, false], [true, '1', true]]) {
     let options;
     const sandbox = { queueDispatcher: null, backgroundTest, process: { env: { NAW_TEST_QUEUE_DIRECTORY_MIGRATION: flag, NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS: '12000' } }, roomState: {}, dataDir: '/synthetic/private', windows: new Map(),
-      connect() {}, sessionLabels: { labels: new Map() }, broadcastRoom() {}, notifyRotation() {}, creationDefaults: { get() { return {}; } }, butlerIngress: null, stewardWake: null, answerNotices: null, versionNotices: null,
+      connect() {}, sessionLabels: { labels: new Map() }, broadcastRoom() {}, notifyRotation() {}, creationDefaults: { get() { return {}; } }, butlerIngress: null, stewardWake: null, answerNotices: null, versionNotices: null, quietWindows: null,
       QueueDispatcher: class { constructor(value) { options = value; } async start() { return this; } } };
     await vm.runInNewContext(personActionsSource(main) + '\n' + section('async function startQueueDispatcher()', 'async function broadcastRoom()') + '\nstartQueueDispatcher()', sandbox);
     assert.ok(options, 'production startup constructed the dispatcher');

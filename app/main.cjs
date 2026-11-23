@@ -37,6 +37,7 @@ const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
 const { VersionEvents, VersionNotices } = require('./version-events.cjs');
+const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -1107,6 +1108,8 @@ async function startQueueDispatcher() {
       answerNotices,
       // What this start brought, owed to the queue secretary (version-events.cjs).
       versionNotices,
+      // Sessions on a backend in a migration's quiet window get no new item or NAW message (quiet-windows.cjs).
+      quietWindows: quietWindows || undefined,
       // A member whose own conversation was compacted COMPACT_LIMIT times continues in a new session.
       countCompactions: true,
     };
@@ -1573,6 +1576,8 @@ async function autoBackendSwitch() {
   }
 }
 let versionEvents = null;
+// Migration quiet windows (quiet-windows.cjs), or null when its record could not be opened: then none is opened.
+let quietWindows = null;
 // What this start brought and the backends still on an old version, with what each waits for, told once and again
 // as each moves or fails (version-events.cjs). The window's state as pushed, no refresh: a report, not a move.
 function observeVersion() {
@@ -1619,8 +1624,22 @@ function migrateUnprovenQuietMs() {
   }
   return queueRules.MIGRATE_UNPROVEN_QUIET_MS;
 }
+// One pass over the quiet windows by the move's own inputs; a timeout is told as the version events are.
+function passQuietWindows(input) {
+  if (!quietWindows) return;
+  let result;
+  try { result = quietWindows.pass(input); } catch { return; }
+  for (const window of result.closed) {
+    if (window.code === 'timeout') try { versionEvents?.quietWindowTimedOut(window); } catch { /* Kept in its record. */ }
+  }
+}
+function quietWindowMoved(key, code) {
+  try { quietWindows?.moved(key, code); } catch { /* Readers stop at its deadline. */ }
+}
 async function autoBackendSwitchOnce() {
   const settings = backendSwitch.readSettings(dataDir);
+  // The person turned migration off: an open window closes now.
+  if (!settings.migrate && quietWindows?.windows.length) passQuietWindows({ options: [], settings, sessions: [], humanAt: new Map(), failed: autoSwitchFailed });
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
@@ -1631,6 +1650,7 @@ async function autoBackendSwitchOnce() {
     humanAt = queueDispatcher.humanAt;
   }
   const options = connectionUpdateOptions(c.client, app.getVersion(), roomState);
+  passQuietWindows({ options, settings, sessions, humanAt, failed: autoSwitchFailed, quietMs: migrateQuietMs(), unprovenQuietMs: migrateUnprovenQuietMs() });
   const ready = options.find(option => option.ready && !autoSwitchFailed.has(option.backendKey));
   if (ready) {
     const backend = { version: ready.version, sessions: ready.sessions };
@@ -1680,6 +1700,7 @@ async function autoBackendSwitchOnce() {
       extra.guard = record => queueRules.migrationReady(record, humanAt, Date.now(), migrateQuietMs(), migrateUnprovenQuietMs());
     }
     const result = await runBackendSwitch(c, option, option.switch.auto === true, extra);
+    quietWindowMoved(option.backendKey, 'moved');
     notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed };
     if (viaMigration) {
       recordMigration(option, screens, result);
@@ -1688,6 +1709,7 @@ async function autoBackendSwitchOnce() {
   // A failed automatic move is not retried in this app run; the person can still click.
   catch (error) {
     autoSwitchFailed.add(option.backendKey);
+    quietWindowMoved(option.backendKey, 'move-failed');
     notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage };
     recordMigrationFailure(option, screens, error, startedAt);
   }
@@ -1778,6 +1800,7 @@ async function boot() {
       changed: stewardWakeChanged,
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
+  try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
   // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
   try {
     versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),

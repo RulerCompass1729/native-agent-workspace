@@ -35,7 +35,7 @@ function fixture(settings = { auto: true, migrate: false }) {
   const context = { client, view: { owner: 'synthetic-owner' }, win: { isDestroyed: () => false, webContents: { send: (event, notice) => notices.push({ event, notice }) } } };
   const scope = vm.createContext({ continuationStatus, uiError, uiLocale: locale, roomState: { apply: state => state },
     app: { getVersion: () => current }, backendSwitch: { ...backendSwitch, readSettings: () => settings },
-    windows: new Map([[1, context]]), backendSwitching: null, autoSwitchRunning: false, autoSwitchFailed: new Set(), quitting: false,
+    windows: new Map([[1, context]]), backendSwitching: null, autoSwitchRunning: false, autoSwitchFailed: new Set(), quitting: false, quietWindows: null,
     queueDispatcher: null, queueRules: { ...queueRules, nextBackendMove(...args) { events.push('nextMove'); return queueRules.nextBackendMove(...args); } },
     migrateQuietMs: () => queueRules.MIGRATE_QUIET_MS, migrateUnprovenQuietMs: () => queueRules.MIGRATE_UNPROVEN_QUIET_MS,
     runningRelays: () => new Set(), dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' },
@@ -50,6 +50,8 @@ function fixture(settings = { auto: true, migrate: false }) {
     register: (name, handler) => handlers[name] = handler,
   });
   for (const name of ['sendToPage', 'connectionUpdateOptions', 'autoBackendSwitchOnce', 'autoBackendSwitch']) vm.runInContext(source(name), scope);
+  // Without a quiet-window record, as when it could not be opened (quiet-windows.cjs).
+  for (const name of ['passQuietWindows', 'quietWindowMoved']) if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === name)) vm.runInContext(source(name), scope);
   // The baseline has no shared helper; the automatic-success assertions still expose its missing route.
   if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === 'runConnectionContinuation')) vm.runInContext(source('runConnectionContinuation'), scope);
   const start = main.indexOf("  register('continueConnection',"), end = main.indexOf("  for (const action of ['resume', 'forget'])", start);

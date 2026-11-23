@@ -214,6 +214,7 @@ async function build() {
       'pty_host.py',
       'queue-dispatch.cjs',
       'queue-secretary.cjs',
+      'quiet-windows.cjs',
       'reader-cache.cjs',
       'reading-state.cjs',
       'record-history.cjs',

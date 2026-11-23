@@ -30,7 +30,7 @@ const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
-  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold',
+  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','quiet-window','person-recent','trust-unknown','trust-hold',
   'control-refused-limit']);
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
