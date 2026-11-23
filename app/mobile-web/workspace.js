@@ -203,6 +203,8 @@
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
+    Object.assign(words.zh, { speechNames: '只看谁的对话', speechList: '对话内容', speechYou: '你', speechTo: '发给', speechDispatch: 'NAW 派活', speechUnknown: '未知会话', speechUnverified: '（未核实）', speechEmpty: '这个空间里还没有人说过话。', speechEmptyMember: '{name} 在这里还没有说过话，也没有收到消息。', speechExpand: '展开全文', speechCollapse: '收起' });
+    Object.assign(words.en, { speechNames: 'Show messages of', speechList: 'Conversation messages', speechYou: 'You', speechTo: 'to', speechDispatch: 'NAW queue', speechUnknown: 'Unknown session', speechUnverified: ' (unverified)', speechEmpty: 'No one has said anything in this space yet.', speechEmptyMember: '{name} has not said or received anything here yet.', speechExpand: 'Show all', speechCollapse: 'Show less' });
     Object.assign(words.zh, { latestPosition: '最新消息', earlierPosition: '较早消息 · 最新在下方', messageQueued: '已排队，等待会话读取；请勿重复发送。', oldReceiptGroup: '上次配对的记录', oldReceiptHelp: '仅保存在此浏览器，不是新消息，不会重发。已收起且未删除；未确认的结果需回 Mac 核对。' });
     Object.assign(words.en, { latestPosition: 'Latest messages', earlierPosition: 'Earlier messages · latest below', messageQueued: 'Queued, waiting for the session to read it. Do not resend.', oldReceiptGroup: 'Previous pairing records', oldReceiptHelp: 'Stored only in this browser, not new messages; they will not be resent. Collapsed, not deleted. Check unresolved results on the Mac.' });
     function receipts(container, scope = {}) {
@@ -385,9 +387,54 @@
       const r = view.rooms.find(r => r.id === route.id); if (!r) { heading('space'); el('content').append(node('p', t('noScope'))); return; }
       tabs([[t('chat'), 'space/' + r.id, true], [t('queue') + ' ' + r.queue.length, 'queue/' + r.id, false]]);
       const members = node('div', r.members.map(s => s.name).join(' / '), 'callout'); members.id = 'room-members'; el('content').append(members);
-      const rows = node('div', undefined, 'thread'); thread(r.messages, rows); el('content').append(rows);
+      const rows = node('div', undefined, 'thread');
+      el('content').append(rows);
+      if (Array.isArray(r.speech)) speech(r, rows); else thread(r.messages, rows);
       el('content').append(button('+ ' + t('add'), () => addTask(r), 'primary'));
       receipts(el('content'), { roomId: r.id });
+    }
+    // The Mac's 「对话」: only what was said, by everyone or by one participant (an older Mac sends the space record).
+    const speechChosen = new Map(), speechOpen = new Set();
+    function speech(r, rows) {
+      const chosen = speechChosen.get(r.id) || '', people = [], seen = new Set(), butler = view.steward?.sessionId;
+      const add = (id, name) => { if (id && !seen.has(id)) { seen.add(id); people.push({ id, name }); } };
+      if (butler && r.speech.some(i => i.fromId === butler || i.to.some(x => x.id === butler))) add(butler, t('butler'));
+      for (const s of r.members) add(s.id, s.name);
+      for (const i of r.speech) { if (i.fromKind === 'agent' && !i.unverified) add(i.fromId, i.fromName); for (const x of i.to) add(x.id, x.name); }
+      const names = node('div', undefined, 'tabs speech-names'); names.setAttribute('role', 'toolbar'); names.setAttribute('aria-label', t('speechNames'));
+      for (const p of [{ id: '', name: t('all') }, ...people]) {
+        const b = button(p.name, () => { speechChosen.set(r.id, p.id); paint(); global.scrollTo?.(0, d.documentElement.scrollHeight); el('content').querySelector(`[data-speech-member="${CSS.escape(p.id)}"]`)?.focus({ preventScroll: true }); });
+        b.dataset.speechMember = p.id; b.setAttribute('aria-pressed', String(p.id === chosen)); if (p.id === chosen) b.className = 'selected'; names.append(b);
+      }
+      rows.before(names);
+      rows.setAttribute('aria-label', t('speechList'));
+      const shown = chosen ? r.speech.filter(i => i.fromId === chosen || i.to.some(x => x.id === chosen)) : r.speech;
+      if (r.earlierSpeechOmitted) rows.append(node('p', t('omit'), 'small-note'));
+      for (const i of shown) {
+        const person = i.fromKind === 'person', article = node('article', undefined, 'message speech' + (person ? ' human' : '')), body = node('div', undefined, 'message-body'), author = node('div', undefined, 'author');
+        const from = person ? t('speechYou') : i.fromKind === 'dispatch' ? t('speechDispatch') : (i.fromName || t('speechUnknown')) + (i.unverified ? t('speechUnverified') : '');
+        article.dataset.speechId = i.id; author.append(node('span', from));
+        const to = i.to.map(x => x.name || t('speechUnknown')).join('、');
+        if (to) { const arrow = node('span', '→', 'speech-arrow'); arrow.setAttribute('aria-hidden', 'true'); author.append(arrow, node('span', t('speechTo'), 'visually-hidden'), node('span', to)); }
+        const at = new Date(i.time);
+        if (Number.isFinite(i.time) && i.time > 0) { const time = node('time', at.toLocaleString(lang === 'zh' ? 'zh-CN' : 'en', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })); time.dateTime = at.toISOString(); author.append(time); }
+        else author.append(node('span', t('receiptTimeUnknown'), 'message-time-unknown'));
+        const bubble = node('div', i.text, 'bubble'); if (i.textOmitted) bubble.append(node('p', t('omit'), 'small-note'));
+        const s = view.sessions.find(s => s.id === i.fromId) || {};
+        body.append(author, bubble);
+        // Same threshold as the Mac (speech-stream.js folds); the open ones stay open across repaints.
+        if (i.text.length > 600 || i.text.split('\n').length > 10) {
+          const open = speechOpen.has(i.id), toggle = button(t(open ? 'speechCollapse' : 'speechExpand'), () => {
+            const top = article.getBoundingClientRect().top;
+            if (speechOpen.has(i.id)) speechOpen.delete(i.id); else speechOpen.add(i.id);
+            paint();
+            const again = el('content').querySelector(`[data-speech-id="${CSS.escape(i.id)}"]`);
+            if (again) { global.scrollTo?.(0, global.scrollY + again.getBoundingClientRect().top - top); again.querySelector('.speech-toggle')?.focus({ preventScroll: true }); }
+          }, 'speech-toggle');
+          toggle.setAttribute('aria-expanded', String(open)); bubble.classList.toggle('folded', !open); body.append(toggle);
+        } if (!person) article.append(avatar(s)); article.append(body); rows.append(article);
+      }
+      if (!shown.length) rows.append(node('p', chosen ? t('speechEmptyMember').replace('{name}', people.find(p => p.id === chosen)?.name || t('speechUnknown')) : t('speechEmpty'), 'quiet'));
     }
     function addTask(room) {
       const form = node('form'); form.method = 'post'; form.action = '/mobile/workspace/action';
@@ -654,6 +701,9 @@
     function paint() {
       // A chat read to its end stays at its end when it repaints, so a message just sent or arrived is in view.
       const stick = route?.page === 'chat' && (readingLatest() || global.innerHeight + global.scrollY >= d.documentElement.scrollHeight - 80);
+      // A space's conversation read to its end keeps growing downward, as on the Mac.
+      const spaceSpeech = route?.page === 'space' && Boolean(route.id) && Boolean(el('content').querySelector('.speech-names')), spaceY = global.scrollY;
+      const stickSpace = spaceSpeech && global.innerHeight + global.scrollY >= d.documentElement.scrollHeight - 80;
       global.clearTimeout(expiryTimer); el('content').replaceChildren(); el('top').replaceChildren(); el('connection').replaceChildren(); el('navigation').replaceChildren();
       d.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'; d.title = (route ? t(route.page) : t('home')) + ' · NAW'; el('skip').textContent = t('skip'); el('dialog-close').textContent = t('close');
       if (!route || route.page === 'home') { const homeLink = link('', 'home', 'brand'); homeLink.append(node('span', 'N', 'mark'), node('span', 'NAW')); el('top').append(homeLink, node('span', '', 'grow')); }
@@ -696,6 +746,8 @@
       if (route?.page === 'chat') { const position = node('span', '', 'reading-position'); position.id = 'reading-position'; el('connection').append(position); }
       updateCompose();
       if (stick) scrollToLatest();
+      // Emptying the page above clamps the scroll to the top; scrolled up, the reading place stays put.
+      if (stickSpace) global.scrollTo?.(0, d.documentElement.scrollHeight); else if (spaceSpeech) global.scrollTo?.(0, spaceY);
     }
     const routeKey = () => JSON.stringify([lang, route?.page, route?.id, route?.nativeId]);
     const workspacePath = () => '/mobile/workspace/' + (route?.page === 'chat' && route.id ? 'session/' + encodeURIComponent(route.id)
@@ -763,6 +815,7 @@
         if (ticket === navigation) paint();
         // A chat opens at its newest message, as on the Mac; later refreshes keep the reader's place.
         if (ticket === navigation && route.page === 'chat') scrollToLatest();
+        if (ticket === navigation && route.page === 'space' && el('content').querySelector('.speech-names')) global.scrollTo?.(0, d.documentElement.scrollHeight);
       } catch {
         if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
       } finally { if (ticket === navigation) d.documentElement.dataset.loading = 'false'; }

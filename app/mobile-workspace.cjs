@@ -10,6 +10,7 @@ const { confirmationSummary } = require('./confirmation-inbox.cjs');
 const { tempSummary } = require('./temp-reminders.cjs');
 const { currentTarget } = require('./mobile-session.cjs');
 const { storedQueueSource } = require('./butler-ingress.cjs');
+const { speechStream } = require('./task-stream.js');
 const denied = () => Object.assign(Error('Mobile workspace authorization or state changed'), { code: 'MOBILE_WORKSPACE_DENIED', notSent: true });
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
@@ -55,6 +56,22 @@ function conversation(rows = [], sessionId, budget, cards) {
     bytes += size; result.push(row);
   }
   return { messages: result.reverse(), earlierMessagesOmitted: omitted };
+}
+// The desktop's 「对话」: what was said in the space, newest kept first within the budget. sessions: only the
+// members this phone may read, so a member it may not read adds nothing beyond the space's own record.
+function speech(room, sessions, budget) {
+  const limit = budget ?? 128 * 1024, result = [];
+  let bytes = 0, omitted = 0;
+  for (const item of speechStream(room, { sessions }).reverse()) {
+    const content = text(item.text, 16000);
+    const row = { id: text(item.id, 300), fromKind: item.fromKind, fromId: text(item.fromId, 100), fromName: text(item.fromName, 200),
+      to: item.to.map(r => ({ id: text(r.id, 100), name: text(r.name, 200) })), text: content, time: item.time,
+      textOmitted: item.text.length > content.length, ...(item.unverified ? { unverified: true } : {}) };
+    const size = Buffer.byteLength(JSON.stringify(row));
+    if (result.length >= 200 || bytes + size > limit) { omitted++; continue; }
+    bytes += size; result.push(row);
+  }
+  return { speech: result.reverse(), earlierSpeechOmitted: omitted };
 }
 class MobileWorkspace {
   constructor({ snapshot, roomState, labels = new Map(), records, confirmation, decide, broadcast = async () => {}, schedule = () => {}, now = Date.now, steward, personAction = () => {} }) {
@@ -158,14 +175,16 @@ class MobileWorkspace {
     // for metadata, exact confirmation content and reminders. Selected mode
     // keeps its original per-thread contract. Native data is never modified.
     const bodyBudget = all ? Math.min(128 * 1024, Math.floor(4 * 1024 * 1024 / Math.max(1, permitted.size + roomRows.length))) : undefined;
+    const current = s => {
+      const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
+      return (s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
+        (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId));
+    };
     const sessions = [...permitted.values()].map(s => {
       // question: a Codex question that does not block the turn is open; the home row says it needs you, as 等你 does.
       const row = { id: s.id, name: s.name, provider: s.provider, state: s.state, question: (s.approvals || []).some(r => !r.pending && nonBlockingQuestion(r)), roomIds: roomIds(s).filter(id => grant.roomIds.includes(id)) };
       if (selection && (selection.kind !== 'session' || selection.id !== s.id)) return { ...row, conversationLoaded: false };
-      const boundary = (s.messages || []).findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
-      return { ...row, ...(selection ? { conversationLoaded: true } : {}),
-        ...conversation((s.messages || []).slice(boundary + 1).filter(m => (!m.nativeId || m.nativeId === s.nativeId) &&
-          (!m.backgroundOperation?.nativeId || m.backgroundOperation.nativeId === s.nativeId)), s.id, bodyBudget, cards) };
+      return { ...row, ...(selection ? { conversationLoaded: true } : {}), ...conversation(current(s), s.id, bodyBudget, cards) };
     });
     const rooms = roomRows.map(r => {
       const questions = this.waitingQuestions(r.id, r.queue || []);
@@ -177,7 +196,10 @@ class MobileWorkspace {
           scopes.some(s => s.sessionId === i.sentTo && s.nativeId === i.sentNative && s.actions.includes('send')) })),
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
       ...(selection && (selection.kind !== 'room' || selection.id !== r.id) ? { conversationLoaded: false }
-        : { ...conversation(r.messages, undefined, bodyBudget), ...(selection ? { conversationLoaded: true } : {}) }),
+        : { ...conversation(r.messages, undefined, bodyBudget), ...(selection ? { conversationLoaded: true } : {}),
+          // Only the space page shows it, so a read of every space at once adds nothing toward the size limit.
+          ...selection?.kind === 'room' && speech(r, [...permitted.values()].filter(s => roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, nativeId: s.nativeId, state: s.state,
+            messagesOmitted: s.messagesOmitted, messages: current(s) })), bodyBudget === undefined ? undefined : Math.floor(bodyBudget / 2)) }),
       };
     });
     const shared = grant.records ? this.records.status(state, client) : null;

@@ -257,6 +257,7 @@ async function build() {
       'steward-standing.cjs',
       'steward-wake.cjs',
       'submission-policy.cjs',
+      'task-stream.js',
       'temp-cleanup.py',
       'temp-ownership.cjs',
       'temp-reminders.cjs',

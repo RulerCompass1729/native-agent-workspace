@@ -3774,7 +3774,20 @@
     "notice.activity.dshWitnessLost": "沙盒拦截记录中断；会话已停止",
     "disclosure.older": "显示更早的 {count} 条 · 共 {total} 条",
     "disclosure.shown": "已显示 {shown}/{total} 条",
-    "disclosure.more": "再显示 {count} 条 · 共 {total} 条"
+    "disclosure.more": "再显示 {count} 条 · 共 {total} 条",
+    "room.conversation": "对话",
+    "speech.all": "全部",
+    "speech.names": "只看谁的对话",
+    "speech.list": "对话内容",
+    "speech.you": "你",
+    "speech.to": "发给",
+    "speech.unknown": "未知会话",
+    "speech.unverified": "（未核实）",
+    "speech.newMessages": "有 {count} 条新消息 ↓",
+    "speech.expand": "展开全文",
+    "speech.collapse": "收起",
+    "speech.empty": "这个空间里还没有人说过话。",
+    "speech.emptyMember": "{name} 在这里还没有说过话，也没有收到消息。"
   },
   "en": {
     "taskBoard.action.unknown.card": "Check confirmation",
@@ -7549,7 +7562,20 @@
     "notice.activity.dshWitnessLost": "The sandbox refusal record stopped; the session was stopped",
     "disclosure.older": "Show {count} earlier · {total} in all",
     "disclosure.shown": "{shown} of {total} shown",
-    "disclosure.more": "Show {count} more · {total} in all"
+    "disclosure.more": "Show {count} more · {total} in all",
+    "room.conversation": "Conversation",
+    "speech.all": "All",
+    "speech.names": "Show messages of",
+    "speech.list": "Conversation messages",
+    "speech.you": "You",
+    "speech.to": "to",
+    "speech.unknown": "Unknown session",
+    "speech.unverified": " (unverified)",
+    "speech.newMessages": "New messages: {count} ↓",
+    "speech.expand": "Show all",
+    "speech.collapse": "Show less",
+    "speech.empty": "No one has said anything in this space yet.",
+    "speech.emptyMember": "{name} has not said or received anything here yet."
   }
 };
   Object.freeze(messages.zh); Object.freeze(messages.en); Object.freeze(messages);

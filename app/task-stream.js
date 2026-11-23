@@ -91,15 +91,95 @@
     return { tasks, system, counts };
   }
 
-  // The conversation in the space, without NAW's own records: what the person sent (role human, to a
-  // recipient) and what members said back (role assistant). Newest last.
-  function speech(room, limit = 20) {
+  // What was said in a space, oldest first: the person's, the butler's and the members' words to each other and
+  // each member's last reply of a turn. NAW's own records (queue, delivery, timers, cards, tools, thinking,
+  // automatic input) are left out. room: the space's record; sessions: its members' display sessions (a member's
+  // replies and the words sent to it outside the space are read from its messages when shown).
+  const WAKE_HEADER = /^\[Workspace message from [^\n]*\]\n/u;
+  const PERSON_ORIGINS = ['human', 'human-mobile', 'room'];
+  const said = m => typeof m?.text === 'string' && m.text.trim() !== '';
+  const NOTIFICATION = /<task-notification>[\s\S]*?<\/task-notification>/g;
+  const onlyNotifications = text => Boolean(text.match(NOTIFICATION)) && !text.replace(NOTIFICATION, '').trim();
+  function speechStream(room, { sessions = [] } = {}) {
+    const items = [], byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
+    const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
+    const stamp = value => Number.isFinite(value) ? value : 0;
     const messages = Array.isArray(room?.messages) ? room.messages : [];
-    return messages.filter(m => m && !m.kind && typeof m.text === 'string' && m.text.trim() && (m.role === 'human' || m.role === 'assistant' && typeof m.sessionId === 'string'))
-      .map(m => ({ id: m.id, from: m.role === 'human' ? 'person' : 'member', sessionId: m.role === 'human' ? '' : m.sessionId, recipientId: typeof m.recipientId === 'string' ? m.recipientId : '',
-        text: m.text, time: Number.isFinite(m.time) ? m.time : 0 }))
-      .sort((a, b) => a.time - b.time).slice(-limit);
+    // Session rows that the space already records: the person's words delivered from it and the agents' wakes.
+    const delivered = new Set(), wakes = new Set();
+    for (const m of messages) {
+      if (m?.role === 'human') for (const d of m.deliveries || []) if (d?.id) delivered.add(d.id);
+      if (m?.kind === 'agent-wake' && m.wake?.id) wakes.add(m.wake.id);
+    }
+    // A shown member's replies come from its own messages; the space's mirror is kept for what came before them.
+    const shownSince = new Map();
+    for (const s of byId.values()) {
+      if (!Array.isArray(s.messages) || s.messagesOmitted) continue;
+      shownSince.set(s.id, s.messages.length ? Math.min(...s.messages.map(m => stamp(m?.time) || Infinity)) : Infinity);
+      let time = 0, last = null;
+      const reply = () => {
+        if (last) items.push({ id: `reply:${s.id}:${last.id}`, fromKind: 'agent', fromId: s.id, fromName: nameOf(s.id), to: [], text: last.text, time: stamp(last.time) || time,
+          target: { sessionId: s.id, nativeId: s.nativeId || '', messageId: last.id } });
+        last = null;
+      };
+      for (const m of s.messages) {
+        if (!m) continue;
+        time = stamp(m.time) || time;
+        if (m.role === 'assistant') {
+          if (!m.kind && !m.volatile && said(m) && m.status !== 'streaming' && m.phase !== 'commentary') last = m;
+          continue;
+        }
+        if (m.role !== 'user') continue;
+        reply();
+        if (!said(m) || delivered.has(m.id) || m.backgroundOperation) continue;
+        const to = [{ id: s.id, name: nameOf(s.id) }], target = { sessionId: s.id, nativeId: s.nativeId || '', messageId: m.id }, base = { id: `input:${s.id}:${m.id}`, to, text: m.text, time, target };
+        if (m.origin === 'agent-wake' && m.wakeSource) {
+          if (wakes.has(m.wakeSource.id)) continue;
+          const id = m.wakeSource.senderId || '';
+          items.push({ ...base, fromKind: 'agent', fromId: id, fromName: nameOf(id, String(m.name || '').replace(/^来自\s*/u, '')), text: m.text.replace(WAKE_HEADER, '') });
+        } else if (m.origin === 'room' && typeof m.name === 'string' && m.name.trim()) {
+          // Through a space with a sender's name: another agent's words (workspace.cjs sendScopedOutboxInput keeps only
+          // its name); the person's own space sends carry none. A name proves nothing, so it stays unverified.
+          const name = plainName(m.name), match = [...byId.values()].filter(x => x.id !== s.id && plainName(x.name) === name);
+          items.push({ ...base, fromKind: 'agent', unverified: true, ...(match.length === 1 ? { fromId: match[0].id, fromName: name } : { fromId: '', fromName: `「${name}」` }) });
+        } else if (PERSON_ORIGINS.includes(m.origin) || m.origin === 'native' && (m.inputSource === 'user' || m.inputSource === undefined && !onlyNotifications(m.text))) {
+          // With no source, NAW's own display (workspace.cjs nativeInputOrigin) counts typed text, not a turn of notifications.
+          items.push({ ...base, fromKind: 'person', fromId: '', fromName: '' });
+        } else if (m.origin === 'naw-dispatch' && m.dispatchPurpose?.kind === 'queue' && !String(m.dispatchItem || '').startsWith('steward-wake:')) {
+          items.push({ ...base, fromKind: 'dispatch', fromId: '', fromName: '' });
+        } else if (m.origin === 'agent-control' && m.agentControl?.id) {
+          items.push({ ...base, fromKind: 'agent', fromId: m.agentControl.id, fromName: nameOf(m.agentControl.id, m.agentControl.name) });
+        }
+      }
+      // A turn that is still going has not given its reply yet.
+      if (!['working', 'approval'].includes(s.state)) reply(); else last = null;
+    }
+    for (const m of messages) {
+      if (!m || m.backgroundOperation) continue;
+      const target = originalTarget(m), time = stamp(m.time);
+      if (m.role === 'human' && !m.kind && said(m)) {
+        const to = (m.deliveries?.length ? m.deliveries.map(d => ({ id: d.recipientId || '', name: nameOf(d.recipientId, d.recipientName) }))
+          : m.recipientId ? [{ id: m.recipientId, name: nameOf(m.recipientId) }] : []);
+        items.push({ id: `room:${m.id}`, fromKind: 'person', fromId: '', fromName: '', to, text: m.text, time, target });
+      } else if (m.kind === 'agent-wake' && m.wake) {
+        const w = m.wake;
+        items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: w.senderId || '', fromName: nameOf(w.senderId, w.senderName),
+          to: [{ id: w.recipientId || '', name: nameOf(w.recipientId, w.recipientName) }], text: String(w.body ?? ''), time, target });
+      } else if (m.kind === 'agent-peer' && m.peerMessage) {
+        const p = m.peerMessage, body = m.uiMessage?.params?.body ?? String(m.text || '').split('\n').slice(1).join('\n');
+        items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: p.senderId || '', fromName: p.senderId ? nameOf(p.senderId, p.senderName) : p.senderName ? `「${p.senderName}」` : '',
+          to: [{ id: p.recipientId || '', name: nameOf(p.recipientId, p.recipientName) }], text: body, time, target, unverified: true });
+      } else if (m.role === 'assistant' && !m.kind && typeof m.sessionId === 'string' && said(m) && (m.finalReply || !m.sharedStream && m.status !== 'streaming')) {
+        if (time >= (shownSince.get(m.sessionId) ?? Infinity)) continue;
+        items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: m.sessionId, fromName: nameOf(m.sessionId, m.name), to: [], text: m.text, time, target });
+      }
+    }
+    const seen = new Set();
+    return items.filter(i => !seen.has(i.id) && seen.add(i.id)).map((item, order) => ({ item, order }))
+      .sort((a, b) => a.item.time - b.item.time || a.order - b.order).map(({ item }) => item);
   }
+  // A stream item that a named participant said or that was sent to it.
+  const speechInvolves = (item, id) => Boolean(id) && (item.fromId === id || item.to.some(t => t.id === id));
 
   // A permission request or a native question keeps the member's turn until the person answers.
   const needsApproval = s => Boolean(s && (s.nativeApproval?.requests?.length || s.approvals?.length || s.approval || s.approvalOverflow || s.state === 'approval' || s.claudeQuestion));
@@ -182,7 +262,7 @@
     return { sessionId, nativeId: row.nativeId || '', messageId: row.sharedStream ? row.nativeMessageId || '' :
       row.role === 'human' ? row.deliveries?.find(d => d.recipientId === sessionId)?.id || row.id || '' : '' };
   }
-  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, roomTasks, speech, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
+  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, roomTasks, speechStream, speechInvolves, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.nativeWorkspaceTaskStream = api;
 })(globalThis);
