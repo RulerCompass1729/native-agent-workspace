@@ -98,6 +98,8 @@
   const WAKE_HEADER = /^\[Workspace message from [^\n]*\]\n/u;
   const PERSON_ORIGINS = ['human', 'human-mobile', 'room'];
   const said = m => typeof m?.text === 'string' && m.text.trim() !== '';
+  const NOTIFICATION = /<task-notification>[\s\S]*?<\/task-notification>/g;
+  const onlyNotifications = text => Boolean(text.match(NOTIFICATION)) && !text.replace(NOTIFICATION, '').trim();
   function speechStream(room, { sessions = [] } = {}) {
     const items = [], byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
     const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
@@ -137,11 +139,11 @@
           items.push({ ...base, fromKind: 'agent', fromId: id, fromName: nameOf(id, String(m.name || '').replace(/^来自\s*/u, '')), text: m.text.replace(WAKE_HEADER, '') });
         } else if (m.origin === 'room' && typeof m.name === 'string' && m.name.trim()) {
           // Through a space with a sender's name: another agent's words (workspace.cjs sendScopedOutboxInput keeps only
-          // its name); the person's own space sends carry none. Attributed only when exactly one other member has it.
+          // its name); the person's own space sends carry none. A name proves nothing, so it stays unverified.
           const name = plainName(m.name), match = [...byId.values()].filter(x => x.id !== s.id && plainName(x.name) === name);
-          items.push({ ...base, fromKind: 'agent', ...(match.length === 1 ? { fromId: match[0].id, fromName: name } : { fromId: '', fromName: `「${name}」`, unverified: true }) });
-        } else if (PERSON_ORIGINS.includes(m.origin) || m.origin === 'native' && (m.inputSource === undefined || m.inputSource === 'user')) {
-          // A native row carries a source only when NAW recognised it as machine input (workspace.cjs on('nativeInput')).
+          items.push({ ...base, fromKind: 'agent', unverified: true, ...(match.length === 1 ? { fromId: match[0].id, fromName: name } : { fromId: '', fromName: `「${name}」` }) });
+        } else if (PERSON_ORIGINS.includes(m.origin) || m.origin === 'native' && (m.inputSource === 'user' || m.inputSource === undefined && !onlyNotifications(m.text))) {
+          // With no source, NAW's own display (workspace.cjs nativeInputOrigin) counts typed text, not a turn of notifications.
           items.push({ ...base, fromKind: 'person', fromId: '', fromName: '' });
         } else if (m.origin === 'naw-dispatch' && m.dispatchPurpose?.kind === 'queue' && !String(m.dispatchItem || '').startsWith('steward-wake:')) {
           items.push({ ...base, fromKind: 'dispatch', fromId: '', fromName: '' });

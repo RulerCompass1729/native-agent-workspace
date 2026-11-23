@@ -108,7 +108,8 @@ test('a member\'s message through the space outbox is that member\'s, not the pe
     { id: 'ob2', role: 'user', origin: 'room', name: 'Somebody', text: 'B, from an unknown name.', time: 71 });
   const items = stream.speechStream(room, { sessions });
   const known = items.find(i => i.text === 'B, outbox note.'), unknown = items.find(i => i.text === 'B, from an unknown name.');
-  assert.deepEqual([known.fromKind, known.fromId, known.fromName, known.to.map(t => t.id), Boolean(known.unverified)], ['agent', 'A', 'A', ['B'], false]);
+  // Review round 2, B: only the name is kept, so even a single match stays marked unverified.
+  assert.deepEqual([known.fromKind, known.fromId, known.fromName, known.to.map(t => t.id), known.unverified], ['agent', 'A', 'A', ['B'], true]);
   assert.deepEqual([unknown.fromKind, unknown.fromId, unknown.fromName, unknown.unverified], ['agent', '', '「Somebody」', true]);
   assert.ok(stream.speechInvolves(known, 'A'));
 });
@@ -120,6 +121,9 @@ test('native input the person typed without a recorded source still shows as the
   const items = stream.speechStream(room, { sessions });
   assert.ok(view(items).includes('你 → B: queued while working'));
   assert.ok(!items.some(i => i.text === 'wake'));
+  // Review round 2, A: with no source, a turn made only of task notifications is not the person's (workspace.cjs:999, :1013).
+  sessions[1].messages.push({ id: 'tn', role: 'user', origin: 'native', text: '<task-notification><task-id>t1</task-id><status>completed</status></task-notification>\n', time: 63 });
+  assert.ok(!stream.speechStream(room, { sessions }).some(i => i.text.includes('task-notification')));
 });
 test('ids are unique and inputs are not changed', () => {
   const { room, sessions } = space(), before = JSON.stringify({ room, sessions });
