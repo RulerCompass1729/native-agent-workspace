@@ -1790,6 +1790,7 @@ async function boot() {
     },
     standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
       sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
+    standingFallback: (actor, command) => stewardStanding.fallback(actor, command),
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);

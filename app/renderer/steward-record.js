@@ -87,7 +87,15 @@
       const box = make('section', 'steward-record-wake'), label = make('label'), input = document.createElement('input');
       input.type = 'checkbox'; input.dataset.action = 'steward-standing'; label.append(input, make('span', '', 'standing.switch'));
       const note = make('p', 'records-note', 'standing.scope'), status = make('p', 'records-note'); status.setAttribute('role', 'status');
-      const show = value => { input.checked = value.on === true; say(status, value.unavailable ? 'standing.unavailable' : value.on ? 'standing.on' : 'standing.off'); };
+      const show = value => {
+        input.checked = value.on === true;
+        let key = 'standing.off';
+        if (value.unavailable) key = 'standing.unavailable';
+        else if (value.on) key = 'standing.on';
+        // On for the previous butler: why it reads off (R118).
+        else if (value.reason === 'other-designation') key = 'standing.offOther';
+        say(status, key);
+      };
       try { show(await api.stewardStanding()); } catch { input.disabled = true; say(status, 'standing.unavailable'); }
       input.addEventListener('change', async () => {
         const previous = !input.checked; input.disabled = true;

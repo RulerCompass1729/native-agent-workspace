@@ -75,9 +75,20 @@ class StewardStanding {
       try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
     } finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temp); } catch {} }
   }
+  // On for an earlier designation reads off, with why: the person designated another butler since (R118).
   view() {
-    try { const s = this.read(); return { on: s.on && same(s.designation, this.role.selected), limit: LIMIT, unavailable: false }; }
-    catch { return { on: false, limit: LIMIT, unavailable: true }; }
+    try {
+      const s = this.read(), on = s.on && same(s.designation, this.role.selected);
+      return { on, limit: LIMIT, unavailable: false, ...(s.on && !on ? { reason: 'other-designation' } : {}) };
+    } catch { return { on: false, limit: LIMIT, unavailable: true }; }
+  }
+  // Why the current butler's local action asks instead, when the person can fix it from the switch. A code only.
+  fallback(actor, command) {
+    try {
+      const s = this.read();
+      if (!s.on || same(s.designation, this.role.selected) || !localAction(command)) return null;
+      return same(this.role.current(), { sessionId: actor.id, nativeId: actor.nativeId }) ? 'standing-other-designation' : null;
+    } catch { return null; }
   }
   set(context, on) {
     if (!this.person(context) || typeof on !== 'boolean') throw Error('Only the current person window can change standing permission');

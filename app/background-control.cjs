@@ -79,6 +79,7 @@ function readTarget(record, value) {
     ...(typeof name === 'string' ? { name: operation.visibleText(name) } : {}), ...(messages ? { messages: messages.length, ...(through !== undefined ? { through } : {}) } : {}) };
 }
 const token = v => typeof v === 'string' && v.length > 0 && v.length <= 160 && !/[\x00-\x1f\x7f]/.test(v);
+const STANDING_FALLBACKS = new Set(['standing-other-designation']);
 // Parameters use the existing application's names and order. All values still
 // pass its normal validators. Snapshot supplies current native/turn identities.
 const parameters = {
@@ -159,7 +160,7 @@ const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms 
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {}, confirmationFingerprint = null }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, standingFallback = () => null, stagedPollMs = 200, decided = () => {}, receiptRead = () => {}, confirmationFingerprint = null }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -179,6 +180,8 @@ class BackgroundControl {
     // only for the designated butler in no space (the person, 2026-11-12 14:24). Its preconditions are still checked.
     this.unasked = unasked;
     this.standing = standing; this.standingValid = standingValid;
+    // Why the person's standing permission did not apply, as a code the card and the agent's result carry (R118).
+    this.standingFallback = standingFallback;
     this.confirmationPending = confirmationPending;
     this.confirmationFingerprint = confirmationFingerprint;
     // The person's answer on a card, once its outcome is recorded, and the agent reading a receipt itself: what main.cjs
@@ -792,7 +795,7 @@ class BackgroundControl {
   async perform(actor, args, context, valid, approved) {
     const key = this.key(actor), handler = this.handlers.get(args.method);
     const checkDeadline = () => { if (approved && this.now() >= approved.expiresAt) throw require('./ui-errors.cjs').uiError('error.background.confirmationExpired'); };
-      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, standingFailure, disposition, reason, handlerEntered = false;
+      let state, value, error, confirmation, delivery, refusal, originCheck, preconditionError, standingFailure, standingFallback = null, disposition, reason, handlerEntered = false;
       try {
         await valid();
         checkDeadline();
@@ -822,6 +825,11 @@ class BackgroundControl {
               throw failure;
             }
             if (!unasked && !standing) {
+              if (!approved) {
+                let code = null;
+                try { code = this.standingFallback(actor, args, context); } catch { /* No reason; the card is unchanged. */ }
+                if (STANDING_FALLBACKS.has(code)) standingFallback = code;
+              }
               const answer = await dialog(context, 'message', options);
               if (answer.response !== 1) return { cancelled: true };
             }
@@ -923,6 +931,7 @@ class BackgroundControl {
           row.confirmationRequestedAt ??= this.now();
           row.confirmationTitle = operation.visibleText(confirmation.options?.message || '');
           row.confirmationSummary = operation.operationSummary(args, actor, this.terminalSnapshot(context) || {});
+          if (standingFallback) row.standingFallback = standingFallback;
         }
         // Only a resumable handler needs this marker. A later approval cannot
         // claim non-execution if an earlier handler may already have had effects.
@@ -1120,6 +1129,7 @@ class BackgroundControl {
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${r.disposition ? require('./ui-locale.js').format('zh', r.stateUiMessage.key) : ({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
       backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}), ...(this.answerState(r) ? { answer: this.answerState(r) } : {}), ...this.answerProgress(r),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
+        ...(r.standingFallback ? { standingFallback: r.standingFallback } : {}),
         resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
           ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),

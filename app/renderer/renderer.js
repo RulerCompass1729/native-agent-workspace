@@ -3037,6 +3037,10 @@ function renderBackgroundControls(entry, message) {
     box.append(note);
   }
   if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
+  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
+  if (card && op.standingFallback === 'standing-other-designation') {
+    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
+  }
   const raw = card ? question.options.detail : op.arguments;
   if (raw) {
     const details = node('details', undefined, 'background-details'), label = uiNode('summary', 'background.card.details');
