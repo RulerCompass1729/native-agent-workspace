@@ -1044,6 +1044,9 @@ function displayState(snapshot, context, read = null) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
   display.sessions = display.sessions.map(s => ({ ...s }));
+  const operatorCreations = context?.background ? [] : display.sessions.filter(s => !s.archived).flatMap(s =>
+    (s.messages || []).filter(m => m.kind === 'operator-open' && m.operator?.creation === 'pending-authorization' && m.operator.actionable !== false && m.operator.initiatorId === s.id)
+      .map(message => ({ sessionId: s.id, nativeId: s.nativeId, message })));
   const backgroundConfirmations = context?.background ? [] : backgroundControl?.confirmations(display, snapshot) || [];
   if (!context?.background && context?.win) {
     const key = JSON.stringify(backgroundConfirmations.map(confirmationInbox.confirmationSummary));
@@ -1068,7 +1071,7 @@ function displayState(snapshot, context, read = null) {
   const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
@@ -1453,6 +1456,7 @@ function register(name, handler) {
       // where a session went is the desktop's own step. An agent can do neither, with or without confirmation.
       if (name === 'operatorAction' && (['placement', 'placed'].includes(args[1]) || args[1] === 'grant' && args[2] && typeof args[2] === 'object' && Object.hasOwn(args[2], 'space'))) throw uiError('error.operator.personOnlySpace');
       if (name === 'operatorAction' && args[1] === 'succession') throw uiError('error.operator.desktopOnly');
+      if (name === 'operatorAction' && args[1] === 'quota') throw uiError('error.operator.personOnlyQuota');
       if (backgroundOperation.deliveryTargets(name, args)) {
         await c.client.refresh();
         backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
@@ -1908,7 +1912,11 @@ async function boot() {
     if (!c.background) throw uiError('error.background.withdrawNotPending');
     return backgroundControl.withdraw(c.actor, id, c);
   });
-  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy', 'operatorAction']) register(name, (c, ...args) => {
+  register('operatorAction', (c, id, action, value) => {
+    if (c.background && action === 'quota') throw uiError('error.operator.personOnlyQuota');
+    return c.client.call('operatorAction', id, action, value);
+  });
+  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
     const approved = c.background && backgroundOperation.request()?.approved;
     // Only a card the person confirmed carries a confirmation into input; a caller's own fourth argument is dropped.

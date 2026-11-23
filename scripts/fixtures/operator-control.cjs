@@ -7,7 +7,7 @@ const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const create = NativeHost.prototype.create, bind = Workspace.prototype.bind, sessions = new Map();
 NativeHost.prototype.create = function (record) {
   const runtime = create.call(this, record); runtime.operatorAvailable = record.provider === 'claude';
-  record.nativePermissionMode = 'default';
+  record.nativePermissionMode = process.env.NAW_TEST_OPERATOR_BYPASS === '1' ? 'bypassPermissions' : 'default';
   runtime.liveTurn = { id: 'synthetic-turn-' + record.id, promptId: 'synthetic-prompt-' + record.id };
   const start = runtime.start; runtime.start = async () => { await start(); runtime.emit('model', 'synthetic-native-default'); };
   return runtime;

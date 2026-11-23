@@ -472,6 +472,7 @@ class Workspace extends EventEmitter {
     // (Both are the desktop's own steps; main.cjs refuses them, and a grant that names a space, from an agent's context.)
     if (['close', 'read'].includes(action) && this.operator.data.requests[action === 'read' ? value : value?.requestId]?.initiatorId !== id) throw Error('Request belongs to another initiator');
     if (action === 'grant') return this.operator.grant(id, value);
+    if (action === 'quota') return this.operator.quota(id, value);
     if (action === 'revoke') return this.operator.revoke(value);
     if (action === 'authorize') return this.operator.authorize(value?.key, value?.domainId);
     if (action === 'dismiss') return this.operator.dismiss(value?.key);

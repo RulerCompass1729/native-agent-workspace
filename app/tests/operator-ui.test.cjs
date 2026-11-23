@@ -14,19 +14,19 @@ function fixture(message) {
  let language='zh';const locale=require(path.join(root,'app/ui-locale.js')),uiText=(key,params)=>locale.format(language,key,params),display=bind(uiText),node=(tag,text)=>new El(tag,text);
  const box=node('div'),entry={item:node('article'),actions:node('div')}; entry.actions.before=el=>box.append(el);
  const calls=[],rooms=[{id:'shared',untouched:true,name:'共同工作'},{id:'10000000-0000-4000-8000-000000000001',name:'Synthetic space'},{id:'20000000-0000-4000-8000-000000000002',name:'Archived space',archived:true}];
- const context=vm.createContext({Date,JSON,Number,node,uiText,uiError:locale.createError,ui:{display,language:{getSnapshot:()=>({active:language})}},button:(label,action)=>Object.assign(node('button',label),{onclick:action}),state:{sessions:[{id:'s',nativeId:'n',provider:'claude'}],capabilities:['operatorControl1a'],operatorPolicy:{domains:[]}},disconnected:false,
+ const context=vm.createContext({Date,JSON,Number,node,uiText,uiError:locale.createError,ui:{display,errorText:problem=>locale.errorText(language,problem),language:{getSnapshot:()=>({active:language})}},button:(label,action)=>Object.assign(node('button',label),{onclick:action}),state:{sessions:[{id:'s',nativeId:'n',provider:'claude'}],capabilities:['operatorControl1a'],operatorPolicy:{domains:[]}},disconnected:false,
   // The grant form lists the person's spaces (renderer.js allSpaces and spaceName); the attempt wrapper and the desktop call are recorded.
-  allSpaces:()=>rooms,spaceName:room=>room.untouched?uiText('space.defaultName'):room.name,attempt:run=>{context.pending=run();},api:{operatorAction:async(...args)=>{calls.push(args);return 'domain-id';}}});
+  allSpaces:()=>rooms,spaceName:room=>room.untouched?uiText('space.defaultName'):room.name,attempt:run=>{context.pending=run();},updateState:next=>{context.state=next;},api:{initial:async()=>context.state,operatorAction:async(...args)=>{calls.push(args);return 'domain-id';}}});
  vm.runInContext(renderer.slice(renderer.indexOf('const uiNode ='),renderer.indexOf('const states =')),context);
- vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorControls('),renderer.indexOf('const roomMenuKey =')),context);
- context.entry=entry;context.message={time:Date.now(),operator:message}; vm.runInContext('renderOperatorControls(entry,message)',context);
+ vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorQuota('),renderer.indexOf('const roomMenuKey =')),context);
+ context.entry=entry;context.message={time:Date.now(),operator:message}; context.state.sessions[0].messages=[context.message]; vm.runInContext('renderOperatorControls(entry,message,{inbox:true})',context);
  const walk=el=>el.children.flatMap(child=>[child,...walk(child)]);
- return {box,entry,calls,rooms,context,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};vm.runInContext('renderOperatorControls(entry,message)',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
+ return {box,entry,calls,rooms,context,walk:()=>walk(box),update(delta={}){context.message={...context.message,operator:delta===null?null:{...context.message.operator,...delta}};context.state.sessions[0].messages=[context.message];vm.runInContext('renderOperatorControls(entry,message,{inbox:true})',context);},disconnect(){context.disconnected=true;this.update();},refresh(){language='en';display.refresh(box);}};
 }
 test('actual grant card keeps fields and consent through the actual DSH language repaint',()=>{
  const f=fixture({initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',args:{provider:'claude',permission:'default'},actual:{actionId:'a',permission:'default',model:'unknown'}});
  const fields=f.walk().filter(el=>el.tagName==='input');assert.equal(fields.length,4);fields[0].value='7';fields[3].checked=true;
- assert.equal(f.walk().filter(el=>el.tagName==='select').length,2,'Permission, and the space new sessions join');
+ assert.equal(f.walk().filter(el=>el.tagName==='select').length,2,'Expiry preset, and the space new sessions join; permission cannot be widened');
  assert.doesNotThrow(()=>f.refresh());assert.equal(f.walk().filter(el=>el.tagName==='input')[0],fields[0]);assert.equal(fields[0].value,'7');assert.equal(fields[3].checked,true);
 });
 test('cancellation warning keeps its confirmation buttons through language repaint without cancelling on first click',()=>{
@@ -84,6 +84,149 @@ const pendingGrant={initiatorId:'s',initiatorNativeId:'n',creation:'pending-auth
 const grantForm=f=>{const all=f.walk(),selects=all.filter(el=>el.tagName==='select'),inputs=all.filter(el=>el.tagName==='input');
  return {space:selects[1],options:selects[1].children,daily:inputs[0],concurrent:inputs[1],expires:inputs[2],consent:inputs[3],consentText:inputs[3].parentNode.children[1],form:all.find(el=>el.tagName==='form'),problem:all.findLast(el=>el.tagName==='p')};};
 const fill=g=>{g.daily.value='1';g.concurrent.value='1';g.expires.value=new Date(Date.now()+3600000).toISOString();};
+function quotaFixture() {
+ const f=fixture(null);f.context.state.capabilities.push('operatorQuotaEditV1');f.context.state.sessions[0].name='Lead';
+ f.context.domain={id:'quota-domain',initiators:[{id:'s',nativeId:'n'}],providers:['claude'],directories:['/synthetic'],permission:'default',daily:8,concurrent:6,expiresAt:Date.UTC(2027,0,1),space:'shared',usage:{day:'2026-11-20',usedToday:3,concurrent:2}};
+ f.context.state.operatorPolicy.domains.push(f.context.domain);
+ f.repaint=()=>vm.runInContext('renderOperatorQuota(entry,domain)',f.context);f.repaint();
+ f.edit=()=>f.walk().find(el=>el.tagName==='button'&&el.textContent==='调整额度').onclick();
+ return f;
+}
+const quotaFields=f=>{const inputs=f.walk().filter(e=>e.tagName==='input');return {daily:inputs[0],concurrent:inputs[1],consent:inputs[2],form:f.walk().find(e=>e.tagName==='form'),save:f.walk().find(e=>e.tagName==='button'&&e.type==='submit')};};
+const consentQuota=g=>{g.consent.checked=true;g.consent.listeners.change();};
+test('existing quota cards show actual usage and scope without any pending request and prefill current limits',()=>{
+ const f=quotaFixture(),text=f.walk().map(e=>e.textContent).join('\n');
+ assert.match(text,/3 \/ 8/);assert.match(text,/2 \/ 6/);assert.match(text,/claude.*synthetic/);assert.match(text,/共同工作.*队列任务/);
+ f.edit();const g=quotaFields(f);assert.deepEqual([g.daily.value,g.concurrent.value,g.consent.checked,g.save.disabled],['8','6',false,true]);
+});
+test('every quota value edit resets consent, and exact increased or decreased limits need a new explicit tick',async()=>{
+ for(const value of ['16','2']){
+  const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value=value;g.daily.listeners.input();consentQuota(g);assert.equal(g.save.disabled,false);
+  g.concurrent.value='3';g.concurrent.listeners.input();assert.equal(g.consent.checked,false);assert.equal(g.save.disabled,true);
+  g.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+  consentQuota(g);g.form.listeners.submit({preventDefault(){}});await f.context.pending;
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0][1],'quota');assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0][2])),{domainId:'quota-domain',daily:Number(value),concurrent:3,revision:0,nativeId:'n',consent:true});
+ }
+});
+test('usage-only and language updates keep the same quota fields, values and consent connected',()=>{
+ const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value='16';g.daily.listeners.input();consentQuota(g);
+ f.context.domain.usage.usedToday=4;f.repaint();f.refresh();const fresh=quotaFields(f);
+ assert.equal(fresh.daily,g.daily);assert.equal(fresh.daily.value,'16');assert.equal(fresh.consent.checked,true);assert.match(f.walk().map(e=>e.textContent).join('\n'),/4 \/ 8/);
+ assert.equal(fresh.form.getAttribute('aria-label'),'Adjust limits');
+});
+test('a changed quota revision invalidates the edit and requires reopening instead of overwriting another decision',async()=>{
+ const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value='16';g.daily.listeners.input();consentQuota(g);
+ f.context.domain.quotaRevision=1;f.context.domain.daily=12;f.repaint();const latest=quotaFields(f);
+ assert.equal(latest.consent.checked,false);assert.equal(latest.save.disabled,true);assert.match(f.walk().map(e=>e.textContent).join('\n'),/授权或持有人已变化/);
+ latest.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+});
+test('an expired quota, replaced holder, or removed grant cannot be posted from a retained form',async()=>{
+ for(const change of ['expired','native','removed']){
+  const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value='16';g.daily.listeners.input();consentQuota(g);
+  if(change==='expired')f.context.domain.expiresAt=Date.now()-1;
+  if(change==='native')f.context.state.sessions[0].nativeId='replacement';
+  if(change==='removed')f.context.state.operatorPolicy.domains=[];
+  g.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+ }
+});
+test('an older backend has unknown usage and a disabled quota editor',()=>{
+ const f=quotaFixture();f.context.state.capabilities=['operatorControl1a'];delete f.context.domain.usage;f.repaint();
+ assert.equal(f.walk().find(e=>e.tagName==='button'&&e.textContent==='调整额度').disabled,true);
+ assert.match(f.walk().map(e=>e.textContent).join('\n'),/— \/ 8/);assert.match(f.walk().map(e=>e.textContent).join('\n'),/后端尚不支持/);
+});
+test('invalid quota inputs never reach the service and a later input clears the local error',async()=>{
+ const f=quotaFixture();f.edit();const g=quotaFields(f);
+ for(const value of ['0','-1','1.5','9007199254740992']){
+  g.daily.value=value;g.daily.listeners.input();consentQuota(g);assert.equal(g.save.disabled,true);
+  g.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+ }
+ const fresh=quotaFields(f);fresh.daily.value='16';fresh.daily.listeners.input();assert.equal(fresh.consent.checked,false);
+});
+test('duplicate quota submission writes one request and a backend failure remains visible after repaint',async()=>{
+ const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value='16';g.daily.listeners.input();consentQuota(g);
+ let count=0;f.context.api.operatorAction=async()=>{count++;await Promise.resolve();throw Error('Synthetic quota save failure');};
+ g.form.listeners.submit({preventDefault(){}});const pending=f.context.pending;g.form.listeners.submit({preventDefault(){}});await pending;
+ assert.equal(count,1);assert.match(f.walk().map(e=>e.textContent).join('\n'),/Synthetic quota save failure/);
+ f.repaint();f.refresh();assert.match(f.walk().map(e=>e.textContent).join('\n'),/Synthetic quota save failure/);
+});
+test('a successful save refreshes the acknowledged grant before the next edit can prefill an old revision',async()=>{
+ const f=quotaFixture();f.edit();let g=quotaFields(f);g.daily.value='16';g.daily.listeners.input();consentQuota(g);
+ const saved=structuredClone(f.context.state);saved.operatorPolicy.domains[0].daily=16;saved.operatorPolicy.domains[0].quotaRevision=1;
+ f.context.api.initial=async()=>saved;
+ g.form.listeners.submit({preventDefault(){}});await f.context.pending;f.edit();g=quotaFields(f);
+ assert.equal(g.daily.value,'16');assert.equal(g.consent.checked,false);assert.equal(g.daily.disabled,false);
+});
+test('an existing creation receipt refreshes its grant limits after a quota edit without changing the request',()=>{
+ const f=fixture({initiatorId:'s',initiatorNativeId:'n',creation:'created',actual:{actionId:'a',permission:'default',model:'unknown',domainId:'d'}});
+ const domain={id:'d',daily:8,concurrent:6,expiresAt:Date.UTC(2027,0,1),initiators:[{id:'s',nativeId:'n'}]};f.context.state.operatorPolicy.domains.push(domain);f.update();
+ assert.match(f.walk().map(e=>e.textContent).join('\n'),/每天（UTC）最多 8 个/);
+ domain.daily=16;domain.quotaRevision=1;f.update();assert.match(f.walk().map(e=>e.textContent).join('\n'),/每天（UTC）最多 16 个/);
+});
+test('quota consent spells out the actual integer saved for exponent or leading-zero input',async()=>{
+ for(const [input,expected] of [['1e3',1000],['016',16]]){
+  const f=quotaFixture();f.edit();const g=quotaFields(f);g.daily.value=input;g.daily.listeners.input();
+  const sentence=g.consent.parentNode.children[1].textContent;assert.match(sentence,new RegExp('从 8 改为 '+expected));
+  if(input==='1e3')assert.doesNotMatch(sentence,/1e3/);consentQuota(g);g.form.listeners.submit({preventDefault(){}});await f.context.pending;
+  assert.equal(f.calls[0][2].daily,expected);
+ }
+});
+test('defaults do not grant consent or allow changing the requested permission',()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);
+ assert.equal(g.daily.value,'1');assert.equal(g.concurrent.value,'1');assert.equal(g.space.value,'');assert.equal(g.consent.checked,false);
+ assert.ok(new Date(g.expires.value).getTime()>Date.now());assert.equal(g.expires.value.length,16);
+ assert.equal(f.walk().some(el=>el.tagName==='select'&&el.name==='permission'),false);
+ g.form.listeners.submit({preventDefault(){}});assert.equal(f.calls.length,0);
+});
+test('an inline pending record links to the single inbox form instead of making another form',()=>{
+ const f=fixture(pendingGrant);
+ f.context.inline={item:new El('article'),actions:new El('div')};f.context.inline.actions.before=el=>f.box.append(el);
+ vm.runInContext('renderOperatorControls(inline,message)',f.context);
+ assert.equal(f.walk().filter(el=>el.tagName==='form').length,1);
+});
+test('native replacement or authoritative request removal cannot save a grant from a retained form',async()=>{
+ for(const reason of ['native','removed']){
+  const f=fixture(pendingGrant),g=grantForm(f);fill(g);g.consent.checked=true;
+  if(reason==='native')f.context.state.sessions[0].nativeId='replacement';else f.context.state.operatorCreations=[];
+  g.form.listeners.submit({preventDefault(){}});await f.context.pending;assert.equal(f.calls.length,0);
+ }
+});
+test('duplicate submission saves one exact grant and preserves the immutable permission',async()=>{
+ const f=fixture({...pendingGrant,args:{...pendingGrant.args,permission:'bypass'}}),g=grantForm(f);
+ fill(g);g.consent.checked=true;g.form.listeners.submit({preventDefault(){}});const pending=f.context.pending;
+ g.form.listeners.submit({preventDefault(){}});await pending;
+ assert.deepEqual(f.calls.map(c=>c[1]),['grant','authorize']);assert.equal(f.calls[0][2].permission,'bypass');
+ assert.equal(f.calls[0][2].expiresAt,new Date(g.expires.value).getTime());
+});
+test('a cleared custom expiry survives a redraw instead of being silently extended',()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);g.expires.value='';g.expires.listeners.input();
+ f.update({version:2});assert.equal(grantForm(f).expires.value,'');
+});
+test('existing coverage exposes its complete scope and reuses it without another grant',async()=>{
+ const f=fixture(pendingGrant),d={id:'covered',providers:['claude'],directories:['/synthetic'],daily:8,concurrent:6,permission:'bypass',expiresAt:Date.UTC(2027,0,1),space:'shared'};
+ f.context.state.operatorPolicy.domains.push(d);f.update({coveredDomainId:d.id});
+ const text=f.walk().map(el=>el.textContent).join('\n');assert.match(text,/每天（UTC）最多 8 个/);assert.match(text,/同时最多 6 个/);assert.match(text,/跳过确认/);assert.match(text,/共同工作.*队列任务/);
+ const other=f.walk().find(el=>el.tagName==='details'&&el.children.some(c=>c.textContent==='改用新的授权范围'));assert.ok(other);assert.ok(!other.open);
+ await f.walk().find(el=>el.tagName==='button'&&el.textContent==='使用已有授权').onclick();
+ assert.deepEqual(f.calls.map(c=>c[1]),['authorize']);assert.equal(f.calls[0][2].domainId,'covered');
+});
+test('a pending record returning to an ordinary creation receipt drops its card layout',()=>{
+ const f=fixture(pendingGrant);assert.match(f.entry.operatorControls.className,/operator-creation-card/);
+ f.update({creation:'created'});assert.equal(f.entry.operatorControls.className,'operator-controls');
+});
+test('an authorize failure stays visible when the grant response repaints the waiting card',async()=>{
+ const f=fixture(pendingGrant),g=grantForm(f);fill(g);g.consent.checked=true;
+ f.context.api.operatorAction=async(_id,action)=>{
+  if(action==='grant'){
+   f.context.state.operatorPolicy.domains.push({id:'new-grant',providers:['claude'],directories:['/synthetic'],daily:1,concurrent:1,expiresAt:Date.UTC(2027,0,1),permission:'default'});
+   f.update({coveredDomainId:'new-grant'});return 'new-grant';
+  }
+  throw Error('Synthetic creation failure');
+ };
+ g.form.listeners.submit({preventDefault(){}});await f.context.pending;
+ assert.ok(f.walk().some(el=>el.textContent==='Synthetic creation failure'));
+ assert.equal(f.walk().find(el=>el.textContent==='使用已有授权').disabled,false);
+ f.refresh();assert.ok(f.walk().some(el=>el.textContent==='Synthetic creation failure'));
+});
 test('the grant form offers the person\'s open spaces and defaults to none; the consent sentence and a saved grant are then exactly as before',async()=>{
  const f=fixture(pendingGrant),g=grantForm(f);
  assert.deepEqual(g.options.map(o=>[o.value,o.textContent]),[['','不加入（只建会话，和以前一样）'],['shared','共同工作'],['10000000-0000-4000-8000-000000000001','Synthetic space']],'An archived space is not offered');
@@ -150,7 +293,7 @@ const earlier=/[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/;
 const leftovers=f=>f.walk().flatMap(el=>[...(el.children.length?[]:[el.textContent]),el.getAttribute('aria-label')]).filter(text=>text&&earlier.test(text));
 for(const [label,message,expected] of [
  ['a pending grant',{initiatorId:'s',initiatorNativeId:'n',creation:'pending-authorization',actionKey:'key',args:{provider:'claude',permission:'default',cwd:'/synthetic'},actual:{actionId:'a',permission:'default',model:'unknown'}},
-  ['Native provider default; observed model: Unknown','New session permission: Confirmations required (Claude default / Codex read-only + on-request)']],
+  ['New session permission: Confirmations required (Claude default / Codex read-only + on-request)']],
  ['a report that needs attention',{recipientId:'s',requestId:'request',version:1,state:'attention',reportState:'blocked',actionable:true},['Needs your attention: Blocked']],
  ['a cancelled request',{recipientId:'s',requestId:'request',version:1,state:'closed',closedReason:'cancelled',actionable:true},['Closed: Cancelled']],
 ]) test('after a language switch the card of '+label+' keeps nothing in the earlier language',()=>{
@@ -160,7 +303,7 @@ for(const [label,message,expected] of [
  assert.deepEqual(leftovers(f),[]);
  const texts=f.walk().map(el=>el.textContent);
  for(const text of expected)assert.ok(texts.includes(text),text);
- if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].getAttribute('aria-label'),'New session permission: ');
+ if(label==='a pending grant')assert.equal(f.walk().filter(el=>el.tagName==='select')[0].name,'operator.card.duration');
 });
 // B5: a grant follows the session NAW replaced. The card of the grant then says which session holds it now.
 test('after NAW replaced its holder, the card of a grant says which session holds it now, and is drawn again when that changes',()=>{
