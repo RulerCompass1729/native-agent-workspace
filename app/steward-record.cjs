@@ -45,6 +45,9 @@ function check(value) {
     // NAW woke the butler because something new was recorded (steward-wake.cjs): whom, and the position the message named.
     : value?.kind === 'wake' ? exact(value, ['kind', 'at', 'id', 'session', 'position']) && token(value.id) && exact(value.session, ['id', 'nativeId']) &&
       token(value.session.id) && token(value.session.nativeId) && (value.position === null || typeof value.position === 'string' && POSITION.test(value.position))
+    // NAW's patrol of the idle butler (steward-wake.cjs patrol): whom, the interval, and the counts it sent; no names.
+    : value?.kind === 'patrol' ? exact(value, ['kind', 'at', 'id', 'session', 'minutes', 'sessions', 'items']) && token(value.id) && exact(value.session, ['id', 'nativeId']) &&
+      token(value.session.id) && token(value.session.nativeId) && ['minutes', 'sessions', 'items'].every(k => Number.isSafeInteger(value[k]) && value[k] >= 0)
     // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake); the butler's own calls are steps.
     : value?.kind === 'wakeSwitch' ? exact(value, ['kind', 'at', 'on']) && value.on === false
     : value?.kind === 'wakeBlocked' ? exact(value, ['kind', 'at', 'since', 'reason']) && Number.isSafeInteger(value.since) && value.since >= 0 && value.since <= value.at && BLOCK_REASONS.includes(value.reason)
@@ -167,6 +170,11 @@ class StewardRecord {
         return { at: value.at, kind: 'wake', id: value.id, session: value.session, position: value.position, state: outcome?.state ?? null, error: outcome?.error ?? null,
           operationId: outcome?.operationId ?? null, recorded: Boolean(outcome) };
       }
+      if (value.kind === 'patrol') {
+        const outcome = outcomes.get(value.id) || null;
+        return { at: value.at, kind: 'patrol', id: value.id, session: value.session, minutes: value.minutes, sessions: value.sessions, items: value.items,
+          state: outcome?.state ?? null, error: outcome?.error ?? null, operationId: outcome?.operationId ?? null, recorded: Boolean(outcome) };
+      }
       const outcome = outcomes.get(value.id) || null, operationId = value.operationId ?? outcome?.operationId ?? null;
       const open = outcome && !outcome.error && !outcome.duplicate && OPEN.includes(outcome.state) && operationId;
       let later = open ? stateOf({ ...value, operationId }) : null;
@@ -229,6 +237,8 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     if (entry.kind === 'role') return { at: entry.at, kind: 'role', event: entry.event, name: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id, 'nameArchived') };
     // NAW woke the butler of that time: whom, and whether the message went out. Not the position it named.
     if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id), state: entry.state, error: cut(entry.error), recorded: entry.recorded };
+    if (entry.kind === 'patrol') return { at: entry.at, kind: 'patrol', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id),
+      minutes: entry.minutes, sessions: entry.sessions, items: entry.items, state: entry.state, error: cut(entry.error), recorded: entry.recorded };
     if (entry.kind === 'wakeSwitch') return { at: entry.at, kind: 'wakeSwitch', on: entry.on };
     if (entry.kind === 'wakeBlocked') return { at: entry.at, kind: 'wakeBlocked', reason: entry.reason, since: entry.since, minutes: Math.floor((entry.at - entry.since) / 60000) };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
@@ -239,6 +249,10 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     } else if (entry.method === 'stewardWake' && Array.isArray(args)) {
       // The butler's own call on NAW's switch for waking it: turned on, turned off, or only looked at how it stands.
       out.wake = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
+    } else if (entry.method === 'stewardPatrol' && Array.isArray(args)) {
+      // The butler's own call on the patrol interval: set, turned off, or looked at.
+      out.patrol = args.length === 0 ? 'check' : args.length === 1 && [null, 15, 30, 60].includes(args[0]) ? args[0] : undefined;
+      if (out.patrol === undefined) delete out.patrol;
     } else if (Array.isArray(args) && entry.method !== 'stewardEvents') Object.assign(out, { target: nameOf(args[0]), ...archived(args[0]) });
     // A read of another session's conversation (a snapshot NAW ran as `initial`, or one of its images): whom it read,
     // from what NAW actually ran rather than what was asked, and how far.
@@ -271,7 +285,8 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
   if (current) for (const x of sessions.values()) for (const row of x.messages || []) if (row.wake?.status === 'held' && row.wake.recipientId === current.sessionId && Number.isSafeInteger(row.wake.heldAt)) held.push(row.wake.heldAt);
   return { current: s ? { id: s.id, name: s.name, provider: s.provider, usage: s.usage || null } : current ? { id: current.sessionId, name: null, provider: null, usage: null } : null,
     waiting: held.length ? { count: held.length, since: Math.min(...held) } : null,
-    wake: wake && typeof wake.on === 'boolean' ? { on: wake.on, at: Number.isSafeInteger(wake.at) ? wake.at : null, failed: wake.failed === true } : null,
+    wake: wake && typeof wake.on === 'boolean' ? { on: wake.on, at: Number.isSafeInteger(wake.at) ? wake.at : null, failed: wake.failed === true,
+      ...(Number.isSafeInteger(wake.patrol) ? { patrol: wake.patrol } : {}) } : null,
     total: entries.length, entries: entries.slice(0, Number.isSafeInteger(limit) && limit > 0 ? limit : 300), at: now, writeFailed: record.failed && !record.loadError };
 }
 

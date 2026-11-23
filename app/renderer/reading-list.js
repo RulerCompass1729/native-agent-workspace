@@ -870,6 +870,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
       // NAW waking the butler (steward-wake.cjs) goes out as a NAW message like a queue item; said as what it is.
       if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-wake:')) return uiText('reading.stewardWake');
+      if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-patrol:')) return uiText('reading.stewardPatrol');
       return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : sessionProvider === 'dsh' ? 'DSH' : 'Codex');
     };
     // Heading/action bindings share this synchronous author resolution. Release

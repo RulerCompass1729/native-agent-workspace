@@ -9,6 +9,8 @@
   const ROLES = ['designated', 'revoked', 'followed', 'started'];
   // The butler's call on NAW's switch for waking it (steward-record.cjs view `wake`): turned on, off, or looked at.
   const WAKE_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.wakeOn', off: 'stewardRecord.step.wakeOff', check: 'stewardRecord.step.wakeCheck' });
+  // The intervals NAW's patrol of an idle butler may use (steward-wake.cjs PATROL_CHOICES); null is off.
+  const PATROL = Object.freeze([null, 15, 30, 60]);
   function bind({ dialog, document, api, text, display, usageLines = null, language = () => 'zh' }) {
     const locale = global.nativeWorkspaceLocale || (typeof require === 'function' ? require('../ui-locale.js') : null);
     const disclosure = global.nativeWorkspaceDisclosure || require('./disclosure-list.js');
@@ -36,10 +38,14 @@
       if (entry.kind === 'role') return [`stewardRecord.role.${ROLES.includes(entry.event) ? entry.event : 'started'}`, { name: dash(entry.name) }];
       // NAW's own step: it woke the butler of that time to read what it recorded.
       if (entry.kind === 'wake') return ['stewardRecord.step.wake', { target: dash(entry.target) }];
+      if (entry.kind === 'patrol') return ['stewardRecord.step.patrol', { target: dash(entry.target), count: entry.sessions + entry.items }];
       // The person turned that off in their window.
       if (entry.kind === 'wakeSwitch') return ['stewardRecord.step.youWakeOff', {}];
       // The butler's own calls on that switch and on what NAW recorded for it, in words rather than as commands.
       if (entry.method === 'stewardWake' && WAKE_CALLS[entry.wake]) return [WAKE_CALLS[entry.wake], {}];
+      if (entry.method === 'stewardPatrol' && entry.patrol === 'check') return ['stewardRecord.step.wakeCheck', {}];
+      if (entry.method === 'stewardPatrol' && entry.patrol === null) return ['stewardRecord.step.patrolOff', {}];
+      if (entry.method === 'stewardPatrol' && Number.isSafeInteger(entry.patrol)) return ['stewardRecord.step.patrolSet', { minutes: entry.patrol }];
       if (entry.method === 'stewardEvents') return ['stewardRecord.step.events', {}];
       // A read of another session's conversation: whom, and how far when NAW knows it.
       if (entry.read) {
@@ -60,7 +66,7 @@
       if (entry.kind === 'wakeBlocked') return [`stewardWake.reason.${entry.reason}`, {}];
       if (entry.kind === 'role' || entry.kind === 'wakeSwitch') return null;
       if (entry.kind === 'message') return MESSAGES.includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}] : ['stewardRecord.result.other', { state: dash(entry.state) }];
-      if (entry.kind === 'wake') return entry.state === 'sent' ? ['stewardRecord.wake.sent', {}] : ['not-sent', 'unconfirmed'].includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}]
+      if (entry.kind === 'wake' || entry.kind === 'patrol') return entry.state === 'sent' ? ['stewardRecord.wake.sent', {}] : ['not-sent', 'unconfirmed'].includes(entry.state) ? [`stewardRecord.message.${entry.state}`, {}]
         : entry.state ? ['stewardRecord.result.other', { state: entry.state }] : ['stewardRecord.result.unrecorded', {}];
       if (!entry.state) return ['stewardRecord.result.unrecorded', {}];
       if (entry.duplicate) return ['stewardRecord.result.duplicate', {}];
@@ -77,6 +83,7 @@
       if (outcome) say(end, ...outcome);
       // Opened: the whole sentence, and NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
       body.append(say(make('p'), key, marked(entry, params)));
+      if (entry.kind === 'patrol') body.append(say(make('p'), 'stewardRecord.step.patrolDetail', { sessions: entry.sessions, items: entry.items, minutes: entry.minutes }));
       if (entry.kind === 'wakeBlocked') body.append(say(make('p'), 'stewardWake.stalled', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
       if (entry.error) { const why = make('p', 'steward-record-error'); why.textContent = entry.error; body.append(why); }
     }
@@ -103,8 +110,22 @@
       const status = make('span', 'steward-record-wake-status'), failure = make('p', 'records-note'); failure.setAttribute('role', 'alert'); failure.hidden = true;
       // Read out with the switch: whether it is on, and when NAW last tried to wake the butler (steward-wake.cjs view).
       status.id = `${dialog.id || 'steward-record-dialog'}-wake-status`; input.setAttribute('aria-describedby', status.id);
+      // The patrol interval, on the line below: usable only while the switch above is on (it turns off with it).
+      const patrol = make('div', 'steward-record-patrol'), patrolLabel = make('label'), choice = document.createElement('select'), patrolNote = make('p', 'quiet');
+      choice.dataset.action = 'steward-patrol'; patrolLabel.append(make('span', '', 'stewardRecord.patrol.label'), choice);
+      for (const minutes of PATROL) {
+        const option = document.createElement('option'); option.value = minutes === null ? '' : String(minutes);
+        say(option, minutes === null ? 'stewardRecord.patrol.off' : 'stewardRecord.patrol.minutes', { minutes }); choice.append(option);
+      }
+      patrol.append(patrolLabel, patrolNote);
+      let usable = false;
       const show = (value, at) => {
         input.checked = value.on === true;
+        usable = value.on === true && !value.failed;
+        choice.value = usable && PATROL.includes(value.patrol) && value.patrol !== null ? String(value.patrol) : ''; choice.disabled = !usable;
+        if (!usable) say(patrolNote, 'stewardRecord.patrol.needsWake');
+        else if (value.patrol) say(patrolNote, 'stewardRecord.patrol.rule');
+        patrolNote.hidden = usable && !value.patrol;
         if (value.failed) say(status, 'stewardRecord.wake.failed');
         else if (!value.on) say(status, 'stewardRecord.wake.off');
         else if (value.at) say(status, 'stewardRecord.wake.last', { time: when(value.at, at) });
@@ -120,8 +141,16 @@
           try { show(await api.stewardWake(), Date.now()); } catch { input.checked = !want; }
         } finally { input.disabled = false; }
       });
+      choice.addEventListener('change', async () => {
+        const want = choice.value === '' ? null : Number(choice.value); choice.disabled = true; failure.hidden = true;
+        try { show(await api.stewardPatrol(want), Date.now()); }
+        catch (error) {
+          say(failure, 'stewardRecord.patrol.error', { reason: error?.message || '—' }); failure.hidden = false;
+          try { show(await api.stewardWake(), Date.now()); } catch { /* Left as it was shown. */ }
+        } finally { choice.disabled = !usable; }
+      });
       const line = make('div', 'steward-record-wake-switch'); line.append(label, status);
-      box.append(line, make('p', 'quiet', 'stewardRecord.wake.cost'), failure);
+      box.append(line, ...(typeof api.stewardPatrol === 'function' ? [patrol] : []), make('p', 'quiet', 'stewardRecord.wake.cost'), failure);
       return box;
     }
     function draw(view) {

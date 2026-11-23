@@ -1265,6 +1265,8 @@ dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }
 .steward-record-wake-status { color: var(--muted); font-variant-numeric: tabular-nums; }
 .steward-record-wake p { margin: 4px 0 0; }
 .steward-record-wake p[hidden] { display: none; }
+.steward-record-patrol { margin: 6px 0 0; font-size: 13px; }
+dialog .steward-record-patrol select { margin: 0; padding: 3px 8px; font-size: 13px; }
 
 /* One member identity in each overview column; its header owns its width. */
 .collaboration-member-name .vendor-mark { margin-right: 5px; align-self: center; }
