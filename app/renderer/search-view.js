@@ -522,8 +522,9 @@ function queueAnswerQuote(item) {
   if (head.length > 40) head = head.slice(0, 39) + '…';
   return uiText('queue.answer.quote', { head }) + '\n';
 }
-// Only the session the item went to, still running with the native session NAW sent it to and still in this space;
-// otherwise the text goes only through the send dialog, never by itself to a successor.
+// Only the session that holds the item, still running with the native session the item names and still in this
+// space; otherwise the text goes only through the send dialog. A decision goes with its session to a successor
+// (room-state.cjs queueCarry): the item then names the successor, and nothing here picks one by itself.
 function queueAnswerTarget(entry, text = '.') {
   const s = state.sessions.find(x => x.id === entry.sentTo);
   if (!s || s.archived) return { gone: 'queue.answer.ended' };
@@ -534,6 +535,12 @@ function queueAnswerTarget(entry, text = '.') {
   if (!disconnected && ['none', 'resume'].includes(soloAction(s, { mode: 'chat' }).kind)) return { gone: 'queue.answer.ended' };
   return searchSendTarget({ id: s.id, nativeId: s.nativeId }, text);
 }
+// The row follows the item to the session that holds it now, with the words already typed; not while an answer
+// is on its way, which stays with the session it was sent to.
+function queueAnswerHolder(entry, item) {
+  if (!item || entry.busy || entry.follow) return;
+  entry.sentTo = item.sentTo; entry.nativeId = item.sentNative || '';
+}
 function queueAnswerNode(item, open) {
   let entry = queueAnswers.get(item.id);
   if (!open && !entry?.follow) return item.answer ? queueAnswerDelivered(item) : null;
@@ -541,6 +548,7 @@ function queueAnswerNode(item, open) {
     entry = { roomId: queueSpace, itemId: item.id, sentTo: item.sentTo, nativeId: item.sentNative || '', text: queueAnswerQuote(item), follow: null, note: null };
     queueAnswers.set(item.id, entry);
   }
+  queueAnswerHolder(entry, item);
   const block = node('div', undefined, 'queue-answer'), box = node('textarea');
   box.rows = 2; box.maxLength = QUEUE_ANSWER_LIMIT; box.value = entry.text; box.dataset.queueAnswer = item.id;
   ui.display.attribute(box, 'aria-label', 'queue.answer.label', () => ({ name: queueMemberName(entry.sentTo) }));
@@ -592,6 +600,7 @@ async function queueAnswerSend(entry) {
   if (entry.busy || entry.follow) return;
   const text = entry.text;
   if (!text.trim() || queueAnswerItem(entry)?.status !== 'waiting') return;
+  queueAnswerHolder(entry, queueAnswerItem(entry));
   const shown = queueAnswerTarget(entry);
   // The existing dialog with the text and no preferred session: the person picks one or 新开一个.
   if (shown.gone) return openSearchSend(text);
@@ -654,13 +663,15 @@ function followQueueAnswer(entry) {
     reportShown();
   }
   if (entry.follow && !follow.unconfirmed && !entry.resolving && item.status === 'waiting' && QUEUE_ANSWER_DELIVERED.has(sendFollowStatusKey(follow))) queueAnswerResolve(entry);
+  queueAnswerHolder(entry, item);
   renderQueueAnswer(entry);
 }
 // Handled as the person's 已处理 is, with the answer on the item; only once native received it.
 async function queueAnswerResolve(entry) {
   entry.resolving = true;
   try {
-    await api.spaceAction(entry.roomId, 'queueResolve', [entry.itemId, entry.follow.text]);
+    // With the session that received it: the item may name a successor by now.
+    await api.spaceAction(entry.roomId, 'queueResolve', [entry.itemId, entry.follow.text, entry.follow.id]);
     updateState(await api.initial());
     renderQueue();
   } catch (error) {

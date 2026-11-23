@@ -39,22 +39,27 @@ const UNHELD_WAITING = ['person-intervened', 'no-reply'];
 function holdsMember(item) {
   return Boolean(item) && item.status === 'sent';
 }
-// Whether an item asks the person to decide, until they handle it. The person answers in the member's own
-// session, so what that member is sent meanwhile is marked (asking in planDispatch); keepsSession decides
-// whether the session is replaced. A decision is settled without a reason, but one saved by an older build
+// Whether an item asks the person to decide, until they handle it. The person answers in the session that
+// holds it, so what that session is sent meanwhile is marked (asking in planDispatch). A decision is settled
+// without a reason, but one saved by an older build
 // can still carry an earlier refusal's (queueRequeue kept it through the send; queueMarkSent now drops it),
 // so the two kinds above are named rather than told apart by having a reason.
 function asksPerson(item) {
   return Boolean(item) && item.status === 'waiting' && !UNHELD_WAITING.includes(item.reason);
 }
 // The waiting kinds the planner itself sets when it settles an item; a decision has none. The member asked the
-// person nothing in any of them, so none keeps its session from being replaced. The last four came on 11-19
-// unnamed and counted as decisions: nobody holding one was rotated for 14 hours (11-23).
+// person nothing in any of them. The last four came on 11-19 unnamed and counted as decisions: nobody holding
+// one was rotated for 14 hours (11-23).
 const PLANNER_WAITING = [...UNHELD_WAITING, 'input-purpose-unconfirmed', 'rotation-control-unresolved', 'native-turn-failed', 'usage-limit-exceeded'];
-// Whether an open item keeps its member's session: a decision, which the person answers there.
-function keepsSession(item) {
+// Whether an open item is a decision its member asked the person. It kept the session until 11-23 (the person:
+// 「否则会影响效率浪费 token」); now it goes with the session: the successor is told it whole (openDecisions) and
+// the item points at the successor once the handoff is confirmed (room-state.cjs queueCarry).
+function openDecision(item) {
   return Boolean(item) && item.status === 'waiting' && !PLANNER_WAITING.includes(item.reason);
 }
+// What a handoff may spend on open decisions. They are never cut, and the whole message is at most
+// SEND_TEXT_LIMIT, so a member holding more than this keeps its session until the person answers some.
+const DECISIONS_LIMIT = 10000;
 // A member must stay idle this long before NAW sends, so a turn-end report can settle.
 const IDLE_SETTLE_MS = 8000;
 // The person's own activity in a session keeps NAW out of it for this long.
@@ -281,6 +286,19 @@ function validTime(value) {
   return Number.isFinite(value) && value >= 0;
 }
 
+// A session a decision was with: its id and, when NAW knew it, the native session.
+function validHolder(holder) {
+  if (!holder || typeof holder !== 'object' || Array.isArray(holder) || !validId(holder.id)) {
+    return false;
+  }
+  const keys = Object.keys(holder);
+  if (keys.length === 1) {
+    return true;
+  }
+  return keys.length === 2 && typeof holder.nativeId === 'string' && holder.nativeId.length > 0 &&
+    holder.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(holder.nativeId);
+}
+
 function validateCreator(creator) {
   if (!creator || typeof creator !== 'object' || Array.isArray(creator) ||
       Object.keys(creator).length !== 3 || !['kind', 'name', 'sessionId'].every(key => Object.hasOwn(creator, key)) ||
@@ -344,6 +362,13 @@ function validateItem(item) {
   if (item.answer !== undefined && !(item.answer && typeof item.answer === 'object' && !Array.isArray(item.answer) &&
       Object.keys(item.answer).length === 2 && validText(item.answer.text, ITEM_TEXT_LIMIT) && validTime(item.answer.deliveredAt))) {
     throw Error('Invalid queue answer');
+  }
+  // A decision that went with its session to a successor (room-state.cjs queueCarry): who first asked it, and who
+  // held it just before the session it points at now.
+  for (const key of ['askedBy', 'carriedFrom']) {
+    if (item[key] !== undefined && !validHolder(item[key])) {
+      throw Error('Invalid queue holder');
+    }
   }
   // Who acted when it was not the person or the item's creator: only the butler, for now.
   for (const key of ['addedBy', 'finishedBy']) {
@@ -839,8 +864,8 @@ function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || (record && !restingSuccessor(record)) || options.blockedRotations?.has(session.id)) {
     return null;
   }
-  // A decision it asked is still open: the person answers it here. It keeps working and is rotated later.
-  if (options.decisionOpen && options.decisionOpen.has(session.id)) {
+  // Its open decisions do not fit whole in one handoff: it stays until the person answers some.
+  if (options.decisionsTooLong && options.decisionsTooLong.has(session.id)) {
     return null;
   }
   // The person used it while it was being rotated: it waits until it is quiet again (see personDeferred).
@@ -986,10 +1011,10 @@ function planDispatch(input) {
   const quietCompactMs = input.quietCompactMs ?? QUIET_COMPACT_MS;
   const rotationOptions = {
     blockedRotations: input.blockedRotations,
-    // Filled in step 1: members whose next item is marked afterDecision (asksPerson), and those whose
-    // session an open decision keeps (keepsSession).
+    // Filled in step 1: members whose next item is marked afterDecision (asksPerson), and those whose open
+    // decisions are too long to hand over whole (DECISIONS_LIMIT).
     asking: new Set(),
-    decisionOpen: new Set(),
+    decisionsTooLong: new Set(),
     contentLimits,
     compactions: input.compactions,
     compactLimit: input.compactLimit ?? COMPACT_LIMIT,
@@ -1064,13 +1089,18 @@ function planDispatch(input) {
     return { sessionId: id, reason: 'person-recent' };
   }
   // 1) Settle items already sent.
+  const holders = new Set();
   for (const room of rooms) {
     for (const item of room.queue || []) {
       if (item.sentTo && asksPerson(item)) {
         rotationOptions.asking.add(item.sentTo);
       }
-      if (item.sentTo && keepsSession(item)) {
-        rotationOptions.decisionOpen.add(item.sentTo);
+      if (item.sentTo && openDecision(item) && !holders.has(item.sentTo)) {
+        holders.add(item.sentTo);
+        const holder = byId.get(item.sentTo);
+        if (holder && decisionsNote(holder.name || holder.id, openDecisions(rooms, holder, spacesOf(holder))).length > DECISIONS_LIMIT) {
+          rotationOptions.decisionsTooLong.add(holder.id);
+        }
       }
       if (item.status !== 'sent') {
         continue;
@@ -1389,7 +1419,9 @@ function directoryHandoff(record, snapshot) {
 // Sent before NAW knows whether the old session ends: what it says about the old one holds either way. A kept
 // old session stays for the person; the space's work goes on to the successor (carriedOn), while the butler
 // designation, the person's own setting, stays where the person is using it (queue-secretary.cjs successor).
-function handoffText(oldName, handoff, directoryNote = '', duty = '') {
+// `decisions`: decisionsNote of the old session's open decisions. It stands right after the old session's own
+// text, whole: only that text is shortened.
+function handoffText(oldName, handoff, directoryNote = '', duty = '', decisions = '') {
   const after = duty
     ? '旧会话交完就结束，大管家由你接着当；要是人这时还在用旧会话，它就留给人用，大管家仍是它，直到人另行指定。'
     : '旧会话交完就结束；要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你。';
@@ -1398,6 +1430,7 @@ function handoffText(oldName, handoff, directoryNote = '', duty = '') {
     '',
     body,
     '',
+    ...(decisions ? [decisions, ''] : []),
     ...(directoryNote ? [directoryNote, ''] : []),
     ...(duty ? [duty, ''] : []),
     after,
@@ -1413,6 +1446,114 @@ function handoffText(oldName, handoff, directoryNote = '', duty = '') {
     end -= 1;
   }
   return text(handoff.slice(0, end) + '…');
+}
+
+function spacesOf(session) {
+  try {
+    return roomIds(session);
+  } catch {
+    return [];
+  }
+}
+
+// A decision's text as a handoff carries it: line ends made one kind and characters a NAW message cannot hold
+// replaced, nothing dropped. replyLine of it is replyLine of the original.
+function wholeText(text) {
+  return plainReply(text).replace(/\r\n?|[\u2028\u2029]/gu, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/gu, ' ').trim();
+}
+
+const DECISIONS_HEAD = '【没答的决定】';
+function decisionHead(number, roomName, itemId, text, question) {
+  return `〔决定 ${number}〕空间「${shortText(roomName || '')}」的条目 ${itemId}；任务原文 ${text.length} 字，提问 ${question.length} 字。`;
+}
+
+// The question of one decision as an earlier handoff told it, or null. The two counts in its heading say exactly
+// where each text ends: what a block counts is its own, so a heading written inside a text is not read as one.
+// The last block for the item stands, since the old session's own words come before NAW's.
+function toldQuestion(text, itemId) {
+  const heading = /〔决定 \d+〕空间「[^\n]*」的条目 ([^\n；]+)；任务原文 (\d+) 字，提问 (\d+) 字。\n任务原文：\n/gu;
+  const asked = '\n提问：\n';
+  let found = null;
+  for (let match = heading.exec(text); match; match = heading.exec(text)) {
+    const from = heading.lastIndex + Number(match[2]);
+    const end = from + asked.length + Number(match[3]);
+    if (text.slice(from, from + asked.length) !== asked || end > text.length || (end < text.length && text[end] !== '\n')) {
+      continue;
+    }
+    heading.lastIndex = end;
+    if (match[1] === itemId) {
+      found = text.slice(from + asked.length, end);
+    }
+  }
+  return found;
+}
+
+// What the member asked, whole. The item keeps one cut line of it (replyLine); the whole of it is the member's
+// own reply to that item, or, in a successor, what its handoff told it. Either must start as the kept line does.
+function decisionQuestion(item, session) {
+  const kept = typeof item.reply === 'string' ? item.reply : '';
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  if (!kept) {
+    return '';
+  }
+  let sent = -1;
+  if (item.tag) {
+    sent = messages.findLastIndex(message => message && message.id === item.tag);
+  }
+  for (let i = sent + 1; sent >= 0 && i < messages.length; i += 1) {
+    const message = messages[i];
+    if (message && message.role === 'assistant' && typeof message.text === 'string' && replyLine(message.text) === kept) {
+      return wholeText(message.text);
+    }
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.role !== 'user' || message.origin !== 'naw-dispatch' || typeof message.text !== 'string' ||
+        typeof message.dispatchItem !== 'string' || !message.dispatchItem.startsWith('rotation-handoff:')) {
+      continue;
+    }
+    const told = toldQuestion(message.text, item.id);
+    if (told !== null && replyLine(told) === kept) {
+      return told;
+    }
+  }
+  return kept;
+}
+
+// The decisions a session holds open in the spaces it hands over, as its successor must be told them.
+function openDecisions(rooms, session, spaceIds) {
+  const found = [];
+  for (const room of rooms || []) {
+    if (!spaceIds.includes(room.id)) {
+      continue;
+    }
+    for (const item of room.queue || []) {
+      if (item.sentTo === session.id && openDecision(item)) {
+        found.push({ roomId: room.id, roomName: room.name, itemId: item.id, text: wholeText(item.text), question: decisionQuestion(item, session) });
+      }
+    }
+  }
+  return found;
+}
+
+function decisionsNote(oldName, decisions) {
+  if (!decisions.length) {
+    return '';
+  }
+  const lines = [
+    `${DECISIONS_HEAD}「${oldName}」名下问过人、人还没答的决定有 ${decisions.length} 条，现在归你。人的答复会直接发到你这里，收到后照答复接着做；人答之前不替人决定，也不用再问一遍。`,
+  ];
+  decisions.forEach((decision, index) => {
+    lines.push(
+      '',
+      decisionHead(index + 1, decision.roomName, decision.itemId, decision.text, decision.question),
+      '任务原文：',
+      decision.text,
+      '提问：',
+      decision.question || '',
+    );
+  });
+  return lines.join('\n');
 }
 
 function shortText(text, limit = 60) {
@@ -3878,7 +4019,9 @@ class QueueDispatcher {
       if (mismatch) {
         throw Error(`settings-differ:${mismatch}`);
       }
-      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record)), `rotation-handoff:${oldId}`);
+      // Its open decisions go in the same message, whole; the items move once the successor has it (below).
+      const decisions = decisionsNote(record.name, openDecisions(snapshot.rooms || [], old || { id: oldId, messages: [] }, record.roomIds || []));
+      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record), decisions), `rotation-handoff:${oldId}`);
       record.handedAt = now;
       record.phase = 'handed';
       this.save();
@@ -3907,6 +4050,15 @@ class QueueDispatcher {
         record.newNativeId = fresh.nativeId;
       }
       this.save();
+      // The successor has the handoff: the old session's open decisions are answered there from now on. Run on
+      // every pass until the rotation ends; a decision already moved is left as it is.
+      for (const roomId of record.roomIds || []) {
+        try {
+          this.roomState.queueCarry(roomId, oldId, record.newId, record.newNativeId || null);
+        } catch {
+          // A space that is gone or read-only keeps its items; the rotation goes on.
+        }
+      }
       this.releaseTrustSuccessor(record);
       // Ending the old session is refused while, or pauses, the relays it is in, and leaving its spaces pauses
       // theirs: wait until none of those is running, but not forever. A service whose stop pauses only those
@@ -4025,6 +4177,11 @@ module.exports = {
   COMPACT_LIMIT,
   QUIET_COMPACT_MS,
   PLANNER_WAITING,
+  DECISIONS_LIMIT,
+  openDecision,
+  openDecisions,
+  decisionsNote,
+  replyLine,
   rotationSubjects,
   NOT_SENT_ATTEMPTS,
   NATIVE_DRAFT_KEY,

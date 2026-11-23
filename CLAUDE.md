@@ -233,8 +233,14 @@ local branch or main; not installed, pushed or published):
   command, an active goal or running teammates. A turn whose final message
   starts with 「需要你决定：」 leaves its item open as 等你决定 for the person;
   the member takes its next item meanwhile, in the same session, where the
-  person's answer arrives (NAW does not replace that session until the person
-  handles the item; 2026-11-13, a held member left four items waiting).
+  person's answer arrives (2026-11-13, a held member left four items waiting).
+  An open decision does not stop NAW from replacing that session when it is
+  due (the person, 2026-11-23): the successor's handoff gives each open
+  decision whole (the item id, its text and the member's question), the item
+  then names the successor, and the person's answer arrives there. The
+  successor acts on the answer; it does not decide for the person or ask
+  again. Only decisions too long to hand over whole in one message keep the
+  session until the person answers some of them.
   When the work on the item ends in commits, the turn's final message has,
   after its first line, one line of its own with exactly three words
   separated by single spaces: `READY <branch> <commit>` (the branch that holds the work and its

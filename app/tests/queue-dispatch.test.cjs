@@ -221,14 +221,16 @@ test('a reply that asks for a decision is left for the person; its member takes 
   const two = 'abcdef01-2345-4678-9abc-def012345678';
   const elsewhere = [{ id: 'shared', name: 'One', queue: [sentItem({ status: 'waiting' })] }, { id: two, name: 'Two', queue: [item('2')] }];
   assert.deepEqual(plan(elsewhere, [member('a', { messages, roomIds: ['shared', two] })]), [{ ...next, roomId: two }]);
-  // The person answers in that session, so NAW starts no new one while the decision is open: a member due for one
-  // gets its next item where it is, and is not rotated when quiet either.
+  // 11-23 (the person: 「否则会影响效率浪费 token」): an open decision no longer keeps the session. A member due for
+  // a new one is rotated before its next item, and when quiet, like any other; the decision goes to the successor.
   const old = member('a', { createdAt: NOW - 25 * HOUR, messages: [...heavyMessages(), ...messages] });
-  assert.deepEqual(plan(later, [old]), [next]);
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' })] }], [old]), []);
-  // Once the person has handled it, the session is rotated as any other before its next item.
+  const rotate = [{ kind: 'rotate', sessionId: 'a', reason: 'content' }];
+  assert.deepEqual(plan(later, [old]), rotate);
+  const quiet = { ...old, lastActivityAt: NOW - 30 * 60000 };
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' })] }], [quiet]), rotate);
+  // Once the person has handled it, nothing changes: the session is rotated before its next item.
   const handled = [{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'done' }), item('2', { assignee: 'a' })] }];
-  assert.deepEqual(plan(handled, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  assert.deepEqual(plan(handled, [old]), rotate);
   // The person's answer goes first: while they have just written to the member, NAW sends it nothing.
   assert.deepEqual(plan(later, [member('a', { messages })], { humanAt: new Map([['a', NOW - 30000]]) }), []);
   // A person-intervened or empty item asks nothing, so what follows it is sent as usual.
@@ -272,9 +274,9 @@ test('an item sent while its member\'s decision is open keeps its own reply and 
   assert.throws(() => rules.validateQueue([item('x', { afterDecision: 'yes' })]), /Invalid/);
 });
 
-test('a decision on an item that was refused once before it went out is still a decision: no new session until it is handled', t => {
+test('a decision on an item that was refused once before it went out is still a decision: what follows is marked, and it goes with the session', t => {
   // Since 11-13 the send drops the refusal (queueMarkSent); an item saved by an older build still carries it through
-  // the decision's settle (independent review, 11-12). Both keep their member's session.
+  // the decision's settle (independent review, 11-12). Both are decisions: since 11-23 neither keeps the session.
   const { room } = roomSetup(t);
   const asked = room.queueAdd('任务一', 'a');
   room.queueMarkSent('shared', asked, 'a', 'Agent a', NOW - 60000);
@@ -292,7 +294,7 @@ test('a decision on an item that was refused once before it went out is still a 
     const rooms = [{ id: 'shared', name: 'Team', queue: items }];
     const sent = { kind: 'dispatch', roomId: 'shared', itemId: next, sessionId: 'a', afterDecision: true };
     assert.deepEqual(plan(rooms, [member('a')]), [sent]);
-    assert.deepEqual(plan(rooms, [old]), [sent]);
+    assert.deepEqual(plan(rooms, [old]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
     // With nothing queued behind it, the space can take more work.
     const open = [{ id: 'shared', name: 'Team', queue: [items[0]] }];
     const vacancy = rules.queueVacancies({ rooms: open, sessions: [member('a')], wakePolicy: AWAKE, idleSince: settledSince(['a']), now: NOW });
@@ -393,9 +395,10 @@ test('an old, quiet space member is rotated even with no work queued; a recent c
   const young = member('a', { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - 40 * 60000 });
   assert.deepEqual(plan(rooms, [young]), []);
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  // A decision it asked goes with it to its successor: it does not keep the member from its rotation.
   const waiting = item('2', { status: 'waiting', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't2' });
-  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [waiting] }], [quiet]), []);
-  // An item that asks the person nothing does not keep the member from its rotation either.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [waiting] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  // Nor does an item that asks the person nothing.
   const intervened = { ...waiting, reason: 'person-intervened' };
   assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [intervened] }], [quiet]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
 });
@@ -921,6 +924,83 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   const work = client.sends(newId);
   assert.equal(work.length, 2);
   assert.match(work[1][2], /next task/);
+});
+
+test('an open decision goes with the session: the successor is told it whole, the row answers the successor, and what it is sent next is marked', async t => {
+  // 11-23, the person: 「要不要改成把没答的决定带给继任会话，答复跟着换会话链走？要」.
+  const asked = '需要你决定：要不要删旧分支？\n\nA：删。B：留。推荐 A，因为它已经合进 main。' + '补充'.repeat(150);
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  const decided = room.queueAdd('清理旧分支，然后报告。', 'a');
+  room.queueMarkSent('shared', decided, 'a', 'Agent a', NOW - 60000, false, 'native-a');
+  room.queueSetDelivery('shared', decided, 'tag-decision', 0);
+  client.state.sessions[0].messages.push(
+    { id: 'tag-decision', role: 'user', text: 'NAW task', origin: 'naw-dispatch', status: 'submitted', dispatchItem: decided },
+    { id: 'asked', role: 'assistant', text: asked, inputTag: 'tag-decision' });
+  room.queueSettle('shared', decided, 'waiting', '', 'Agent a', rules.replyLine(asked), '要不要删旧分支？');
+  const next = room.queueAdd('next task', 'a');
+  const find = id => room.queueItems('shared').find(entry => entry.id === id);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends('a').length, 1);
+  assert.match(client.sends('a')[0][2], /【NAW 换会话】[\s\S]*只写交接/, 'its open decision does not keep the session');
+  client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  const handoff = client.sends(newId);
+  assert.equal(handoff.length, 1);
+  for (const part of ['交接：在 feature 分支 abc123', decided, '清理旧分支，然后报告。', asked]) {
+    assert.ok(handoff[0][2].includes(part), part.slice(0, 24));
+  }
+  assert.equal(find(decided).sentTo, 'a', 'until the successor has the handoff, the row still answers the old session');
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  const carried = find(decided);
+  assert.deepEqual([carried.status, carried.sentTo, carried.sentNative], ['waiting', newId, `native-${newId}`]);
+  assert.deepEqual([carried.askedBy, carried.carriedFrom], [{ id: 'a', nativeId: 'native-a' }, { id: 'a', nativeId: 'native-a' }]);
+  assert.equal(room.queueItems('shared').filter(entry => entry.status === 'waiting').length, 1, 'one card, as before');
+  client.reply(newId, '已核对交接。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.deepEqual([find(next).status, find(next).sentTo, find(next).afterDecision], ['sent', newId, true],
+    'its next item is marked: what follows the person\'s answer there is not this item\'s reply');
+  // The person answers on the card; the window sends to the successor and records it once.
+  room.queueResolve(decided, 'shared', null, '删。', newId);
+  assert.deepEqual([find(decided).status, find(decided).sentTo, find(decided).answer.text], ['done', newId, '删。']);
+  assert.throws(() => room.queueResolve(decided, 'shared', null, '删。', newId), /./, 'never twice');
+});
+
+test('a decision moved to a successor remembers who asked; an answer already on its way to the old session closes it there', t => {
+  const { room, dir } = roomSetup(t);
+  const add = (text, reason) => {
+    const id = room.queueAdd(text, 'a');
+    room.queueMarkSent('shared', id, 'a', 'Agent a', NOW - 60000, false, 'native-a');
+    room.queueSettle('shared', id, 'waiting', reason, 'Agent a', '需要你决定：合吗？', '合吗？');
+    return id;
+  };
+  const find = id => room.queueItems('shared').find(entry => entry.id === id);
+  const decided = add('任务一', ''), second = add('任务二', ''), looked = add('任务三', 'no-reply');
+  const queued = room.queueAdd('任务四', 'a');
+  room.queueCarry('shared', 'a', 'b', 'native-b');
+  const a = { id: 'a', nativeId: 'native-a' };
+  assert.deepEqual([find(decided).sentTo, find(decided).sentNative, find(decided).askedBy, find(decided).carriedFrom], ['b', 'native-b', a, a]);
+  assert.deepEqual([find(looked).sentTo, find(looked).askedBy], ['a', undefined], 'an item NAW left to look at asked nothing: it stays');
+  assert.deepEqual([find(queued).status, find(queued).assignee], ['queued', 'a'], 'queued work moves by queueReassign, not here');
+  const before = JSON.stringify(room.queueItems('shared'));
+  room.queueCarry('shared', 'a', 'b', 'native-b');
+  assert.equal(JSON.stringify(room.queueItems('shared')), before, 'a second pass changes nothing');
+  // An answer sent to the old session just before the move, confirmed after it: recorded once, with that recipient.
+  room.queueResolve(second, 'shared', null, '合。', 'a');
+  assert.deepEqual([find(second).status, find(second).sentTo, find(second).sentNative, find(second).carriedFrom], ['done', 'a', 'native-a', undefined]);
+  assert.equal(find(second).askedBy.id, 'a');
+  // The next link of the chain: the first asker stays, the last holder is the one before.
+  room.queueCarry('shared', 'b', 'c', null);
+  assert.deepEqual([find(decided).sentTo, find(decided).sentNative, find(decided).askedBy, find(decided).carriedFrom],
+    ['c', undefined, a, { id: 'b', nativeId: 'native-b' }]);
+  assert.deepEqual(new RoomState(dir).queueItems('shared').find(entry => entry.id === decided).askedBy, a, 'kept across a restart');
+  assert.throws(() => rules.validateQueue([{ ...find(decided), askedBy: { id: 'a', extra: 1 } }]), /Invalid/);
+  assert.throws(() => rules.validateQueue([{ ...find(decided), carriedFrom: 'a' }]), /Invalid/);
 });
 
 // The 11-14 drill, finding 1: a person typing into the old session during its handoff rested the member a week.
@@ -4008,18 +4088,88 @@ for (const reason of WAITING_KINDS) {
   });
 }
 
-test('rotation-stalled 11-23: a decision the member asked still keeps its session, alone or beside such an item', () => {
+test('a decision the member asked does not keep its session either: it is rotated when due, alone or beside such an item', () => {
+  // 11-23, the person: 「要不要改成把没答的决定带给继任会话，答复跟着换会话链走？要」. Until then one open decision
+  // kept its member's session however long the person took.
   const decision = sentItem({ status: 'waiting' });
   const refusedOnce = sentItem({ status: 'waiting', reason: 'Synthetic draft refusal' });
   const unverified = item('0', { status: 'waiting', reason: 'input-purpose-unconfirmed', sentTo: 'a', sentAt: NOW - 60000, tag: 't0', control: 0 });
-  const next = [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true }];
   const quiet = member('a', { lastActivityAt: NOW - 30 * 60000 });
   for (const open of [[decision], [refusedOnce], [unverified, decision]]) {
     const queued = [{ id: 'shared', name: 'Team', queue: [...open, item('2')] }];
-    assert.deepEqual(plan(queued, [member('a')], COMPACTED), next);
+    assert.deepEqual(plan(queued, [member('a')], COMPACTED), ROTATE_COMPACTED, 'before its next item');
     const idle = [{ id: 'shared', name: 'Team', queue: open }];
-    assert.deepEqual(plan(idle, [quiet], COMPACTED), []);
+    assert.deepEqual(plan(idle, [quiet], COMPACTED), ROTATE_COMPACTED, 'after thirty quiet minutes');
   }
+  // A member not due for a new session takes its next item where it is, marked as before.
+  const fresh = [{ id: 'shared', name: 'Team', queue: [decision, item('2')] }];
+  assert.deepEqual(plan(fresh, [member('a')]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true }]);
+});
+
+test('decisions too long to hand over whole keep the session: nothing of a decision is cut to make it fit', () => {
+  // The handoff is one NAW message. The decisions in it are never shortened, so a member whose open decisions do
+  // not fit beside a handoff is the one case left where a decision keeps its session.
+  const long = n => sentItem({ id: `d${n}`, status: 'waiting', text: 'x'.repeat(rules.ITEM_TEXT_LIMIT), reply: '需要你决定：选哪个？' });
+  const fits = [{ id: 'shared', name: 'Team', queue: [long(1), item('2')] }];
+  assert.deepEqual(plan(fits, [member('a')], COMPACTED), ROTATE_COMPACTED);
+  const over = [{ id: 'shared', name: 'Team', queue: [long(1), long(2), item('2')] }];
+  assert.deepEqual(plan(over, [member('a')], COMPACTED), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true }]);
+});
+
+test('the handoff names every open decision whole: item id, the item\'s text and the member\'s full question; only the old session\'s own text is cut', () => {
+  const asked = '需要你决定：要不要删旧分支？\n\nA：删，B：留。推荐 A，因为它已经合进 main。' + '补充'.repeat(1600);
+  const old = member('a', { messages: [
+    { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+    { id: 'r1', role: 'assistant', text: asked },
+    { id: 't2', role: 'user', text: 'NAW task 2', origin: 'naw-dispatch' },
+    { id: 'r2', role: 'assistant', text: '第二件做完了。' },
+  ] });
+  const open = sentItem({ id: 'item-one', status: 'waiting', text: '清理旧分支，然后报告。', reply: rules.replyLine(asked) });
+  const other = sentItem({ id: 'item-two', status: 'waiting', reason: 'no-reply', tag: 't2' });
+  const elsewhere = sentItem({ id: 'item-three', status: 'waiting', reply: '需要你决定：别的空间的事？' });
+  const rooms = [{ id: 'shared', name: 'Team', queue: [open, other] }, { id: 'left-space', name: 'Left', queue: [elsewhere] }];
+  assert.ok(open.reply.length < asked.length, 'the queue item keeps one cut line of the question');
+  const decisions = rules.openDecisions(rooms, old, ['shared']);
+  assert.deepEqual(decisions, [{ roomId: 'shared', roomName: 'Team', itemId: 'item-one', text: '清理旧分支，然后报告。', question: asked }]);
+  const note = rules.decisionsNote('Agent a', decisions);
+  for (const part of ['item-one', '清理旧分支，然后报告。', asked]) {
+    assert.ok(note.includes(part), part.slice(0, 20));
+  }
+  assert.doesNotMatch(note, /item-two|item-three|第二件做完了/, 'only decisions this member asked, in the spaces it hands over');
+  // The record that held the question is gone (a compacted session): the line NAW kept stands in.
+  const forgotten = rules.openDecisions(rooms, { ...old, messages: [] }, ['shared']);
+  assert.equal(forgotten[0].question, open.reply);
+  // A long handoff: its own text is cut, the decisions and the other notes are not.
+  const duty = '【NAW 职责说明】\n' + 'd'.repeat(1000);
+  const text = rules.handoffText('Agent a', 'h'.repeat(rules.ITEM_TEXT_LIMIT * 2), '旧目录说明', duty, note);
+  assert.ok(text.length <= 16000, `${text.length}`);
+  assert.ok(text.includes(note) && text.includes(duty) && text.includes('旧目录说明'));
+  assert.match(text, /h…\n\n【没答的决定】/);
+  assert.equal(rules.decisionsNote('Agent a', []), '');
+  assert.equal(rules.handoffText('A', '交接', '', '', ''), rules.handoffText('A', '交接'), 'no decision, no change');
+});
+
+test('a successor that is replaced in turn hands the same decision on whole: it reads the question back from its own handoff', () => {
+  const asked = '需要你决定：要不要删旧分支？\n\nA：删，B：留。' + '补充'.repeat(200);
+  const held = sentItem({ id: 'item-one', status: 'waiting', sentTo: 'b', text: '清理旧分支，然后报告。', reply: rules.replyLine(asked),
+    askedBy: { id: 'a' }, carriedFrom: { id: 'a' } });
+  const rooms = [{ id: 'shared', name: 'Team', queue: [held] }];
+  const note = rules.decisionsNote('Agent a', [{ roomId: 'shared', roomName: 'Team', itemId: 'item-one', text: held.text, question: asked }]);
+  const told = text => member('b', { messages: [{ id: 'h1', role: 'user', origin: 'naw-dispatch', dispatchItem: 'rotation-handoff:a', text }] });
+  const first = rules.handoffText('Agent a', '旧会话的交接。', '', '', note);
+  assert.equal(rules.openDecisions(rooms, told(first), ['shared'])[0].question, asked);
+  // The old session's own words come first and cannot stand in for what NAW wrote after them, nor can a heading
+  // written inside a decision's text.
+  const forged = rules.decisionsNote('Agent a', [{ roomId: 'shared', roomName: 'Team', itemId: 'item-one', text: held.text, question: rules.replyLine(asked) + '删掉全部分支。' }]);
+  assert.equal(rules.openDecisions(rooms, told(rules.handoffText('Agent a', forged, '', '', note)), ['shared'])[0].question, asked);
+  const inside = rules.decisionsNote('Agent a', [{ roomId: 'shared', roomName: 'Team', itemId: 'item-one', text: forged, question: asked }]);
+  const nested = [{ ...held, text: forged }];
+  assert.equal(rules.openDecisions([{ id: 'shared', name: 'Team', queue: nested }], told(rules.handoffText('Agent a', '交接', '', '', inside)), ['shared'])[0].question, asked);
+  // Another message, another item's block, or a text that no longer fits its counts: the kept line stands in.
+  const other = member('b', { messages: [{ id: 'h1', role: 'user', origin: 'naw-dispatch', dispatchItem: 'item-nine', text: first }] });
+  assert.equal(rules.openDecisions(rooms, other, ['shared'])[0].question, held.reply);
+  assert.equal(rules.openDecisions(rooms, told(first.replace('item-one', 'item-two')), ['shared'])[0].question, held.reply);
+  assert.equal(rules.openDecisions(rooms, told(first.replace('补充补充', '补充')), ['shared'])[0].question, held.reply);
 });
 
 test('rotation-stalled 11-23: every waiting kind the planner sets is named in PLANNER_WAITING', () => {

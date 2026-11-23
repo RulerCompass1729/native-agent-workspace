@@ -1988,7 +1988,10 @@ async function boot() {
         // The answer sent from the person's own window (search-view.js queueAnswerResolve); no agent records one.
         const answer = args[1] ?? undefined;
         if (answer !== undefined && c.background) throw uiError("error.queue.personOnly");
-        if (answer === undefined) roomState.queueResolve(args[0], roomId, by); else roomState.queueResolve(args[0], roomId, by, answer);
+        // The session whose native receipt the window saw: a decision may have gone to a successor meanwhile.
+        const recipient = args[2] ?? undefined;
+        if (recipient !== undefined && typeof recipient !== 'string') throw uiError("error.queue.invalid");
+        if (answer === undefined) roomState.queueResolve(args[0], roomId, by); else roomState.queueResolve(args[0], roomId, by, answer, recipient);
         queueDispatcher?.schedule();
       }
     }

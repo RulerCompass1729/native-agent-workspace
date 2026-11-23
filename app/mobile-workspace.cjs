@@ -67,21 +67,27 @@ class MobileWorkspace {
     const events = this.roomState.metadata?.(roomId)?.events || [], byId = new Map(items.map(i => [i.id, i]));
     for (let n = events.length - 1; n >= 0; n--) {
       const event = events[n], item = byId.get(event.itemId);
-      if (!item || questions.has(item.id) || event.kind !== 'queue' || event.sessionId !== item.sentTo) continue;
+      // The member that asked: a decision that went to a successor keeps its question (room-state.cjs queueCarry).
+      const asker = item?.askedBy?.id ?? item?.sentTo;
+      if (!item || questions.has(item.id) || event.kind !== 'queue' || event.sessionId !== asker) continue;
       const source = storedQueueSource(roomId, event);
-      if (source.kind === 'decision' && source.payload.itemId === item.id && source.payload.memberId === item.sentTo && source.payload.title)
+      if (source.kind === 'decision' && source.payload.itemId === item.id && source.payload.memberId === asker && source.payload.title)
         questions.set(item.id, { question: source.payload.title, questionId: event.id });
     }
     return questions;
   }
-  queueAnswerTarget(client, grant, target) {
+  // earlier: the session an answer was already delivered to, when the item went to a successor meanwhile. Only the
+  // one the item names as its holder just before (carriedFrom) is accepted, under the same checks.
+  queueAnswerTarget(client, grant, target, earlier) {
     if (!exact(target, ['roomId', 'itemId', 'questionId']) || ![target.roomId, target.itemId, target.questionId].every(identifier)) throw denied();
     grant = this.resolveGrant(grant, this.snapshot(client));
     if (!grant.roomIds.includes(target.roomId)) throw denied();
     const item = this.roomState.queueFind(target.roomId, target.itemId);
-    const session = this.snapshot(client).sessions.find(s => s.id === item.sentTo);
-    if (item.status !== 'waiting' || !session || session.archived || session.nativeContextPending || !item.sentNative ||
-        session.nativeId !== item.sentNative || this.waitingQuestions(target.roomId, [item]).get(item.id)?.questionId !== target.questionId) throw denied();
+    const holder = earlier === undefined ? { id: item.sentTo, nativeId: item.sentNative } : item.carriedFrom;
+    if (!holder || earlier !== undefined && holder.id !== earlier) throw denied();
+    const session = this.snapshot(client).sessions.find(s => s.id === holder.id);
+    if (item.status !== 'waiting' || !session || session.archived || session.nativeContextPending || !holder.nativeId ||
+        session.nativeId !== holder.nativeId || this.waitingQuestions(target.roomId, [item]).get(item.id)?.questionId !== target.questionId) throw denied();
     return { ...target, sessionId: session.id, nativeId: session.nativeId, serviceKey: client.route(session.id).key };
   }
   // Which phone entry the Mac's butler gets. Only a session this phone already reads is named; otherwise only why not.
@@ -254,11 +260,21 @@ class MobileWorkspace {
       else if (answering) {
         if (typeof answerProof !== 'function') throw denied();
         await client.refresh();
-        const target = this.queueAnswerTarget(client, grant, { roomId: value.roomId, itemId, questionId: value.questionId });
-        const proof = answerProof(); valid();
+        const asked = { roomId: value.roomId, itemId, questionId: value.questionId };
+        let target = null, refused = null;
+        try { target = this.queueAnswerTarget(client, grant, asked); } catch (error) { refused = error; }
+        let proof;
+        try { proof = answerProof(); } catch (error) { throw refused || error; }
+        valid();
+        // Sent to the session before, received there, and the item went to a successor meanwhile: closed once, for
+        // that one, whatever state the successor is in. Any other refusal stays the one the holder's check gave.
+        if (typeof proof.sessionId === 'string' && proof.sessionId !== target?.sessionId) {
+          try { target = this.queueAnswerTarget(client, grant, asked, proof.sessionId); } catch (error) { throw refused || error; }
+        }
+        if (!target) throw refused;
         if (proof.requestId !== value.answerRequestId || proof.sessionId !== target.sessionId || proof.nativeId !== target.nativeId ||
             proof.serviceKey !== target.serviceKey || typeof proof.text !== 'string' || !proof.text.trim() || proof.text.length > 6000) throw denied();
-        this.roomState.queueResolve(itemId, value.roomId, null, proof.text);
+        this.roomState.queueResolve(itemId, value.roomId, null, proof.text, target.sessionId);
       } else this.roomState.queueResolve(itemId, value.roomId, null);
     }
     if (['queueCancel', 'queueResolve'].includes(value.action))
