@@ -56,7 +56,7 @@ async function runWorker(input, { directory, signal, authorize }, deps = {}) {
 }
 function createTransport({ directory }) {
   const controller = new AbortController();
-  return { readSource: options => readSource({ signal: AbortSignal.any([controller.signal, options.signal]) }),
+  return { readSource: options => readSource({ url: options.url, signal: AbortSignal.any([controller.signal, options.signal]) }),
     select: (input, options) => runWorker(input, { directory, signal: AbortSignal.any([controller.signal, options.signal]), authorize: options.authorize }), close: () => controller.abort() };
 }
 module.exports = { createTransport, runWorker, sandboxProfile };

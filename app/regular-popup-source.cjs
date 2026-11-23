@@ -2,6 +2,8 @@
 const https = require('node:https');
 const { performance } = require('node:perf_hooks');
 const MAX_BYTES = 2 * 1024 * 1024, SOURCE = 'https://github.com/trending';
+const SOURCES = Object.freeze([SOURCE, SOURCE + '?since=weekly', SOURCE + '?since=monthly']);
+const validSource = url => typeof url === 'string' && SOURCES.includes(url);
 const plain = value => value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_, entity) => {
   const names = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
   if (!entity.startsWith('#')) return names[entity.toLowerCase()];
@@ -88,13 +90,14 @@ function parseTrending(html, { deadline = Infinity } = {}) {
   }
   check(); if (row || !rows.length) throw Error('source-invalid'); return rows;
 }
-function readSource({ signal } = {}, { get = https.get, timeoutMs = 15000 } = {}) {
+function readSource({ url = SOURCE, signal } = {}, { get = https.get, timeoutMs = 15000 } = {}) {
+  if (!validSource(url)) return Promise.reject(Error('source-unavailable'));
   if (signal?.aborted) return Promise.reject(Error('source-cancelled'));
   return new Promise((resolve, reject) => {
     let request, response, done = false, bytes = 0; const chunks = [], deadline = performance.now() + timeoutMs;
     const finish = (error, value) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); if (error) { response?.destroy(); request?.destroy(); reject(Error('source-unavailable')); } else resolve(value); };
     const abort = () => finish(Error()), timer = setTimeout(abort, timeoutMs); signal?.addEventListener('abort', abort, { once: true });
-    try { request = get(SOURCE, { agent: false, headers: { Accept: 'text/html', 'Accept-Encoding': 'identity', 'User-Agent': 'Native-Agent-Workspace-Discoveries' } }, res => {
+    try { request = get(url, { agent: false, headers: { Accept: 'text/html', 'Accept-Encoding': 'identity', 'User-Agent': 'Native-Agent-Workspace-Discoveries' } }, res => {
       response = res; if (done) { res.destroy(); return; }
       if (res.statusCode !== 200 || !/^text\/html(?:;|$)/i.test(res.headers['content-type'] || '') || Number(res.headers['content-length'] || 0) > MAX_BYTES) { finish(Error()); return; }
       res.on('error', () => finish(Error())); res.on('aborted', () => finish(Error()));
@@ -103,4 +106,4 @@ function readSource({ signal } = {}, { get = https.get, timeoutMs = 15000 } = {}
     }); request.on('error', () => finish(Error())); } catch { finish(Error()); }
   });
 }
-module.exports = { parseTrending, readSource, MAX_BYTES, SOURCE };
+module.exports = { parseTrending, readSource, MAX_BYTES, SOURCE, SOURCES, validSource };

@@ -2605,7 +2605,7 @@ async function boot() {
   });
   register('discoveries', (c, action, ...args) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.discoveries.personOnly');
-    if (action === 'status' && !args.length) return discoveries.status();
+    if (action === 'status' && !args.length) return discoveries.prefill([roomState.value, ...roomState.spaces.rooms]);
     if (action === 'configure' && args.length === 1) return discoveries.configure(args[0]);
     if (action === 'mark' && args.length === 3) return discoveries.mark(...args);
     throw uiError('error.discoveries.invalid');
