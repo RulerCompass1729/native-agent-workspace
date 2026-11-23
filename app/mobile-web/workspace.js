@@ -108,10 +108,10 @@
   Object.assign(words.zh, { receiptTitle: '回执', receiptSend: '发给', receiptAnswer: '回答', receiptTime: '发起', receiptTimeUnknown: '时间未记录', receiptMissing: '原任务内容未保存，请回 Mac 核对', receiptHidden: '关联内容已不在本次授权范围内，请回 Mac 核对', receiptFull: '查看完整原输入', receiptExcerpt: '查看已保存片段', receiptHelp: '移除回执不会撤回消息或任务。', removeReceipt: '移除此条回执', unsentDraft: '未发送的草稿', taskAdded: '任务已添加', taskCancelled: '任务已取消', taskHandled: '任务已标为处理', reminderAcknowledged: '提醒已确认', receiptOperations: '操作记录', receiptSteward: '大管家记录', answerPending: '回答已写入；原生处理仍待确认', messageNotSent: '未发送，草稿保留' });
   Object.assign(words.en, { receiptTitle: 'Receipts', receiptSend: 'To', receiptAnswer: 'Answer to', receiptTime: 'started', receiptTimeUnknown: 'Time not saved', receiptMissing: 'Original task was not saved; check on the Mac', receiptHidden: 'Associated content is outside this grant; check on the Mac', receiptFull: 'View full original input', receiptExcerpt: 'View saved excerpt', receiptHelp: 'Removing a receipt keeps the message or task.', removeReceipt: 'Remove receipt', unsentDraft: 'Unsent draft', taskAdded: 'Task added', taskCancelled: 'Task cancelled', taskHandled: 'Task marked handled', reminderAcknowledged: 'Reminder acknowledged', receiptOperations: 'Operations record', receiptSteward: 'Butler record', answerPending: 'Answer written; native processing is still unconfirmed', messageNotSent: 'Not sent; draft kept' });
   // The desktop's own batch and timer words (ui-messages.js background.batch.* / background.timer.*).
-  Object.assign(words.zh, { batchTitle: '{action} · {count} 项', confirmAll: '全部确认（{count}）', confirmNext: '确认下一项（{index}/{count}）',
+  Object.assign(words.zh, { batchTitle: '{action} · {count} 项', confirmFirst: '逐项确认（1/{count}）', confirmNext: '确认下一项（{index}/{count}）',
     timerCountdown: '等你确认 · 剩余 {time}', timerCountdownName: '等你确认，剩余 {minutes} 分 {seconds} 秒，跳到这条消息', timerCountdownSecondsName: '等你确认，剩余 {seconds} 秒，跳到这条消息',
     timerMore: '+{count}', timerMoreName: '还有 {count} 个计时' });
-  Object.assign(words.en, { batchTitle: '{action} · {count} items', confirmAll: 'Confirm all ({count})', confirmNext: 'Confirm next ({index}/{count})',
+  Object.assign(words.en, { batchTitle: '{action} · {count} items', confirmFirst: 'Confirm one by one (1/{count})', confirmNext: 'Confirm next ({index}/{count})',
     timerCountdown: 'Waiting for confirmation · {time} left', timerCountdownName: 'Waiting for confirmation, {minutes} min {seconds} s left. Jump to this message', timerCountdownSecondsName: 'Waiting for confirmation, {seconds} s left. Jump to this message',
     timerMore: '+{count}', timerMoreName: 'Other timers: {count}' });
   function mount() {
@@ -561,7 +561,7 @@
       }
       box.append(rows);
       const next = waiting[0], index = members.indexOf(next) + 1, unconfirmed = passkeys.pending.some(p => p.status === 'unconfirmed' && members.some(c => c.id === p.id));
-      const approve = button(index > 1 ? f('confirmNext', { index, count: members.length }) : f('confirmAll', { count: members.length }), async () => {
+      const approve = button(index > 1 ? f('confirmNext', { index, count: members.length }) : f('confirmFirst', { count: members.length }), async () => {
         approve.disabled = true;
         const ids = members.map(c => c.id);
         for (const id of ids) startedBatches.set(id, ids);

@@ -74,11 +74,11 @@ function desktopAPI(app) {
 }
 const words = {
   zh: { actor: '大管家（合成）', targets: ['测试 2', '开发 2', '调研 3'], single: '允许读取项目文档？', archive: name => '归档「' + name + '」？',
-    detail: name => '对象：' + name + ' · 合成测试会话', title: '归档会话 · 3 项', all: '全部确认（3）', next: k => '确认下一项（' + k + '/3）',
+    detail: name => '对象：' + name + ' · 合成测试会话', title: '归档会话 · 3 项', all: '逐项确认（1/3）', next: k => '确认下一项（' + k + '/3）',
     chip: /^等你确认 · 剩余 \d+:\d\d$/, chipName: /^等你确认，剩余 (\d+ 分 )?\d+ 秒，跳到这条消息$/, moreName: '还有 1 个计时', manage: '管理', register: '登记敏感确认凭证',
     filler: '合成示例：这是一段较长的回复，用来把上面的确认卡推出可见区。' },
   en: { actor: 'Butler (synthetic)', targets: ['Test 2', 'Dev 2', 'Research 3'], single: 'Allow access to project docs?', archive: name => 'Archive ' + name + '?',
-    detail: name => 'Target: ' + name + ' · synthetic session', title: 'Archive session · 3 items', all: 'Confirm all (3)', next: k => 'Confirm next (' + k + '/3)',
+    detail: name => 'Target: ' + name + ' · synthetic session', title: 'Archive session · 3 items', all: 'Confirm one by one (1/3)', next: k => 'Confirm next (' + k + '/3)',
     chip: /^Waiting for confirmation · \d+:\d\d left$/, chipName: /^Waiting for confirmation, (\d+ min )?\d+ s left. Jump to this message$/, moreName: 'Other timers: 1', manage: 'Manage', register: 'Register an approval passkey',
     filler: 'Synthetic example: a longer reply that pushes the confirmation cards out of view.' },
 };
