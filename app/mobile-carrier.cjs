@@ -5,6 +5,8 @@ const { execFile } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { validActor } = require('./mobile-identity.js');
 const fail = (code = 'MOBILE_CARRIER_UNAVAILABLE') => Object.assign(Error('The private mobile entry could not be verified.'), { code });
+// Tailscale not started, not logged in or offline yet, or nothing served for this host yet: a later check may pass.
+const notReady = () => Object.assign(fail(), { carrierNotReady: true });
 const bindings = new WeakMap();
 const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
@@ -33,8 +35,9 @@ function knownTopology(configs) {
 }
 function binding(carrier) { return structuredClone(bindings.get(carrier) || null); }
 function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = {}) {
-  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535 || typeof sharedHostConfirmed !== 'boolean' || status?.BackendState !== 'Running') throw fail();
-  const name = status.Self?.DNSName, actor = status.User?.[String(status.Self?.UserID)]?.LoginName;
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535 || typeof sharedHostConfirmed !== 'boolean') throw fail();
+  const name = status?.Self?.DNSName, actor = status?.User?.[String(status?.Self?.UserID)]?.LoginName;
+  if (status?.BackendState !== 'Running' || status.Self?.Online === false || typeof name !== 'string' || !name) throw notReady();
   if (!/^[1-9][0-9]*$/.test(String(status.Self?.UserID)) || typeof name !== 'string' || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.ts\.net\.?$/i.test(name) || !validActor(actor) || status.Self?.Online === false || status.Self?.Tags !== undefined && (!Array.isArray(status.Self.Tags) || status.Self.Tags.length)) throw fail();
   const host = name.replace(/\.$/, '').toLowerCase(), matches = [], peers = new Set();
   const map = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -75,7 +78,8 @@ function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = 
     }
    }
   }
-  if (matches.length !== 1) throw fail();
+  // Entries for this host that no longer reach the port are a changed setup, not a slow start.
+  if (matches.length !== 1) throw matches.length || peers.size ? fail() : notReady();
   if ((peers.size !== 1 || unproven) && !sharedHostConfirmed) throw Object.assign(fail('MOBILE_SHARED_HOST'), { otherPorts: [...peers].filter(site => site !== matches[0]).map(site => Number(new URL(site).port || 443)).sort((a,b)=>a-b) });
   const result = Object.freeze({ origin: matches[0], actor, port });
   if (!unproven && knownTopology(configs) && (typeof status.Self.UserID !== 'number' || Number.isSafeInteger(status.Self.UserID))) {
@@ -98,13 +102,13 @@ function binary(io = fs) {
     // canonical file without replacing the wrapper/symlink used to enter CLI mode.
     try { const target = io.realpathSync(name), s = io.statSync(target); if (s.isFile() && !(s.mode & 0o022) && (s.uid === 0 || s.uid === process.getuid())) return name; } catch {}
   }
-  throw fail();
+  throw notReady();
 }
 async function read({ run = execFile, executable = binary } = {}) {
   const program = executable();
   const read = args => new Promise((resolve, reject) => run(program, args, { timeout: 4000, maxBuffer: 512 * 1024, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' } }, (error, stdout) => {
-    if (error) return reject(fail());
-    try { resolve(JSON.parse(stdout)); } catch { reject(fail()); }
+    if (error) return reject(notReady());
+    try { resolve(JSON.parse(stdout)); } catch { reject(notReady()); }
   }));
   const status = await read(['status', '--json']), serve = await read(['serve', 'status', '--json']);
   return { status, serve };

@@ -175,6 +175,17 @@
     words.en.autoReconnect='Connection lost · Reconnecting automatically. Draft kept; nothing resent.';
     words.zh.offline = words.zh.phoneOffline = words.zh.autoReconnect;
     words.en.offline = words.en.phoneOffline = words.en.autoReconnect;
+    // A pairing past its end cannot come back by reconnecting; a long outage points to the reason the Mac shows.
+    words.zh.pairExpired='配对已到期。请在电脑上打开 设置 → 手机访问，点“连接手机”重新扫码。';
+    words.en.pairExpired='The pairing has expired. On the Mac, open Settings → Phone access and select “Connect phone” to scan again.';
+    words.zh.longOffline='还连不上电脑上的 NAW。电脑刚重启时，Tailscale 就绪后会自动接回；几分钟后还不行，请看电脑 设置 → 手机访问 里写的原因。草稿保留。';
+    words.en.longOffline='Still cannot reach NAW on the Mac. After a restart it reconnects once Tailscale is ready; if not within a few minutes, see the reason under Settings → Phone access on the Mac. Draft kept.';
+    let offlineSince = 0;
+    const offlineWord = () => {
+      const until = client?.state.session?.expiresAt;
+      if (Number.isSafeInteger(until) && until <= Date.now()) return 'pairExpired';
+      return offlineSince && Date.now() - offlineSince >= 180000 ? 'longOffline' : 'autoReconnect';
+    };
     Object.assign(words.zh, { healthUnknown: '告警状态未核实', wakeStalled: '大管家未能叫醒', tokenAnomaly: '用量状态异常', sourceDisconnected: '本机服务已断开' });
     Object.assign(words.en, { healthUnknown: 'Alert status unverified', wakeStalled: 'Butler could not be awakened', tokenAnomaly: 'Usage status needs attention', sourceDisconnected: 'Local service disconnected' });
     words.zh.bellNote='数量来自桌面同一份提醒。敏感卡需逐张系统验证；未启用或不支持的操作请回 Mac。';
@@ -657,7 +668,8 @@
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
       el('connection').classList.toggle('connection-warning', disconnected && !authorizationRejected);
       el('connection').classList.remove('health-attention');
-      const status = node('span', disconnected && !authorizationRejected ? t('autoReconnect') : locked ? t('locked') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; status.setAttribute('role','status'); el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
+      if (!disconnected) offlineSince = 0; else if (!offlineSince) offlineSince = Date.now();
+      const status = node('span', disconnected && !authorizationRejected ? t(offlineWord()) : locked ? t('locked') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; status.setAttribute('role','status'); el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
       if (!pendingPair && view?.reminders) {
         const health = view.reminders.health, keys = { 'steward-wake-stalled': 'wakeStalled', 'token-anomaly': 'tokenAnomaly', 'service-disconnected': 'sourceDisconnected' };
         const alerts = Array.isArray(health?.alerts) ? [...new Set(health.alerts.map(a => keys[a?.code]).filter(Boolean))] : [];

@@ -9,6 +9,9 @@ function fixture() {
     // Until when a pairing link or paired device is open (the real one reads mobile-access state).
     openUntil() { return context.openUntil === undefined ? context.now + 120000 : context.openUntil; }
     resumeInfo(){return context.savedEndpoint||null;}
+    resumeBlocker(){return context.blocker||null;}
+    async preparePersistence(){if(context.holdPrepare)await new Promise(r=>{context.releasePrepare=r;});}
+    approvalStatus(){return {paired:false,enabled:false,registered:false,pending:null,...(context.savedEndpoint&&!context.blocker?{resumeRequired:true}:{})};}
     setEndpoint(value){this.endpoint=value;}
     async resume(validate){if(!await validate())throw Error('Synthetic changed carrier');calls.push({method:'resume'});return {restored:true};}
     suspend(){calls.push({method:'pause',quitting:context.quitting,exclusive:this.options.exclusive()});return {paused:true,connectionClosed:true};}
@@ -34,7 +37,7 @@ function fixture() {
       options.signal.addEventListener('abort', () => { this.listening = false; this.emit('close'); });
       if (!context.holdListen) queueMicrotask(() => {
         if (options.signal.aborted) return;
-        if (context.listenFailure) this.emit('error', Error('/PRIVATE_BIND_PATH'));
+        if (context.listenFailure) this.emit('error', Object.assign(Error('/PRIVATE_BIND_PATH'), { code: context.listenCode }));
         else { this.listening = true; callback(); }
       });
     }
@@ -49,7 +52,7 @@ function fixture() {
       if (name === './mobile-carrier.cjs') return {
         sameBinding:require('../mobile-carrier.cjs').sameBinding,
         binding:value=>value.binding||{version:1,origin:'https://mobile.invalid',actor:'synthetic-human',port:45123,userId:'7',topologyHash:'0'.repeat(64)},
-        detectRestored:async value=>{calls.push({method:'detectRestored',value});if(context.recoveryFailure)throw Error('Synthetic changed topology');return {origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};},
+        detectRestored:async value=>{calls.push({method:'detectRestored',value});if(context.holdRecovery)await new Promise(r=>{context.releaseRecovery=r;});const next=context.recoveryErrors?.shift();if(next)throw next;if(context.recoveryFailure)throw Error('Synthetic changed topology');return {origin:'https://mobile.invalid',actor:'synthetic-human',port:45123};},
         detect: async value => { calls.push({ method: 'detectCarrier', value }); if (context.carrierFailure) throw Object.assign(Error('Synthetic unavailable carrier'), { code: 'MOBILE_SHARED_HOST',otherPorts:context.carrierPorts }); return { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123 }; }
       };
       if (name === './mobile-qr.cjs') return { generate: async link => { assert.ok(link.startsWith('https://mobile.invalid/mobile/#pair=')); if (context.qrFailure) throw Error('Synthetic local image failure'); calls.push({ method: 'localQR' }); return 'data:image/png;base64,c3ludGhldGlj'; } };
@@ -329,4 +332,116 @@ test('quit drops live mobile authority before asynchronously settling persistenc
 
 test('the production Main factory selects asynchronous persistence without calling a helper at construction',()=>{
  const f=fixture();f.context.appMobileBroker();assert.equal(f.context.broker.options.persistence.options.asynchronous,true);
+});
+
+// The person, 2026-11-23: after a power cut the phone stayed disconnected until someone clicked on the Mac. Boot
+// recovery now waits for a carrier that is still starting, and says why it stopped otherwise.
+const carrierModule = require('../mobile-carrier.cjs');
+const notReady = () => { try { carrierModule.inspect({ BackendState: 'Starting' }, {}); } catch (error) { return error; } };
+const changed = () => { try { carrierModule.inspectRestored({ BackendState: 'Running', Self: { DNSName: 'demo.example.ts.net.', UserID: 8 }, User: { 8: { LoginName: 'synthetic-human' } } },
+  { TCP: { 10000: { HTTPS: true } }, Web: { 'demo.example.ts.net:10000': { Handlers: { '/': { Proxy: 'http://127.0.0.1:45123' } } } } }, savedBinding()); } catch (error) { return error; } };
+const savedBinding = () => ({ version: 1, origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123, userId: '7', topologyHash: '0'.repeat(64) });
+function bootFixture() {
+  const f = fixture(), logs = [];
+  f.context.savedEndpoint = { origin: 'https://mobile.invalid', actor: 'synthetic-human', port: 45123, binding: savedBinding() };
+  f.context.console = { warn: value => logs.push(value.replace(/ [0-9]+ms$/, '')) };
+  const settle = () => new Promise(setImmediate);
+  const fireRetry = async () => { const due = [...f.timers]; f.timers.clear(); for (const [, t] of due) t.fn(); await settle(); };
+  const delays = () => [...f.timers.values()].map(t => t.ms);
+  const status = async () => (await f.handlers.get('workspace:mobileApprovalStatus')(f.event)).value;
+  const restored = () => f.calls.filter(c => c.method === 'detectRestored').length;
+  return { ...f, logs, settle, fireRetry, delays, status, restored };
+}
+test('a carrier that is still starting at boot is waited for, then the full checks open the listener', async () => {
+  const f = bootFixture(); f.context.recoveryErrors = [notReady(), notReady()];
+  await f.context.resumeAppMobileOnBoot();
+  assert.equal(f.servers.length, 0); assert.deepEqual(f.delays(), [5000]);
+  assert.equal((await f.status()).resumeReason, 'not-ready'); assert.equal((await f.status()).resumeRequired, true);
+  await f.fireRetry(); assert.equal(f.servers.length, 0); assert.deepEqual(f.delays(), [10000]);
+  await f.fireRetry();
+  assert.equal(f.servers.length, 1); assert.equal(f.servers[0].options.host, '127.0.0.1'); assert.equal(f.servers[0].listening, true);
+  assert.equal(f.calls.filter(c => c.method === 'resume').length, 1); assert.equal(f.restored(), 4, 'two carrier checks on the attempt that opened');
+  assert.equal(f.calls.some(c => ['detectCarrier', 'pair', 'localQR'].includes(c.method)), false);
+  assert.equal((await f.status()).resumeReason, undefined);
+  assert.deepEqual(f.logs, ['[mobile-pairing] boot not-ready', '[mobile-pairing] boot-retry ok']);
+});
+test('a changed carrier binding is not retried: no listener, and the person is told to pair again', async () => {
+  const f = bootFixture(); f.context.recoveryErrors = [changed()];
+  await f.context.resumeAppMobileOnBoot();
+  assert.equal(f.servers.length, 0); assert.deepEqual(f.delays(), []);
+  const value = await f.status();
+  assert.equal(value.resumeRequired, false); assert.equal(value.reconnectRequired, true); assert.equal(value.resumeReason, 'changed');
+  assert.deepEqual(f.logs, ['[mobile-pairing] boot changed']);
+});
+test('an expired or unbound saved pairing is not retried even when the carrier is also starting', async () => {
+  for (const blocker of ['expired', 'unbound', 'refused']) {
+    const f = bootFixture(); f.context.blocker = blocker; f.context.recoveryErrors = [notReady()];
+    await f.context.resumeAppMobileOnBoot();
+    assert.equal(f.servers.length, 0, blocker); assert.deepEqual(f.delays(), [], blocker); assert.deepEqual(f.logs, ['[mobile-pairing] boot ' + blocker]);
+  }
+});
+test('a port taken by another program is not retried and names the port', async () => {
+  const f = bootFixture(); f.context.listenFailure = true; f.context.listenCode = 'EADDRINUSE';
+  await f.context.resumeAppMobileOnBoot();
+  assert.deepEqual(f.delays(), []); assert.equal(f.calls.some(c => c.method === 'resume'), false);
+  const value = await f.status(); assert.equal(value.resumeReason, 'port-in-use'); assert.equal(value.resumePort, 45123); assert.equal(value.resumeRequired, true);
+});
+test('without a saved authority file boot does nothing, as before', async () => {
+  const f = bootFixture(); f.context.fs = { existsSync: () => false };
+  await f.context.resumeAppMobileOnBoot();
+  assert.deepEqual(f.calls, []); assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, []);
+});
+test('the backoff doubles from five seconds and stays at one minute, and only a changed reason is logged again', async () => {
+  const f = bootFixture(); f.context.recoveryErrors = Array.from({ length: 8 }, notReady);
+  await f.context.resumeAppMobileOnBoot(); const seen = [...f.delays()];
+  for (let i = 0; i < 7; i++) { await f.fireRetry(); seen.push(...f.delays()); }
+  assert.deepEqual(seen, [5000, 10000, 20000, 40000, 60000, 60000, 60000, 60000]);
+  assert.equal(f.restored(), 8); assert.deepEqual(f.logs, ['[mobile-pairing] boot not-ready']);
+  f.context.recoveryErrors = [changed()]; await f.fireRetry();
+  assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, ['[mobile-pairing] boot not-ready', '[mobile-pairing] boot-retry changed']);
+});
+test('a manual restore, revoke or quit while waiting cancels the pending retry', async () => {
+  for (const act of ['manual', 'revoke', 'quit']) {
+    const f = bootFixture(); f.context.recoveryErrors = [notReady()];
+    await f.context.resumeAppMobileOnBoot(); assert.deepEqual(f.delays(), [5000], act);
+    if (act === 'manual') { f.context.carrierFailure = false; assert.equal((await f.handlers.get('workspace:mobileResume')(f.event, { sharedHostConfirmed: false })).ok, true); }
+    if (act === 'revoke') f.context.revokeAppMobile();
+    if (act === 'quit') f.quit({ preventDefault() {} });
+    const before = f.restored(), servers = f.servers.length; await f.fireRetry();
+    assert.equal(f.restored(), before, act); assert.equal(f.servers.length, servers, act);
+    if (act !== 'quit') assert.equal((await f.status()).resumeReason, undefined, act);
+    else assert.equal((await f.handlers.get('workspace:mobileApprovalStatus')(f.event)).ok, false, 'no status while quitting');
+  }
+});
+test('a revoke during an attempt keeps a late "not ready" answer from scheduling another', async () => {
+  const f = bootFixture(); f.context.holdRecovery = true; f.context.recoveryErrors = [notReady()];
+  const attempt = f.context.resumeAppMobileOnBoot(); await f.settle();
+  f.context.revokeAppMobile(); f.timers.clear(); f.context.releaseRecovery(); await attempt;
+  assert.deepEqual(f.delays(), []); assert.equal(f.servers.length, 0); assert.deepEqual(f.logs, []);
+});
+test('a saved-pairing reason seen at boot is not shown once the broker says the pairing can resume', async () => {
+  const f = bootFixture(); f.context.blocker = 'refused'; f.context.recoveryErrors = [notReady()];
+  await f.context.resumeAppMobileOnBoot();
+  assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, ['[mobile-pairing] boot refused']);
+  f.context.blocker = null;
+  const value = await f.status(); assert.equal(value.resumeRequired, true); assert.equal(value.resumeReason, undefined);
+});
+test('a person\'s action while the attempt is still preparing is newer, whether or not the attempt takes its own step afterwards', async () => {
+  const f = bootFixture(); f.context.holdPrepare = true;
+  const attempt = f.context.resumeAppMobileOnBoot(); await f.settle();
+  f.context.revokeAppMobile(); f.context.savedEndpoint = null; f.context.releasePrepare(); await attempt;
+  assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, []); assert.equal((await f.status()).resumeReason, undefined);
+  // The same action, and the attempt still takes its own step afterwards and finds the carrier starting.
+  const g = bootFixture(); g.context.holdPrepare = true; g.context.recoveryErrors = [notReady()];
+  const later = g.context.resumeAppMobileOnBoot(); await g.settle();
+  g.context.revokeAppMobile(); g.context.releasePrepare(); await later;
+  assert.deepEqual(g.delays(), []); assert.deepEqual(g.logs, []);
+});
+test('waking from sleep runs a pending retry at once and starts its backoff over', async () => {
+  const f = bootFixture(); f.context.recoveryErrors = Array.from({ length: 4 }, notReady);
+  await f.context.resumeAppMobileOnBoot(); await f.fireRetry(); await f.fireRetry(); assert.deepEqual(f.delays(), [20000]);
+  f.context.wakeAppMobileResume(); await f.settle();
+  assert.equal(f.restored(), 4); assert.deepEqual(f.delays(), [10000]);
+  f.context.wakeAppMobileResume(); await f.settle(); assert.equal(f.servers.length, 1);
+  f.context.wakeAppMobileResume(); await f.settle(); assert.equal(f.restored(), 6, 'nothing pending after the listener opened');
 });

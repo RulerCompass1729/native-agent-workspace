@@ -16,8 +16,9 @@ function details(d){
    !(exact(w,['roomIds','records'])&&Array.isArray(w.roomIds)&&w.roomIds.length<=32&&new Set(w.roomIds).size===w.roomIds.length&&w.roomIds.every(x=>typeof x==='string'&&/^[A-Za-z0-9_-]{1,100}$/.test(x))&&typeof w.records==='boolean'))return false;
  return d.consent===null||exact(d.consent,['version','owner','enabled','key']);
 }
-const PHASES=['boot','restore','pair','load','restore-check','persist-enabled','persist-disabled','quit','revoke'];
-const CATEGORIES=['ok','unconfirmed','unavailable','timeout','output-limit','input-limit','unsupported','process','invalid-response'];
+const PHASES=['boot','boot-retry','restore','pair','load','restore-check','persist-enabled','persist-disabled','quit','revoke'];
+const CATEGORIES=['ok','unconfirmed','unavailable','timeout','output-limit','input-limit','unsupported','process','invalid-response',
+  'not-ready','expired','unbound','refused','changed','port-in-use'];
 function logPairing(root,entry){
  if(!exact(entry,['phase','category','elapsedMs'])||!PHASES.includes(entry.phase)||!CATEGORIES.includes(entry.category)||!Number.isSafeInteger(entry.elapsedMs)||entry.elapsedMs<0)return false;
  let fd;try{

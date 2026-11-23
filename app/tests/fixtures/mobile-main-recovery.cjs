@@ -4,7 +4,7 @@ async function resume(broker,{entry,status,serve,root}){
  const source=fs.readFileSync(require.resolve('../../main.cjs'),'utf8'),handlers=new Map(),windows=new Map();let listeners=0;
  const human={view:{},win:{webContents:{id:1},isDestroyed:()=>false}};windows.set(1,human);
  const context=vm.createContext({primary:true,quitting:false,mobileOpening:false,mobileGeneration:0,mobileQrRequest:0,mobileListener:null,mobileStopped:Promise.resolve(true),
-  fs,path:require('node:path'),dataDir:root,windows,Error,Number,appMobileBroker:()=>broker,
+  fs,path:require('node:path'),dataDir:root,windows,Error,Number,setTimeout,clearTimeout,appMobileBroker:()=>broker,
   uiError:()=>Error('Synthetic mobile recovery refused'),watchAppMobile(){},isCurrentHumanContext:null,
   register:(name,handler)=>handlers.set(name,handler),applicationHandlers:new Map(),
   connectAppMobile(){throw Error('No pairing in recovery fixture');},cancelAppMobileSetup(){},appMobileSetupStatus(){},

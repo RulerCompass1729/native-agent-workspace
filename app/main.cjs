@@ -301,7 +301,7 @@ async function startAppMobileListener(options,handler,generation) {
   server.maxConnections=8;server.maxRequestsPerSocket=16;server.headersTimeout=5000;server.requestTimeout=5000;server.keepAliveTimeout=1000;
   server.on('error',()=>{if(entry.ready && mobileListener===entry)revokeAppMobile();});
   await new Promise((resolve,reject)=>{
-    server.once('error',()=>reject(Error('Mobile listener unavailable.')));server.once('close',()=>reject(Error('Mobile listener cancelled.')));
+    server.once('error',error=>reject(Object.assign(Error('Mobile listener unavailable.'),{listenCode:error?.code})));server.once('close',()=>reject(Error('Mobile listener cancelled.')));
     try{server.listen({host:'127.0.0.1',port:options.port,exclusive:true,signal:controller.signal},resolve);}catch(error){reject(error);}
   });
   if(generation!==mobileGeneration || quitting || mobileListener!==entry || controller.signal.aborted)throw Error('Mobile setup cancelled.');
@@ -318,7 +318,7 @@ async function startAppMobileListener(options,handler,generation) {
 async function resumeAppMobile(context,value){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||typeof value.sharedHostConfirmed!=='boolean'||!primary||quitting||mobileOpening)throw uiError('error.mobile.carrierUnavailable');
   const broker=appMobileBroker();await broker.preparePersistence?.(context?'restore':'boot');if(!primary||quitting||mobileOpening||context&&!isCurrentHumanContext(context))throw uiError('error.mobile.carrierUnavailable');const endpoint=broker.resumeInfo();if(!endpoint)throw uiError('error.mobile.carrierUnavailable');
-  const generation=++mobileGeneration,request=++mobileQrRequest;mobileOpening=true;let currentEndpoint;
+  const generation=++mobileGeneration,request=++mobileQrRequest;mobileOpening=true;let currentEndpoint;if(!context)mobileBootGeneration=generation;
   const current=()=>generation===mobileGeneration&&request===mobileQrRequest&&!quitting&&primary&&(!context||isCurrentHumanContext(context));
   const validate=async()=>{
     const carrier=context?await detectAppMobile({view:{mobileEndpoint:{port:endpoint.port}}},value):
@@ -339,9 +339,54 @@ function appMobileLog(phase,category,elapsedMs){
   const entry={phase,category,elapsedMs};try{require('./mobile-pairing-store.cjs').logPairing?.(dataDir,entry);}catch{}
   console.warn(`[mobile-pairing] ${phase} ${category} ${elapsedMs}ms`);
 }
-async function resumeAppMobileOnBoot(){
+// After an outage Tailscale can come up after NAW. Only "not ready yet" is retried, with the full checks each time and
+// capped exponential backoff (5 s doubling to 1 min); a pairing action, revoke or quit since the attempt cancels it.
+const MOBILE_RESUME_DELAYS=[5000,10000,20000,40000,60000];
+let mobileResumeRetry,mobileResumeNow,mobileResumeState=null,mobileBootGeneration=0;
+function mobileResumeReason(error){
+  const blocked=mobileBroker?.resumeBlocker?.();
+  if(blocked)return blocked;
+  if(error?.carrierNotReady)return 'not-ready';
+  if(error?.listenCode==='EADDRINUSE')return 'port-in-use';
+  if(['MOBILE_CARRIER_UNAVAILABLE','MOBILE_SHARED_HOST'].includes(error?.code))return 'changed';
+  return 'other';
+}
+async function resumeAppMobileOnBoot(attempt=0){
+  clearTimeout(mobileResumeRetry);mobileResumeRetry=mobileResumeNow=undefined;
   if(!fs.existsSync(path.join(dataDir,'mobile-authority.json')))return;
-  const started=Date.now();try{await resumeAppMobile(null,{sharedHostConfirmed:false});}catch{appMobileLog('boot','unavailable',Math.max(0,Date.now()-started));}
+  const started=Date.now(),before=mobileGeneration,previous=attempt?mobileResumeState?.reason:undefined;
+  try{
+    await resumeAppMobile(null,{sharedHostConfirmed:false});
+    mobileResumeState=null;
+    if(attempt)appMobileLog('boot-retry','ok',Math.max(0,Date.now()-started));
+  }catch(error){
+    // Anything past the generation this attempt took (or the one before it, if it failed first) is a newer action by the person.
+    if(mobileGeneration>Math.max(before,mobileBootGeneration)||mobileBootGeneration>before+1||quitting)return;
+    let reason='other',port;
+    try{reason=mobileResumeReason(error);port=mobileBroker?.resumeInfo?.()?.port;}catch{}
+    const generation=mobileGeneration;
+    mobileResumeState={reason,generation,port};
+    if(reason!==previous)appMobileLog(attempt?'boot-retry':'boot',reason==='other'?'unavailable':reason,Math.max(0,Date.now()-started));
+    if(reason!=='not-ready')return;
+    const run=next=>{
+      mobileResumeRetry=mobileResumeNow=undefined;
+      if(generation===mobileGeneration&&!quitting&&primary&&!mobileOpening&&!mobileListener)resumeAppMobileOnBoot(next).catch(()=>{});
+    };
+    mobileResumeNow=run;
+    mobileResumeRetry=setTimeout(()=>run(attempt+1),MOBILE_RESUME_DELAYS[Math.min(attempt,MOBILE_RESUME_DELAYS.length-1)]);
+  }
+}
+// On wake a pending retry runs at once and its backoff starts over, as browsers retry when they come back online.
+function wakeAppMobileResume(){
+  if(!mobileResumeRetry)return;
+  clearTimeout(mobileResumeRetry);mobileResumeNow(1);
+}
+function appMobileApprovalStatus(value){
+  const status=appMobileBroker().approvalStatus(value),s=mobileResumeState;
+  // The broker states saved-pairing reasons itself, live; only reasons it cannot see are remembered here.
+  if(!status.resumeRequired||!s||s.generation!==mobileGeneration||!['not-ready','port-in-use','other','changed'].includes(s.reason))return status;
+  if(s.reason==='changed')return {...status,resumeRequired:false,reconnectRequired:true,resumeReason:'changed'};
+  return {...status,resumeReason:s.reason,...(s.reason==='port-in-use'&&s.port?{resumePort:s.port}:{})};
 }
 function suspendAppMobile(){
   mobileGeneration++;mobileQrRequest++;clearTimeout(mobileExpiry);mobileExpiry=undefined;
@@ -2727,7 +2772,7 @@ async function boot() {
   for (const [method, name] of Object.entries({ mobileApprovalStatus: 'approvalStatus', mobileApprovalBegin: 'approvalBegin', mobileApprovalConfirm: 'approvalConfirm', mobileApprovalEnable: 'approvalEnable', mobileApprovalRevoke: 'approvalRevoke' })) {
     register(method, (c, value) => {
       if (!isCurrentHumanContext(c)) throw uiError('error.operator.desktopOnly');
-      return appMobileBroker()[name](value);
+      return name === 'approvalStatus' ? appMobileApprovalStatus(value) : appMobileBroker()[name](value);
     });
     applicationHandlers.delete(method);
   }
@@ -2937,6 +2982,7 @@ function focusOrOpen() {
 app.on('activate', focusOrOpen);
 app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background')) focusOrOpen(); });
 if (primary) app.whenReady().then(() => { notificationScreen ||= new (require('./confirmation-notifications.cjs').NotificationScreen)(powerMonitor); });
+if (primary) app.whenReady().then(() => powerMonitor.on('resume', wakeAppMobileResume));
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {

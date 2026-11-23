@@ -57,3 +57,19 @@ test('QR pixel expiry does not cancel a redeemed enrollment window; closing stil
  const f=fixture(),cancelled=[];f.api.mobileCancelSetup=async v=>{cancelled.push(v.setupId);return {cancelled:true};};f.api.mobileConnect=async()=>({qr:f.png,expiresAt:110000,setupId:'11111111-1111-4111-8111-111111111111'});
  await f.el('mobile-prepare').listeners.click();f.timers.get(1).fn();assert.equal(f.el('mobile-pair-qr').hidden,true);assert.equal(cancelled.length,0);f.setup.close();assert.equal(cancelled.length,1);
 });
+test('a restore that stopped says why and offers the one action that helps',async()=>{
+ const cases=[
+  [{paired:false,resumeRequired:true,resumeReason:'not-ready'},'手机入口未恢复：Tailscale 还没就绪。就绪后会自动接回；几分钟后还是这样，请打开 Tailscale 并确认已登录。','恢复手机连接'],
+  [{paired:false,resumeRequired:true,resumeReason:'port-in-use',resumePort:45123},'手机入口未恢复：端口 45123 被别的程序占用。关掉它后点“恢复手机连接”。','恢复手机连接'],
+  [{paired:false,resumeRequired:true,resumeReason:'other'},'手机入口未恢复：本机没能完成恢复。点“恢复手机连接”再试。','恢复手机连接'],
+  [{paired:false,reconnectRequired:true,resumeReason:'expired'},'手机入口未恢复：配对已到期（每次配对保留 7 天）。点“连接手机”重新扫码。','连接手机'],
+  [{paired:false,reconnectRequired:true,resumeReason:'changed'},'手机入口未恢复：Tailscale 的入口或账号和配对时不同。点“连接手机”重新扫码。','连接手机'],
+  [{paired:false,reconnectRequired:true,resumeReason:'unbound'},'手机入口未恢复：这次配对的入口无法自动核实。点“连接手机”重新扫码。','连接手机'],
+  [{paired:false,reconnectRequired:true,resumeReason:'refused'},'手机入口未恢复：保存的配对无法核实。点“连接手机”重新扫码。','连接手机'],
+  [{paired:false,reconnectRequired:true,resumeReason:'PRIVATE_TEXT'},'手机连接未恢复，请重新连接手机。原有记录已保留。','连接手机'],
+ ];
+ for(const [value,text,button] of cases){
+  const f=fixture();f.api.mobileApprovalStatus=async()=>value;f.api.mobileResume=async()=>({restored:true});f.setup.close();f.setup.open();await new Promise(setImmediate);
+  assert.equal(f.el('mobile-status').textContent,text,value.resumeReason);assert.equal(f.el('mobile-prepare').textContent,button,value.resumeReason);assert.deepEqual(f.calls,[]);
+ }
+});
