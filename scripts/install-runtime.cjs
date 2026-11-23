@@ -8,6 +8,7 @@ function createInspector(config, platform) {
   const { readLayout } = require(path.join(config.release, 'app/service-layout.cjs'));
   const { readSettings } = require(path.join(config.release, 'app/backend-switch.cjs'));
   const { processIdentity, processMayBeAlive } = require(path.join(config.release, 'app/platform.cjs'));
+  const { sessionBusy } = require(path.join(config.release, 'app/background-fingerprint.cjs'));
   const run = platform.run;
 async function readBackends() {
   const layout = readLayout(DATA);
@@ -53,9 +54,27 @@ function summary(view) {
   return { sessions, services, active: view.layout.active, pending: view.layout.pending || null };
 }
 
+// A staged wake goes out only when its turn's end reaches NAW. If the sender is idle and on another turn, that end
+// was lost: its next turn withdraws the wake as unreported (session-wake nativeStart) and a reopen marks it
+// unconfirmed, never sent. Such a wake is not in flight; capture lists it instead.
+function staleWake(state, s, m) {
+  if (m.wake.status !== 'staged') {
+    return null;
+  }
+  const sender = m.wake.senderId === s.id ? s : state.sessions.find(other => other.id === m.wake.senderId);
+  if (!sender || sessionBusy(sender)) {
+    return null;
+  }
+  if (m.wake.nativeId === sender.nativeId && m.wake.turnId === sender.activeTurnId) {
+    return null;
+  }
+  return { id: m.wake.id ?? null, sender: sender.id, turnId: m.wake.turnId ?? null, reason: 'staged; sender idle and the wake turn is not its current turn' };
+}
 // A relay or automatic message in flight would be paused or withdrawn by the new app's startup.
+// A held wake still goes out from the butler limit timer, so it blocks too.
 function assertQuiet(view) {
   assert.ok(!view.layout.pending, 'No pending backend activation');
+  const stale = [];
   for (const backend of view.backends) {
     const state = backend.state;
     const rooms = [state.room, ...(Array.isArray(state.rooms) ? state.rooms : [])];
@@ -67,10 +86,16 @@ function assertQuiet(view) {
     }
     for (const s of state.sessions) {
       for (const m of s.messages || []) {
-        assert.ok(!['staged', 'sending'].includes(m && m.wake && m.wake.status), 'No automatic message in flight: ' + backend.key);
+        const wake = m && m.wake && staleWake(state, s, m);
+        if (wake) {
+          stale.push({ backend: backend.key, ...wake });
+          continue;
+        }
+        assert.ok(!['staged', 'sending', 'held'].includes(m && m.wake && m.wake.status), 'No automatic message in flight: ' + backend.key);
       }
     }
   }
+  return stale;
 }
 
 // Startup restarts an older backend on the new code when every session in it ended and none of their
@@ -176,8 +201,8 @@ function views() {
 
   async function capture() {
     assert.equal(readSettings(DATA).auto, false, 'Automatic backend switching must be off');
-    const view = await readBackends(); assertQuiet(view); assertRestartsSafe(view);
-    const state = summary(view);
+    const view = await readBackends(); const staleWakes = assertQuiet(view); assertRestartsSafe(view);
+    const state = { ...summary(view), staleWakes };
     for (const service of state.services) assert.ok(service.identity, 'Backend identity unavailable');
     return { state, views: views(), restarting: restartedKeys(view), expectedActive: predictActive(view), view };
   }

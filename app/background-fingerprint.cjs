@@ -3,6 +3,15 @@
 const backgroundOperation = require('./background-operation.cjs');
 const { roomIds } = require('./collaboration-spaces.cjs');
 const { uiError } = require('./ui-errors.cjs');
+// Archive refuses a busy session; the installer's in-flight wake gate reads the same rule.
+function sessionBusy(target) {
+  if (['starting', 'working', 'approval', 'stopping', 'background'].includes(target.state)) {
+    return true;
+  }
+  return Boolean(target.activeTurnId || target.pendingTag || target.pendingQueue || target.pendingSteer || target.nativeInputRequired ||
+    target.approval || target.nativeApproval?.requests?.length || target.nativeGoal?.status === 'active' ||
+    target.background > 0 || target.scheduled > 0);
+}
 function fingerprint(command, { state, actor, context, roomState, sessionLabels, client }) {
   const strings = new Set();
   const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
@@ -12,10 +21,7 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
     const metadata = roomState.apply(state), auditRooms = new Set();
     if (maintenance === 'archiveSession') {
       const target = metadata.sessions.find(s => s.id === command.arguments[0]);
-      if (target && (['starting', 'working', 'approval', 'stopping', 'background'].includes(target.state) ||
-          target.activeTurnId || target.pendingTag || target.pendingQueue || target.pendingSteer || target.nativeInputRequired ||
-          target.approval || target.nativeApproval?.requests?.length || target.nativeGoal?.status === 'active' ||
-          target.background > 0 || target.scheduled > 0)) throw uiError('error.planWorking');
+      if (target && sessionBusy(target)) throw uiError('error.planWorking');
     }
     const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
     for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
@@ -122,4 +128,4 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
     connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
     rooms: (state.rooms || [state.room]).filter(r => r && (global || strings.has(r.id))).map(r => ({ id: r.id, memberIds: r.memberIds })) };
 }
-module.exports = { fingerprint };
+module.exports = { fingerprint, sessionBusy };
