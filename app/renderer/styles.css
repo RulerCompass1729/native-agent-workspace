@@ -491,6 +491,25 @@ header h1, header p { overflow-wrap: anywhere; }
 .split-workspace.terminal-maximized{grid-template-columns:minmax(0,1fr)}
 #session-layout.terminal-maximized>.conversation-pane,#room-layout.terminal-maximized>#room-record-view{display:none}
 #session-layout.native-only{grid-template-columns:minmax(0,1fr)}
+/* The collapsed side keeps a full-height rail on its own edge, in its own grid track so it covers no terminal column or scrollbar. */
+#session-layout:has(>#edge-chat:not([hidden])){grid-template-columns:28px minmax(0,1fr)}
+#session-layout:has(>#edge-terminal:not([hidden])){grid-template-columns:minmax(0,1fr) 28px}
+#session-layout>.edge-handle{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0;min-height:0;margin:0;padding:12px 0 0;border:0;border-radius:0;background:var(--panel);color:var(--muted);font-size:12px;line-height:1.2}
+#edge-chat{border-right:1px solid var(--border)}
+#edge-terminal{border-left:1px solid var(--border)}
+#session-layout>.edge-handle:hover{background:var(--hover);color:var(--ink)}
+#session-layout>.edge-handle:focus-visible{outline:2px solid var(--ink);outline-offset:-3px}
+.edge-handle svg{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.edge-handle .edge-label{writing-mode:vertical-rl;letter-spacing:2px;font-weight:550;color:var(--ink)}
+@media(max-width:900px) and (min-height:721px){
+#session-layout:has(>#edge-chat:not([hidden])){grid-template-columns:minmax(0,1fr);grid-template-rows:32px minmax(0,1fr)}
+#session-layout:has(>#edge-terminal:not([hidden])){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) 32px}
+#session-layout>.edge-handle{flex-direction:row;justify-content:flex-start;gap:6px;padding:0 14px}
+#edge-chat{border-right:0;border-bottom:1px solid var(--border)}
+#edge-terminal{border-left:0;border-top:1px solid var(--border)}
+.edge-handle .edge-label{writing-mode:horizontal-tb;letter-spacing:0}
+.edge-handle .edge-chevron{transform:rotate(90deg)}
+}
 #room-layout>#room-session{border-left:1px solid var(--border)}
 #room-session .native-pane{border-left:0}
 #room-session .session-toolbar{padding:5px 10px;min-height:34px}
