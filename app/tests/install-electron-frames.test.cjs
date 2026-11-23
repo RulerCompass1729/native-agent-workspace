@@ -164,7 +164,9 @@ test('broker answers v4 with the Electron window list; v1 and v3 replies stay un
   assert.deepEqual(calls, [[false, false], [true, false], [true, true]]);
   for (const bad of [{ capability: '0'.repeat(64) }, { nonce: 'bad' }, { extra: true }])
     assert.equal((await request(broker.descriptorFile, { ...bad, kind: 'window-frames-v4' })).basis, undefined);
-  assert.equal(calls.length, 3, 'invalid v4 requests cannot read the window getter');
+  for (const kind of ['__proto__', 'constructor', 'toString', 'hasOwnProperty'])
+    assert.equal((await request(broker.descriptorFile, { kind })).basis, undefined, kind);
+  assert.equal(calls.length, 3, 'invalid v4 requests and inherited kind names cannot read the window getter');
   unavailable = true;
   const refused = await request(broker.descriptorFile, { kind: 'window-frames-v4' });
   assert.equal(refused.failureReason, 'operation-unconfirmed', 'a current GUI that cannot capture must not look like an old one');

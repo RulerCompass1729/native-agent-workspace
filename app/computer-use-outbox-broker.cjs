@@ -153,7 +153,7 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
-        const frameVersion = { 'window-frames': 1, 'window-frames-v3': 3, 'window-frames-v4': 4 }[request.kind];
+        const frameVersion = new Map([['window-frames', 1], ['window-frames-v3', 3], ['window-frames-v4', 4]]).get(request.kind);
         if (frameVersion) {
           const includeLocalPages = frameVersion >= 3, includeElectron = frameVersion === 4;
           const unavailable = () => failed('admission', includeLocalPages ? 'operation-unconfirmed' : 'invalid-request');
