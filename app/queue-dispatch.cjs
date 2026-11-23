@@ -2806,7 +2806,7 @@ class QueueDispatcher {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
-    if (await this.finishDeferrals(current.snapshot)) current = this.view();
+    if (await this.finishDeferrals(current.snapshot, current.now)) current = this.view();
     const sample = await this.memory(current.snapshot.sessions, current.now);
     const steward = this.stewardOutside(current.snapshot.sessions);
     const handedOff = this.handedOff();
@@ -3640,7 +3640,7 @@ class QueueDispatcher {
   // which then held the session for good: the butler from 11-19 21:13 PT, through every restart (R129). Its own log
   // still says what NAW did: the request, then the deferral, nothing after. Ended here as deferRotation ends one now,
   // on a backend that can; any other invalid episode stays the person's to release.
-  async finishDeferrals(snapshot) {
+  async finishDeferrals(snapshot, now) {
     let changed = false;
     for (const s of snapshot?.sessions || []) {
       const episode = s?.rotationEpisode;
@@ -3654,7 +3654,7 @@ class QueueDispatcher {
           after.slice(1).some(e => e.event !== 'waiting')) continue;
       let entry;
       try { entry = this.client.route(s.id); } catch { continue; }
-      const version = entry?.state?.runtimeVersion;
+      const version = entry?.state?.runtimeVersion ?? s.runtimeVersion;
       // An older backend has no such step: the person updates it first (the banner's button).
       if (releaseBackendOutdated(version)) continue;
       const key = JSON.stringify([s.id, episode.epoch, episode.tag, version ?? null]);
@@ -3664,6 +3664,8 @@ class QueueDispatcher {
         const result = await withTimeout(entry.client.call('invalidateRotation', s.id, s.nativeId, episode.epoch,
           { tag: episode.tag, reason: 'person-active' }), CALL_TIMEOUT_MS, 'invalidate-timeout');
         if (result?.epoch === episode.epoch && result.tag === episode.tag && result.state === 'released') {
+          // It rests as deferRotation's would, before it is asked again.
+          this.deferredAt.set(s.id, { at: now, due: after[0].reason });
           this.appendLog('waiting', { oldId: s.id, oldNativeId: s.nativeId, name: this.name(s), roomIds: roomIds(s) }, { reason: 'person-active', finished: true });
           changed = true;
         }

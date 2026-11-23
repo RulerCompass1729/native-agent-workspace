@@ -69,6 +69,8 @@ test('the orphaned deferral on a current backend is ended as NAW logged it, and 
   const last = f.logged().at(-1);
   assert.equal(last.event, 'waiting'); assert.equal(last.reason, 'person-active'); assert.equal(last.finished, true);
   assert.equal(f.wake.view().blocked, undefined);
+  // It rests as a deferral does now, before it is asked to hand off again.
+  assert.ok(f.d.personDeferred([s], 'butler', f.clock.now).has('butler'));
   f.clock.now += 60000; await f.pass();
   assert.deepEqual(f.dispatches(), ['butler']);
   assert.equal(f.invalidations().length, 1);
@@ -86,6 +88,13 @@ test('on a backend before alpha.284 nothing is called and the person is told to 
   assert.equal(s.rotationEpisode.state, 'released');
   f.clock.now += 60000; await f.pass();
   assert.deepEqual(f.dispatches(), ['butler']);
+});
+
+test('a route without a version is judged by the session\'s own, as the step is', async t => {
+  const s = { ...butler(), runtimeVersion: '0.1.0-alpha.270' }, f = fixture(t, [s]);
+  await f.pass();
+  assert.deepEqual(f.invalidations(), []);
+  assert.equal(f.wake.view().blocked.step, 'update-backend');
 });
 
 test('any other invalid episode stays the person\'s: nothing is called and the step is still shown', async t => {
