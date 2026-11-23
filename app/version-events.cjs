@@ -95,14 +95,15 @@ class VersionEvents {
       return;
     }
     const current = new Map(list.map(b => [b.key, b])), lines = [];
-    let moved = 0, failed = 0;
+    let moved = 0, gone = 0, failed = 0;
     for (const [key, was] of this.watch) {
       const b = current.get(key);
       if (!b) {
         const there = was.sessions.filter(s => placed(s.id) === this.version).length;
         // Gone from the list is not proof of a move: its sessions may have been archived or hidden.
         lines.push(`- ${short(key)} ${there === was.count ? '迁完' : '不在待迁列表里了'}：${was.count} 个会话里 ${there} 个已在 ${this.version}`);
-        this.watch.delete(key); moved++;
+        this.watch.delete(key);
+        if (there === was.count) moved++; else gone++;
         continue;
       }
       const failedNow = b.wait.code === 'failed' && !was.failed;
@@ -113,8 +114,8 @@ class VersionEvents {
     for (const b of list) if (!this.watch.has(b.key)) this.watch.set(b.key, { ...b, failed: b.wait.code === 'failed' });
     if (!lines.length) return;
     const rest = behindText(this.version, [...this.watch.values()]);
-    this.emit(failed && !moved ? 'backend-move-failed' : 'backend-moved', `【NAW 版本】后台迁移（${this.version}）：\n${lines.join('\n')}\n${rest}`,
-      `moved:${moved},failed:${failed},behind:${this.watch.size}`);
+    this.emit(failed && !moved && !gone ? 'backend-move-failed' : 'backend-moved', `【NAW 版本】后台迁移（${this.version}）：\n${lines.join('\n')}\n${rest}`,
+      `moved:${moved},gone:${gone},failed:${failed},behind:${this.watch.size}`);
   }
   emit(reason, text, outcome) {
     const at = this.now(), eventId = `version-change:${hash([this.version, this.at, this.sequence++])}`;

@@ -155,7 +155,7 @@ test('a backend that moved gets a follow-up with what is left; one that failed g
   let rows = f.recorded();
   assert.equal(rows.length, 2);
   assert.equal(rows[1].kind, 'blocked'); assert.equal(rows[1].payload.reason, 'backend-moved');
-  assert.equal(rows[1].payload.outcome, 'moved:1,failed:0,behind:1');
+  assert.equal(rows[1].payload.outcome, 'moved:1,gone:0,failed:0,behind:1');
   assert.match(rows[1].payload.text, /^【NAW 版本】后台迁移（0\.1\.0-alpha\.287）：\n- bbbbbbb 迁完：1 个会话里 1 个已在 0\.1\.0-alpha\.287\n还有 1 个后台不在 0\.1\.0-alpha\.287：\n- e2b6a43（[^）]+）：4 个会话里 1 个在干活或等人回答/u);
   f.scope.autoSwitchFailed.add(KEY_A); f.observe(); f.observe();
   rows = f.recorded();
@@ -182,6 +182,7 @@ test('a backend gone from the list with sessions not on this version is not told
   assert.equal(rows.length, 2);
   assert.match(rows[1].payload.text, /\n- bbbbbbb 不在待迁列表里了：1 个会话里 0 个已在 0\.1\.0-alpha\.287\n后台都已在 0\.1\.0-alpha\.287。$/u);
   assert.doesNotMatch(rows[1].payload.text, /迁完/u);
+  assert.equal(rows[1].payload.outcome, 'moved:0,gone:1,failed:0,behind:0');
 });
 
 test('what each old backend waits for, by the same rule as the move NAW chooses', () => {
@@ -208,6 +209,8 @@ test('what each old backend waits for, by the same rule as the move NAW chooses'
   assert.deepEqual(wait([stoppable('d', 'D', 3600000, { state: 'disconnected' })]), { code: 'blocked' }, 'a broken session needs the person');
   for (const stuck of [stoppable('d', 'D', 3600000, { state: 'disconnected' }), stoppable('n', 'N', 3600000, { nativeId: null }), stoppable('o', 'O', 3600000, { provider: 'other' })])
     assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stuck]), { code: 'blocked' }, `not told as passing by itself: ${stuck.id}`);
+  assert.deepEqual(wait([stoppable('h', 'H', 0, { state: 'working', provider: 'dsh' })]), { code: 'blocked' }, 'an unsupported provider at work never moves by itself');
+  assert.deepEqual(wait([stoppable('s', 'S', 0, { state: 'working', nativeId: null })]), { code: 'busy', waiting: 1 }, 'a starting session gets its identity');
   assert.deepEqual(wait([quiet], { auto: true, migrate: false }), { code: 'needs-person' });
   assert.deepEqual(wait([stoppable('n', 'N', 3600000, { nativeId: null })]), { code: 'blocked' });
   assert.deepEqual(wait([quiet], { auto: true, migrate: true }, new Set([KEY_B])), { code: 'failed' });

@@ -1782,12 +1782,12 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
       if (!session || ['ended', 'recoverable', 'background'].includes(session.state)) {
         continue;
       }
-      if (['disconnected', 'error'].includes(session.state)) {
+      // These block this backend for good (backend-switch.cjs sessionPlan): not to be told as passing by itself.
+      if (['disconnected', 'error'].includes(session.state) || !['claude', 'codex'].includes(session.provider)) {
         stuck = true;
       } else if (!backendSwitch.migrationAcceptable(session)) {
         busy++;
-      } else if (!session.nativeId || !['claude', 'codex'].includes(session.provider)) {
-        // Blocks this backend for good (backend-switch.cjs sessionPlan): not to be told as passing by itself.
+      } else if (!session.nativeId) {
         stuck = true;
       }
     }
