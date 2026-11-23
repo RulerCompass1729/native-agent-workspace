@@ -236,11 +236,13 @@ local branch or main; not installed, pushed or published):
   person's answer arrives (2026-11-13, a held member left four items waiting).
   An open decision does not stop NAW from replacing that session when it is
   due (the person, 2026-11-23): the successor's handoff gives each open
-  decision whole (the item id, its text and the member's question), the item
+  decision whole (the item id, its text and the member's question; where NAW
+  has only the start of a question left, the handoff says so), the item
   then names the successor, and the person's answer arrives there. The
   successor acts on the answer; it does not decide for the person or ask
-  again. Only decisions too long to hand over whole in one message keep the
-  session until the person answers some of them.
+  again. A session stays only while its open decisions cannot all be handed
+  over: together too long for one message, or one of them in a space the
+  session has left.
   When the work on the item ends in commits, the turn's final message has,
   after its first line, one line of its own with exactly three words
   separated by single spaces: `READY <branch> <commit>` (the branch that holds the work and its

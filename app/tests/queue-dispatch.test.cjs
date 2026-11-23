@@ -4138,7 +4138,13 @@ test('the handoff names every open decision whole: item id, the item\'s text and
   assert.doesNotMatch(note, /item-two|item-three|第二件做完了/, 'only decisions this member asked, in the spaces it hands over');
   // The record that held the question is gone (a compacted session): the line NAW kept stands in.
   const forgotten = rules.openDecisions(rooms, { ...old, messages: [] }, ['shared']);
-  assert.equal(forgotten[0].question, open.reply);
+  assert.deepEqual(forgotten, [{ ...decisions[0], question: open.reply, cut: true }]);
+  // The successor is told so, not left to take that line for the whole question.
+  assert.match(rules.decisionsNote('Agent a', forgotten), /提问 200 字（只留下开头，全文没找到）。\n/);
+  assert.doesNotMatch(note, /只留下开头/);
+  // A short question the kept line holds entire is not marked.
+  const brief = sentItem({ id: 'item-four', status: 'waiting', reply: '需要你决定：选哪个？' });
+  assert.equal(rules.openDecisions([{ id: 'shared', name: 'Team', queue: [brief] }], { ...old, messages: [] }, ['shared'])[0].cut, undefined);
   // A long handoff: its own text is cut, the decisions and the other notes are not.
   const duty = '【NAW 职责说明】\n' + 'd'.repeat(1000);
   const text = rules.handoffText('Agent a', 'h'.repeat(rules.ITEM_TEXT_LIMIT * 2), '旧目录说明', duty, note);
@@ -4170,6 +4176,21 @@ test('a successor that is replaced in turn hands the same decision on whole: it 
   assert.equal(rules.openDecisions(rooms, other, ['shared'])[0].question, held.reply);
   assert.equal(rules.openDecisions(rooms, told(first.replace('item-one', 'item-two')), ['shared'])[0].question, held.reply);
   assert.equal(rules.openDecisions(rooms, told(first.replace('补充补充', '补充')), ['shared'])[0].question, held.reply);
+  // A question NAW had only the start of stays marked when its successor hands it on.
+  const cutNote = rules.decisionsNote('Agent a', [{ roomId: 'shared', roomName: 'Team', itemId: 'item-one', text: held.text, question: held.reply, cut: true }]);
+  const again = rules.openDecisions(rooms, told(rules.handoffText('Agent a', '交接', '', '', cutNote)), ['shared']);
+  assert.deepEqual([again[0].question, again[0].cut], [held.reply, true]);
+});
+
+test('a decision in a space its session has left keeps the session: no successor could be given it there', () => {
+  // The successor joins the spaces the old session is in, and only items there move to it. A decision elsewhere
+  // would stay named for a session that has ended, so that session waits for the answer as it did before.
+  const decision = sentItem({ id: 'd1', status: 'waiting', reply: '需要你决定：选哪个？' });
+  const left = '308f55b3-ec97-467c-a2b8-1ecc47562029';
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('2')] }, { id: left, name: 'Left', queue: [decision] }];
+  assert.deepEqual(plan(rooms, [member('a')], COMPACTED), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a', afterDecision: true }]);
+  // In a space it is still in, the same decision goes with it.
+  assert.deepEqual(plan(rooms, [member('a', { roomIds: ['shared', left] })], COMPACTED), ROTATE_COMPACTED);
 });
 
 test('rotation-stalled 11-23: every waiting kind the planner sets is named in PLANNER_WAITING', () => {

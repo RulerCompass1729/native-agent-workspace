@@ -864,8 +864,8 @@ function rotationReason(session, now, options, rotations) {
   if (!['claude', 'codex'].includes(session.provider) || (record && !restingSuccessor(record)) || options.blockedRotations?.has(session.id)) {
     return null;
   }
-  // Its open decisions do not fit whole in one handoff: it stays until the person answers some.
-  if (options.decisionsTooLong && options.decisionsTooLong.has(session.id)) {
+  // Its open decisions cannot all go to a successor (step 1 of the plan): it stays until the person answers those.
+  if (options.decisionsStay && options.decisionsStay.has(session.id)) {
     return null;
   }
   // The person used it while it was being rotated: it waits until it is quiet again (see personDeferred).
@@ -1012,9 +1012,9 @@ function planDispatch(input) {
   const rotationOptions = {
     blockedRotations: input.blockedRotations,
     // Filled in step 1: members whose next item is marked afterDecision (asksPerson), and those whose open
-    // decisions are too long to hand over whole (DECISIONS_LIMIT).
+    // decisions cannot all be handed over: too long to tell whole (DECISIONS_LIMIT), or in a space they have left.
     asking: new Set(),
-    decisionsTooLong: new Set(),
+    decisionsStay: new Set(),
     contentLimits,
     compactions: input.compactions,
     compactLimit: input.compactLimit ?? COMPACT_LIMIT,
@@ -1095,11 +1095,14 @@ function planDispatch(input) {
       if (item.sentTo && asksPerson(item)) {
         rotationOptions.asking.add(item.sentTo);
       }
-      if (item.sentTo && openDecision(item) && !holders.has(item.sentTo)) {
-        holders.add(item.sentTo);
-        const holder = byId.get(item.sentTo);
-        if (holder && decisionsNote(holder.name || holder.id, openDecisions(rooms, holder, spacesOf(holder))).length > DECISIONS_LIMIT) {
-          rotationOptions.decisionsTooLong.add(holder.id);
+      const holder = item.sentTo && openDecision(item) ? byId.get(item.sentTo) : null;
+      if (holder && !spacesOf(holder).includes(room.id)) {
+        // A successor joins only the spaces its old session is in: this decision could not follow.
+        rotationOptions.decisionsStay.add(holder.id);
+      } else if (holder && !holders.has(holder.id)) {
+        holders.add(holder.id);
+        if (decisionsNote(holder.name || holder.id, openDecisions(rooms, holder, spacesOf(holder))).length > DECISIONS_LIMIT) {
+          rotationOptions.decisionsStay.add(holder.id);
         }
       }
       if (item.status !== 'sent') {
@@ -1463,15 +1466,17 @@ function wholeText(text) {
 }
 
 const DECISIONS_HEAD = '【没答的决定】';
-function decisionHead(number, roomName, itemId, text, question) {
-  return `〔决定 ${number}〕空间「${shortText(roomName || '')}」的条目 ${itemId}；任务原文 ${text.length} 字，提问 ${question.length} 字。`;
+// Said of a question when only the line the item kept is left and that line was cut (decisionQuestion).
+const QUESTION_CUT = '（只留下开头，全文没找到）';
+function decisionHead(number, roomName, itemId, text, question, cut) {
+  return `〔决定 ${number}〕空间「${shortText(roomName || '')}」的条目 ${itemId}；任务原文 ${text.length} 字，提问 ${question.length} 字${cut ? QUESTION_CUT : ''}。`;
 }
 
 // The question of one decision as an earlier handoff told it, or null. The two counts in its heading say exactly
 // where each text ends: what a block counts is its own, so a heading written inside a text is not read as one.
 // The last block for the item stands, since the old session's own words come before NAW's.
 function toldQuestion(text, itemId) {
-  const heading = /〔决定 \d+〕空间「[^\n]*」的条目 ([^\n；]+)；任务原文 (\d+) 字，提问 (\d+) 字。\n任务原文：\n/gu;
+  const heading = /〔决定 \d+〕空间「[^\n]*」的条目 ([^\n；]+)；任务原文 (\d+) 字，提问 (\d+) 字(（只留下开头，全文没找到）)?。\n任务原文：\n/gu;
   const asked = '\n提问：\n';
   let found = null;
   for (let match = heading.exec(text); match; match = heading.exec(text)) {
@@ -1482,7 +1487,7 @@ function toldQuestion(text, itemId) {
     }
     heading.lastIndex = end;
     if (match[1] === itemId) {
-      found = text.slice(from + asked.length, end);
+      found = { text: text.slice(from + asked.length, end), cut: match[4] === QUESTION_CUT };
     }
   }
   return found;
@@ -1490,11 +1495,12 @@ function toldQuestion(text, itemId) {
 
 // What the member asked, whole. The item keeps one cut line of it (replyLine); the whole of it is the member's
 // own reply to that item, or, in a successor, what its handoff told it. Either must start as the kept line does.
+// When neither is found the kept line stands in, and `cut` says that line is not the whole question.
 function decisionQuestion(item, session) {
   const kept = typeof item.reply === 'string' ? item.reply : '';
   const messages = Array.isArray(session.messages) ? session.messages : [];
   if (!kept) {
-    return '';
+    return { text: '', cut: false };
   }
   let sent = -1;
   if (item.tag) {
@@ -1503,7 +1509,7 @@ function decisionQuestion(item, session) {
   for (let i = sent + 1; sent >= 0 && i < messages.length; i += 1) {
     const message = messages[i];
     if (message && message.role === 'assistant' && typeof message.text === 'string' && replyLine(message.text) === kept) {
-      return wholeText(message.text);
+      return { text: wholeText(message.text), cut: false };
     }
   }
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -1513,11 +1519,12 @@ function decisionQuestion(item, session) {
       continue;
     }
     const told = toldQuestion(message.text, item.id);
-    if (told !== null && replyLine(told) === kept) {
+    if (told !== null && replyLine(told.text) === kept) {
       return told;
     }
   }
-  return kept;
+  // shortText ends a line it cut with '…'.
+  return { text: kept, cut: kept.length >= ITEM_REPLY_LIMIT && kept.endsWith('…') };
 }
 
 // The decisions a session holds open in the spaces it hands over, as its successor must be told them.
@@ -1529,7 +1536,12 @@ function openDecisions(rooms, session, spaceIds) {
     }
     for (const item of room.queue || []) {
       if (item.sentTo === session.id && openDecision(item)) {
-        found.push({ roomId: room.id, roomName: room.name, itemId: item.id, text: wholeText(item.text), question: decisionQuestion(item, session) });
+        const question = decisionQuestion(item, session);
+        const decision = { roomId: room.id, roomName: room.name, itemId: item.id, text: wholeText(item.text), question: question.text };
+        if (question.cut) {
+          decision.cut = true;
+        }
+        found.push(decision);
       }
     }
   }
@@ -1546,7 +1558,7 @@ function decisionsNote(oldName, decisions) {
   decisions.forEach((decision, index) => {
     lines.push(
       '',
-      decisionHead(index + 1, decision.roomName, decision.itemId, decision.text, decision.question),
+      decisionHead(index + 1, decision.roomName, decision.itemId, decision.text, decision.question, decision.cut === true),
       '任务原文：',
       decision.text,
       '提问：',
