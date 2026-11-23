@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { ButlerLedger } = require('../butler-ledger.cjs');
 const { ButlerIngress } = require('../butler-ingress.cjs');
-const { StewardWake, GAP_MS, wakeText } = require('../steward-wake.cjs');
+const { StewardWake, GAP_MS, wakeText, REFUSED } = require('../steward-wake.cjs');
 const stewardRecords = require('../steward-record.cjs');
 const rules = require('../queue-dispatch.cjs');
 const { RoomState } = require('../room-state.cjs');
@@ -124,6 +124,40 @@ test('a butler call that goes through resets the count and clears the banner', a
   assert.equal(env.sends.length, 6);
 });
 
+// 287 review, item 1: past one page of the record (100 events, or about 8 KiB) the check gave up and called it news.
+test('more than a page of refusals between wakes still counts toward the three, and news after them still wakes', async t => {
+  const env = unit(t); env.wake.set(true);
+  let n = 0;
+  const cycle = async count => {
+    const before = env.ledger.latest();
+    for (let i = 0; i < count; i++) env.refuse(++n);
+    if (count > 100) assert.equal(env.ledger.eventsAfter(before, 100).more, true, 'more than one page');
+    return (await env.next())?.state ?? env.wake.view().blocked?.reason;
+  };
+  const results = [await cycle(101), await cycle(1), await cycle(1), await cycle(101)];
+  assert.deepEqual(results, ['sent', 'sent', 'sent', 'control-refused-limit'], 'a long cycle counts, and a long cycle is held after three');
+  assert.equal(env.sends.length, 3);
+  env.ledger.ingest(failure(1));
+  assert.equal((await env.next())?.state, 'sent', 'a failure on the second page is news');
+  assert.equal(env.sends.length, 4);
+});
+
+test('a record of refusals longer than the pages read is still refusals only, and each check reads a bounded number of pages', async t => {
+  const dir = directory(t, 'naw-control-refused-pages-'), clock = { now: NOW };
+  let sequence = 0, reads = 0;
+  const ledger = { latest: () => `0123456789abcdef:${sequence}`,
+    eventsAfter: position => { reads++; return { events: [{ sequence, kind: 'blocked', payload: { reason: REFUSED } }], through: position, more: true }; } };
+  const wake = new StewardWake(dir, { ledger: () => ledger, selected: () => BUTLER, now: () => clock.now, record() {} });
+  wake.set(true);
+  const states = [];
+  for (let i = 0; i < 4; i++) {
+    sequence++; clock.now += GAP_MS; reads = 0;
+    states.push((await wake.wake({ id: 'butler', nativeId: 'native-butler' }, 'claude-test-model', async () => 'tag'))?.state ?? wake.view().blocked?.reason);
+    assert.ok(reads <= 20, `${reads} pages read`);
+  }
+  assert.deepEqual(states, ['sent', 'sent', 'sent', 'control-refused-limit']);
+});
+
 test('only the designated butler counts; a repeated answer or another session records nothing', t => {
   const env = unit(t), before = env.ledger.latest();
   const result = (sender, value, steward = () => BUTLER) => env.ingress.controlResult(sender, args(1), value, { steward });
@@ -209,7 +243,7 @@ export function seed(binding, prompt) {
 
 // releaseRotation (queue-dispatch.cjs): a backend before alpha.284 destroys a six-argument call's connection
 // (daemon 5-argument guard, fixed dfa418e5); a lost answer is asked again and confirmed, never left unconfirmed.
-function releaseFixture(t, { runtimeVersion = '0.1.0-alpha.287', fail = [] } = {}) {
+function releaseFixture(t, { runtimeVersion = '0.1.0-alpha.287', fail = [], stewardWake } = {}) {
   const dir = directory(t, 'naw-release-retry-');
   const host = { binaries: {}, close() {}, rpc: {} }, w = new Workspace(host, dir);
   const s = { id: 'butler', nativeId: 'native-butler', provider: 'codex', model: 'm', view: 'chat', cwd: dir, owner: 'window', state: 'idle', createdAt: NOW - 10000,
@@ -226,7 +260,7 @@ function releaseFixture(t, { runtimeVersion = '0.1.0-alpha.287', fail = [] } = {
       if (next) throw uiError(next);
       return w.releaseRotation(...rest);
     } };
-  const dispatcher = new rules.QueueDispatcher({ dataDir: dir, roomState: new RoomState(dir), clients: () => client, now: () => NOW, settleMs: 0, tickMs: 3600000 });
+  const dispatcher = new rules.QueueDispatcher({ dataDir: dir, roomState: new RoomState(dir), clients: () => client, now: () => NOW, settleMs: 0, tickMs: 3600000, stewardWake });
   dispatcher.client = client; dispatcher.closed = false; dispatcher.releaseRetryMs = 0;
   t.after(() => { dispatcher.close(); w.close(); });
   const release = () => dispatcher.releaseRotation('butler', 'native-butler', 'e1', 'tag-1', { kind: 'steward', id: 'butler' }, 'discard-handoff');
@@ -265,4 +299,28 @@ test('a release already saved is confirmed by the backend again without a second
   assert.deepEqual(f.s, saved, 'nothing changes the second time');
   assert.throws(() => f.w.releaseRotation('butler', 'native-butler', 'e2', 'tag-1', { kind: 'steward', id: 'butler' }, 'discard-handoff'), 'another epoch is still refused');
   assert.deepEqual(await f.release(), first); assert.deepEqual(f.calls, [], 'the dispatcher reads it from the state');
+});
+
+// 287 review, item 2: the count went back to zero only when one of the butler's calls succeeded, so after the person
+// released it from the card, refusals that followed did not wake it.
+test('a confirmed release resets the count of wakes for refusals; a refused release does not', async t => {
+  const env = unit(t); env.wake.set(true);
+  const limit = async from => {
+    for (const n of [from, from + 1, from + 2]) { env.refuse(n); assert.equal((await env.next())?.state, 'sent', `refusal ${n} wakes`); }
+    env.refuse(from + 3); assert.equal(await env.next(), null); assert.equal(env.wake.view().blocked?.reason, 'control-refused-limit');
+  };
+  await limit(1);
+  const refused = releaseFixture(t, { fail: ['error.workspace.handoffExpired'], stewardWake: env.wake });
+  await assert.rejects(refused.release());
+  const outdated = releaseFixture(t, { runtimeVersion: '0.1.0-alpha.270', stewardWake: env.wake });
+  await assert.rejects(outdated.release());
+  assert.equal(env.wake.view().blocked?.reason, 'control-refused-limit', 'a release that did not go through changes nothing');
+  assert.equal(await env.next(), null); assert.equal(env.sends.length, 3);
+  const released = releaseFixture(t, { stewardWake: env.wake });
+  assert.equal((await released.release()).state, 'released');
+  assert.equal(env.wake.view().blocked, undefined, 'the banner goes with the release');
+  assert.equal((await env.next())?.state, 'sent', 'the refusal still waiting wakes it again');
+  for (const n of [11, 12]) { env.refuse(n); assert.equal((await env.next())?.state, 'sent'); }
+  env.refuse(13); assert.equal(await env.next(), null, 'three again after the reset, not more');
+  assert.equal(env.sends.length, 6);
 });

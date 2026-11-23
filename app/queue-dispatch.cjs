@@ -3514,6 +3514,8 @@ class QueueDispatcher {
       }
     }
     if (result?.epoch !== epoch || result.tag !== tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
+    // A step the person or the butler took went through, as one of the butler's calls does (steward-wake.cjs).
+    this.stewardWake?.controlSucceeded();
     const record = this.rotations[id];
     if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag) { delete this.rotations[id]; this.save(); }
     this.schedule();

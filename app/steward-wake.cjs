@@ -23,8 +23,9 @@ const FILE = 'steward-wake.json', RECORD_MAX = 4096, GAP_MS = 60 * 1000;
 const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // The person, 2026-11-23: 「如果我不理你的话感觉就卡在这里了」. A refused butler call is recorded as an event
 // (butler-ingress.cjs controlRefused) so the butler is woken; wakes that only announce refusals stop after this many
-// in a row, until one of its calls succeeds, so a call refused every time cannot keep waking it.
-const REFUSAL_WAKES = 3, REFUSED = 'control-refused';
+// in a row, until one of its calls or a release goes through, so a call refused every time cannot keep waking it.
+// The record is read a page at a time up to REFUSAL_PAGES pages; refusals beyond them still count as refusals only.
+const REFUSAL_WAKES = 3, REFUSED = 'control-refused', REFUSAL_PAGES = 20;
 const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
@@ -214,11 +215,18 @@ class StewardWake {
   // Whether everything recorded after the position last named is a refused butler call. Unreadable counts as not.
   refusalsOnly(latest) {
     try {
-      const { events, more } = this.ledger().eventsAfter(from(latest, this.state.woken), 100);
-      return !more && events.length > 0 && events.every(e => e.kind === 'blocked' && e.payload?.reason === REFUSED);
+      let position = from(latest, this.state.woken), any = false;
+      for (let page = 0; page < REFUSAL_PAGES; page++) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100);
+        if (!events.every(e => e.kind === 'blocked' && e.payload?.reason === REFUSED)) return false;
+        any = any || events.length > 0;
+        if (!more) return any;
+        position = through;
+      }
+      return true;
     } catch { return false; }
   }
-  // One of the butler's calls went through: refusals may wake it again.
+  // One of the butler's calls, or a release of a rotation, went through: refusals may wake it again.
   controlSucceeded() {
     this.refusalWakes = 0;
     if (this.blocked?.reason === 'control-refused-limit') this.clearBlocked();
