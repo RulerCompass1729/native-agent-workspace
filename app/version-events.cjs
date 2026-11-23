@@ -23,7 +23,7 @@ const short = key => key === '.' ? 'root' : clean(String(key).split('/').pop(), 
 // What each code of queue-dispatch.cjs moveWait (and main.cjs observeVersion) says.
 const WAITS = Object.freeze({
   moving: () => '正在迁',
-  next: () => '一分钟内自动迁',
+  next: () => '排队自动迁（每分钟迁一个后台）',
   'quiet-10m': b => `${b.count} 个会话里 ${b.wait.waiting} 个还没连续安静 10 分钟，安静后自动迁`,
   'quiet-30m': b => `${b.count} 个会话里 ${b.wait.waiting} 个还没安静够（有队友、子 agent 或后台活的要连续安静 30 分钟），之后自动迁`,
   busy: b => `${b.count} 个会话里 ${b.wait.waiting} 个在干活或等人回答，都停下并连续安静 10 分钟（有队友、子 agent 或后台活的 30 分钟）后自动迁`,
@@ -45,7 +45,7 @@ function behindText(version, backends) {
   if (!backends.length) return `后台都已在 ${version}。`;
   const listed = backends.slice(0, MAX_BACKENDS).map(backendLine);
   if (backends.length > MAX_BACKENDS) listed.push(`- 另有 ${backends.length - MAX_BACKENDS} 个`);
-  return `还有 ${backends.length} 个后台在旧版本：\n${listed.join('\n')}\n迁完或失败时再发一条。`;
+  return `还有 ${backends.length} 个后台不在 ${version}：\n${listed.join('\n')}\n迁完或失败时再发一条。`;
 }
 
 function readSeen(file) {
@@ -100,7 +100,8 @@ class VersionEvents {
       const b = current.get(key);
       if (!b) {
         const there = was.sessions.filter(s => placed(s.id) === this.version).length;
-        lines.push(`- ${short(key)} 迁完：${was.count} 个会话里 ${there} 个已在 ${this.version}`);
+        // Gone from the list is not proof of a move: its sessions may have been archived or hidden.
+        lines.push(`- ${short(key)} ${there === was.count ? '迁完' : '不在待迁列表里了'}：${was.count} 个会话里 ${there} 个已在 ${this.version}`);
         this.watch.delete(key); moved++;
         continue;
       }

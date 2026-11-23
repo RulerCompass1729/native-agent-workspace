@@ -91,7 +91,7 @@ test('286 to 287: the butler gets one event and the secretary one notice, with v
   assert.equal(event.payload.outcome, `${OLD}->${NEW}`);
   assert.match(event.payload.title, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u);
   const text = event.payload.text;
-  assert.match(text, new RegExp(`^【NAW 版本】已装 ${NEW}（原来是 ${OLD}），\\d{4}-\\d\\d-\\d\\dT[\\d:]+Z 重启完成。\n还有 2 个后台在旧版本：\n`, 'u'));
+  assert.match(text, new RegExp(`^【NAW 版本】已装 ${NEW}（原来是 ${OLD}），\\d{4}-\\d\\d-\\d\\dT[\\d:]+Z 重启完成。\n还有 2 个后台不在 0\\.1\\.0-alpha\\.287：\n`, 'u'));
   assert.match(text, /- e2b6a43（0\.1\.0-alpha\.286；大管家、项目经理、A、B）：4 个会话里 1 个在干活或等人回答，都停下并连续安静 10 分钟/u);
   assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；C）：1 个会话里 1 个还没连续安静 10 分钟，安静后自动迁/u);
   assert.match(text, /迁完或失败时再发一条。$/u);
@@ -156,12 +156,12 @@ test('a backend that moved gets a follow-up with what is left; one that failed g
   assert.equal(rows.length, 2);
   assert.equal(rows[1].kind, 'blocked'); assert.equal(rows[1].payload.reason, 'backend-moved');
   assert.equal(rows[1].payload.outcome, 'moved:1,failed:0,behind:1');
-  assert.match(rows[1].payload.text, /^【NAW 版本】后台迁移（0\.1\.0-alpha\.287）：\n- bbbbbbb 迁完：1 个会话里 1 个已在 0\.1\.0-alpha\.287\n还有 1 个后台在旧版本：\n- e2b6a43（[^）]+）：4 个会话里 1 个在干活或等人回答/u);
+  assert.match(rows[1].payload.text, /^【NAW 版本】后台迁移（0\.1\.0-alpha\.287）：\n- bbbbbbb 迁完：1 个会话里 1 个已在 0\.1\.0-alpha\.287\n还有 1 个后台不在 0\.1\.0-alpha\.287：\n- e2b6a43（[^）]+）：4 个会话里 1 个在干活或等人回答/u);
   f.scope.autoSwitchFailed.add(KEY_A); f.observe(); f.observe();
   rows = f.recorded();
   assert.equal(rows.length, 3, 'a failure is told once');
   assert.equal(rows[2].kind, 'failure'); assert.equal(rows[2].payload.reason, 'backend-move-failed');
-  assert.match(rows[2].payload.text, /- e2b6a43：自动迁移失败，这次运行不再自动试，要人点更新\n还有 1 个后台在旧版本：\n- e2b6a43（[^）]+）：自动迁移失败/u);
+  assert.match(rows[2].payload.text, /- e2b6a43：自动迁移失败，这次运行不再自动试，要人点更新\n还有 1 个后台不在 0\.1\.0-alpha\.287：\n- e2b6a43（[^）]+）：自动迁移失败/u);
   // The person clicked: it moved after all.
   move(f, a); f.observe();
   rows = f.recorded();
@@ -170,6 +170,18 @@ test('a backend that moved gets a follow-up with what is left; one that failed g
   assert.equal(f.scope.versionEvents?.pending(), false);
   f.observe(); assert.equal(f.recorded().length, 4);
   assert.equal(f.owed().length, 4, 'the secretary is owed each as well');
+});
+
+test('a backend gone from the list with sessions not on this version is not told as moved', t => {
+  const dir = directory(t); seen(dir, OLD);
+  const [, b] = backends();
+  const f = app(t, { dir, entries: [b] });
+  f.observe();
+  b.state.sessions[0].archived = true; f.observe();
+  const rows = f.recorded();
+  assert.equal(rows.length, 2);
+  assert.match(rows[1].payload.text, /\n- bbbbbbb 不在待迁列表里了：1 个会话里 0 个已在 0\.1\.0-alpha\.287\n后台都已在 0\.1\.0-alpha\.287。$/u);
+  assert.doesNotMatch(rows[1].payload.text, /迁完/u);
 });
 
 test('what each old backend waits for, by the same rule as the move NAW chooses', () => {
@@ -194,6 +206,8 @@ test('what each old backend waits for, by the same rule as the move NAW chooses'
   assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stoppable('e', 'E', 0, { state: 'ended' })]), { code: 'busy', waiting: 1 }, 'an ended session is not at work');
   assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'approval' })]), { code: 'busy', waiting: 1 }, 'one waiting for the person is counted');
   assert.deepEqual(wait([stoppable('d', 'D', 3600000, { state: 'disconnected' })]), { code: 'blocked' }, 'a broken session needs the person');
+  for (const stuck of [stoppable('d', 'D', 3600000, { state: 'disconnected' }), stoppable('n', 'N', 3600000, { nativeId: null }), stoppable('o', 'O', 3600000, { provider: 'other' })])
+    assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stuck]), { code: 'blocked' }, `not told as passing by itself: ${stuck.id}`);
   assert.deepEqual(wait([quiet], { auto: true, migrate: false }), { code: 'needs-person' });
   assert.deepEqual(wait([stoppable('n', 'N', 3600000, { nativeId: null })]), { code: 'blocked' });
   assert.deepEqual(wait([quiet], { auto: true, migrate: true }, new Set([KEY_B])), { code: 'failed' });

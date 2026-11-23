@@ -1775,15 +1775,23 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
   }
   if (plan && plan.blocked) {
     // At work (a turn, a question, a running child or background work) passes by itself; anything else needs the person.
-    let busy = 0;
+    let busy = 0, stuck = false;
     for (const listed of option.sessions || []) {
       const session = sessions.find(s => s.id === listed.id);
-      // Ended and background sessions are carried or block for a reason of their own; a broken one needs the person.
-      if (session && !['ended', 'recoverable', 'background', 'disconnected', 'error'].includes(session.state) && !backendSwitch.migrationAcceptable(session)) {
+      // Ended and background sessions are carried or block for a reason of their own.
+      if (!session || ['ended', 'recoverable', 'background'].includes(session.state)) {
+        continue;
+      }
+      if (['disconnected', 'error'].includes(session.state)) {
+        stuck = true;
+      } else if (!backendSwitch.migrationAcceptable(session)) {
         busy++;
+      } else if (!session.nativeId || !['claude', 'codex'].includes(session.provider)) {
+        // Blocks this backend for good (backend-switch.cjs sessionPlan): not to be told as passing by itself.
+        stuck = true;
       }
     }
-    if (busy) {
+    if (busy && !stuck) {
       return { code: settings.migrate ? 'busy' : 'busy-auto', waiting: busy };
     }
     return { code: 'blocked' };
