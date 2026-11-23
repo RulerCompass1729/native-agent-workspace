@@ -6,7 +6,8 @@ const { verifyTicket } = require('./mobile-access.cjs');
 const { readLayout } = require('./service-layout.cjs');
 const { nativeApprovalPolicy, nonBlockingQuestion } = require('./approval-policy.js');
 const wake = require('./session-wake.cjs');
-const CAPABILITY = 'humanMobileV1', MAX_REQUESTS = 256, TEXT_BYTES = 65536;
+const { MAX_REQUESTS, MAX_RETIRED_IDS, confirmedNative } = require('./mobile-receipts.cjs');
+const CAPABILITY = 'humanMobileV1', TEXT_BYTES = 65536;
 const PREPARED = 'humanMobilePreparedV1', PREPARE_MS = 40000;
 const delegates = new WeakSet();
 const pending = new WeakMap();
@@ -92,16 +93,37 @@ function request(spec, action) {
     if (typeof spec.text !== 'string' || !spec.text.trim() || spec.text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(spec.text) || /^\//.test(spec.text.trim())) throw denied();
   } else if (!uuid(spec.questionId) || !spec.answers || typeof spec.answers !== 'object' || Array.isArray(spec.answers) || Buffer.byteLength(JSON.stringify(spec.answers)) > TEXT_BYTES) throw denied();
 }
+const receiptError = value => value === null || typeof value === 'string' && value.length <= 16000;
+const RETIRED_KEYS = ['key', 'tag', 'status'];
+function validRetiredReceipt(row) {
+  // The original compact format did not record the failure reason.
+  const shape = exact(row, RETIRED_KEYS) ||
+    row?.status === 'not-sent' && exact(row, [...RETIRED_KEYS, 'error']) && receiptError(row.error);
+  return shape && /^[a-f0-9]{64}$/.test(row.key) && uuid(row.tag) && confirmedNative(row);
+}
 function records(w) {
   if (!Array.isArray(w.mobileRequests) || w.mobileRequests.length > MAX_REQUESTS || w.mobileRequests.some(r =>
     !exact(r, ['deviceId', 'generation', 'issuer', 'requestId', 'serviceKey', 'sessionId', 'nativeId', 'action', 'digest', 'tag', 'status', 'error', 'at']) ||
     !['deviceId', 'generation', 'issuer', 'requestId', 'tag'].every(k => uuid(r[k])) || !['send', 'answer'].includes(r.action) ||
     !['serviceKey', 'sessionId', 'nativeId'].every(k => typeof r[k] === 'string' && r[k].length > 0 && r[k].length <= 512) ||
-    !/^[a-f0-9]{64}$/.test(r.digest) || !(r.error === null || typeof r.error === 'string' && r.error.length <= 16000) || !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(r.status) || !Number.isSafeInteger(r.at))) throw denied();
+    !/^[a-f0-9]{64}$/.test(r.digest) || !receiptError(r.error) || !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(r.status) || !Number.isSafeInteger(r.at))) throw denied();
   return w.mobileRequests;
+}
+function retiredFor(w, ticket) {
+  const retired = w.mobileRetiredRequests;
+  if (retired === null) return {};
+  if (!exact(retired, ['deviceId', 'rows']) || !uuid(retired.deviceId) ||
+    !retired.rows || Object.getPrototypeOf(retired.rows) !== Object.prototype) throw denied();
+  const entries = Object.entries(retired.rows);
+  if (entries.length > MAX_RETIRED_IDS || entries.some(([id, row]) => !uuid(id) || !validRetiredReceipt(row))) throw denied();
+  return retired.deviceId === ticket.deviceId ? retired.rows : {};
+}
+function retiredBinding(row) {
+  return digest([row.issuer, row.generation, row.serviceKey, row.sessionId, row.nativeId, row.action, row.digest]);
 }
 function lookup(w, ticket, spec, action) {
   checked(w, ticket, action); request(spec, action);
+  if (Object.hasOwn(retiredFor(w, ticket), spec.requestId)) throw denied();
   const row = records(w).find(r => r.deviceId === ticket.deviceId && r.requestId === spec.requestId);
   if (row && (row.issuer !== ticket.issuer.instance || row.generation !== ticket.generation || row.action !== action || row.digest !== digest(spec) ||
     row.serviceKey !== ticket.serviceKey || row.sessionId !== ticket.sessionId || row.nativeId !== ticket.nativeId)) throw denied();
@@ -118,11 +140,24 @@ function receipt(w, row) {
   return { ...(queued ? { queued: true } : {}), requestId: row.requestId, tag: row.tag, sessionId: row.sessionId, nativeId: row.nativeId, action: row.action, status, error: expired ? '手机预备已过期或连接已断开，没有派发。' : row.error, storageWarning: w.storageWarning || null };
 }
 function reserve(w, ticket, spec, action, tag) {
-  const rows = records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance);
-  if (rows.length >= MAX_REQUESTS) throw uiError("error.mobile.receiptLimit");
+  // Resume rotates issuer and generation but preserves the paired device.
+  const rows = records(w).filter(r => r.deviceId === ticket.deviceId);
+  let retiredRows = retiredFor(w, ticket);
+  if (rows.length >= MAX_REQUESTS) {
+    const oldest = Object.keys(retiredRows).length < MAX_RETIRED_IDS ? rows.findIndex(confirmedNative) : -1;
+    if (oldest < 0) throw uiError("error.mobile.receiptLimit");
+    const [retired] = rows.splice(oldest, 1);
+    const entries = pending.get(w);
+    for (const [lease, delegate] of entries || []) if (delegate.row === retired) entries.delete(lease);
+    const compact = { key: retiredBinding(retired), tag: retired.tag, status: retired.status };
+    if (retired.status === 'not-sent') compact.error = retired.error;
+    retiredRows = { ...retiredRows, [retired.requestId]: compact };
+  }
   const row = { deviceId: ticket.deviceId, generation: ticket.generation, issuer: ticket.issuer.instance, requestId: spec.requestId,
     serviceKey: ticket.serviceKey, sessionId: ticket.sessionId, nativeId: ticket.nativeId, action, digest: digest(spec), tag, status: 'awaiting-native', error: null, at: Date.now() };
-  rows.push(row); w.mobileRequests = rows;
+  rows.push(row);
+  w.mobileRetiredRequests = Object.keys(retiredRows).length ? { deviceId: ticket.deviceId, rows: retiredRows } : null;
+  w.mobileRequests = rows;
   return row;
 }
 function delegate(w, ticket, spec, action) {
@@ -201,7 +236,6 @@ function prepare(w, ticket, spec, action, connection) {
   // Same rule as mobile-broker.cjs: a native terminal prefix, also after leading invisible characters or in full-width form.
   if (action === 'send' && /^[!#/]/.test(spec.text.normalize('NFKC').replace(/^[\s\p{Cc}\p{Default_Ignorable_Code_Point}]+/u, ''))) throw denied();
   if (!connection || typeof connection !== 'object' || connection.destroyed) throw denied();
-  if (records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance).length >= MAX_REQUESTS) throw denied();
   ticket = JSON.parse(JSON.stringify(ticket)); spec = JSON.parse(JSON.stringify(spec));
   const s = w.get(ticket.sessionId), r = w.runtime(s.id);
   // A steer read whose turn has gone is answered not-sent below, as 9afe5cdf did; other unsendable states are refused.
@@ -292,5 +326,16 @@ function read(w, ticket) {
     question: q && Buffer.byteLength(JSON.stringify(q)) <= TEXT_BYTES ? q : null, questionOmitted: Boolean(q && Buffer.byteLength(JSON.stringify(q)) > TEXT_BYTES),
     messages, earlierMessagesOmitted: Math.max(0, rows.length - messages.length) };
 }
-function find(w, ticket, spec, action) { const row = lookup(w, ticket, spec, action); return row ? receipt(w, row) : null; }
+function find(w, ticket, spec, action) {
+  checked(w, ticket, action); request(spec, action);
+  const retired = retiredFor(w, ticket)[spec.requestId];
+  if (retired) {
+    const { generation, serviceKey, sessionId, nativeId } = ticket;
+    if (retired.key !== retiredBinding({ issuer: ticket.issuer.instance, generation, serviceKey, sessionId, nativeId, action, digest: digest(spec) })) throw denied();
+    return { requestId: spec.requestId, tag: retired.tag, sessionId, nativeId, action, status: retired.status,
+      error: Object.hasOwn(retired, 'error') ? retired.error : null, storageWarning: w.storageWarning || null };
+  }
+  const row = lookup(w, ticket, spec, action);
+  return row ? receipt(w, row) : null;
+}
 module.exports = { CAPABILITY, PREPARED, PREPARE_MS, MAX_REQUESTS, currentTarget, read, send, answer, find, valid, prepare, commit, cancel, disconnected };

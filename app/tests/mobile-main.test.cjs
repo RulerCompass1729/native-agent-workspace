@@ -220,7 +220,7 @@ test('the existing GUI payload list includes the app-local broker and its existi
   const start = recipe.indexOf('const sources = ['), end = recipe.indexOf('for (const name of sources)', start);
   assert.ok(start > 0 && end > start);
   const names = vm.runInNewContext(recipe.slice(start, end) + ';sources');
-  for (const name of ['mobile-broker.cjs', 'mobile-consent.cjs','mobile-pairing-store.cjs','mobile-pairing-keychain.jxa', 'mobile-web/passkeys.js', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
+  for (const name of ['mobile-broker.cjs', 'mobile-consent.cjs','mobile-pairing-store.cjs','mobile-pairing-keychain.jxa', 'mobile-web/passkeys.js', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'mobile-http.cjs', 'mobile-workspace.cjs', 'mobile-web/workspace.js', 'mobile-web/index.html', 'mobile-web/client.js', 'mobile-web/style.css']) {
     assert.equal(names.filter(value => value === name).length, 1); assert.ok(fs.statSync(require.resolve('../' + name)).isFile());
   }
 });

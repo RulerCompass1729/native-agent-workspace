@@ -6,6 +6,7 @@ function fixture(options = {}) {
   const storage = { getItem: k => disk.get(k), setItem(k, value) { if (options.failStorage) throw Error('Full'); disk.set(k, value); } };
   const model = createWorkspaceActions({ storage, newId: randomUUID, request: async (route, value) => {
     calls.push({ route, value }); assert.ok(disk.get(ACTION_KEY).includes(value.requestId), 'The original ID was saved before posting');
+    if (options.capacity) throw Object.assign(Error('full'), { code: 'MOBILE_PAIR_LIMIT' });
     if (options.loseResult) throw Error('Unconfirmed'); return { requestId: value.requestId, status: 'complete', itemId: 'task' };
   } });
   return { model, disk, calls, session };
@@ -51,4 +52,18 @@ test('queue answer drafts stay with the original device, item and question acros
   reloaded.model.answerDraft(f.session, target, 'A newer draft');
   reloaded.model.clearAnswerDraft(f.session, target, 'Explicit original answer');
   assert.equal(reloaded.model.answerDraft(f.session, target), 'A newer draft');
+});
+
+test('workspace capacity refusal leaves a definite not-sent receipt', async () => {
+  const f = fixture({ capacity: true });
+  await assert.rejects(f.model.act(f.session, { action: 'queueAdd', roomId: 'shared', text: 'Original' }), { code: 'MOBILE_PAIR_LIMIT' });
+  assert.equal(JSON.parse(f.disk.get(ACTION_KEY)).pending[0].status, 'not-sent');
+});
+
+test('700 settled workspace actions keep local receipt storage bounded', async () => {
+  const f = fixture();
+  for (let i = 0; i < 700; i++)
+    assert.equal((await f.model.act(f.session, { action: 'queueAdd', roomId: 'shared', text: 'Synthetic ' + i })).status, 'complete');
+  assert.equal(f.model.state.pending.length, 64);
+  assert.equal(f.calls.length, 700);
 });

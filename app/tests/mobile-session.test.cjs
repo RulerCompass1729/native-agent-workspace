@@ -161,15 +161,83 @@ test('forgetting a session cannot erase the current device request namespace for
   f.w.sessions.delete(f.id); f.w.persist();
   const disk = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'), 'utf8')); assert.equal(disk.mobileRequests[0].requestId, spec.requestId);
 });
-test('phone receipt exhaustion refuses new work and never evicts still-authorized request IDs', async t => {
-  const f = await fixture(t), spec = f.spec(); await f.w.mobileSend(f.ticket('send'), spec);
+test('an entirely uncertain phone ledger stays full and retains all receipts', async t => {
+  const f = await fixture(t), spec = f.spec();
+  await f.w.mobileSend(f.ticket('send'), spec);
   const original = f.w.mobileRequests[0];
+  original.status = 'unconfirmed';
   f.w.mobileRequests.push(...Array.from({ length: mobile.MAX_REQUESTS - 1 }, () => ({ ...original, requestId: randomUUID(), tag: randomUUID() })));
-  f.s.pendingTag = null; const next = f.spec('Do not dispatch');
-  await f.w.mobileSend(f.ticket('send'), next).then(() => assert.fail('receipt exhaustion must reject'), () => {});
-  assert.equal(f.calls.length, 1); assert.equal(f.w.mobileRequests.length, mobile.MAX_REQUESTS);
-  assert.equal((await f.w.mobileSend(f.ticket('send'), spec)).tag, original.tag);
+  f.r.emit('state', 'idle'); f.s.pendingTag = null;
+  await assert.rejects(async () => f.w.mobileSend(f.ticket('send'), f.spec('Do not dispatch')));
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.w.mobileRequests.length, mobile.MAX_REQUESTS);
+  assert.equal(f.w.mobileReceipt(f.ticket('send'), spec, 'send').tag, original.tag);
 });
+test('700 confirmed native submissions over seven days retain uncertain rows and reject retired IDs', async t => {
+  const f = await fixture(t);
+  const start = Date.now();
+  let now = start;
+  t.mock.method(Date, 'now', () => now);
+  const held = f.spec('Original unanswered receipt');
+  const ticket = f.ticket('send');
+  const { lease } = f.w.mobilePrepare(ticket, held, 'send', {});
+  assert.equal(typeof lease, 'string');
+  f.w.mobileRequests[0].status = 'unconfirmed';
+  let oldest;
+  for (let day = 0; day < 7; day++) for (let count = 0; count < 100; count++) {
+    now = start + day * 86400000 + 1000 * count;
+    f.r.emit('state', 'idle');
+    f.s.pendingTag = null;
+    const spec = f.spec('Synthetic contact ' + day + ':' + count);
+    oldest ||= spec;
+    const result = await f.w.mobileSend(ticket, spec);
+    assert.equal(result.status, 'submitted');
+  }
+  assert.equal(f.calls.length, 700);
+  assert.equal(f.w.mobileRequests.length, mobile.MAX_REQUESTS);
+  assert.equal(f.w.mobileRequests.find(row => row.requestId === held.requestId).status, 'unconfirmed');
+  assert.ok(!f.w.mobileRequests.some(row => row.requestId === oldest.requestId));
+  assert.equal(f.w.mobileReceipt(ticket, oldest, 'send').status, 'submitted');
+  assert.equal(f.w.mobileRetiredRequests.rows[oldest.requestId].status, 'submitted');
+  const reopened = new Workspace(f.host, f.root);
+  try {
+    assert.equal(reopened.mobileReceipt(ticket, oldest, 'send').status, 'submitted');
+    assert.throws(() => reopened.mobilePrepare(ticket, oldest, 'send', {}));
+    assert.equal(f.calls.length, 700);
+  } finally { reopened.close(); }
+});
+test('a retired not-sent receipt preserves its reason through compaction and reopen', async t => {
+  const f = await fixture(t), ticket = f.ticket('send'), original = f.spec(), connection = {};
+  const prepared = f.w.mobilePrepare(ticket, original, 'send', connection);
+  const reason = 'Synthetic original reason: paused before dispatch.';
+  f.w.mobileCancel(ticket, prepared.lease, 'send', connection, reason);
+  const receipt = f.w.mobileReceipt(ticket, original, 'send');
+  assert.equal(receipt.status, 'not-sent');
+  assert.equal(receipt.error, reason);
+
+  const row = f.w.mobileRequests[0];
+  f.w.mobileRequests.push(...Array.from({ length: mobile.MAX_REQUESTS - 1 }, () => ({
+    ...row, requestId: randomUUID(), tag: randomUUID(), status: 'unconfirmed',
+  })));
+  assert.equal(f.w.mobilePrepare(ticket, f.spec(), 'send', {}).prepared, true);
+  assert.ok(!f.w.mobileRequests.some(record => record.requestId === original.requestId));
+  assert.equal(f.w.mobileRequests.filter(record => record.status === 'unconfirmed').length, mobile.MAX_REQUESTS - 1);
+  assert.deepEqual(f.w.mobileReceipt(ticket, original, 'send'), receipt);
+
+  const reopened = new Workspace(f.host, f.root);
+  try {
+    assert.deepEqual(reopened.mobileReceipt(ticket, original, 'send'), receipt);
+    assert.throws(() => reopened.mobileReceipt({ ...ticket, generation: randomUUID() }, original, 'send'));
+    assert.throws(() => reopened.mobileReceipt(ticket, { ...original, text: 'Different input' }, 'send'));
+    assert.equal(reopened.mobileReceipt(ticket, { ...original, requestId: randomUUID() }, 'send'), null);
+    assert.throws(() => reopened.mobilePrepare(ticket, original, 'send', {}));
+    assert.equal(f.calls.length, 0);
+
+    delete reopened.mobileRetiredRequests.rows[original.requestId].error;
+    assert.deepEqual(reopened.mobileReceipt(ticket, original, 'send'), { ...receipt, error: null });
+  } finally { reopened.close(); }
+});
+
 test('a caller-supplied function cannot impersonate the internal human delegate', async t => {
   const f = await fixture(t);
   await assert.rejects(f.w.send(f.id, 'Forged mobile', null, null, null, null, null, null, { valid: () => true, human() {}, reserve() {} }));

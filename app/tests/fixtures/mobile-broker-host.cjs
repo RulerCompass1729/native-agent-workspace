@@ -3,10 +3,12 @@ require('./mobile-host.cjs');
 const { NativeHost } = require('../../adapters.cjs');
 const { Workspace } = require('../../workspace.cjs');
 const originalCreate = NativeHost.prototype.create, originalPrepare = Workspace.prototype.mobilePrepare;
-const runtimes = new Map(), replies = [], held = [];
+const runtimes = new Map(), lastTags = new Map(), replies = [], held = [];
 let holdPrepare = false;
 NativeHost.prototype.create = function (record) {
-  const runtime = originalCreate.call(this, record); runtimes.set(record.id, runtime); return runtime;
+  const runtime = originalCreate.call(this, record); runtimes.set(record.id, runtime);
+  runtime.on('submitted', tag => lastTags.set(record.id, tag));
+  return runtime;
 };
 Workspace.prototype.mobilePrepare = function (...args) {
   const result = originalPrepare.apply(this, args);
@@ -21,6 +23,11 @@ process.on('message', value => {
     runtime.emit('askQuestion', { questions: [{ header: 'Choose', question: 'Original fixture question?', multiSelect: false,
       options: [{ label: 'Original fixture answer', description: 'Original fixture description' }] }],
     open: () => open, reply: answer => { replies.push(answer); open = false; runtime.emit('state', 'idle'); } });
+  }
+  if (value.brokerFixture === 'idle') {
+    const runtime = runtimes.get(value.sessionId), tag = lastTags.get(value.sessionId);
+    if (tag) { runtime.emit('complete', { tag }); lastTags.delete(value.sessionId); }
+    runtime.emit('state', 'idle');
   }
   if (value.brokerFixture === 'holdPrepare') holdPrepare = true;
   if (value.brokerFixture === 'releasePrepare') { holdPrepare = false; for (const release of held.splice(0)) release(); }
