@@ -97,7 +97,7 @@ test('open work and 30 idle minutes with no event: one patrol, its line written 
   assert.match(itemId, /^steward-patrol:[0-9a-f-]{36}$/u);
   // Two sessions (working; approval), three items (two queued in two spaces, one sent); done, archived and idle do not count.
   assert.equal(text, patrolText(30, 2, 3));
-  assert.equal(text, '【NAW 巡查】大管家空闲 30 分钟，还有 5 件没结的活（2 个会话在跑或等批准，3 件在队列里）。用 workspace_control snapshot 看。');
+  assert.equal(text, '【NAW 巡查】大管家已空闲至少 30 分钟，还有 5 件没结的活（2 个会话在跑或等批准，3 件在队列里）。用 workspace_control snapshot 看。');
   assert.doesNotMatch(text, /SECRET|SYNTHETIC|m1|m2|shared|stewardEvents/u, 'no name, item text, space or id');
   assert.deepEqual(env.order, [['record', 'patrol'], ['send', itemId], ['record', 'outcome']], 'the line comes first');
   const line = env.record.entries().find(entry => entry.kind === 'patrol');
@@ -109,6 +109,27 @@ test('open work and 30 idle minutes with no event: one patrol, its line written 
   assert.equal(env.client.calls.some(call => ['send', 'queue', 'claim', 'input'].includes(call[0])), false, 'no human send, no takeover');
   await env.pass();
   assert.equal(env.patrols().length, 1, 'the butler at work again is not called');
+});
+
+// The dispatcher's own passes (schedule): an active wake keeps them going, and the idle time survives until the patrol.
+test('through the dispatcher passes themselves: a butler idle for the interval with a member at work gets one patrol', async t => {
+  const env = fixture(t, [butler({ state: 'working' }), member('m1', { state: 'working' })]);
+  await env.dispatcher.start();
+  on(env, 30);
+  assert.equal(env.dispatcher.hasOpenWork(), true, 'the active wake keeps the passes going');
+  await env.dispatcher.schedule();
+  env.client.state.sessions[0].state = 'idle'; env.client.emit('state', env.client.snapshot());
+  await env.dispatcher.schedule();
+  for (let minute = 1; minute < 30; minute++) {
+    env.clock.now += MIN;
+    await env.dispatcher.schedule();
+  }
+  assert.equal(env.patrols().length, 0, 'not before the interval');
+  env.clock.now += MIN;
+  await env.dispatcher.schedule();
+  assert.equal(env.patrols().length, 1);
+  assert.equal(env.patrols()[0][2], patrolText(30, 1, 0));
+  assert.equal(env.client.dispatches().length, 1, 'nothing else was sent');
 });
 
 test('no open work, or only items waiting on the person: no patrol', async t => {
@@ -157,7 +178,7 @@ test('unchanged work doubles the interval 30, 60, 120, 240 and stays at 240; a c
     assert.equal(env.patrols().length, minutes.length, `not before ${interval} minutes`);
     env.clock.now += 1; await env.pass();
     assert.equal(env.patrols().length, minutes.length + 1, `at ${interval} minutes`);
-    minutes.push(Number(/空闲 (\d+) 分钟/u.exec(env.patrols().at(-1)[2])[1]));
+    minutes.push(Number(/空闲至少 (\d+) 分钟/u.exec(env.patrols().at(-1)[2])[1]));
   }
   assert.deepEqual(minutes, [30, 60, 120, 240, 240]);
   assert.equal(PATROL_MAX, 240);
@@ -276,11 +297,15 @@ test('the interval is one of off, 15, 30 or 60, only while the wake is on; it is
   env.wake.set(true);
   assert.equal(env.wake.view().patrol, undefined, 'off by default');
   for (const bad of [0, 45, 240, '30', true, undefined, 30.5, -15]) assert.throws(() => env.wake.setPatrol(bad), { code: 'STEWARD_PATROL_INVALID' }, String(bad));
+  const keys = () => Object.keys(JSON.parse(fs.readFileSync(path.join(env.dir, FILE), 'utf8'))).sort().join(',');
+  assert.equal(keys(), 'at,designation,on,version,woken', 'with patrol off an earlier version still reads the file');
   for (const minutes of [15, 60, 30]) assert.equal(env.wake.setPatrol(minutes).patrol, minutes);
+  assert.equal(keys(), 'at,designation,on,patrol,version,woken');
   const reopened = new StewardWake(env.dir, { ledger: () => env.ledger, selected: () => BUTLER, now: () => env.clock.now, record: () => {} });
   assert.equal(reopened.view().patrol, 30, 'survives a restart');
   assert.equal(env.wake.set(false).patrol, undefined, 'turning the wake off turns the patrol off');
   assert.equal(env.wake.set(true).patrol, undefined, 'and on again leaves it off');
+  assert.equal(keys(), 'at,designation,on,version,woken');
   const file = path.join(env.dir, FILE), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   delete saved.patrol; fs.writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
   const old = new StewardWake(env.dir, { ledger: () => env.ledger, selected: () => BUTLER, now: () => env.clock.now, record: () => {} });

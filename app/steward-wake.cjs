@@ -64,7 +64,7 @@ function wakeText(position) {
 }
 // Counts only: no session, space or item is named.
 function patrolText(minutes, sessions, items) {
-  return `【NAW 巡查】大管家空闲 ${minutes} 分钟，还有 ${sessions + items} 件没结的活（${sessions} 个会话在跑或等批准，${items} 件在队列里）。用 workspace_control snapshot 看。`;
+  return `【NAW 巡查】大管家已空闲至少 ${minutes} 分钟，还有 ${sessions + items} 件没结的活（${sessions} 个会话在跑或等批准，${items} 件在队列里）。用 workspace_control snapshot 看。`;
 }
 const count = n => Number.isSafeInteger(n) && n >= 0;
 function valid(data) {
@@ -202,7 +202,10 @@ class StewardWake {
     let fd;
     try {
       fd = fs.openSync(temp, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify(next));
+      // With patrol off the file keeps the earlier keys, so a version from before patrol still reads it.
+      const saved = { ...next };
+      if (saved.patrol === null) delete saved.patrol;
+      fs.writeFileSync(fd, JSON.stringify(saved));
       fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
       fs.renameSync(temp, this.file);
       const directory = fs.openSync(path.dirname(this.file), 'r');

@@ -617,7 +617,7 @@ test('a wake of the butler is labelled as an event wake; a queue item and anythi
 test('a patrol of the butler is labelled as a patrol; a typed message with the same prefix keeps its sender', () => {
   const queueName = locale.displayMessage({ version: 1, key: 'notice.queue.senderName', params: {} }, 'notice.');
   const rows = [
-    { id: 'patrol', role: 'user', text: '【NAW 巡查】大管家空闲 30 分钟，还有 1 件没结的活（1 个会话在跑或等批准，0 件在队列里）。用 workspace_control snapshot 看。', time: 1, name: 'NAW 派活', uiNameMessage: queueName, origin: 'naw-dispatch', dispatchItem: 'steward-patrol:4d1c2a7e-0000-4000-8000-000000000000', status: 'complete' },
+    { id: 'patrol', role: 'user', text: '【NAW 巡查】大管家已空闲至少 30 分钟，还有 1 件没结的活（1 个会话在跑或等批准，0 件在队列里）。用 workspace_control snapshot 看。', time: 1, name: 'NAW 派活', uiNameMessage: queueName, origin: 'naw-dispatch', dispatchItem: 'steward-patrol:4d1c2a7e-0000-4000-8000-000000000000', status: 'complete' },
     { id: 'typed', role: 'user', text: 'steward-patrol: typed by the person', time: 2, origin: 'human', dispatchItem: 'steward-patrol:x', status: 'complete' },
   ];
   const f = fixture(rows), label = id => f.view.entries.get(id).heading.firstChild.textContent;
