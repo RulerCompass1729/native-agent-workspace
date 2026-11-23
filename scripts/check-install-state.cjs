@@ -224,10 +224,11 @@ function windowFrames(gui, helper = path.join(__dirname, 'install-electron-frame
     const value = JSON.parse(execFileSync('/usr/bin/python3', ['-I', '-B', helper, String(gui.pid), profile, gui.started], {
       encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: { LC_ALL: 'C', TZ: 'UTC' },
     }));
-    if (!value || !['inferredMenuWindows,pid,windows', 'pid,windows'].includes(Object.keys(value).sort().join(',')) || value.pid !== gui.pid) throw Error();
+    if (!value || !['inferredMenuWindows,offscreenWindows,pid,windows', 'inferredMenuWindows,pid,windows', 'pid,windows'].includes(Object.keys(value).sort().join(',')) || value.pid !== gui.pid) throw Error();
     const result = projectWindows(value.windows, gui.pid), inferredMenuWindows = menuInference(value.inferredMenuWindows || []), after = processInfo(gui.pid);
+    const offscreenWindows = offscreenInference(value.offscreenWindows || []);
     if (!result.length || after.started !== gui.started || after.executable !== gui.executable) throw Error();
-    return { windows: result, inferredMenuWindows };
+    return { windows: result, inferredMenuWindows, offscreenWindows };
   } catch { throw refusal('frame 口径待核实'); }
 }
 function menuInference(values) {
@@ -241,16 +242,25 @@ function menuInference(values) {
     seen.add(row.display); return { display: row.display, count: row.count, bounds: box, menuBarHeight: row.menuBarHeight };
   }).sort((a, b) => a.display - b.display);
 }
+// At most one hidden window of the GUI process that is not a BrowserWindow ('unproven': the GUI could not list them).
+function offscreenInference(values) {
+  if (!Array.isArray(values) || values.length > 1) throw refusal('frame 口径待核实');
+  return values.map(row => {
+    if (!row || Object.keys(row).sort().join(',') !== 'basis,bounds' || !['outside-electron', 'unproven'].includes(row.basis) ||
+        !row.bounds || Object.keys(row.bounds).sort().join(',') !== 'height,width,x,y') throw refusal('frame 口径待核实');
+    return { bounds: bounds(row.bounds), basis: row.basis };
+  });
+}
 function collector(options, helper, target) {
   const version = {};
   return (fresh = false) => {
     const gui = processInfo(options.pid);
     if (gui.executable !== target.executable) throw refusal('GUI executable mismatch');
     const views = projectViews(json(path.join(options.profile, 'views.json')));
-    const { windows, inferredMenuWindows } = windowFrames(gui, helper, options.profile);
+    const { windows, inferredMenuWindows, offscreenWindows } = windowFrames(gui, helper, options.profile);
     if (!windows.length) throw refusal('No GUI window metadata; unlock or verify the explicit PID, do not request permissions');
     const backend = backendState(options.profile, target, version, fresh);
-    return { profile: options.profile, gui, views, windows, inferredMenuWindows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
+    return { profile: options.profile, gui, views, windows, inferredMenuWindows, offscreenWindows, backend, bundle: { version: target.version, revision: target.revision, runtimeHash: runtimeClosure(target.app).hash } };
   };
 }
 async function stable(collect, { timeoutMs = 60000, minimumMs = 20000, quietMs = 5000, intervalMs = 1000, now = () => performance.now(), sleep = wait } = {}) {
@@ -275,6 +285,7 @@ function compare(before, after, expected) {
   const retainedBounds = after.views.every(v => saved.has(v.owner) && near(saved.get(v.owner), v.bounds));
   const closureMatches = /^[a-f0-9]{16}$/.test(after.backend.runtimeHash || '') && after.backend.runtimeHash === after.bundle.runtimeHash;
   const inferredBefore = menuInference(before.inferredMenuWindows || []), inferredAfter = menuInference(after.inferredMenuWindows || []);
+  const offscreenBefore = offscreenInference(before.offscreenWindows || []), offscreenAfter = offscreenInference(after.offscreenWindows || []);
   return [
     ['on-screen windows', count(before), count(after), count(before) === count(after)],
     ['active view owners', before.views.length, after.views.length, JSON.stringify(before.views.map(v => v.owner)) === JSON.stringify(after.views.map(v => v.owner))],
@@ -286,6 +297,8 @@ function compare(before, after, expected) {
     ['active backend closure', 'release-matching version / complete runtime hash', after.backend.version + ' / ' + (after.backend.runtimeHash || 'unconfirmed'), after.backend.version === expected.version && closureMatches && after.backend.evidence === 'active-key+live-lock+runtime-source'],
     ['DSH runtime', 'qualified inheritance or proved donor recovery', dshNotice, inherited || restored],
     ['inferred menu windows (geometry only, not provenance)', JSON.stringify(inferredBefore), JSON.stringify(inferredAfter), JSON.stringify(inferredBefore) === JSON.stringify(inferredAfter)],
+    ['offscreen windows outside Electron (count unchanged, max 1)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
+      offscreenAfter.length === offscreenBefore.length && offscreenAfter.every(w => w.basis === 'outside-electron')],
   ];
 }
 async function post(before, collect, expected, gate, options) {
@@ -326,7 +339,7 @@ async function main(argv = process.argv.slice(2)) {
       const savedViews = state.views; state.views = liveViewBaseline(state.views, state.windows);
       if (!geometry(state.views, state.windows)) throw refusal('Pre-install views/native geometry mismatch');
       fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), savedViews, ...state }, null, 2), { flag: 'wx', mode: 0o600 });
-      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['inferred menu windows (geometry only, not provenance)', JSON.stringify(state.inferredMenuWindows), 'recorded per display; max 4', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
+      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['inferred menu windows (geometry only, not provenance)', JSON.stringify(state.inferredMenuWindows), 'recorded per display; max 4', true], ['offscreen windows outside Electron', JSON.stringify(state.offscreenWindows), 'recorded; max 1', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
       return preDshReady(state.dsh) ? 0 : 1;
     }
     if (!/^0\.1\.0-alpha\.\d+$/.test(expected.version || '') || !/^[a-f0-9]{40}$/.test(expected.revision || '')) throw refusal('Post requires explicit release version and full revision');
@@ -345,4 +358,4 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(error => { console.error('FAIL: ' + (error.installStateReason || 'Metadata unavailable; verify input files and OS metadata access without changing permissions') + '. No settings or permissions were changed.'); process.exitCode = 1; });
-module.exports = { liveViewBaseline, windowFrames, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
+module.exports = { liveViewBaseline, windowFrames, offscreenInference, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
