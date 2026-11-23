@@ -155,6 +155,15 @@ async function scenario(lang) {
     await page.evaluate(() => { document.activeElement.blur(); scrollTo(0, 0); });
     await shot('chat');
     await go('space/shared'); await page.locator('#room-members').waitFor(); await shot('space');
+    const chips = await page.locator('#room-members .member-chip').evaluateAll(list => list.map(e => ({ id: e.dataset.memberId, href: e.getAttribute('href'), name: e.querySelector('.member-name')?.textContent, state: e.querySelector('.tag')?.textContent, work: e.querySelector('.tag')?.classList.contains('work'), height: e.getBoundingClientRect().height })));
+    check(lang + ' space lists each member with its state as a 44px target', () => {
+      assert.deepEqual(chips.map(c => c.id), ids.slice(0, 3), JSON.stringify(chips)); assert.deepEqual(chips.map(c => c.name), names, JSON.stringify(chips));
+      for (const c of chips) { assert.equal(c.href, '#' + lang + '/chat/' + encodeURIComponent(c.id), JSON.stringify(c)); assert.ok(c.state, JSON.stringify(c)); assert.ok(c.height >= 44, JSON.stringify(c)); }
+      assert.deepEqual(chips.map(c => c.work), [true, false, false], JSON.stringify(chips));
+    });
+    await page.locator('#room-members .member-chip[data-member-id="' + ids[1] + '"]').tap();
+    await page.waitForFunction(hash => document.documentElement.dataset.route === hash && document.documentElement.dataset.loading === 'false', '#' + lang + '/chat/' + encodeURIComponent(ids[1]));
+    check(lang + ' tapping a member opens its chat', () => {});
     await go('queue/shared'); await page.locator('article.queue-card').first().waitFor(); await shot('queue');
     const projected = await app.broker().workspaceRead({ token: cookies.find(c => c.name === '__Host-naw-mobile').value, actor: 'synthetic-person', origin: site });
     check(lang + ' projection contains no unpaired private body or native desktop draft', () => assert.ok(!JSON.stringify(projected).includes('UNPAIRED_SENTINEL')));

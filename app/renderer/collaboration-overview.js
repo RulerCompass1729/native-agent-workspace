@@ -271,6 +271,25 @@
       }
       options.onLayout?.();
     }
+    // Sidebar member rows land on a column without changing layout or focus mode.
+    function reveal(id) {
+      const index = records.findIndex(r => r.id === id), pane = panes.get(id);
+      if (index < 0 || !pane || focused) return false;
+      if (pane.unit.hidden && progressive && layout !== 'list') {
+        options.beforeLayout?.();
+        visibleRows = Math.max(visibleRows, Math.floor(index / Math.max(1, capacity)) + 1); memberLimits.set(roomKey, visibleRows); render();
+        options.onLayout?.();
+      }
+      if (aligned) markActive(id);
+      if (alignedGrid()) {
+        const start = alignedWidths.slice(0, index).reduce((a, b) => a + b, 0), end = start + (alignedWidths[index] || 0);
+        if (start < readers.scrollLeft - 1 || end > readers.scrollLeft + readers.clientWidth + 1) readers.scrollLeft = start;
+        schedulePager();
+      } else pane.unit.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      pane.header.classList.remove('revealed'); void pane.header.offsetWidth; pane.header.classList.add('revealed');
+      pane.name.focus({ preventScroll: true });
+      return true;
+    }
     function setLayout(value) { cancelColumnSnap(); options.beforeInputLayout?.(); options.beforeLayout?.(); layout = value; render(); options.onLayout?.(); }
     function refreshStatus() {
       for (const record of records) {
@@ -367,6 +386,7 @@
     }
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
+      header.addEventListener('animationend', event => { if (event.animationName === 'collaboration-revealed') header.classList.remove('revealed'); });
       // The enlarged member's own card control toggles back to the whole space.
       const name = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-name');
       const nameText = el('span', undefined, 'collaboration-name-text'), nameSuffix = el('span', undefined, 'collaboration-name-suffix'); name.append(nameText, nameSuffix);
@@ -588,7 +608,7 @@
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }
         render();
       },
-      focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
+      focus, reveal, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
       dispose() { disposed = true; cancelColumnSnap(); if (aligned) delete readers.scrollLeft; if (pagerFrame) cancelAnimationFrame(pagerFrame); widthObserver.disconnect(); toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }

@@ -373,7 +373,13 @@
       if (!route.id) { heading('space'); roomList(el('content')); return; }
       const r = view.rooms.find(r => r.id === route.id); if (!r) { heading('space'); el('content').append(node('p', t('noScope'))); return; }
       tabs([[t('chat'), 'space/' + r.id, true], [t('queue') + ' ' + r.queue.length, 'queue/' + r.id, false]]);
-      const members = node('div', r.members.map(s => s.name).join(' / '), 'callout'); members.id = 'room-members'; el('content').append(members);
+      // 11-23: each member shows its state; one granted to this phone opens its chat.
+      const members = node('nav', undefined, 'member-chips'); members.id = 'room-members'; members.setAttribute('aria-label', t('members'));
+      for (const m of r.members) {
+        const s = view.sessions.find(x => x.id === m.id), chip = s ? link('', 'chat/' + encodeURIComponent(m.id), 'member-chip') : node('span', undefined, 'member-chip');
+        chip.dataset.memberId = m.id; chip.append(avatar(m), node('span', m.name, 'member-name'), stateTag(s || m)); members.append(chip);
+      }
+      el('content').append(members);
       const rows = node('div', undefined, 'thread'); thread(r.messages, rows); el('content').append(rows);
       el('content').append(button('+ ' + t('add'), () => addTask(r), 'primary'));
       receipts(el('content'), { roomId: r.id });

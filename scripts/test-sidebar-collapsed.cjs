@@ -129,6 +129,61 @@ async function routes(){
   });
  }
 }
+const viewState=()=>page.evaluate(()=>workspace.initial().then(s=>s.viewState));
+async function openSolo(){
+ await page.locator('#independent-nav').click();const names=await page.getByRole('menuitem').allTextContents(),matches=names.filter(n=>n.startsWith(NAMES.sessions[9]+' · '));assert.equal(matches.length,1,JSON.stringify(names));
+ await page.getByRole('menuitem',{name:matches[0],exact:true}).click();await until(async()=>(await viewState()).selected===ids[9],'Independent session selected');await settle();await delay(350);
+}
+const sidebarBox=()=>page.evaluate(()=>{const e=document.querySelector('.naw[data-native-surface="sidebar"]');return {collapsed:e.dataset.collapsed,width:e.getBoundingClientRect().width};});
+function readMembers(){
+ const ctx=document.createElement('canvas').getContext('2d'),side=document.querySelector('.naw[data-native-surface="sidebar"]'),drawn=e=>Boolean(e&&e.getClientRects().length);
+ const paint=c=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=c;ctx.fillRect(0,0,1,1);return 'rgb('+[...ctx.getImageData(0,0,1,1).data].slice(0,3).join(', ')+')';},ink=c=>[c.backgroundColor,c.backgroundImage,c.borderTopColor,c.boxShadow].join(' '),look=e=>[...e.classList].filter(c=>c!=='agent-cell').sort().join(' ');
+ const rows=[...side.querySelectorAll('.session-row')].filter(drawn).map(row=>{
+  const id=row.dataset.sessionRow,icon=row.querySelector('.agent-icon'),dot=row.querySelector('.agent-icon>.state-dot'),cell=document.querySelector('#agent-distribution .agent-strip .agent-cell[data-session-id="'+id+'"]');
+  if(!dot||!cell)return {id,member:row.classList.contains('space-member-row'),missing:!dot?'sidebar':'header'};
+  const a=getComputedStyle(dot),b=getComputedStyle(cell),color=a.getPropertyValue('--agent-color').trim(),rgb=paint(color);
+  return {id,member:row.classList.contains('space-member-row'),icon:drawn(icon),dot:drawn(dot),side:look(dot),header:look(cell),color,headerColor:b.getPropertyValue('--agent-color').trim(),sidePaint:ink(a).includes(rgb),headerPaint:ink(b).includes(rgb)};
+ });
+ const box=side.getBoundingClientRect();
+ return {collapsed:side.dataset.collapsed,width:box.width,rows,columns:[...document.querySelectorAll('.collaboration-member-status[data-member-id]')].map(e=>e.dataset.memberId),
+  elsewhere:[...document.querySelectorAll('.space-member-row')].filter(e=>!side.contains(e)).length};
+}
+// 11-23: a space keeps the sidebar as the person set it and lists its members there; a row lands on that member's column.
+async function spaceMembers(){
+ for(const [width,height] of [[1280,820],[900,700]])for(const theme of ['light','dark'])for(const collapsed of [false,true]){
+  const label=`${width} ${theme} ${collapsed?'collapsed':'expanded'}`;
+  await size(width,height);await page.emulateMedia({colorScheme:theme});await page.waitForFunction(d=>document.body.hasAttribute('data-ds-dark-theme')===d,theme==='dark');
+  await openSolo();await rail(collapsed);const before=await sidebarBox();
+  await check(label+' entering a space keeps the sidebar width and lists one row per member column',async()=>{
+   await page.locator(G(rooms[0])).click();await until(async()=>(await viewState()).selected==='room','Space selected');await settle();
+   const focused=(await viewState()).roomSession;if(focused){await page.locator('.collaboration-member-status[data-member-id="'+focused+'"] .collaboration-member-name').click();await until(async()=>!(await viewState()).roomSession,'Whole space shown');}
+   await settle();await delay(350);const data=await page.evaluate(readMembers);fs.writeFileSync(path.join(out,`space-${label.replace(/ /g,'-')}.json`),JSON.stringify({before,data},null,2));
+   assert.equal(data.collapsed,before.collapsed,JSON.stringify({before,data}));assert.ok(Math.abs(data.width-before.width)<=1,JSON.stringify({before,width:data.width}));
+   assert.deepEqual([...data.columns].sort(),ids.slice(1,5).sort(),JSON.stringify(data.columns));
+   assert.deepEqual(data.rows.map(r=>r.id),data.columns,JSON.stringify(data.rows));
+   for(const r of data.rows){assert.ok(r.member,JSON.stringify(r));assert.equal(r.missing,undefined,JSON.stringify(r));assert.ok(r.icon&&r.dot,JSON.stringify(r));assert.equal(r.side,r.header,JSON.stringify(r));assert.equal(r.color,r.headerColor,JSON.stringify(r));assert.ok(r.sidePaint&&r.headerPaint,JSON.stringify(r));}
+   assert.equal(data.elsewhere,0);
+  });
+  await page.mouse.move(width-10,5);await settle();await page.screenshot({path:path.join(out,`space-${label.replace(/ /g,'-')}.png`)});
+  await check(label+' a member row brings that member column into view without leaving the overview',async()=>{
+   const target=ids[4],column=page.locator('.collaboration-member-status[data-member-id="'+target+'"]');
+   await page.locator('.collaboration-readers').evaluate(e=>{e.scrollLeft=0;});await settle();
+   await page.locator(S(target)+' .session-link').click();
+   await until(()=>column.evaluate(e=>e.classList.contains('revealed')),'Column highlighted',2000);
+   await until(()=>column.evaluate(e=>{const c=e.getBoundingClientRect(),r=e.closest('.collaboration-readers').getBoundingClientRect();return c.left>=r.left-1&&c.right<=r.right+1;}),'Column in view',2000);
+   const view=await viewState();assert.equal(view.selected,'room');assert.ok(!view.roomSession,JSON.stringify(view));
+  });
+  if(width===1280&&theme==='light'&&!collapsed)await check(label+' in one member view a member row switches to that member',async()=>{
+   await page.locator('.collaboration-member-status[data-member-id="'+ids[1]+'"] .collaboration-member-name').click();await until(async()=>(await viewState()).roomSession===ids[1],'Member focused');await settle();
+   await page.locator(S(ids[3])+' .session-link').click();await until(async()=>(await viewState()).roomSession===ids[3],'Member switched');await settle();
+   assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('.naw[data-native-surface="sidebar"] .space-member-row.active')].map(e=>e.dataset.sessionRow)),[ids[3]]);
+   await page.locator('.collaboration-member-status[data-member-id="'+ids[3]+'"] .collaboration-member-name').click();await until(async()=>!(await viewState()).roomSession,'Whole space shown again');
+  });
+  await check(label+' returning to an independent session keeps the sidebar as set',async()=>{
+   await openSolo();const after=await sidebarBox();assert.equal(after.collapsed,before.collapsed,JSON.stringify({before,after}));assert.ok(Math.abs(after.width-before.width)<=1,JSON.stringify({before,after}));
+  });
+ }
+}
 async function parity(){
  const target=ids[1],words=lang==='zh'?['待核实','就绪','在做','等你','卡住']:['Check','Ready','Work','You','Stuck'];
  // An idle event without a Claude turn-end report leaves background work unconfirmed.
@@ -166,7 +221,7 @@ const cleanup=scratch.cleanup(async()=>{if(app)await app.close();client?.close()
 (async()=>{
  try{fs.mkdirSync(slot);}catch(e){if(e.code==='EEXIST'){console.log('OCCUPIED: no launch/profile');process.exitCode=75;return;}throw e;}
  lease=true;fs.writeFileSync(path.join(slot,'owner.json'),JSON.stringify({owner:'collapsed-sidebar test',task:plan.task,token,pid:process.pid}));fs.mkdirSync(out,{recursive:true});let counters;
- try{await launch();await behaviour();await routes();counters=await fixture('inspect');await check('zero sends, native inputs, page errors and OS dialogs',async()=>{assert.deepEqual(counters.sends,[]);assert.deepEqual(counters.inputs,[]);assert.deepEqual(errors,[]);assert.deepEqual(await app.evaluate(()=>globalThis.hoverGuards),[]);});if(failures.length)process.exitCode=1;}
+ try{await launch();await behaviour();await routes();await spaceMembers();counters=await fixture('inspect');await check('zero sends, native inputs, page errors and OS dialogs',async()=>{assert.deepEqual(counters.sends,[]);assert.deepEqual(counters.inputs,[]);assert.deepEqual(errors,[]);assert.deepEqual(await app.evaluate(()=>globalThis.hoverGuards),[]);});if(failures.length)process.exitCode=1;}
  catch(e){failures.push({error:e.stack});console.error(e.stack);process.exitCode=1;if(page&&!page.isClosed())await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
  finally{await cleanup();assert.equal(JSON.parse(fs.readFileSync(path.join(slot,'owner.json'))).token,token);fs.unlinkSync(path.join(slot,'owner.json'));fs.rmdirSync(slot);const result={checks,failures,errors,sends:counters?.sends?.length??null,inputs:counters?.inputs?.length??null,modelCalls:0,profileRemoved:!profile||!fs.existsSync(profile),slotReleased:true};fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({pass:checks.length,fail:failures.length,profileRemoved:result.profileRemoved,slotReleased:true}));}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

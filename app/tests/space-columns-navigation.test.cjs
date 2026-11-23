@@ -5,7 +5,7 @@ function actual(name) { const start = source.indexOf(`function ${name}(`); asser
 function harness() {
   const calls = [], nodes = new Map(), surface = { dataset: { collapsed: 'false' } }, locale = localeUI('en'); let menu;
   const $ = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, attrs: {}, isConnected: true, setAttribute(k, v) { this.attrs[k] = v; }, getBoundingClientRect: () => ({ left: 0, top: 0 }), getClientRects: () => [{}], focus() {}, closest: () => surface }); return nodes.get(id); };
-  const context = vm.createContext({ ...locale, $, selected: 'room', spaceId: 'shared', spaceRailBefore: null, spaceNavigationMenu: null, spaceRecord: id => context.roomList.find(room => room.id === id), switched: [], renderSpaceSwitch: room => context.switched.push(room?.id || null),
+  const context = vm.createContext({ ...locale, $, selected: 'room', spaceId: 'shared', spaceNavigationMenu: null, spaceRecord: id => context.roomList.find(room => room.id === id), switched: [], renderSpaceSwitch: room => context.switched.push(room?.id || null),
     focusedRoomMember: () => Boolean(context.selected === 'room' && context.roomSurface === 'overview' && context.roomSession), roomSurface: 'overview', roomSession: '',
     state: { room: { name: 'Demo' }, sessions: [], steward: {} }, roomList: [{ id: 'shared', name: 'Demo' }, { id: '00000000-0000-4000-8000-000000000001', name: 'Archived', archived: true }],
     allSpaces() { return context.roomList; }, inSpace: (record, id) => spaces.isMember(record, id), members: () => [], orderedMembers: () => context.state.sessions,
@@ -45,12 +45,17 @@ for (const change of ['space archived', 'session joined', 'session archived', 'b
   if (change === 'butler designated') c.state.steward.sessionId = 'free';
   menu().onSelect(kind === 'spaces' ? 'shared' : 'free'); assert.deepEqual(calls, [['toast', 'navigation.changed']]);
 });
-test('the rail changes DSH geometry once per entry and restores the prior width on leaving', () => {
+// 11-23 requirement change: entering a space used to collapse the sidebar (one toggle in, one out);
+// the person now wants that space's members listed at full width, so the width never changes here.
+test('entering or leaving a space leaves the sidebar width as the person set it', () => {
   const { context: c, calls, $, surface } = harness();
-  c.renderSpaceRail(); c.renderSpaceRail(); assert.deepEqual(calls, [['toggle']]); assert.equal($('space-rail-routes').hidden, false);
-  c.selected = 'free'; c.renderSpaceRail(); assert.deepEqual(calls, [['toggle'], ['toggle']]); assert.equal(surface.dataset.collapsed, 'false'); assert.equal($('switch-space').hidden, true);
-  surface.dataset.collapsed = 'true'; calls.length = 0; c.selected = 'room'; c.renderSpaceRail(); c.selected = 'free'; c.renderSpaceRail(); assert.deepEqual(calls, []);
-  assert.deepEqual(Array.from(c.switched), ['shared', 'shared', null, 'shared', null], 'The switch carries the space name only while the space view is shown');
+  for (const collapsed of ['false', 'true']) {
+    surface.dataset.collapsed = collapsed; calls.length = 0;
+    c.selected = 'room'; c.renderSpaceRail(); c.renderSpaceRail(); assert.equal($('space-rail-routes').hidden, false);
+    c.selected = 'free'; c.renderSpaceRail(); assert.equal($('switch-space').hidden, true);
+    assert.deepEqual(calls, [], `no DSH toggle from ${collapsed === 'true' ? 'collapsed' : 'expanded'}`); assert.equal(surface.dataset.collapsed, collapsed);
+  }
+  assert.deepEqual(Array.from(c.switched), ['shared', 'shared', null, 'shared', 'shared', null], 'The switch carries the space name only while the space view is shown');
 });
 test('the independent empty state offers no implicit create, join or native-control action', () => {
   const { context: c, $, menu, calls } = harness(); c.openSpaceNavigation('sessions', $('anchor'));
