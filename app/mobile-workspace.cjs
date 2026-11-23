@@ -197,7 +197,8 @@ class MobileWorkspace {
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
       ...(selection && (selection.kind !== 'room' || selection.id !== r.id) ? { conversationLoaded: false }
         : { ...conversation(r.messages, undefined, bodyBudget), ...(selection ? { conversationLoaded: true } : {}),
-          ...speech(r, [...permitted.values()].filter(s => roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, nativeId: s.nativeId, state: s.state,
+          // Only the space page shows it, so a read of every space at once adds nothing toward the size limit.
+          ...selection?.kind === 'room' && speech(r, [...permitted.values()].filter(s => roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, nativeId: s.nativeId, state: s.state,
             messagesOmitted: s.messagesOmitted, messages: current(s) })), bodyBudget === undefined ? undefined : Math.floor(bodyBudget / 2)) }),
       };
     });

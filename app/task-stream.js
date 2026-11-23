@@ -135,7 +135,13 @@
           if (wakes.has(m.wakeSource.id)) continue;
           const id = m.wakeSource.senderId || '';
           items.push({ ...base, fromKind: 'agent', fromId: id, fromName: nameOf(id, String(m.name || '').replace(/^来自\s*/u, '')), text: m.text.replace(WAKE_HEADER, '') });
-        } else if (PERSON_ORIGINS.includes(m.origin) || m.origin === 'native' && m.inputSource === 'user') {
+        } else if (m.origin === 'room' && typeof m.name === 'string' && m.name.trim()) {
+          // Through a space with a sender's name: another agent's words (workspace.cjs sendScopedOutboxInput keeps only
+          // its name); the person's own space sends carry none. Attributed only when exactly one other member has it.
+          const name = plainName(m.name), match = [...byId.values()].filter(x => x.id !== s.id && plainName(x.name) === name);
+          items.push({ ...base, fromKind: 'agent', ...(match.length === 1 ? { fromId: match[0].id, fromName: name } : { fromId: '', fromName: `「${name}」`, unverified: true }) });
+        } else if (PERSON_ORIGINS.includes(m.origin) || m.origin === 'native' && (m.inputSource === undefined || m.inputSource === 'user')) {
+          // A native row carries a source only when NAW recognised it as machine input (workspace.cjs on('nativeInput')).
           items.push({ ...base, fromKind: 'person', fromId: '', fromName: '' });
         } else if (m.origin === 'naw-dispatch' && m.dispatchPurpose?.kind === 'queue' && !String(m.dispatchItem || '').startsWith('steward-wake:')) {
           items.push({ ...base, fromKind: 'dispatch', fromId: '', fromName: '' });

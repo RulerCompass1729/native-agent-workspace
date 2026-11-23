@@ -22,7 +22,7 @@ function seed({ butler, pm, a, b }) {
   ];
   room.events = [...(room.events || []), { id: 'q-1', kind: 'queue', role: 'system', time: at(25), uiMessage: { key: 'notice.queue.dispatched', params: { text: '写文档', name: 'Claude B' } } }];
   s(pm).messages = [
-    { id: 'tag-pm', role: 'user', origin: 'room', name: '你', text: '把今天要做的三件事排一下。', time: yesterday },
+    { id: 'tag-pm', role: 'user', origin: 'room', text: '把今天要做的三件事排一下。', time: yesterday },
     { id: 'pm-think', role: 'assistant', status: 'complete', phase: 'commentary', text: '先看队列。', time: yesterday + 30000 },
     { id: 'pm-reply', role: 'assistant', status: 'complete', text: '排好了：1. 输入框修复（A）；2. 文档（B）；3. 安装检查（大管家）。', time: yesterday + 60000 },
   ];

@@ -17,7 +17,7 @@ function space() {
       peerMessage: { senderId: null, senderName: 'X', recipientId: 'B', recipientName: 'B' } },
   ], events: [queueEvent('q1', 9), queueEvent('q2', 16)] };
   const A = { id: 'A', name: 'A', nativeId: 'nA', state: 'idle', messages: [
-    { id: 'tagA1', role: 'user', origin: 'room', name: '你', text: 'A, please check the build.', time: 10 },
+    { id: 'tagA1', role: 'user', origin: 'room', text: 'A, please check the build.', time: 10 },
     { id: 'a-tool', role: 'assistant', kind: 'tool', text: 'npm test', time: 13 },
     { id: 'a-mid', role: 'assistant', status: 'complete', text: 'Let me look', time: 14 },
     { id: 'a-final', role: 'assistant', status: 'complete', text: 'Build passes.', time: 15 },
@@ -99,6 +99,27 @@ test('each item points at its original message', () => {
   assert.deepEqual(target('B, take the docs.'), { sessionId: 'A', nativeId: '', messageId: 'wake1' });
   assert.deepEqual(target('B, report status.'), { sessionId: 'B', nativeId: 'nB', messageId: 'bw2' });
   assert.deepEqual(target('A, please check the build.'), { sessionId: 'A', nativeId: '', messageId: 'tagA1' });
+});
+// Review round 1, finding 2: the scoped outbox writes another agent's words as an origin 'room' row with the sender's
+// name (workspace.cjs sendScopedOutboxInput); the person's own space sends carry no name.
+test('a member\'s message through the space outbox is that member\'s, not the person\'s', () => {
+  const { room, sessions } = space();
+  sessions[1].messages.push({ id: 'ob1', role: 'user', origin: 'room', name: 'A', text: 'B, outbox note.', time: 70 },
+    { id: 'ob2', role: 'user', origin: 'room', name: 'Somebody', text: 'B, from an unknown name.', time: 71 });
+  const items = stream.speechStream(room, { sessions });
+  const known = items.find(i => i.text === 'B, outbox note.'), unknown = items.find(i => i.text === 'B, from an unknown name.');
+  assert.deepEqual([known.fromKind, known.fromId, known.fromName, known.to.map(t => t.id), Boolean(known.unverified)], ['agent', 'A', 'A', ['B'], false]);
+  assert.deepEqual([unknown.fromKind, unknown.fromId, unknown.fromName, unknown.unverified], ['agent', '', '「Somebody」', true]);
+  assert.ok(stream.speechInvolves(known, 'A'));
+});
+// Finding 3: typed native input without a recorded source (a prompt queued during a turn) is the person's; machine
+// input always carries its source (workspace.cjs on('nativeInput')).
+test('native input the person typed without a recorded source still shows as the person\'s', () => {
+  const { room, sessions } = space();
+  sessions[1].messages.push({ id: 'claude-prompt-00000000-0000-4000-8000-000000000000-q1234abcd', role: 'user', origin: 'native', nativeId: 'nB', text: 'queued while working', time: 62 });
+  const items = stream.speechStream(room, { sessions });
+  assert.ok(view(items).includes('你 → B: queued while working'));
+  assert.ok(!items.some(i => i.text === 'wake'));
 });
 test('ids are unique and inputs are not changed', () => {
   const { room, sessions } = space(), before = JSON.stringify({ room, sessions });

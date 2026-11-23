@@ -136,9 +136,12 @@
       list.setAttribute('aria-label', t('list'));
       panel.setAttribute('aria-label', host.text('room.conversation'));
       const shown = chosen ? items.filter(i => model.speechInvolves(i, chosen)) : items;
-      const rows = shown.slice(-limit), first = drawnFor !== roomId + '\n' + chosen;
+      const first = drawnFor !== roomId + '\n' + chosen, follow = first || atBottom;
       const before = new Set(lastIds);
-      const added = first ? 0 : rows.filter(i => !before.has(i.id)).length;
+      const added = first ? 0 : shown.filter(i => !before.has(i.id)).length;
+      // Scrolled up, new messages widen the page instead of pushing what is being read out above.
+      if (!follow && added) { limit += added; signature = inputKey(room, members); }
+      const rows = shown.slice(-limit);
       const nodes = [earlier];
       let previousDay = '';
       for (const item of rows) {
@@ -152,8 +155,11 @@
       }
       earlier.hidden = shown.length <= rows.length;
       earlier.textContent = host.text('disclosure.older', { count: Math.min(PAGE, shown.length - rows.length), total: shown.length });
-      const follow = first || atBottom, scroll = list.scrollTop;
       // Day headings are rebuilt; message nodes are kept, so an expanded message, focus and reading place survive.
+      // The first message in view keeps its place on screen whatever changes above it.
+      const scroll = list.scrollTop, listTop = list.getBoundingClientRect().top;
+      const anchor = follow ? null : [...list.querySelectorAll('.speech-msg')].find(n => n.getBoundingClientRect().bottom > listTop);
+      const anchorAt = anchor ? anchor.getBoundingClientRect().top : 0;
       const focused = list.contains(doc.activeElement) ? doc.activeElement : null;
       for (let i = 0; i < nodes.length; i++) if (list.children[i] !== nodes[i]) list.insertBefore(nodes[i], list.children[i] || null);
       while (list.children.length > nodes.length) list.lastChild.remove();
@@ -162,7 +168,10 @@
       lastIds = shown.map(i => i.id);
       drawnFor = roomId + '\n' + chosen;
       if (follow) { list.scrollTop = list.scrollHeight; atBottom = true; unseen = 0; }
-      else { list.scrollTop = scroll; unseen += added; }
+      else {
+        if (anchor?.isConnected) list.scrollTop += anchor.getBoundingClientRect().top - anchorAt; else list.scrollTop = scroll;
+        unseen += added;
+      }
       if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
       drawFresh();
     }

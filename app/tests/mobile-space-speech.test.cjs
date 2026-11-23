@@ -54,6 +54,15 @@ test('speech keeps the newest 200 within its share of the budget', async t => {
   assert.equal(selected.speech.length, 200);
   assert.ok(selected.speech.at(-1).text.startsWith('Message 259') && selected.speech.at(-1).textOmitted);
   assert.ok(selected.earlierSpeechOmitted >= 60);
-  const all = (await f.read(undefined, { allRooms: true, records: true })).rooms[0];
+  const all = (await f.read({ kind: 'room', id: 'shared' }, { allRooms: true, records: true })).rooms[0];
   assert.ok(Buffer.byteLength(JSON.stringify(all.speech)) <= Math.floor(4 * 1024 * 1024 / 3 / 2));
+});
+// Review round 1, finding 5: only the space page shows speech, so a read of every space at once adds none.
+test('a read of every space at once carries no speech', async t => {
+  const f = fixture(t);
+  for (const grant of [undefined, { allRooms: true, records: true }]) {
+    const view = await f.read(undefined, grant);
+    assert.ok(view.rooms[0].messages.length > 0);
+    assert.equal(Object.hasOwn(view.rooms[0], 'speech'), false);
+  }
 });

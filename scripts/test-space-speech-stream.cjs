@@ -148,13 +148,34 @@ async function main() {
   const earlier = page.locator('#speech-stream .speech-earlier');
   assert.ok(await earlier.isVisible());
   assert.equal(await earlier.textContent(), '显示更早的 28 条 · 共 78 条');
+  record('78 messages: 50 first (no 20-item cap)');
+
+  // Review round 1, finding 1: scrolled up with more than one page drawn, a new message must not push the message
+  // being read out above, nor move it.
+  const list = page.locator('#speech-stream .speech-list');
+  await list.evaluate(n => { n.scrollTop = Math.floor((n.scrollHeight - n.clientHeight) / 2); n.dispatchEvent(new Event('scroll')); });
+  await delay(100);
+  const reading = await page.evaluate(() => {
+    const list = document.querySelector('#speech-stream .speech-list'), top = list.getBoundingClientRect().top;
+    const first = [...list.querySelectorAll('.speech-msg')].find(n => n.getBoundingClientRect().top >= top);
+    return { id: first.dataset.speechId, offset: Math.round(first.getBoundingClientRect().top - top) };
+  });
+  await fixture('speechAdd', { pm: ids.pm, a: ids.a, text: '往上翻时的新消息' });
+  await page.locator('#speech-stream .speech-new').waitFor();
+  const moved = await page.evaluate(id => {
+    const list = document.querySelector('#speech-stream .speech-list'), n = list.querySelector(`[data-speech-id="${CSS.escape(id)}"]`);
+    return n ? Math.round(n.getBoundingClientRect().top - list.getBoundingClientRect().top) : null;
+  }, reading.id);
+  assert.equal(moved, reading.offset, 'The message being read stays where it was');
+  assert.equal(await earlier.textContent(), '显示更早的 28 条 · 共 79 条');
+  record('scrolled up past one page, a new message keeps the message being read in place');
+  await page.locator('#speech-stream .speech-new').click();
   await earlier.click();
-  await until(async () => (await rows()).length === 78, 'All 78 shown');
+  await until(async () => (await rows()).length === 79, 'All 79 shown');
   assert.ok(!await earlier.isVisible());
-  record('78 messages: 50 first, the earlier 28 on request (no 20-item cap)');
+  record('the earlier 28 on request');
 
   // Following the bottom, and holding the reading place when scrolled up.
-  const list = page.locator('#speech-stream .speech-list');
   await list.evaluate(n => { n.scrollTop = n.scrollHeight; n.dispatchEvent(new Event('scroll')); });
   await fixture('speechAdd', { pm: ids.pm, a: ids.a, text: '第一条新消息' });
   await until(async () => (await rows()).at(-1)?.endsWith('第一条新消息'), 'New message appended');
