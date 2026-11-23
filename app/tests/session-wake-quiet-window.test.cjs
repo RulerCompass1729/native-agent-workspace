@@ -186,7 +186,7 @@ test('the person\'s own words to the recipient are not held by the window', asyn
 test('a sender on the backend being moved is refused at once, not held: the move would end its store and the held row', async t => {
   const f = await fixture(t);
   const peer = await f.target.create('codex', f.root, 'target-owner', 'Peer');
-  const notice = '自动消息没有发出；不会自动重发。\n收件方和你在同一个后台上，这个后台在迁移前的安静窗口里：迁移前这里不开新回合，迁移也带不走存着的消息，所以这条不存、不补送。';
+  const notice = '自动消息没有发出；不会自动重发。\n收件方和你在同一个后台上，这个后台在迁移前的安静窗口里：NAW 迁移前不在这里开新回合，迁移也带不走存着的消息，所以这条不存、不补送。';
   f.open(40);
   const one = await f.turnOf(f.target, f.b, 'one', 'Same backend.', peer);
   assert.equal(one.result.status, 'not-sent');
@@ -194,7 +194,7 @@ test('a sender on the backend being moved is refused at once, not held: the move
   await one.finish();
   const row = f.target.get(f.b).messages.filter(m => m.wake).at(-1);
   assert.equal(row.wake.status, 'not-sent'); assert.equal(f.writes.length, 0);
-  assert.equal(locale.displayText('en', row.text, row.uiMessage), "Automatic message was not sent; it will not be retried automatically.\nThe recipient is on your own backend, which is in the quiet window before a migration: no new turn starts there before the move, and the move cannot carry a held message, so this one is not kept or resent.\nSame backend.");
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), "Automatic message was not sent; it will not be retried automatically.\nThe recipient is on your own backend, which is in the quiet window before a migration: NAW starts no new turn there before the move, and the move cannot carry a held message, so this one is not kept or resent.\nSame backend.");
   // Staged before the window opened: refused at its turn end, as honestly.
   f.close();
   const two = await f.turnOf(f.target, f.b, 'two', 'Before the window.', peer);
@@ -205,4 +205,22 @@ test('a sender on the backend being moved is refused at once, not held: the move
   // From another backend it is held as before.
   const three = await f.turn('three', 'From the root backend.');
   assert.equal(three.result.readiness, 'held');
+});
+
+test('one held for the butler\'s minute before the window opened is held for the window at its retry, not sent into it', async t => {
+  const f = await fixture(t), b = f.target.get(f.b);
+  b.roomIds = []; b.roomId = null;
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.b, nativeId: b.nativeId } }), { mode: 0o600 });
+  const first = await f.turn('first', 'First.'); await first.finish();
+  assert.equal(f.writes.length, 1); f.reply();
+  f.advance(10000);
+  const second = await f.turn('second', 'Second.'); await second.finish();
+  const row = f.rows().at(-1);
+  assert.equal(row.wake.status, 'held'); assert.equal(row.wake.quietWindow, undefined, 'held for the minute only');
+  f.open(40); f.advance(MIN); await f.retry();
+  assert.equal(f.writes.length, 1, 'nothing goes into the window');
+  assert.equal(row.wake.status, 'held'); assert.ok(row.wake.quietWindow, 'now held for the window');
+  assert.equal(row.text, '收件方的后台在迁移前的安静窗口里；这条先存着，窗口结束后再试一次。\nSecond.');
+  f.close(); f.advance(MIN); await f.retry();
+  assert.equal(f.writes.length, 2); assert.equal(f.writes[1].text.split('\n')[1], 'Second.'); assert.equal(row.wake.status, 'submitted');
 });

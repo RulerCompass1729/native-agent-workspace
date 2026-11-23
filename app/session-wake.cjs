@@ -395,15 +395,20 @@ function complete(w, s, r, info) {
     deliver(w, row);
   }
 }
+// A window open now on the recipient's backend: the row is held for it, or refused as at registration. true: nothing
+// goes now. Also for a row held for the butler's minute before the window opened (the reviewer, 11-23).
+function keepQuiet(w, row) {
+  const intent = row.wake, quiet = quietWindow(w, intent.targetKey);
+  if (!quiet) return false;
+  if (intent.targetKey === ownKey(w)) refusedNotice(row, quietSame());
+  else if (!intent.quietWindow && quietRows(w) >= QUIET_HELD_MAX) refusedNotice(row, quietFull());
+  else { intent.quietWindow = { id: quiet.id, deadline: quiet.deadline }; holdQuiet(w, row, quiet); }
+  return true;
+}
 // At the turn's end: held while the recipient's backend is in a quiet window (one staged before it opened too),
 // otherwise one attempt.
 function deliver(w, row) {
-  const intent = row.wake, quiet = quietWindow(w, intent.targetKey);
-  if (!quiet) return transfer(w, row, Boolean(intent.quietWindow));
-  if (intent.targetKey === ownKey(w)) { refusedNotice(row, quietSame()); durable(w); return; }
-  if (!intent.quietWindow && quietRows(w) >= QUIET_HELD_MAX) { refusedNotice(row, quietFull()); durable(w); return; }
-  intent.quietWindow = { id: quiet.id, deadline: quiet.deadline };
-  holdQuiet(w, row, quiet);
+  if (!keepQuiet(w, row)) return transfer(w, row, Boolean(row.wake.quietWindow));
   try { durable(w); } finally { arm(w); }
 }
 // One delivery attempt. Persist before it: reopening never replays sending/staged/held rows. Only an explicit refusal
@@ -479,8 +484,7 @@ function retryHeld(w) {
       try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (quietly || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
       catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
       if (issue) { dropHeld(w, row, issue); continue; }
-      const quiet = quietly ? quietWindow(w, row.wake.targetKey) : null;
-      if (quiet) { holdQuiet(w, row, quiet); try { durable(w); } catch { /* Shown now; a later attempt checks storage first. */ } continue; }
+      if (keepQuiet(w, row)) { try { durable(w); } catch { /* Shown now; a later attempt checks storage first. */ } continue; }
       // A save that fails before the attempt sends nothing.
       try { transfer(w, row, quietly); pending = true; } catch (error) { dropHeld(w, row, { code: 'storage-unavailable', reason: error.message }); }
     }
