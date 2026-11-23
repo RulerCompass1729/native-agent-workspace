@@ -4833,7 +4833,7 @@ function renderPaneSwitches(s, inRoom) {
   $('open-native-terminal').hidden = !paired || !$('native-pane').hidden;
   $('open-native-terminal').setAttribute('aria-expanded', String(!$('native-pane').hidden));
   $('return-to-chat').hidden = !paired || terminalLayout !== 'maximized';
-  $('edge-chat').hidden = $('return-to-chat').hidden;
+  $('edge-chat').hidden = $('return-to-chat').hidden || $('native-pane').hidden;
   $('edge-terminal').hidden = $('open-native-terminal').hidden;
 }
 function visibleModeControl(next) {

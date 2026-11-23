@@ -87,6 +87,12 @@ test('pane-local entry and return controls follow split, closed, maximized and r
     assert.equal(nodes['edge-terminal'].hidden, layout !== 'hidden', 'terminal handle only while the conversation is fullscreen');
     assert.equal(nodes['native-pane-title'].hidden, true);
   }
+  // A space member restored to chat while the shared layout stays maximized.
+  context.terminalLayout = 'maximized'; context.mode = 'chat'; nodes['native-pane'].hidden = true;
+  vm.runInContext('renderPaneSwitches({ id: "synthetic" }, true)', context);
+  assert.equal(nodes['edge-chat'].hidden, true, 'no expand-conversation handle while the conversation is already shown');
+  assert.equal(nodes['edge-terminal'].hidden, false);
+  context.terminalLayout = 'split'; nodes['native-pane'].hidden = false;
   vm.runInContext('renderPaneSwitches({ id: "synthetic" }, true)', context);
   assert.equal(nodes['native-pane-title'].hidden, false, 'focused space member keeps its identity beside the terminal control');
   nodes['conversation-pane'].hidden = true;
