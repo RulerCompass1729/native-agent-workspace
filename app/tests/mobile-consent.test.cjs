@@ -120,3 +120,25 @@ test('challenge pressure cannot evict a consumed record or unlock a replay', () 
   assert.throws(() => f.consent.challenge(f.state, binding)); assert.throws(() => f.consent.consume(f.state, value, binding));
 });
 module.exports = { fixture, cbor };
+test('a recovered public key keeps per-card verification and never restores old challenges',()=>{
+ const f=fixture();f.enabled();const old=f.consent.challenge(f.state,f.binding()),saved=f.consent.snapshot(f.state),next={...f.state,generation:crypto.randomUUID()};
+ const restored=new MobileConsent({now:()=>1700000000000});restored.restore(f.state,next,saved);assert.equal(restored.status(next).enabled,true);
+ assert.throws(()=>restored.consume(next,{challengeId:old.challengeId,assertion:f.assertion(old.publicKey)},f.binding()));
+ const bad=restored.challenge(next,f.binding());assert.throws(()=>restored.consume(next,{challengeId:bad.challengeId,assertion:f.assertion(bad.publicKey,{flags:1})},f.binding()));
+ const fresh=restored.challenge(next,f.binding());assert.ok(restored.consume(next,{challengeId:fresh.challengeId,assertion:f.assertion(fresh.publicKey)},f.binding()));
+ assert.equal(Object.hasOwn(saved.key,'privateKey'),false);
+});
+test('recovery refuses a changed origin, device, owner, RP, public key or schema',()=>{
+ const f=fixture();f.enabled();for(const change of ['origin','device','owner','rp','key','extra']){
+  const saved=f.consent.snapshot(f.state),next={...f.state,generation:crypto.randomUUID()};
+  if(change==='origin')next.origin='https://other.example.test';if(change==='device')next.device={id:crypto.randomUUID()};
+  if(change==='owner')saved.owner='0'.repeat(64);if(change==='rp')saved.key.rpId='other.example.test';
+  if(change==='key')saved.key.publicKey=Buffer.alloc(80).toString('base64url');if(change==='extra')saved.key.extra=true;
+  const restored=new MobileConsent();assert.throws(()=>restored.restore(f.state,next,saved));assert.equal(restored.status(next).enabled,false);
+ }
+});
+test('recovery of a disabled key or revoked enrollment never enables approvals',()=>{
+ const f=fixture();f.enroll();const restored=new MobileConsent();restored.restore(f.state,f.state,f.consent.snapshot(f.state));
+ assert.equal(restored.status(f.state).registered,true);assert.equal(restored.status(f.state).enabled,false);
+ f.consent.revoke();restored.restore(f.state,f.state,f.consent.snapshot(f.state));assert.equal(restored.status(f.state).registered,false);
+});

@@ -24,6 +24,15 @@ function fixture() {
   }
   return { broker, calls, result, invoke, handler };
 }
+test('only a fixed read-source outage becomes 503; writes remain unconfirmed and secrets stay private', async () => {
+  const f = fixture(), failure = Object.assign(Error('PRIVATE_SOURCE_PATH_TOKEN'), { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.broker.refreshSession = async () => { throw failure; };
+  const reading = await f.invoke(); assert.equal(reading.statusCode, 503);
+  assert.deepEqual(reading.json(), { error: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.broker.send = async () => { throw failure; };
+  const sending = await f.invoke({ url: '/mobile/send', method: 'POST', value: { requestId, contextId: 'x'.repeat(43), text: 'Synthetic explicit message' } });
+  assert.equal(sending.statusCode, 409); assert.deepEqual(sending.json(), { error: 'MOBILE_REQUEST_UNCONFIRMED' });
+});
 test('QR activation keeps every fixed transport gate and accepts only its exact completion modes',async()=>{
  const f=fixture();let activated=0;f.broker.activateCandidate=async()=>{activated++;return {activated:true,sensitiveDecisions:false};};
  const raw=['Host','mobile.invalid','Tailscale-User-Login',actor,'X-NAW-Mobile','1','Origin',origin,'Cookie',`${COOKIE}=${bearer}`,'X-NAW-CSRF',csrf,'Content-Type','application/json'];
@@ -95,6 +104,14 @@ test('ambiguous duplicate headers/cookies, length plus encoding and malformed co
     const f = fixture(), response = await f.invoke({ raw: ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor, 'X-NAW-Mobile', '1', 'Cookie', cookie] });
     assert.equal(response.statusCode, 401); assert.equal(f.calls.length, 0);
   }
+});
+test('the phone cookie lasts as long as a seven-day pairing and never longer', async () => {
+  const week = 7 * 24 * 60 * 60, age = async ms => {
+    const f = fixture(); f.broker.pair = () => ({ deviceId, expiresAt: Date.now() + ms, cookieValue: bearer });
+    return Number((await f.invoke({ method: 'POST', url: '/mobile/pair', value: { secret: pairing } })).headers['set-cookie'].match(/Max-Age=(\d+)$/)[1]);
+  };
+  const full = await age(week * 1000); assert.ok(full > week - 10 && full <= week, 'A browser must not drop the cookie after twelve hours: ' + full);
+  assert.equal(await age(30 * 24 * 60 * 60 * 1000), week); assert.equal(await age(-1), 0);
 });
 test('pair secret is accepted only in exact JSON at an explicit same-origin fixed endpoint, cookie never JSON', async () => {
   const f = fixture(), response = await f.invoke({ method: 'POST', url: '/mobile/pair', value: { secret: pairing } });
@@ -181,4 +198,11 @@ test('HTTP preserves the proven queued marker but never infers one from an uncer
   Object.assign(f.result, { status: 'unconfirmed', queued: false });
   const next = await f.invoke({ method: 'POST', url: '/mobile/receipt', value: { requestId } });
   assert.notEqual(next.json().queued, true); assert.equal(next.json().status, 'unconfirmed');
+
+});
+
+test('logout awaits asynchronous persistence but never clears device drafts',async()=>{
+ for(const confirmed of [true,false]){const f=fixture();f.broker.logout=async()=>({authorizationRevoked:confirmed,connectionClosed:true,committedWorkMayContinue:true});
+  const result=await f.invoke({method:'POST',url:'/mobile/logout',value:{}});assert.equal(result.statusCode,confirmed?200:409);assert.equal(result.json().authorizationRevoked,confirmed);assert.equal(result.headers['clear-site-data'],undefined);assert.match(result.headers['set-cookie'],/Max-Age=0/);
+ }
 });

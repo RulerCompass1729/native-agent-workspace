@@ -179,6 +179,8 @@ async function build() {
       'mobile-consent.cjs',
       'mobile-http.cjs',
       'mobile-identity.js',
+      'mobile-pairing-keychain.jxa',
+      'mobile-pairing-store.cjs',
       'mobile-push.cjs',
       'mobile-qr.cjs',
       'mobile-qr.jxa',

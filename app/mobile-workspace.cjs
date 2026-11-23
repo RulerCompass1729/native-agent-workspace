@@ -14,6 +14,11 @@ const denied = () => Object.assign(Error('Mobile workspace authorization or stat
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const identifier = s => typeof s === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(s);
 const text = (s, limit = 65536) => typeof s === 'string' ? s.slice(0, limit) : '';
+function healthSummary(wake, reasons) {
+  if (!Array.isArray(reasons) || !reasons.length || !wake || typeof wake.on !== 'boolean' || wake.failed !== false ||
+      wake.blocked && !reasons.includes(wake.blocked.reason)) return { available: false, alerts: [] };
+  return { available: true, alerts: wake.blocked ? [{ code: 'steward-wake-stalled' }] : [] };
+}
 // cards: the confirmation ids this view can show. Other background operations and rows with no text
 // are not messages; on the phone they only took row slots as "earlier messages not shown" notes.
 function conversation(rows = [], sessionId, budget, cards) {
@@ -268,4 +273,4 @@ class MobileWorkspace {
     return grant;
   }
 }
-module.exports = { MobileWorkspace };
+module.exports = { MobileWorkspace, healthSummary };

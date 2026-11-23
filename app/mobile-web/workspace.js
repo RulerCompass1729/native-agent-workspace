@@ -137,20 +137,32 @@
     async function run(fn) { try { await started; await fn(); } catch { disconnected = true; paint(); toast('offline'); } }
     async function api(url, value, csrf) {
       const generation = client?.state.authorization;
-      const response = await global.fetch(url, { method: value === undefined ? 'GET' : 'POST', cache: 'no-store', credentials: 'same-origin',
-        headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', 'X-NAW-CSRF': csrf || '' }) }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
-      const result = await response.json();
-      if (generation !== client?.state.authorization) throw Error('MOBILE_AUTH_CHANGED');
-      if (!response.ok) { if ([401, 403].includes(response.status)) { client.invalidate(); locked = true; view = null; paint(); } throw Error(result.error || 'MOBILE_DENIED'); }
-      disconnected = false;
-      if (url === '/mobile/session') locked = false;
-      return result;
+      const read = value === undefined ? new global.AbortController() : null;
+      if (read) readingRequests.add(read);
+      const timer = read ? global.setTimeout(() => read.abort(), 8000) : null;
+      try {
+        const response = await global.fetch(url, { method: value === undefined ? 'GET' : 'POST', cache: 'no-store', credentials: 'same-origin',
+          headers: { 'X-NAW-Mobile': '1', ...(value === undefined ? {} : { 'Content-Type': 'application/json', 'X-NAW-CSRF': csrf || '' }) }, ...(read ? { signal: read.signal } : { body: JSON.stringify(value) }) });
+        const result = await response.json();
+        if (generation !== client?.state.authorization) throw Error('MOBILE_AUTH_CHANGED');
+        if (!response.ok) { if ([401, 403].includes(response.status)) { authorizationRejected = true; client.invalidate(); locked = true; view = null; paint(); } throw Error(result.error || 'MOBILE_DENIED'); }
+        disconnected = false;
+        if (url === '/mobile/session') { locked = false; authorizationRejected = false; }
+        return result;
+      } finally { if (read) { readingRequests.delete(read); global.clearTimeout(timer); } }
     }
     const actions = createWorkspaceActions({ storage, request: api, newId: () => global.crypto.randomUUID(), changed: () => updateCompose() });
     const passkeys = global.NAWMobilePasskeys.create({ storage, request: api });
     Object.assign(words.zh,{finishPair:'完成手机配对',qrEnrollment:'这次二维码授权登记一把批准密钥。尚未激活，不能读取或执行操作。',verifyPair:'使用系统验证完成配对',finishVerified:'完成配对',verifyPairNote:'系统可能提示创建凭据及再次验证。每张敏感卡仍须单独验证。',basicPair:'先使用基础权限',basicPairNote:'敏感批准保持关闭。新手机完成后，旧手机才断开。',cancelPair:'取消本次配对',pairUnconfirmed:'验证取消或结果未确认。请刷新核对；可回 Mac 重新出码，或明确选择基础权限。不会自动启用敏感批准。'});
     Object.assign(words.en,{finishPair:'Complete phone pairing',qrEnrollment:'This QR code authorizes one approval key. Nothing can be read or executed until activation.',verifyPair:'Complete pairing with system verification',finishVerified:'Complete pairing',verifyPairNote:'The system may ask you to create a credential and verify again. Each sensitive card still requires its own verification.',basicPair:'Use basic access first',basicPairNote:'Sensitive approvals stay off. The old phone disconnects only after this phone completes pairing.',cancelPair:'Cancel this pairing',pairUnconfirmed:'Verification cancelled or unconfirmed. Refresh to check, get a new code on the Mac, or explicitly choose basic access. Sensitive approval is never enabled automatically.'});
-    let pairingNotice=false,pairingBusy=false;
+    let pairingNotice=false,pairingBusy=false, recovery=null, authorizationRejected=false;
+    const readingRequests = new Set();
+    words.zh.autoReconnect='连接中断 · 正在自动重连。草稿保留，不会重发。';
+    words.en.autoReconnect='Connection lost · Reconnecting automatically. Draft kept; nothing resent.';
+    words.zh.offline = words.zh.phoneOffline = words.zh.autoReconnect;
+    words.en.offline = words.en.phoneOffline = words.en.autoReconnect;
+    Object.assign(words.zh, { healthUnknown: '告警状态未核实', wakeStalled: '大管家未能叫醒', tokenAnomaly: '用量状态异常', sourceDisconnected: '本机服务已断开' });
+    Object.assign(words.en, { healthUnknown: 'Alert status unverified', wakeStalled: 'Butler could not be awakened', tokenAnomaly: 'Usage status needs attention', sourceDisconnected: 'Local service disconnected' });
     words.zh.bellNote='数量来自桌面同一份提醒。敏感卡需逐张系统验证；未启用或不支持的操作请回 Mac。';
     words.en.bellNote='The count uses the same desktop reminders. Sensitive cards require individual system verification; use the Mac when not enabled or supported.';
     client = global.NAWMobile.createMobileClient({ request: api, storage, newId: () => global.crypto.randomUUID(), onChange: state => {
@@ -161,8 +173,8 @@
       } else updateCompose();
     } });
     const push = global.NAWMobilePush?.create({ request: api, session: () => client.state.session });
-    Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量，不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
-    Object.assign(words.en, { pushTitle: 'Phone notifications', pushEnable: 'Enable reminders', pushDisable: 'Disable reminders', pushNote: 'Only the reminder count is sent, without names or content. Notifications may be delayed; open NAW for current records.', pushHome: 'On iPhone, add this page to the Home Screen in Safari, then open it there. Requires iOS 16.4 or later.', pushUnsupported: 'Push is unavailable in this browser. On iPhone, add NAW to the Home Screen and open it there.', pushOff: 'Not enabled', pushSubscribed: 'Registered; no reminder submitted yet', pushAccepted: 'Accepted by the push service; phone delivery unconfirmed', pushDelayed: 'Submission unconfirmed; notifications may be delayed. Refresh for current reminders.', pushExpired: 'Subscription expired; enable again', pushDenied: 'Notification permission was not granted. Check system settings.', pushUnknown: 'Setting unconfirmed. Refresh to check, or revoke this phone on the Mac.' });
+    Object.assign(words.zh, { pushTitle: '手机通知', pushEnable: '开启提醒', pushDisable: '关闭提醒', pushNote: '只发送提醒数量和几种固定告警（如本机服务断开、有事等你决定），不含名字或正文。通知可能延迟；打开后以当前记录为准。', pushHome: 'iPhone 请先从 Safari 添加到主屏幕，再从主屏幕打开。需要 iOS 16.4 或更新版本。', pushUnsupported: '当前浏览器未提供推送能力。iPhone 请添加到主屏幕后打开。', pushOff: '尚未开启', pushSubscribed: '已登记，尚未提交提醒', pushAccepted: '已交给推送服务，未确认手机送达', pushDelayed: '提交未确认，通知可能延迟；请刷新查看当前提醒', pushExpired: '订阅已失效，请重新开启', pushDenied: '通知权限未允许，请在系统设置中核对', pushUnknown: '设置结果未确认，请刷新核对；需要时在 Mac 撤销此手机' });
+    Object.assign(words.en, { pushTitle: 'Phone notifications', pushEnable: 'Enable reminders', pushDisable: 'Disable reminders', pushNote: 'Only the reminder count and a few fixed alerts are sent (such as local service disconnected or a decision waiting for you), without names or content. Notifications may be delayed; open NAW for current records.', pushHome: 'On iPhone, add this page to the Home Screen in Safari, then open it there. Requires iOS 16.4 or later.', pushUnsupported: 'Push is unavailable in this browser. On iPhone, add NAW to the Home Screen and open it there.', pushOff: 'Not enabled', pushSubscribed: 'Registered; no reminder submitted yet', pushAccepted: 'Accepted by the push service; phone delivery unconfirmed', pushDelayed: 'Submission unconfirmed; notifications may be delayed. Refresh for current reminders.', pushExpired: 'Subscription expired; enable again', pushDenied: 'Notification permission was not granted. Check system settings.', pushUnknown: 'Setting unconfirmed. Refresh to check, or revoke this phone on the Mac.' });
     function avatar(s) { return node('span', (s.provider || 'N').slice(0, 1).toUpperCase(), 'avatar ' + (['claude', 'codex', 'deepseek'].includes(s.provider) ? s.provider : '')); }
     const providerName = name => ({ claude: 'Claude', codex: 'Codex', deepseek: 'DeepSeek', dsh: 'DSH' })[name] || name || 'NAW';
     const stateText = s => t(({ idle: 'idle', working: 'working', starting: 'working', approval: 'needs', queued: 'queued', sent: 'working', waiting: 'needs', done: 'done', cancelled: 'cancelled' })[s] || s || 'idle');
@@ -248,7 +260,7 @@
           if(mode==='verified' && !client.state.session.consent?.verified)await passkeys.registerCandidate(client.state.session);
           await api('/mobile/pair/activate',{mode},session.csrf);await client.start();await refresh();
         }catch{pairingNotice=true;}
-        finally{pairingBusy=false;paint();}
+        finally{pairingBusy=false;paint();recovery?.wake();}
       };
       const verify=button(t(session.consent?.verified?'finishVerified':'verifyPair'),()=>runPair('verified'),'primary');verify.id='complete-phone-pairing';verify.disabled=pairingBusy;
       const basic=button(t('basicPair'),()=>runPair('basic'));basic.id='basic-phone-pairing';basic.disabled=pairingBusy;
@@ -629,7 +641,19 @@
       const pendingPair=client.state.session?.candidate===true;
       const bell = link('', 'reminders', 'icon bell'); bell.hidden=pendingPair;bell.setAttribute('aria-label', t('reminders') + ' · ' + (view?.reminders?.count || 0)); bell.append(icon('bell')); if (view?.reminders?.count) bell.append(node('span', view.reminders.count, 'count')); el('top').append(bell, button('···', () => { const menu = node('div', undefined, 'dialog-menu'); menu.append(button(t('refresh'), refresh));if(!pendingPair)menu.append(button(t('registerKey'), registerPasskey));menu.append(button(t(pendingPair?'cancelPair':'logout'), async () => { await client.logout(); locked = true; view = null; el('dialog').close(); paint(); })); dialog(t('manage'), menu); }, 'icon'));
       el('top').lastElementChild.setAttribute('aria-label', t('manage'));
-      const status = node('span', locked ? t('locked') : disconnected ? t('offline') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
+      el('connection').classList.toggle('connection-warning', disconnected && !authorizationRejected);
+      el('connection').classList.remove('health-attention');
+      const status = node('span', disconnected && !authorizationRejected ? t('autoReconnect') : locked ? t('locked') : pendingPair?t('finishPair'):t('connected') + (view?.syncedAt ? ' · ' + new Date(view.syncedAt).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en', { hour: '2-digit', minute: '2-digit' }) : ''), 'sync-time'); status.id = 'sync-status'; status.setAttribute('role','status'); el('connection').append(status, button(t('refresh'), refresh)); const language = link(lang === 'zh' ? 'English' : '中文', (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.href = '#' + (lang === 'zh' ? 'en' : 'zh') + '/' + (route?.nativeId ? 'confirm/native/' + encodeURIComponent(route.nativeId) : (route?.page || 'home') + (route?.id ? '/' + encodeURIComponent(route.id) : '')); language.id = 'language-link'; el('connection').append(language);
+      if (!pendingPair && view?.reminders) {
+        const health = view.reminders.health, keys = { 'steward-wake-stalled': 'wakeStalled', 'token-anomaly': 'tokenAnomaly', 'service-disconnected': 'sourceDisconnected' };
+        const alerts = Array.isArray(health?.alerts) ? [...new Set(health.alerts.map(a => keys[a?.code]).filter(Boolean))] : [];
+        el('connection').classList.toggle('health-attention', alerts.length > 0);
+        if (health?.available !== true || !Array.isArray(health.alerts) || health.alerts.some(a => !keys[a?.code])) alerts.push('healthUnknown');
+        if (alerts.length) {
+          const warning = link(alerts.map(t).join(' · '), 'reminders', 'health-warning');
+          warning.id = 'health-warning'; warning.setAttribute('role', 'status'); el('connection').append(warning);
+        }
+      }
       el('navigation').hidden = locked || client.state.session?.candidate===true;
       if (locked || !client.state.session) { login(); updateCompose(); return; }
       if(client.state.session.candidate){candidate();updateCompose();return;}
@@ -651,7 +675,7 @@
     const workspacePath = () => '/mobile/workspace/' + (route?.page === 'chat' && route.id ? 'session/' + encodeURIComponent(route.id)
       : route?.page === 'space' && route.id ? 'room/' + encodeURIComponent(route.id) : 'summary');
     let refreshRead;
-    function refresh() {
+    function refresh({ automatic = false } = {}) {
       const key = routeKey(), acknowledged = acknowledgedMessages;
       if (refreshRead?.key === key && refreshRead.authorization === client.state.authorization && refreshRead.acknowledged === acknowledged) { paint(); return refreshRead.promise; }
       const read = { key, authorization: client.state.authorization, acknowledged }, ticket = ++epoch;
@@ -662,7 +686,9 @@
       const current = () => ticket === epoch && key === routeKey();
       try { await client.start(undefined, { strict: true }); if (!current()) return;
         generation = client.state.authorization; deviceId = client.state.session?.deviceId;
-        if (!locked && client.state.session) await client.refresh(true, { strict: true });
+        const selected = route?.page === 'chat' ? route.id : route?.nativeId;
+        if (!locked && selected && client.state.selected !== selected && client.state.session?.sessions.some(s => s.id === selected && s.available !== false)) await client.select(selected);
+        else if (!locked && client.state.session) await client.refresh(!automatic, { strict: true });
         if (!current() || generation !== client.state.authorization) return;
         if (locked || !client.state.session || client.state.session.candidate) { view = null; return; }
         paint();
@@ -673,7 +699,7 @@
         view = next; lastReceived = global.performance.now();
         if (push && next.reminders && next.capabilities?.push !== false) await push.read();
         if (current() && generation === client.state.authorization && offlineToast && currentToast === offlineToast) dismissToast();
-      } catch { if (generation === client.state.authorization && current()) { disconnected = true; toast('offline'); } }
+      } catch { if (generation === client.state.authorization && current()) { disconnected = true; if (!automatic) toast('offline'); } }
       finally { if (current()) { busy = false; paint(); } if (refreshRead === read) refreshRead = null; }
       })();
       return read.promise;
@@ -719,8 +745,20 @@
     // Navigation must not wait for an earlier route's network requests.
     global.addEventListener('hashchange', scheduleNavigate);
     started = (async () => { try { await client.start(pairSecret); } finally { pairSecret = undefined; } })();
-    client.ready = (async () => { await started; await scheduleNavigate(); })(); paint();
-    return { client, actions, refresh, navigate };
+    recovery = global.NAWMobile.createReadRecovery({ read: async () => {
+      const editing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(d.activeElement?.tagName) && !el('compose').contains(d.activeElement);
+      if (pairingBusy || client.state.busy || passkeys.busy || busy || el('dialog').open || editing) return true;
+      await refresh({ automatic: true }); return !disconnected && !locked;
+    }, active: () => !authorizationRejected && !client.state.session?.candidate,
+    visible: () => d.visibilityState !== 'hidden', online: () => global.navigator.onLine !== false });
+    const wake = () => recovery.wake(), offline = () => { disconnected = true; paint(); recovery.wake(); };
+    const hide = () => { recovery.stop(); for (const read of readingRequests) read.abort(); };
+    const show = () => recovery.start();
+    d.addEventListener('visibilitychange', wake); global.addEventListener('online', wake); global.addEventListener('offline', offline);
+    global.addEventListener('pagehide', hide); global.addEventListener('pageshow', show);
+    client.ready = (async () => { await started; await scheduleNavigate(); })().finally(() => recovery.start()); paint();
+    return { client, actions, refresh, navigate, dispose() { hide(); d.removeEventListener('visibilitychange', wake);
+      global.removeEventListener('online', wake); global.removeEventListener('offline', offline); global.removeEventListener('pagehide', hide); global.removeEventListener('pageshow', show); global.removeEventListener('hashchange', scheduleNavigate); } };
   }
   const exported = { createWorkspaceActions, ACTION_KEY, mount, receiptVisible };
   if (typeof module === 'object' && module.exports) module.exports = exported;

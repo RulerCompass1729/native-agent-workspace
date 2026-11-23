@@ -35,7 +35,7 @@
     const status = document.createElement('p'); status.id = 'mobile-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     section.append(node('p', 'mobile.introCompact'));
     const advanced = node('details'), advancedTitle = node('summary', 'mobile.advanced'); advanced.id = 'mobile-advanced'; advancedTitle.id = 'mobile-advanced-title'; advanced.append(advancedTitle);
-    const hint = key => { const el = node('p', key); el.className = 'quiet'; advanced.append(el); };
+    const hint = key => { const el = node('p', key); el.className = 'quiet'; advanced.append(el); return el; };
     const check = (key, id, parent = advanced) => { const input = checkbox(id), row = checkRow(input, node('span', key)); parent.append(row); return input; };
     const field = (key, id, type, parent) => { const input = document.createElement('input'); input.id = id; input.type = type; parent.append(labelled(key, input)); return input; };
     const connection = document.createElement('div'), connectionFields = document.createElement('div'); connection.id = 'mobile-connection-summary'; connection.className = 'mobile-connection-summary'; connectionFields.id = 'mobile-connection-fields';
@@ -65,9 +65,9 @@
     const noMatch = node('p', 'mobile.noMatch'); noMatch.className = 'quiet'; noMatch.hidden = true;
     const spaces = document.createElement('fieldset'); spaces.className = 'mobile-spaces'; spaces.append(node('legend', 'mobile.spaces')); advanced.append(spaces);
     const records = checkbox('mobile-records'), recordsRow = checkRow(records, node('span', 'mobile.allowRecords')); advanced.append(recordsRow);
-    hint('mobile.workspaceNote');
-    const replace = check('mobile.replace', 'mobile-replace');
-    hint('mobile.note');
+    const workspaceHint=hint('mobile.workspaceNote');
+    const replace=checkbox('mobile-replace'),replaceRow=checkRow(replace,node('span','mobile.replace'));advanced.append(replaceRow);
+    const inputHint=hint('mobile.note');
     const prepare = node('button', 'mobile.prepare'), revoke = node('button', 'mobile.revoke'); prepare.type = revoke.type = 'button'; prepare.id = 'mobile-prepare'; revoke.id = 'mobile-revoke';
     const link = document.createElement('input'); link.id = 'mobile-pair-link'; link.readOnly = true; link.autocomplete = 'off';
     const linkBox = labelled('mobile.link', link); linkBox.hidden = true;
@@ -80,7 +80,7 @@
     for (const [button, id] of [[approvalBegin, 'begin'], [approvalRefresh, 'refresh'], [approvalConfirm, 'confirm'], [approvalRevoke, 'revoke']]) { button.type = 'button'; button.id = 'mobile-approval-' + id; }
     const matched = checkbox('mobile-approval-matched'), enabled = checkbox('mobile-approval-enabled');
     approval.append(approvalInfo, labelled('mobile.approvalFingerprint', fingerprint), approvalBegin, approvalRefresh, checkRow(matched, node('span', 'mobile.approvalMatched')), approvalConfirm, checkRow(enabled, node('span', 'mobile.approvalEnable')), approvalRevoke); advanced.append(approval);
-    const allSessions = checkbox('mobile-all-sessions'), sharedHost = checkbox('mobile-shared-host'), qr = document.createElement('img');
+    const allSessions = checkbox('mobile-all-sessions'), sharedHost = checkbox('mobile-shared-host'), qr = document.createElement('img');let allScopeRow;
     const sharedError=node('div'),sharedErrorTitle=node('strong','mobile.sharedHostBlocked'),sharedErrorBody=node('p');
     sharedError.id='mobile-shared-error';sharedError.className='mobile-shared-error';sharedError.hidden=true;sharedError.setAttribute('role','alert');sharedError.append(sharedErrorTitle,sharedErrorBody);
     const renewalHint=node('p');renewalHint.className='quiet mobile-renewal-hint';renewalHint.hidden=true;
@@ -91,16 +91,18 @@
     function showScope() {
       if (!oneStep) return;
       const all = allSessions.checked;
+      const restoring=approvalValue?.resumeRequired===true&&typeof api.mobileResume==='function';
       choices.hidden = carrierRow.hidden = spaces.hidden = recordsRow.hidden = all; connection.hidden = connectionFields.hidden = all;
       if (port.parentElement) port.parentElement.hidden = all;
-      fullScope.hidden = fullBoundary.hidden = !all;
+      fullScope.hidden = fullBoundary.hidden = !all||restoring;if(allScopeRow)allScopeRow.hidden=restoring;approval.hidden=restoring;
+      replaceRow.hidden=workspaceHint.hidden=inputHint.hidden=restoring;
       if (!all) showConnection(recall());
-      say(prepare, all ? setupId && renewable ? 'mobile.refreshQr' : approvalValue?.paired ? 'mobile.replacePhone' : 'mobile.connect' : 'mobile.prepare');
+      say(prepare, restoring?'mobile.resumePhone':all ? setupId && renewable ? 'mobile.refreshQr' : approvalValue?.paired ? 'mobile.replacePhone' : 'mobile.connect' : 'mobile.prepare');
       if(oneStep)say(fullBoundary,approvalValue?.paired?'mobile.replaceAfterComplete':'mobile.fullStage2');
     }
     if (oneStep) {
       allSessions.checked = true;
-      advanced.prepend(checkRow(allSessions, node('span', 'mobile.scopeAll')), sharedError, checkRow(sharedHost, node('span', 'mobile.sharedHost')));
+      allScopeRow=checkRow(allSessions,node('span','mobile.scopeAll'));advanced.prepend(allScopeRow, sharedError, checkRow(sharedHost, node('span', 'mobile.sharedHost')));
       advanced.append(connection, connectionFields, carrierRow, choices);
       section.insertBefore(fullScope, advanced); section.insertBefore(fullBoundary, advanced); section.insertBefore(status,actions);section.insertBefore(renewalHint,actions);section.append(qr,qrTrust);
       allSessions.addEventListener('change', () => { invalidatePairing(); showScope(); });
@@ -113,11 +115,12 @@
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
       updateAdvanced();showScope();
+      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(value?.resumeRequired)say(status,'mobile.resumeReady');else if(value?.reconnectRequired)say(status,'mobile.reconnectRequired');
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;
       const ticket = revision;
-      try { await api[method](value); const next = await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
+      try { const result=await api[method](value); const next = method==='mobileApprovalStatus'?result:await api.mobileApprovalStatus(); if (opened && revision === ticket) showApproval(next); }
       catch { if (opened && revision === ticket) { enabled.indeterminate = true; enabled.disabled = true; approvalConfirm.disabled = true; say(approvalInfo, 'mobile.approvalUnconfirmed'); updateAdvanced(); } }
     }
     approvalBegin.addEventListener('click', () => approvalAction('mobileApprovalBegin'));
@@ -170,7 +173,7 @@
       let value;try{value=await api.mobileApprovalStatus();}catch{}
       if(!opened || !section.open || revision!==ticket || setupId!==id)return;
       clearLink(false);enrollment=false;prepare.disabled=false;
-      if(value?.paired===true) {setupId=null;showApproval(value);renewalState('mobile.connected');}
+      if(value?.paired===true) {setupId=null;showApproval(value);renewalState(value.temporaryPairing?'mobile.temporaryPairing':'mobile.connected');}
       else renewalState('mobile.renewUnconfirmed');
     }
     async function enrollmentTick(ticket,id) {
@@ -284,6 +287,17 @@
     async function pair(automatic=false) {
       automatic=automatic===true;
       if (!opened || busy || enrollment || renewable && !section.open) return;
+      if(approvalValue?.resumeRequired&&typeof api.mobileResume==='function'){
+        if(automatic)return;
+        clearLink();hideSharedError();const ticket=++revision;busy=true;prepare.disabled=true;
+        try{
+          const result=await api.mobileResume({sharedHostConfirmed:sharedHost.checked});
+          if(!opened||ticket!==revision)return;if(result?.restored!==true)throw Error('unconfirmed');
+          const next=await api.mobileApprovalStatus();if(!opened||ticket!==revision)return;showApproval(next);say(status,'mobile.resumed');
+        }catch(error){if(opened&&ticket===revision){if(['error.mobile.sharedHost','error.mobile.sharedHostPorts'].includes(error?.uiMessage?.key))sharedHostError(error);else say(status,'mobile.connectUnavailable');}}
+        finally{if(opened&&ticket===revision){busy=false;prepare.disabled=false;}}
+        return;
+      }
       const previous=setupId;
       if(renewable && oneStep && allSessions.checked) {
         if(automatic && (!previous || now()>=renewUntil))return;
@@ -335,7 +349,7 @@
       try { remember({ origin: site.origin, actor: account, port: String(listenPort) }); } catch {}
       const ticket = ++revision; busy = true; prepare.disabled = true; say(status, 'mobile.preparing');
       try {
-        const result = await api.mobilePairing({ actor: account, origin: site.origin, port: listenPort, carrierConfirmed: true, replace: replace.checked,
+        const result = await api.mobilePairing({ actor: account, origin: site.origin, port: listenPort, carrierConfirmed: true, ...(sharedHost.checked?{sharedHostConfirmed:true}:{}), replace: replace.checked,
           ...(roomSelections.some(r => r.input.checked) || records.checked ? { workspace: { roomIds: roomSelections.filter(r => r.input.checked).map(r => r.id), records: records.checked } } : {}),
           selection: selected.map(s => ({ sessionId: s.id, actions: ['read', ...(s.send.checked ? ['send'] : []), ...(s.answer.checked ? ['answer'] : [])] })) });
         if (!opened || revision !== ticket) return;

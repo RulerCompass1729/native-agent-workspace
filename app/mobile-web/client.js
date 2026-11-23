@@ -1,4 +1,4 @@
-/* Same-origin phone UI. No native/provider calls, polling or automatic resend. */
+/* Same-origin phone UI. No native/provider calls or automatic resend. */
 (function (global) {
   'use strict';
   const KEY = 'naw.mobile.v1', LIMIT = 512 * 1024;
@@ -262,7 +262,28 @@
     el('refresh').addEventListener('click', () => run(() => client.refresh())); el('logout').addEventListener('click', () => run(() => client.logout()));
     render(client.state); client.ready = client.start(pairSecret); return client;
   }
-  const exported = { createMobileClient, mount, KEY, receiptContext, validReceiptContext };
+  function createReadRecovery({ read, active, visible, online, schedule = global.setTimeout.bind(global), cancel = global.clearTimeout.bind(global) }) {
+    let timer = null, running = false, stopped = true, failures = 0, again = false, revision = 0;
+    const clear = () => { if (timer !== null) cancel(timer); timer = null; };
+    const allowed = () => !stopped && active() && visible() && online();
+    const arm = delay => { clear(); if (allowed()) timer = schedule(run, delay); };
+    async function run() {
+      timer = null;
+      if (!allowed() || running) return;
+      running = true; const current = revision;
+      try { const okay = await read(); if (current === revision) failures = okay === false ? Math.min(failures + 1, 6) : 0; }
+      catch { if (current === revision) failures = Math.min(failures + 1, 6); }
+      finally {
+        running = false;
+        if (again) { again = false; arm(0); }
+        else if (current === revision) arm(failures ? Math.min(30000, 1000 * 2 ** (failures - 1)) : 5000);
+      }
+    }
+    function wake() { clear(); if (!allowed()) return; if (running) again = true; else arm(0); }
+    return { start() { if (!stopped) return; stopped = false; revision++; wake(); }, wake,
+      stop() { stopped = true; revision++; again = false; clear(); } };
+  }
+  const exported = { createMobileClient, createReadRecovery, mount, KEY, receiptContext, validReceiptContext };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobile = exported; if (!global.document.documentElement.hasAttribute('data-workspace-ui')) mount(global.document, global.location, global.history,
     { getItem: key => global.localStorage.getItem(key), setItem: (key, value) => global.localStorage.setItem(key, value) }, global.fetch.bind(global), global.crypto); }

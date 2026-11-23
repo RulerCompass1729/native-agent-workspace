@@ -14,6 +14,19 @@ function fixture(){const root=new Element('container'),calls=[],timers=new Map()
  const setup=bind({container:root,document:{createElement:t=>new Element(t)},api,getSessions:()=>[{id:'first',nativeId:'native-first',name:'Synthetic'}],now:()=>100000,setTimer:(fn,ms)=>{timers.set(1,{fn,ms});return 1},clearTimer:id=>timers.delete(id)});
  const el=id=>root.all().find(x=>x.id===id);setup.open();return {root,calls,setup,el,timers,png,api};}
 test('new one-step surface starts with all scope intent but opening and closing do not grant or broaden anything',()=>{const f=fixture();assert.equal(f.el('mobile-all-sessions').checked,true);assert.equal(f.el('mobile-advanced').open,false);assert.equal(f.el('mobile-records').checked,false);assert.equal(f.el('mobile-approval-enabled').checked,false);assert.deepEqual(f.calls,[]);f.setup.close();assert.deepEqual(f.calls,[]);});
+test('retained pairing uses an explicit recovery action and never generates or renews a QR',async()=>{
+ const f=fixture(),calls=[];let pending=true;
+ f.api.mobileApprovalStatus=async()=>pending?{paired:false,resumeRequired:true,registered:false,enabled:false}:{paired:true,registered:true,enabled:true};
+ f.api.mobileResume=async value=>{calls.push(value);pending=false;return {restored:true};};f.setup.close();f.setup.open();await new Promise(setImmediate);
+ assert.equal(f.el('mobile-prepare').textContent,'恢复手机连接');assert.equal(f.el('mobile-shared-host').checked,false);assert.equal(f.el('mobile-approval-section').hidden,true);
+ await f.el('mobile-prepare').listeners.click();assert.deepEqual(calls,[{sharedHostConfirmed:false}]);assert.deepEqual(f.calls,[]);
+ assert.equal(f.el('mobile-pair-qr').hidden,true);assert.equal(f.timers.size,0);assert.equal(f.el('mobile-status').textContent,'手机连接已恢复，授权范围和有效期未改变。');
+});
+test('recovery never remembers shared-host confirmation when the panel is reopened',async()=>{
+ const f=fixture();f.api.mobileApprovalStatus=async()=>({paired:false,resumeRequired:true});f.api.mobileResume=async()=>({restored:true});
+ f.setup.close();f.setup.open();await new Promise(setImmediate);f.el('mobile-shared-host').checked=true;f.el('mobile-shared-host').listeners.change();
+ f.setup.close();f.setup.open();await new Promise(setImmediate);assert.equal(f.el('mobile-shared-host').checked,false);assert.deepEqual(f.calls,[]);
+});
 test('one explicit click sends no origin or account and renders only local QR pixels until expiry',async()=>{const f=fixture();await f.el('mobile-prepare').listeners.click();assert.deepEqual(f.calls,[{sharedHostConfirmed:false}]);assert.equal(f.el('mobile-pair-qr').src,f.png);assert.equal(f.el('mobile-pair-link').value,'');assert.equal(f.el('mobile-pair-qr').hidden,false);assert.equal(f.timers.get(1).ms,10000);f.timers.get(1).fn();assert.equal(f.el('mobile-pair-qr').hidden,true);assert.equal(f.el('mobile-pair-qr').src,'');});
 test('cancelling all intent reveals the existing individually scoped setup without silently checking rows',()=>{const f=fixture(),a=f.el('mobile-all-sessions');a.checked=false;a.listeners.change();const field=f.root.all().find(n=>n.className==='mobile-sessions');assert.equal(field.hidden,false);assert.ok(f.root.all().filter(n=>n.className==='mobile-session').every(r=>!r.children[0].children[0].checked));assert.deepEqual(f.calls,[]);});
 test('scope and carrier edits invalidate a pending QR and immediately permit a new explicit attempt',async()=>{

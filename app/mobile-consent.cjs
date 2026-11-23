@@ -86,6 +86,21 @@ function assertion(credential, key, challenge, authority, rpId) {
 class MobileConsent {
   #now; #pending = null; #key = null; #enabled = false; #epoch = 0; #challenges = new Map();
   constructor({ now = Date.now } = {}) { this.#now = now; }
+  snapshot(a){
+    const key=this.#key?.owner===owner(a)?this.#key:null;
+    return key?{version:1,owner:owner(a),enabled:this.#enabled,key:{id:key.id,publicKey:key.publicKey.export({format:'der',type:'spki'}).toString('base64url'),fingerprint:key.fingerprint,registrationId:key.registrationId,rpId:key.rpId}}:null;
+  }
+  restore(previous,current,value){
+    this.revoke();if(value===null)return;
+    const exact=(v,ks)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===ks.length&&ks.every(k=>Object.hasOwn(v,k));
+    if(!exact(value,['version','owner','enabled','key'])||value.version!==1||value.owner!==owner(previous)||typeof value.enabled!=='boolean'||
+      previous.origin!==current.origin||previous.device?.id!==current.device?.id||!exact(value.key,['id','publicKey','fingerprint','registrationId','rpId']))throw denied();
+    const k=value.key,der=bytes(k.publicKey,256),publicKey=createPublicKey({key:der,format:'der',type:'spki'});
+    bytes(k.id,1023);
+    if(publicKey.asymmetricKeyType!=='ec'||publicKey.asymmetricKeyDetails?.namedCurve!=='prime256v1'||!same(publicKey.export({format:'der',type:'spki'}),der)||
+      hash(der).toString('hex')!==k.fingerprint||k.rpId!==site(previous)||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(k.registrationId))throw denied();
+    this.#key={...k,publicKey,owner:owner(current)};this.#enabled=value.enabled;
+  }
   #time() { const t = this.#now(); if (!Number.isSafeInteger(t) || t < 0) throw denied(); return t; }
   revoke() { this.#epoch++; this.#enabled = false; this.#key = null; this.#pending = null; this.#challenges.clear(); }
   #pendingFor(a) { const p = this.#pending; if (!p || p.owner !== owner(a) || p.until <= this.#time()) throw denied(); return p; }

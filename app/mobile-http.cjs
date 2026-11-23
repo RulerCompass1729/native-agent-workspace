@@ -129,7 +129,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       if (request.url === '/mobile/push') {
         if (typeof broker.pushAction !== 'function') throw reject(403, 'MOBILE_DENIED');
-        return respond(response, 200, broker.pushAction(credentials, value));
+        return respond(response, 200, await broker.pushAction(credentials, value));
       }
       if (Object.hasOwn(consentRoutes, request.url)) {
         const method = consentRoutes[request.url];
@@ -152,7 +152,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       }
       if (request.url === '/mobile/logout') {
         if (!exact(value, [])) throw reject(400, 'MOBILE_BAD_REQUEST');
-        const result = broker.logout(credentials);
+        const result = await broker.logout(credentials);
         // Keep phone drafts and unresolved request IDs for checking on the Mac.
         // Revoke server-side authority and expire only this bearer cookie;
         // a browser-wide storage wipe would destroy recovery evidence.
@@ -163,6 +163,7 @@ function createMobileHandler({ broker, origin, actor, expectedHost, bodyTimeoutM
       const result = request.url === '/mobile/send' ? await broker.send(credentials, value) : await broker.answer(credentials, value);
       return respond(response, 200, publicReceipt(result));
     } catch (error) {
+      if (request.method === 'GET' && error.code === 'MOBILE_SOURCE_UNAVAILABLE') return respond(response, 503, { error: 'MOBILE_SOURCE_UNAVAILABLE' });
       // Neither thrown errors nor receipt diagnostics may expose local paths,
       // provider details or another backend's pause error through transport.
       const allowed = new Set(['MOBILE_REQUEST_CONFLICT', 'MOBILE_PAIR_LIMIT', 'MOBILE_CONTEXT_UNAVAILABLE', 'MOBILE_RECEIPT_UNKNOWN']);

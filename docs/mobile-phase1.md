@@ -44,8 +44,8 @@ software client who obtains the QR first can enroll its own key. The desktop
 warns about this accepted boundary; there is no claim that per-card verification
 repairs a stolen first enrollment. See [WebAuthn's none attestation format](https://www.w3.org/TR/webauthn-3/#sctn-none-attestation).
 
-All current/future target, ended-target, shared-host exception and push-off
-boundaries below remain. No native terminal, arbitrary command, session/space
+All current/future target, ended-target and shared-host exception boundaries
+below remain. No native terminal, arbitrary command, session/space
 creation, membership, model/settings, interruption/takeover or file API is added.
 The session/space creation `+` controls remain hidden; queue task addition remains
 the separately authorized existing action. No real pairing, phone, notification
@@ -99,9 +99,9 @@ eight-MiB response unavailable. The original native records, confirmation conten
 and selected-mode limits are unchanged. Metadata itself still has the existing
 hard response bound.
 
-The all-scope path **forbids push on the server**
-for an all-scope pairing, even with records access. The phone also omits its push
-controls in this mode. Enrollment and candidate activation follow the separate
+Since 2026-11-20 an all-scope pairing may use push like any pairing with records
+access, at the person's request (it was refused on the server before); what a
+push may carry is in `docs/mobile-phase3.md`. Enrollment and candidate activation follow the separate
 QR authorization above. This checkpoint is not a daily installation.
 Session/space `+` controls that only explained a Mac-only
 action are now hidden; no creation API is added.
@@ -117,9 +117,16 @@ the desktop draft and enter the existing human quiet interval.
 In the retained individual-selection mode, the desktop person explicitly selects each native session, its send/answer
 permissions, shared spaces and record reminders. A room grant includes shared
 messages, member metadata and queue management, not members' private conversations.
-The new workspace grant and its idempotent request receipts live only in Main's
-memory, bound to the current pairing generation. A restart requires pairing again.
-Existing native request persistence remains unchanged.
+Completed pairing grants and their sensitive-approval public key are retained in
+the local macOS Keychain, within the original 12-hour expiry. Restart recovery
+requires the same account, HTTPS origin, local mapping and verified Serve service
+topology. Changed or unverifiable trust requires the person to confirm on the Mac;
+an unfinished pairing, invalid storage or an expired grant requires pairing again.
+Normal exit pauses native authorization; explicit revocation remains durable.
+Recovery binds a new process and generation: old tickets, CSRF contexts, challenges
+and permits cannot be reused. Workspace request receipts remain memory-only, so a
+missing receipt after restart means unknown, never permission to resend. Existing
+native request persistence remains unchanged.
 
 Unpaired requests receive no private state. Pairing/revocation are excluded from
 agent application commands and require the current desktop window context.

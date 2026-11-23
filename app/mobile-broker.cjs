@@ -1,14 +1,16 @@
 // App-local mobile delegation. Importing or constructing starts no connection,
 // listener, native session or model work. Transport and desktop UI stay separate.
-const fs = require('node:fs');
+const fs = require('node:fs'), path = require('node:path');
 const { randomUUID, randomBytes, createHash, timingSafeEqual } = require('node:crypto');
-const { MobileAccess } = require('./mobile-access.cjs');
+const { performance } = require('node:perf_hooks');
+const { MobileAccess, SESSION_MS, FILE } = require('./mobile-access.cjs');
 const { MobileConsent } = require('./mobile-consent.cjs');
 const { MAX_REQUESTS, currentTarget } = require('./mobile-session.cjs');
 const { readLayout } = require('./service-layout.cjs');
 const { connect } = require('./service-client.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const denied = (code = 'MOBILE_BROKER_DENIED') => Object.assign(new Error('Mobile authorization or the original session changed. Nothing was retried.'), { code });
+const unavailable = () => denied('MOBILE_SOURCE_UNAVAILABLE');
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value);
 const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value);
@@ -30,39 +32,175 @@ const receipt = (value, ticket, requestId, action) => {
 };
 
 class MobileBroker {
+  #persistence;#endpoint=null;#staging=null;
   #candidate=null; #candidateSerial=0; #activatedCandidate=null;
   #fullLayout = null; #fullGeneration = null; #refreshing = null;
   #access; #root; #scope; #client = null; #epoch = 0; #csrf = null; #changed;
   #contexts = new Map(); #requests = new Map();
   #desktop; #human; #workspaceGrant = null; #workspaceRequests = new Map();
-  #push = null; #pushOptions;
+  #push = null; #pushOptions; #pushStore;
+  #reconnectState = null; #reconnecting = null;
   #consent = new MobileConsent(); #decisions = new Map(); #consentView = false;
   // changed() runs after the phone pairs or logs out, so the app can close its listener when nothing stays open.
-  constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {} } = {}) {
-    this.#access = new MobileAccess(root, { exclusive });
+  constructor(root, { exclusive, changed, desktop, onHumanInput = () => {}, pushOptions = {}, persistence } = {}) {
+    this.#persistence=persistence||null;
+    this.#access = new MobileAccess(root, { exclusive,...(persistence?{transaction:(state,save)=>this.#persist(state,save),pauseTransaction:(state,mirror,save)=>persistence.pause(state,this.#details(state),mirror,save),recover:receipt=>persistence.take(receipt)}:{}) });
     this.#changed = typeof changed === 'function' ? changed : () => {};
     this.#root = this.#access.root;
     this.#desktop = desktop || null;
     this.#human = onHumanInput;
     this.#pushOptions = pushOptions;
+    this.#pushStore = pushOptions.persistence || (pushOptions.adapter ? new (require('./mobile-push.cjs').PushStore)(root, { adapter: pushOptions.adapter }) : null);
     // WorkspaceClient shares human boundaries by the exact app scope string.
     // Keep that spelling while separately verifying its canonical authority.
     this.#scope = root;
   }
-  #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
+  async preparePersistence(phase='load'){
+    await this.#persistence?.ready?.(phase);
+    if(this.#pushStore){
+      let state;try{state=this.#access.initialized?this.#access.load():this.#persistence?.checkpoint().authority;}catch{}
+      await this.#pushStore.reconcile(state?.enabled&&state.device?this.#pushBinding(state):null,state?.device?.until).catch(()=>{});
+    }
+  }
+  async settlePersistence(quitting=false){
+    if(quitting){
+      const deadline=performance.now()+5000,remaining=()=>Math.max(0,deadline-performance.now());
+      const pairing=this.#persistence?.finish?this.#persistence.finish(remaining()):this.#persistence?.flush?.();
+      const push=this.#pushStore?.finish(remaining()).catch(()=>{});
+      const [result]=await Promise.all([pairing,push]);return result;
+    }
+    const result = await this.#persistence?.flush?.();
+    await this.#pushStore?.flush().catch(()=>{}); return result;
+  }
+  #details(state){
+    if(this.#staging)return this.#staging;
+    return {endpoint:this.#endpoint,all:this.#all(state),workspace:this.#workspaceGrant?.generation===state.generation?this.#workspaceGrant.value:null,
+      consent:this.#consent.snapshot(state),consentView:this.#consentView};
+  }
+  #persist(state,save){
+    if(this.#pushStore){const task=state.enabled&&state.device?this.#pushStore.retain(this.#pushBinding(state)):this.#pushStore.clear();task.catch(()=>{});}
+    return this.#persistence.commit(state,state.enabled?this.#details(state):null,save);
+  }
+  #checkpoint(){
+    if(!this.#persistence||!this.#access.initialized||this.#access.closed)return;
+    try{const state=this.#access.load();if(state.enabled)this.#access.save(state);}
+    catch{this.#access.revoke();this.#forget();throw denied('MOBILE_STORAGE');}
+  }
+  setEndpoint(value){
+    this.#access.owner();if(exact(value,['origin','actor','port']))value={...value,binding:null};
+    if(!exact(value,['origin','actor','port','binding'])||!Number.isSafeInteger(value.port)||value.port<1024||value.port>65535||
+      value.binding!==null&&(!require('./mobile-carrier.cjs').validBinding(value.binding)||!['origin','actor','port'].every(k=>value[k]===value.binding[k])))throw denied();
+    this.#endpoint=structuredClone(value);this.#checkpoint();
+  }
+  resumeInfo(){
+    this.#access.owner();if(!this.#persistence||this.#access.initialized)return null;
+    try{const c=this.#persistence.checkpoint();if(c.authority.device.until<=this.#access.time()||c.authority.device.until>this.#access.time()+SESSION_MS)return null;return structuredClone(c.details.endpoint);}catch{return null;}
+  }
+  async resume(validate){
+    this.#access.owner();if(typeof validate!=='function'||!this.#persistence||this.#access.initialized)throw denied();
+    await this.preparePersistence('restore');
+    const checkpoint=this.#persistence.checkpoint(),previous=checkpoint.authority,details=checkpoint.details,serial=++this.#candidateSerial;
+    const consent=new MobileConsent();consent.restore(previous,previous,details.consent);
+    const client=await connect(this.#scope,'mobile-resume-'+randomUUID());
+    try{
+      if(serial!==this.#candidateSerial||await validate()!==true||serial!==this.#candidateSerial||!(client instanceof WorkspaceClient)||client.closing||client.socket.destroyed||client.scope!==this.#scope||fs.realpathSync(client.scope)!==this.#root)throw denied();
+      const endpoint=this.#endpoint;
+      if(!endpoint||!['origin','actor','port'].every(k=>endpoint[k]===details.endpoint[k])||!require('./mobile-carrier.cjs').sameBinding(endpoint.binding,details.endpoint.binding))throw denied();
+      const layout=details.all?this.#layout():null,grant=details.workspace===null?null:this.#desktop?.grant(client,details.workspace);
+      if(details.workspace!==null&&!grant)throw denied();
+      await this.#persistence.confirm?.(checkpoint);
+      if(serial!==this.#candidateSerial||await validate()!==true||serial!==this.#candidateSerial||client.closing||client.socket.destroyed)throw denied();
+      const result=this.#access.resume(checkpoint,{beforeSave:next=>{
+        consent.restore(previous,next,details.consent);this.#staging={...details,endpoint,consent:consent.snapshot(next)};
+      }});
+      this.#client=client;this.#endpoint=endpoint;this.#fullLayout=layout;this.#fullGeneration=details.all?result.state.generation:null;
+      this.#workspaceGrant=grant&&{value:grant,generation:result.state.generation};this.#consent=consent;this.#consentView=details.consentView;
+      this.#csrf={generation:result.state.generation,deviceId:result.state.device.id,value:result.csrf};
+      this.#watch(client);
+      if(details.all)this.#access.syncAllScopes(this.#scopes(result.state));
+      await this.settlePersistence();if(!this.#liveGeneration(result.state.generation,client))throw denied();if(this.#persistence.status?.()==='temporary'){this.#access.revoke();this.#forget();this.#disconnect();throw denied('MOBILE_STORAGE');}
+      await this.#restorePush(result.state, client);
+      if(!this.#liveGeneration(result.state.generation,client))throw denied();
+      this.#changed();return {restored:true};
+    }catch(error){if(this.#client!==client)try{client.close();}catch{}throw error;}
+    finally{this.#staging=null;}
+  }
+  suspend(){
+    this.#access.owner();if(!this.#access.initialized)this.#persistence?.cancelRecovery?.();const result=this.#access.pause();this.#candidateSerial++;let clean=true;
+    for(const close of [()=>this.#forget(),()=>this.#dropCandidate(),()=>this.#disconnect()])try{close();}catch{clean=false;}
+    return {...result,connectionClosed:clean};
+  }
+  #forget() { const push = this.#push; this.#push = null;this.#activatedCandidate=null; this.#fullLayout = this.#fullGeneration = this.#refreshing = null; this.#reconnectState = this.#reconnecting = null; this.#epoch++; this.#csrf = null; this.#contexts.clear(); this.#requests.clear(); this.#workspaceGrant = null; this.#workspaceRequests.clear(); this.#consent.revoke(); this.#decisions.clear(); this.#consentView = false; push?.close(); }
   #disconnect() { const client = this.#client; this.#client = null; client?.close(); }
+  #liveGeneration(generation,client){
+    try{if(this.#client!==client||client.closing||client.socket.destroyed||this.#access.closed||this.#access.disabledMarker())return false;
+      const state=this.#access.load();return state.enabled&&state.generation===generation&&state.device.until>this.#access.time();
+    }catch{return false;}
+  }
+  // A reader that cannot be reconnected ends this phone's session. Its push, while still bound to the paired
+  // device, says so once and then ends too. Kept here so that a revoke or a new pairing stops it first.
+  #lost() { const push = this.#push; this.#push = null; this.#forget(); this.#push = push; this.#disconnect(); push?.end(); }
   #bound() {
     const client = this.#client;
+    if (!client && this.#reconnectState) throw unavailable();
     if (!(client instanceof WorkspaceClient) || client.closing || client.socket.destroyed ||
         client.scope !== this.#scope || fs.realpathSync(client.scope) !== this.#root || this.#access.issuer.pid !== process.pid) throw denied();
     return client;
   }
   #authenticate(auth) {
-    if (!auth || typeof auth !== 'object' || Array.isArray(auth) || Object.keys(auth).some(key => !['token', 'actor', 'origin', 'csrf'].includes(key))) throw denied();
+    if (!this.#reconnectState) this.#bound();
+    const state = this.#authenticateAccess(auth);
     this.#bound();
+    return state;
+  }
+  #authenticateAccess(auth) {
+    if (!auth || typeof auth !== 'object' || Array.isArray(auth) || Object.keys(auth).some(key => !['token', 'actor', 'origin', 'csrf'].includes(key))) throw denied();
     const state = this.#access.authenticate(auth);
     if (auth.origin !== undefined && auth.origin !== state.origin) throw denied();
     return state;
+  }
+  #identity(state) { return fingerprint([state.issuer, state.generation, state.actor, state.origin, state.device]); }
+  #watch(client) { client.once('closed', () => {
+    if (this.#client !== client) return;
+    try { this.#reconnectState = this.#identity(this.#access.load()); }
+    catch { this.#lost(); return; }
+    this.#epoch++; this.#contexts.clear(); this.#consent.revoke();
+    this.#refreshing = null;
+    // The subscription stays through a reconnect: it says the lost service once, and later that it cleared.
+    this.#disconnect();
+    this.#push?.refresh();
+  }); }
+  // Only a same-authority session GET replaces this reader; pending writes are never replayed.
+  async #recover(auth) {
+    const state = this.#authenticateAccess(auth);
+    if (this.#client) return;
+    const identity = this.#reconnectState, epoch = this.#epoch;
+    if (!identity || this.#identity(state) !== identity) throw denied();
+    if (this.#reconnecting) { await this.#reconnecting; this.#authenticate(auth); return; }
+    const work = async () => {
+      let next;
+      try {
+        next = await connect(this.#scope, 'mobile-' + randomUUID());
+        if (epoch !== this.#epoch || identity !== this.#reconnectState || this.#identity(this.#authenticateAccess(auth)) !== identity ||
+            !(next instanceof WorkspaceClient) || next.scope !== this.#scope || fs.realpathSync(next.scope) !== this.#root || next.closing || next.socket.destroyed) throw denied();
+        this.#client = next; this.#reconnectState = null; this.#epoch++; this.#watch(next);
+      } catch (error) {
+        if (next && this.#client !== next) next.close();
+        if (epoch !== this.#epoch || identity !== this.#reconnectState || this.#identity(this.#authenticateAccess(auth)) !== identity) throw denied();
+        throw unavailable();
+      }
+    };
+    const pending = work(); this.#reconnecting = pending;
+    try { await pending; } finally { if (this.#reconnecting === pending) this.#reconnecting = null; }
+  }
+  async #reading(auth, read) {
+    const identity = this.#identity(this.#authenticateAccess(auth)), epoch = this.#epoch;
+    try { return await read(); }
+    catch (error) {
+      let current; try { current = this.#identity(this.#authenticateAccess(auth)); } catch { throw error; }
+      if (current === identity && (epoch !== this.#epoch || this.#reconnectState)) throw unavailable();
+      throw error;
+    }
   }
   #writeState(auth) {
     const state = this.#authenticate(auth);
@@ -90,7 +228,7 @@ class MobileBroker {
       const current=this.#activatedCandidate;
       if(current?.id===id && !this.#access.closed) {
         const s=this.#access.load();
-        if(s.enabled && s.device?.until>this.#access.time() && s.generation===current.generation)return {setupId:id,state:'complete'};
+        if(s.enabled && s.device?.until>this.#access.time() && s.generation===current.generation)return current.pending?{...current.pending,state:'redeemed',redeemed:true}:{setupId:id,state:'complete'};
       }
     } catch {}
     return this.#access.candidateInfo(id);
@@ -109,20 +247,20 @@ class MobileBroker {
     if(!c || c.id!==this.#access.candidateStatus()?.id || c.client.closing || c.client.socket.destroyed)throw denied();
     return {c,state};
   }
-  async beginCandidate({actor,origin,replace=false,validate=async()=>true,renew=false,refreshOf,automatic=false}) {
-    this.#access.owner();if(typeof replace!=='boolean' || typeof validate!=='function')throw denied();
+  async beginCandidate({actor,origin,replace=false,validate=async()=>true,renew=false,refreshOf,automatic=false,endpoint=this.#endpoint}) {
+    this.#access.owner();if(this.#persistence?.ready){const epoch=this.#epoch,serial=++this.#candidateSerial;await this.preparePersistence('pair');if(epoch!==this.#epoch||serial!==this.#candidateSerial)throw denied();}if(typeof replace!=='boolean' || typeof validate!=='function')throw denied();
     if (refreshOf!==undefined) this.#access.assertCandidateRefresh(refreshOf,automatic);
     else if (!renew) this.#dropCandidate();
     const serial=++this.#candidateSerial,client=await connect(this.#scope,'mobile-candidate-'+randomUUID());let result;
     try {
       if((refreshOf===undefined && serial!==this.#candidateSerial) || !(client instanceof WorkspaceClient) || client.scope!==this.#scope || fs.realpathSync(client.scope)!==this.#root || client.socket.destroyed)throw denied();
-      if(!this.#access.initialized)this.#access.initialize();
+      if(!this.#access.initialized){try{await this.#persistence?.prepareFresh?.();}catch{throw denied('MOBILE_STORAGE');}if(serial!==this.#candidateSerial||client.closing||client.socket.destroyed)throw denied();this.#persistence?.fresh?.();this.#access.initialize();}
       const layout=this.#layout(),grant=this.#desktop?.grant(client,{allRooms:true,records:true});if(!grant)throw denied();
       if (refreshOf!==undefined && await validate()!==true) throw denied('MOBILE_SETUP_UNCONFIRMED');
       // Recheck after all awaits, then replace without yielding to a phone exchange.
       result=this.#access.beginCandidate({actor,origin,replace,renew,refreshOf,automatic});
       this.#dropCandidate();
-      const c={id:result.id,client,layout,grant,validate,consent:new MobileConsent(),activating:false};this.#candidate=c;
+      const c={id:result.id,client,layout,grant,validate,endpoint,consent:new MobileConsent(),activating:false};this.#candidate=c;
       client.once('closed',()=>{if(this.#candidate===c)this.#dropCandidate(c.id);});
       return {...result,setupId:result.id};
     } catch(error){if(result)this.#access.cancelCandidate(result.id);client.close();throw error;}
@@ -150,23 +288,31 @@ class MobileBroker {
       // Keep uncertain receipt recovery and in-flight work on its original
       // generation. The person may explicitly revoke instead of replacing.
       if([...this.#requests.values(),...this.#workspaceRequests.values(),...this.#decisions.values()].some(r=>r.pending || ['unconfirmed','prepared','awaiting-native'].includes(r.result?.status) || r.status==='unconfirmed'))throw denied('MOBILE_REQUEST_CONFLICT');
+      if(this.#access.load().enabled&&this.#persistence?.prepareReplacement){
+        let commit;try{commit=await this.#persistence.prepareReplacement();}catch{try{this.#dropCandidate(c.id);}catch{}throw denied('MOBILE_STORAGE');}
+        if(await c.validate()!==true||this.#candidateFor(auth,true).c!==c||c.layout!==this.#layout())throw denied();
+        if([...this.#requests.values(),...this.#workspaceRequests.values(),...this.#decisions.values()].some(r=>r.pending||['unconfirmed','prepared','awaiting-native'].includes(r.result?.status)||r.status==='unconfirmed'))throw denied('MOBILE_REQUEST_CONFLICT');
+        try{commit();}catch{throw denied('MOBILE_STORAGE');}
+      }
       const scopes=this.#currentScopes(c.client);
       this.#push?.close();this.#push=null;
-      const next=this.#access.activateCandidate(c.id,scopes),old=this.#client;
-      this.#forget();this.#client=c.client;this.#candidate=null;this.#candidateSerial++;this.#activatedCandidate={id:c.id,generation:next.generation};
+      this.#staging={endpoint:c.endpoint,all:true,workspace:c.grant,consent:value.mode==='verified'?c.consent.snapshot(state):null,consentView:false};
+      const pendingInfo=this.#access.candidateInfo(c.id),next=this.#access.activateCandidate(c.id,scopes),old=this.#client;
+      this.#forget();this.#client=c.client;this.#endpoint=c.endpoint;this.#candidate=null;this.#candidateSerial++;this.#activatedCandidate={id:c.id,generation:next.generation,pending:pendingInfo};
       this.#fullLayout=c.layout;this.#fullGeneration=next.generation;this.#workspaceGrant={value:c.grant,generation:next.generation};
       this.#consent=c.consent;if(value.mode==='basic')this.#consent.revoke();
       this.#csrf={generation:next.generation,deviceId:next.device.id,value:auth.csrf};
-      c.client.once('closed',()=>{if(this.#client===c.client){this.#forget();this.#disconnect();}});
+      this.#watch(c.client);
       try{old?.close();if(old && (!old.closing || !old.socket.destroyed))throw denied();}
       catch{this.revoke();this.#changed();throw denied('MOBILE_CLEANUP_UNCONFIRMED');}
-      this.#changed();
+      await this.settlePersistence();if(!this.#liveGeneration(next.generation,c.client))throw denied();this.#activatedCandidate={id:c.id,generation:next.generation};this.#changed();
       return {activated:true,sensitiveDecisions:value.mode==='verified'};
-    } finally {c.activating=false;}
+    } finally {this.#staging=null;c.activating=false;}
   }
   // Only the local desktop owner may call this method. Never expose a generic
   // RPC dispatcher that lets a remote request choose this method or its scope.
   async beginPairing({ actor, origin, selection, replace = false, workspace, all = false }) {
+    if(this.#persistence?.ready){const epoch=this.#epoch,serial=++this.#candidateSerial;await this.preparePersistence('pair');if(epoch!==this.#epoch||serial!==this.#candidateSerial)throw denied();}
     this.#access.owner();
     this.#dropCandidate();
     if (typeof all !== 'boolean' || all && (selection !== undefined || workspace !== undefined)) throw denied();
@@ -178,6 +324,9 @@ class MobileBroker {
     if (this.#access.initialized) {
       const old = this.#access.load();
       if (old.device && old.device.until > this.#access.time() && !replace) throw denied('MOBILE_REPLACE_REQUIRED');
+      if(old.enabled&&this.#persistence?.prepareReplacement){
+        try{const commit=await this.#persistence.prepareReplacement();commit();}catch{throw denied('MOBILE_STORAGE');}
+      }
       const revoked = this.#access.revoke(); this.#forget(); this.#disconnect();
       if (!revoked.confirmed) throw denied('MOBILE_REVOCATION_UNCONFIRMED');
     } else { this.#forget(); this.#disconnect(); }
@@ -185,7 +334,7 @@ class MobileBroker {
     const client = await connect(this.#scope, 'mobile-' + randomUUID());
     if (epoch !== this.#epoch) { client.close(); throw denied(); }
     this.#client = client;
-    client.once('closed', () => { if (this.#client === client) { this.#forget(); this.#disconnect(); } });
+    this.#watch(client);
     try {
       this.#bound();
       const scopes = selection.map(value => {
@@ -197,7 +346,7 @@ class MobileBroker {
       const workspaceGrant = all ? this.#desktop?.grant(client, { allRooms: true, records: true }) : workspace === undefined ? null : this.#desktop?.grant(client, workspace);
       if (all && !workspaceGrant) throw denied();
       if (workspace !== undefined && !workspaceGrant) throw denied();
-      if (!this.#access.initialized) this.#access.initialize();
+      if (!this.#access.initialized) {try{await this.#persistence?.prepareFresh?.();}catch{throw denied('MOBILE_STORAGE');}if(epoch!==this.#epoch||this.#bound()!==client)throw denied();this.#persistence?.fresh?.();this.#access.initialize();}
       const layout = all ? this.#layout() : null;
       const result = this.#access.beginPairing({ actor, origin, scopes, replace, all });
       this.#fullLayout = layout;
@@ -270,7 +419,7 @@ class MobileBroker {
           const fresh = this.#authenticate(auth);
           if (epoch !== this.#epoch || fresh.generation !== state.generation || layout !== this.#layout() || !(next instanceof WorkspaceClient) || fs.realpathSync(next.scope) !== this.#root || next.socket?.destroyed) throw denied();
           const old = this.#client; this.#client = next; this.#epoch++; this.#contexts.clear(); this.#fullLayout = layout;
-          next.once('closed', () => { if (this.#client === next) { this.#forget(); this.#disconnect(); } });
+          this.#watch(next);
           old.close();
         } catch (error) { if (this.#client !== next) next.close(); throw error; }
       }
@@ -281,8 +430,11 @@ class MobileBroker {
     const pending = work(); this.#refreshing = pending;
     try { await pending; } finally { if (this.#refreshing === pending) this.#refreshing = null; }
   }
-  async refreshSession(auth) { try{return this.#candidateSession(auth);}catch{} await this.#refreshFull(auth); return this.session(auth); }
+  async refreshSession(auth) { try{return this.#candidateSession(auth);}catch{} return this.#reading(auth, async () => { await this.#recover(auth); await this.#refreshFull(auth); return this.session(auth); }); }
   async read(auth, id) {
+    this.#authenticate(auth); return this.#reading(auth, () => this.#read(auth, id));
+  }
+  async #read(auth, id) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const { ticket, scope } = this.#grant(auth, id, 'read'), client = this.#bound(), epoch = this.#epoch;
     const row = await client.call('mobileRead', ticket);
@@ -310,6 +462,9 @@ class MobileBroker {
     return state;
   }
   async workspaceRead(auth, selection) {
+    this.#authenticate(auth); return this.#reading(auth, () => this.#workspaceRead(auth, selection));
+  }
+  async #workspaceRead(auth, selection) {
     if (this.#all(this.#authenticate(auth))) await this.#refreshFull(auth);
     const state = this.#workspaceState(auth), client = this.#bound(), epoch = this.#epoch, scopes = this.#scopes(state);
     const grant = this.#workspaceGrant?.value || { roomIds: [], records: false };
@@ -330,36 +485,75 @@ class MobileBroker {
     }
     const consent = this.#consent.status(state);
     result.capabilities.sensitiveDecisions = consent.enabled;
-    result.capabilities.push = !this.#all(state) && this.#workspaceGrant?.value.records === true;
+    result.capabilities.push = this.#workspaceGrant?.value.records === true;
     for (const card of result.confirmations) card.canDecide = Boolean(consent.enabled && card.version && card.state === 'confirmation-required' && !card.disposition && card.expiresAt > Date.now());
     return result;
   }
+  // What a subscription lives by: the paired device alone, so that a lost service can still be reported.
+  #pushBinding(s) { return fingerprint([s.actor, s.origin, s.device.id, s.device.tokenHash, s.device.until]); }
+  async #restorePush(state, client) {
+    if(!this.#pushStore || this.#workspaceGrant?.value.records !== true)return;
+    const valid=()=>this.#liveGeneration(state.generation,client)&&this.#pushAuthority();
+    let saved;
+    try { saved=await this.#pushStore.load(this.#pushBinding(state),state.device.until,valid); }
+    catch { if(valid())await this.#pushStore.clear().catch(()=>{}); return; }
+    if(!valid())return;
+    if(!saved)return;
+    try { this.#makePush().restore(saved); this.refreshPush(); }
+    catch { this.#push?.close(); this.#push=null; if(valid())await this.#pushStore.clear().catch(()=>{}); }
+  }
+  #pushDevice() {
+    try {
+      if (this.#access.closed || this.#access.disabledMarker()) return null;
+      const s = this.#access.load();
+      if (!s.enabled || !s.device || s.device.until <= this.#access.time()) { this.#pushStore?.clear().catch(()=>{}); return null; }
+      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+    } catch { return null; }
+  }
+  // Who may subscribe and read the count: that device, connected, holding the reminders permission.
   #pushAuthority() {
     try {
       this.#bound();
-      if (this.#access.closed || this.#access.disabledMarker()) return null;
-      const s = this.#access.load();
-      if (this.#all(s) || !s.enabled || !s.device || s.device.until <= this.#access.time() ||
-          this.#workspaceGrant?.generation !== s.generation || this.#workspaceGrant.value.records !== true) return null;
-      return fingerprint([s.issuer, s.generation, s.device.id, s.device.until]);
+      if (this.#workspaceGrant?.generation !== this.#access.load().generation || this.#workspaceGrant.value.records !== true) return null;
+      return this.#pushDevice();
     } catch { return null; }
+  }
+  #pushAlerts() {
+    const alerts = []; let client = null, status = null;
+    try { client = this.#bound(); } catch { alerts.push({ code: 'service-disconnected' }); }
+    // The app judges waiting cards from the same reminder status the count comes from.
+    try { if (client && this.#pushAuthority()) status = this.#desktop.records.status(null, client); } catch { status = null; }
+    const source = this.#pushOptions.alerts;
+    if (!source) return { alerts, unknown: [] };
+    let more; try { more = source(status); } catch { more = null; }
+    // The lost service is known here. When the app cannot answer, every other code is unknown, never "no problems".
+    if (!more || !Array.isArray(more.alerts)) return { alerts, unknown: require('./mobile-push.cjs').ALERTS.filter(code => code !== 'service-disconnected') };
+    return { alerts: alerts.concat(more.alerts), unknown: Array.isArray(more.unknown) ? more.unknown : [] };
   }
   pushInfo(auth) {
     this.#workspaceState(auth);
     if (!this.#pushAuthority()) throw denied();
-    this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions,
-      authority: () => this.#pushAuthority(), count: () => this.#desktop.records.status(null, this.#bound()).count });
-    return this.#push.configuration();
+    return this.#makePush().configuration();
+  }
+  #makePush() {
+    return this.#push ||= new (require('./mobile-push.cjs').MobilePush)({ ...this.#pushOptions, authority: () => this.#pushDevice(),
+      count: () => this.#pushAuthority() ? this.#desktop.records.status(null, this.#bound()).count : null, alerts: () => this.#pushAlerts(), expired: () => { this.#pushStore?.clear().catch(()=>{}); } });
   }
   pushAction(auth, value) {
-    this.#workspaceState(auth, true);
     if (exact(value, ['action']) && value.action === 'unsubscribe') {
+      const state=this.#authenticateAccess(auth);
+      if(auth.origin!==state.origin||!token(auth.csrf)||!timingSafeEqual(Buffer.from(digest(auth.csrf),'hex'),Buffer.from(state.device.csrfHash,'hex')))throw denied();
       this.#push?.close(); this.#push = null;
-      return { enabled: false, state: 'off', lastSubmittedAt: null };
+      const off={enabled:false,state:'off',lastSubmittedAt:null};
+      return this.#pushStore?this.#pushStore.clear().then(()=>off,()=>({...off,storageWarning:'MOBILE_PUSH_STORAGE_UNCONFIRMED'})):off;
     }
+    this.#workspaceState(auth, true);
     if (!exact(value, ['action', 'subscription']) || value.action !== 'subscribe') throw denied();
-    this.pushInfo(auth); this.#push.subscribe(value.subscription); this.refreshPush();
-    return this.#push.status();
+    this.pushInfo(auth); const push=this.#push, subscription=require('./mobile-push.cjs').subscriptionValue(value.subscription);
+    const activate=()=>{this.#workspaceState(auth,true);if(this.#push!==push)throw denied();push.subscribe(subscription);this.refreshPush();return push.status();};
+    if(!this.#pushStore)return activate();
+    const state=this.#authenticateAccess(auth),binding=this.#pushBinding(state),stamp=this.#pushDevice();
+    return this.#pushStore.save(binding,state.device.until,{vapid:push.keys,subscription},()=>this.#push===push&&this.#pushDevice()===stamp).then(activate);
   }
   refreshPush() { return this.#push?.refresh(); }
   #desktopConsentState() {
@@ -368,20 +562,25 @@ class MobileBroker {
     return s;
   }
   approvalStatus() {
-    try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s) }; }
-    catch { return { paired: false, enabled: false, registered: false, pending: null }; }
+    try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s),...(this.#persistence?.status?.()==='temporary'?{temporaryPairing:true}:{}) }; }
+    catch {
+      const resumeRequired = Boolean(this.resumeInfo());
+      return { paired: false, enabled: false, registered: false, pending: null, ...(resumeRequired ? { resumeRequired: true } :
+        this.#persistence && !this.#access.initialized && fs.existsSync(path.join(this.#root, FILE)) ? { reconnectRequired: true } : {}) };
+    }
   }
-  approvalBegin() { return this.#consent.beginRegistration(this.#desktopConsentState()); }
-  approvalConfirm(value) { return this.#consent.confirmRegistration(this.#desktopConsentState(), value); }
+  approvalBegin() { try{return this.#consent.beginRegistration(this.#desktopConsentState());}finally{this.#checkpoint();} }
+  approvalConfirm(value) { const result=this.#consent.confirmRegistration(this.#desktopConsentState(), value);this.#checkpoint();return result; }
   approvalEnable(value) {
     const result = this.#consent.setEnabled(this.#desktopConsentState(), value);
     // Enabling cards also exposes their read projection for already-paired
     // sessions. It grants no rooms or reminders, and survives key revocation so
     // the phone can still check its original card/receipt without approving.
     if (result.enabled && this.#desktop) this.#consentView = true;
+    this.#checkpoint();
     return result;
   }
-  approvalRevoke() { this.#consent.revoke(); return { enabled: false, registered: false }; }
+  approvalRevoke() { this.#consent.revoke();this.#checkpoint();return { enabled: false, registered: false }; }
   registrationOptions(auth, value) {
     let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
     return candidate?candidate.c.consent.qrOptions(candidate.state,value):this.#consent.registrationOptions(this.#writeState(auth),value);
@@ -524,11 +723,11 @@ class MobileBroker {
     this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, requestId, entry.action);
   }
   logout(auth) {
-    // Logging out a read-only device must not require send permission. It
-    // still requires an explicit same-origin, session-bound CSRF token.
+    // Revocation needs the phone's authority and CSRF, never an online backend.
     let candidate;try{candidate=this.#candidateFor(auth,true);}catch{}
     if(candidate){try{this.#dropCandidate(candidate.c.id);}finally{this.#changed();}return {authorizationRevoked:true,connectionClosed:true,committedWorkMayContinue:false};}
-    this.#writeState(auth);
+    const state = this.#authenticateAccess(auth);
+    if (auth.origin !== state.origin || !token(auth.csrf) || !timingSafeEqual(Buffer.from(digest(auth.csrf), 'hex'), Buffer.from(state.device.csrfHash, 'hex'))) throw denied();
     try { return this.revoke(); }
     finally { this.#changed(); }
   }
@@ -553,12 +752,19 @@ class MobileBroker {
     } catch { return candidateUntil; }
   }
   revoke() {
+    const retryPersistence=this.#persistence?.status?.()==='temporary';
     this.#candidateSerial++;
     let result, cleanupFailed = false;
     // Authorization must fail closed before any transport/observer can throw.
     // Attempt every cleanup even if an earlier one failed; never report success
     // for an unconfirmed close. Cancelling only a candidate remains separate.
-    try { result = this.#access.initialized ? this.#access.revoke() : { confirmed: true }; }
+    try {
+      if(this.#access.initialized)result=this.#access.revoke();
+      else if(this.#persistence){
+        try{this.#persistence.revoke();result={confirmed:true};}
+        finally{if(!this.#access.invalidate())result={confirmed:false};}
+      }else result={confirmed:true};
+    }
     finally {
       for (const cleanup of [() => this.#forget(), () => this.#dropCandidate(), () => this.#disconnect()]) {
         try { cleanup(); } catch { cleanupFailed = true; }
@@ -567,7 +773,11 @@ class MobileBroker {
     if (cleanupFailed) throw denied('MOBILE_CLEANUP_UNCONFIRMED');
     // Closing only this broker's own connection invalidates its uncommitted
     // reservations. A commit already written may still be native work.
-    return { authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
+    const summary={ authorizationRevoked: result.confirmed === true, connectionClosed: true, committedWorkMayContinue: true };
+    const pushRevoked=result.confirmed===true?this.#pushStore?.clear():null;pushRevoked?.catch(()=>{});
+    let resultSummary=summary;
+    if(this.#persistence?.flush){const confirmed=retryPersistence&&this.#persistence.sealRevocation?this.#persistence.sealRevocation():this.#persistence.flush().then(()=>this.#persistence.status()==='ready');resultSummary=confirmed.then(ok=>({...summary,authorizationRevoked:summary.authorizationRevoked&&ok}),()=>({...summary,authorizationRevoked:false}));}
+    return pushRevoked?Promise.resolve(resultSummary).then(async value=>{await pushRevoked;return value;}):resultSummary;
   }
 }
 module.exports = { MobileBroker };

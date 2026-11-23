@@ -1,0 +1,32 @@
+// Local Keychain only; stdin/stdout pipes, no secrets in argv or diagnostics.
+ObjC.import('Foundation');
+ObjC.import('Security');
+function run(){
+ if($.SecKeychainSetUserInteractionAllowed(false)!==0)throw Error('Recovery unavailable');
+ const input=$.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+ if(Number(input.length)>512*1024)throw Error('Recovery unavailable');
+ const text=$.NSString.alloc.initWithDataEncoding(input,$.NSUTF8StringEncoding).js,value=JSON.parse(text);
+ const keys=Object.keys(value).sort().join(',');
+ if(!/^[a-f0-9]{64}$/.test(value.account)||!['get','put'].includes(value.action)||keys!==(value.action==='get'?'account,action':'account,action,value'))throw Error('Recovery unavailable');
+ const query=$.NSMutableDictionary.alloc.init;
+ query.setObjectForKey($.kSecClassGenericPassword,$.kSecClass);
+ query.setObjectForKey($('Native Agent Workspace mobile pairing v1'),$.kSecAttrService);
+ query.setObjectForKey($(value.account),$.kSecAttrAccount);
+ query.setObjectForKey($.kCFBooleanFalse,$.kSecAttrSynchronizable);
+ query.setObjectForKey($.kSecUseAuthenticationUIFail,$.kSecUseAuthenticationUI);
+ if(value.action==='put'){
+  const attributes=$.NSMutableDictionary.alloc.init,data=$(JSON.stringify(value.value)).dataUsingEncoding($.NSUTF8StringEncoding);
+  attributes.setObjectForKey(data,$.kSecValueData);
+  let status=$.SecItemUpdate(query,attributes);
+  if(status===-25300){query.setObjectForKey(data,$.kSecValueData);status=$.SecItemAdd(query,null);}
+  if(status!==0)throw Error('Recovery unavailable');
+  return JSON.stringify({value:null});
+ }
+ query.setObjectForKey($.kCFBooleanTrue,$.kSecReturnData);
+ query.setObjectForKey($.kSecMatchLimitOne,$.kSecMatchLimit);
+ const result=Ref(),status=$.SecItemCopyMatching(query,result);
+ if(status===-25300)return JSON.stringify({value:null});
+ if(status!==0)throw Error('Recovery unavailable');
+ const data=ObjC.wrap(result[0]);if(Number(data.length)>512*1024)throw Error('Recovery unavailable');
+ return JSON.stringify({value:JSON.parse($.NSString.alloc.initWithDataEncoding(data,$.NSUTF8StringEncoding).js)});
+}

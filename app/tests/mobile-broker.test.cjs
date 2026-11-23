@@ -9,7 +9,7 @@ const actor = 'synthetic-human', origin = 'https://mobile.invalid';
 
 function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, pushOptions } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'naw-mobile-broker-'))), original = fs.statSync(root);
-  let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false;
+  let exclusive = true, wrongRoot = false, failRevoke = false, holdRead = false, holdSend = false, loseAck = false, failConnect = false;
   const calls = [], clients = [], receipts = new Map(), sent = [], answered = [];
   const record = { id: 'session-a', nativeId: 'native-a', state: 'idle', provider: 'codex', name: 'Original member', owner: 'desktop-owner', liveDraft: 'PRIVATE_DESKTOP_DRAFT',
     proof: { nativeId: 'native-a', controlRevision: 0, connectionRevision: 0 }, question: null };
@@ -55,6 +55,7 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
       if (name === './mobile-access.cjs') return { MobileAccess: Access };
       if (name === './workspace-client.cjs') return { WorkspaceClient: Client };
       if (name === './service-client.cjs') return { connect: async directory => {
+        if (failConnect) throw Error('Synthetic connection unavailable');
         assert.equal(directory, root); const client = new Client(); clients.push(client);
         if (holdConnect) await new Promise(resolve => { releaseConnect = resolve; });
         return client;
@@ -73,18 +74,72 @@ function fixture(t, { requestLimit, holdConnect = false, desktop, onHumanInput, 
   t.after(() => { failRevoke = false; broker.revoke(); assert.equal(fs.statSync(root).ino, original.ino); fs.rmSync(root, { recursive: true }); });
   return { root, broker, record, selection, pair, calls, changes, clients, sent, answered, receipts,
     exclusive(value) { exclusive = value; }, wrongRoot(value) { wrongRoot = value; }, failRevoke(value) { failRevoke = value; },
+    holdConnect(value) { holdConnect = value; }, failConnect(value) { failConnect = value; },
     holdRead(value) { holdRead = value; }, holdSend(value) { holdSend = value; }, loseAck(value) { loseAck = value; }, releaseRead: () => releaseRead(), releaseSend: () => releaseSend(), releaseConnect: () => releaseConnect() };
 }
+
+test('an authenticated read reconnects once and keeps the original CSRF without sending input', async t => {
+  const f = fixture(t), { auth } = await f.pair();
+  f.clients[0].close(); f.holdConnect(true);
+  const first = f.broker.refreshSession(auth), second = f.broker.refreshSession(auth);
+  first.catch(() => {}); second.catch(() => {});
+  assert.equal(f.clients.length, 2); f.releaseConnect();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.csrf, auth.csrf); assert.equal(b.deviceId, a.deviceId);
+  assert.equal(a.sessions[0].available, true); assert.equal(a.consent.enabled, false);
+  assert.deepEqual(f.calls, []); assert.equal(f.sent.length, 0);
+});
+test('a failed source reconnect is retryable, while invalid authority never opens a connection', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  for (const bad of [{ ...auth, token: 'x'.repeat(43) }, { ...auth, actor: 'other' }, { ...auth, origin: 'https://other.invalid' }])
+    await assert.rejects(f.broker.refreshSession(bad));
+  assert.equal(f.clients.length, 1); f.failConnect(true);
+  await assert.rejects(f.broker.refreshSession(auth), { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.failConnect(false); assert.equal((await f.broker.refreshSession(auth)).csrf, auth.csrf);
+});
+test('source recovery preserves receipt identity but invalidates old send contexts', async t => {
+  const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
+  const value = { contextId: row.contextId, requestId: randomUUID(), text: 'One explicit original' };
+  await f.broker.send(auth, value); f.clients[0].close(); await f.broker.refreshSession(auth);
+  assert.equal((await f.broker.receipt(auth, value.requestId)).status, 'submitted');
+  await assert.rejects(f.broker.send(auth, { ...value, requestId: randomUUID() }));
+  assert.equal(f.sent.length, 1);
+});
+test('a late old body is rejected after reconnection and a changed native ID stays unavailable', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.holdRead(true);
+  const reading = f.broker.read(auth, f.record.id); f.clients[0].close(); await f.broker.refreshSession(auth);
+  f.releaseRead(); await assert.rejects(reading, { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  f.record.nativeId = 'replacement-native';
+  assert.equal((await f.broker.refreshSession(auth)).sessions[0].available, false);
+  await assert.rejects(f.broker.read(auth, f.record.id)); assert.equal(f.sent.length, 0);
+});
+test('a late workspace read from the closed source is transient without revoking current authority', async t => {
+  let release, entered; const started = new Promise(resolve => { entered = resolve; });
+  const desktop = { grant: (_client, grant) => grant, read: async () => { entered(); await new Promise(resolve => { release = resolve; }); return { capabilities: {}, confirmations: [] }; } };
+  const f = fixture(t, { desktop }), { auth } = await f.pair(['read'], false, { roomIds: [], records: true });
+  const reading = f.broker.workspaceRead(auth); await started; f.clients[0].close(); await f.broker.refreshSession(auth);
+  release(); await assert.rejects(reading, { code: 'MOBILE_SOURCE_UNAVAILABLE' });
+  assert.equal(f.broker.session(auth).csrf, auth.csrf); assert.equal(f.sent.length, 0);
+});
+for (const change of ['revoke', 'replace', 'root']) test('a held reconnect rejects changed ' + change + ' authority', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close(); f.holdConnect(true);
+  const reading = f.broker.refreshSession(auth); const next = f.clients[1];
+  reading.catch(() => {}); assert.equal(f.clients.length, 2, 'a same-authority read opens its replacement source');
+  if (change === 'revoke') f.broker.revoke();
+  if (change === 'replace') { const file = path.join(f.root, real.FILE), state = JSON.parse(fs.readFileSync(file)); state.generation = randomUUID(); fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 }); }
+  if (change === 'root') next.scope = f.root + '/missing';
+  f.releaseConnect(); await assert.rejects(reading); assert.equal(next.closing, true); assert.equal(f.sent.length, 0);
+});
 
 test('construction is disabled and makes no connection, grant or native call', t => {
   const f = fixture(t); assert.deepEqual(fs.readdirSync(f.root), []); assert.equal(f.clients.length, 0); assert.deepEqual(f.calls, []);
   assert.throws(() => f.broker.session({ token: 'x', actor }), { code: 'MOBILE_BROKER_DENIED' });
 });
-test('push uses the same desktop count and dies on logout, revoke, re-pair or source disconnect', async t => {
-  for (const end of ['logout', 'revoke', 'repair', 'disconnect']) {
-    const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys();
+test('push uses the same desktop count and dies on logout, revoke or re-pair; a lost service is said once and the push stays for the reconnect', async t => {
+  for (const end of ['logout', 'revoke', 'repair', 'unowned', 'disconnect']) {
+    const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys(); let health = { alerts: [] };
     const desktop = { grant: (_c, g) => g, records: { status: () => ({ count: 19, private: 'PRIVATE_SOURCE' }) } };
-    const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; } } });
+    const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return 201; }, alerts: () => health } });
     const { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
     assert.equal(f.broker.pushInfo(auth).publicKey.length, 87);
     const value = { action: 'subscribe', subscription: { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null,
@@ -96,10 +151,59 @@ test('push uses the same desktop count and dies on logout, revoke, re-pair or so
     if (end === 'logout') f.broker.logout(auth);
     else if (end === 'revoke') f.broker.revoke();
     else if (end === 'repair') await f.pair(undefined, true, { roomIds: [], records: true });
+    // A reader lost while this app does not own the scope cannot be reconnected: the session and its push end.
+    else if (end === 'unowned') { f.exclusive(false); f.clients.at(-1).emit('closed'); f.exclusive(true); }
     else f.clients.at(-1).emit('closed');
+    await new Promise(resolve => setImmediate(resolve));
     desktop.records.status = () => ({ count: 999 }); await f.broker.refreshPush();
-    assert.equal(messages.length, 1); assert.throws(() => f.broker.pushAction(auth, value));
+    assert.throws(() => f.broker.pushAction(auth, value));
+    if (end === 'unowned') { const before = f.clients.length; await assert.rejects(f.broker.refreshSession(auth), error => error.code !== 'MOBILE_SOURCE_UNAVAILABLE'); assert.equal(f.clients.length, before); }
+    if (end !== 'disconnect') { assert.equal(messages.length, 1); continue; }
+    const said = index => JSON.parse(require('http_ece').decrypt(messages[index].body, { version: 'aes128gcm', privateKey: key, authSecret: value.subscription.keys.auth }));
+    const settle = () => new Promise(resolve => setImmediate(resolve));
+    assert.equal(messages.length, 2); assert.deepEqual(said(1), { alerts: ['service-disconnected'] });
+    // An invalid CSRF still cannot switch off the retained subscription during a disconnect.
+    assert.throws(() => f.broker.pushAction({ ...auth, csrf: 'x'.repeat(43) }, { action: 'unsubscribe' }));
+    health = { alerts: [{ code: 'token-anomaly' }] }; await f.broker.refreshPush(); assert.equal(messages.length, 3);
+    assert.deepEqual(said(2), { alerts: ['service-disconnected', 'token-anomaly'] });
+    // The phone's own session read reconnects: the same subscription has the count again and drops the lost service.
+    assert.equal((await f.broker.refreshSession(auth)).csrf, auth.csrf); assert.equal(f.broker.pushInfo(auth).enabled, true);
+    await f.broker.refreshPush(); assert.deepEqual(said(3), { count: 999, alerts: ['token-anomaly'] });
+    health = { alerts: [] }; await f.broker.refreshPush(); assert.deepEqual(said(4), { count: 999, alerts: [] });
+    // A second loss is said again. Logging out while it lasts needs no reader and stops the push.
+    f.clients.at(-1).emit('closed'); await settle(); assert.equal(messages.length, 6); assert.deepEqual(said(5), { alerts: ['service-disconnected'] });
+    f.broker.logout(auth); health = { alerts: [{ code: 'token-anomaly' }] }; await f.broker.refreshPush(); await settle(); assert.equal(messages.length, 6);
   }
+});
+test('the app\'s alert codes join the same push; an unreadable source keeps what was said; a lost service is tried until it is said', async t => {
+  const messages = [], key = require('node:crypto').createECDH('prime256v1'); key.generateKeys(); let health = { alerts: [{ code: 'steward-wake-stalled' }] }, code = 201; const seen = [];
+  const desktop = { grant: (_c, g) => g, records: { status: () => ({ count: 19 }) } };
+  const f = fixture(t, { desktop, pushOptions: { transport: async d => { messages.push(d); return code; },
+    alerts: status => { seen.push(status); if (!health) throw Error('PRIVATE_FAILURE'); return health; } } });
+  const { auth } = await f.pair(undefined, false, { roomIds: [], records: true });
+  const subscription = { endpoint: 'https://web.push.apple.com/synthetic', expirationTime: null,
+    keys: { p256dh: key.getPublicKey().toString('base64url'), auth: Buffer.alloc(16, 7).toString('base64url') } };
+  const last = () => JSON.parse(require('http_ece').decrypt(messages.at(-1).body, { version: 'aes128gcm', privateKey: key, authSecret: subscription.keys.auth }));
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  f.broker.pushAction(auth, { action: 'subscribe', subscription }); await f.broker.refreshPush();
+  assert.deepEqual(last(), { count: 19, alerts: ['steward-wake-stalled'] }); assert.deepEqual(seen.at(-1), { count: 19 });
+  // The app cannot answer, then answers that the wake source is unreadable: the stall is not reported cleared.
+  health = null; await f.broker.refreshPush(); assert.equal(messages.length, 1);
+  health = { alerts: [], unknown: ['steward-wake-stalled'] }; await f.broker.refreshPush(); assert.equal(messages.length, 1);
+  // An unreadable reminder status holds back the count, not the alerts; the app is then asked without a status.
+  desktop.records.status = () => { throw Error('PRIVATE_FAILURE'); };
+  health = { alerts: [{ code: 'steward-wake-stalled' }, { code: 'decision-waiting', at: 5 }], unknown: [] }; await f.broker.refreshPush();
+  assert.deepEqual(last(), { alerts: ['steward-wake-stalled', 'decision-waiting'] }); assert.equal(seen.at(-1), null);
+  desktop.records.status = () => ({ count: 19 }); health = { alerts: [] }; await f.broker.refreshPush();
+  assert.deepEqual(last(), { count: 19, alerts: [] });
+  // The service is lost while the push service refuses: the alert is tried, and waits to be tried again.
+  health = { alerts: [{ code: 'decision-waiting', at: 9 }], unknown: ['steward-wake-stalled'] }; code = 500;
+  f.clients.at(-1).emit('closed'); await settle();
+  assert.deepEqual(last(), { alerts: ['service-disconnected', 'decision-waiting'] }); assert.equal(seen.at(-1), null);
+  const attempts = messages.length; assert.equal(attempts, 4);
+  // Another owner of the scope ends it before that second try.
+  f.exclusive(false); code = 201; await f.broker.refreshPush(); await settle(); assert.equal(messages.length, attempts);
+  f.exclusive(true); await f.broker.refreshPush(); await settle(); assert.equal(messages.length, attempts);
 });
 test('native read/send authority never implies reminder push permission', async t => {
   const f = fixture(t, { desktop: { grant: (_c, g) => g, records: { status: () => ({ count: 3 }) } } });
@@ -253,6 +357,48 @@ test('a read-only device cannot send or answer but may explicitly log out with i
   await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId: randomUUID(), text: 'Not authorized' }));
   assert.throws(() => f.broker.logout({ ...auth, csrf: undefined }));
   assert.equal(f.broker.logout(auth).authorizationRevoked, true); assert.ok(f.clients[0].closing); assert.equal(f.sent.length, 0);
+});
+for (const actions of [['read'], ['read', 'send', 'answer']]) test('source-offline logout revokes ' + actions.join('+') + ' without reconnecting', async t => {
+  const f = fixture(t), { auth } = await f.pair(actions); f.clients[0].close();
+  assert.equal(f.broker.logout(auth).authorizationRevoked, true);
+  assert.equal(f.broker.openUntil(), 0);
+  await assert.rejects(f.broker.refreshSession(auth));
+  assert.equal(f.clients.length, 1); assert.equal(f.sent.length, 0);
+});
+test('source-offline logout still requires the original phone, actor, origin and CSRF', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  for (const bad of [{ ...auth, token: 'x'.repeat(43) }, { ...auth, actor: 'other' }, { ...auth, origin: 'https://other.invalid' },
+    { ...auth, origin: undefined }, { ...auth, csrf: undefined }, { ...auth, csrf: 'x'.repeat(43) }]) {
+    assert.throws(() => f.broker.logout(bad)); assert.ok(f.broker.openUntil() > Date.now());
+  }
+  assert.equal(f.clients.length, 1); assert.equal(f.broker.logout(auth).authorizationRevoked, true);
+});
+test('logout during an unfinished reconnect rejects the late reader and prevents another connect', async t => {
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close(); f.holdConnect(true);
+  const reading = f.broker.refreshSession(auth); reading.catch(() => {});
+  let result, error;
+  try { result = f.broker.logout(auth); } catch (caught) { error = caught; } finally { f.releaseConnect(); }
+  await reading.catch(() => {});
+  assert.ifError(error); assert.equal(result.authorizationRevoked, true);
+  assert.equal(f.clients[1].closing, true); await assert.rejects(f.broker.refreshSession(auth));
+  assert.equal(f.clients.length, 2); assert.equal(f.sent.length, 0);
+});
+test('HTTP source-offline logout clears the cookie and old credentials cannot reopen a reader', async t => {
+  const { Readable } = require('node:stream'), { createMobileHandler, COOKIE } = require('../mobile-http.cjs');
+  const f = fixture(t), { auth } = await f.pair(); f.clients[0].close();
+  const handler = createMobileHandler({ broker: f.broker, origin, actor });
+  async function request(method, url) {
+    const req = Readable.from(method === 'POST' ? [Buffer.from('{}')] : []);
+    Object.assign(req, { method, url, socket: { remoteAddress: '127.0.0.1' }, rawHeaders: ['Host', 'mobile.invalid', 'Tailscale-User-Login', actor,
+      'X-NAW-Mobile', '1', 'Origin', origin, 'Cookie', `${COOKIE}=${auth.token}`, 'X-NAW-CSRF', auth.csrf, 'Content-Type', 'application/json'] });
+    const res = { headers: {}, setHeader(key, value) { this.headers[key.toLowerCase()] = value; }, end(body) { this.body = body; this.writableEnded = true; } };
+    await handler(req, res); return res;
+  }
+  const leaving = await request('POST', '/mobile/logout');
+  assert.equal(leaving.statusCode, 200); assert.equal(JSON.parse(leaving.body).authorizationRevoked, true);
+  assert.equal(leaving.headers['set-cookie'], `${COOKIE}=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+  assert.equal((await request('GET', '/mobile/session')).statusCode, 403);
+  assert.equal(f.clients.length, 1); assert.equal(f.sent.length, 0);
 });
 test('revocation or replacement while a read is pending cannot disclose its late body', async t => {
   const f = fixture(t), { auth } = await f.pair(); f.holdRead(true);
