@@ -1,6 +1,7 @@
 // Local Keychain only; stdin/stdout pipes, no secrets in argv or diagnostics.
 ObjC.import('Foundation');
 ObjC.import('Security');
+const native=ref=>ObjC.castRefToObject(ref);
 function run(){
  if($.SecKeychainSetUserInteractionAllowed(false)!==0)throw Error('Recovery unavailable');
  const input=$.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
@@ -9,24 +10,24 @@ function run(){
  const keys=Object.keys(value).sort().join(',');
  if(!/^[a-f0-9]{64}$/.test(value.account)||!['get','put'].includes(value.action)||keys!==(value.action==='get'?'account,action':'account,action,value'))throw Error('Recovery unavailable');
  const query=$.NSMutableDictionary.alloc.init;
- query.setObjectForKey($.kSecClassGenericPassword,$.kSecClass);
- query.setObjectForKey($('Native Agent Workspace mobile pairing v1'),$.kSecAttrService);
- query.setObjectForKey($(value.account),$.kSecAttrAccount);
- query.setObjectForKey($.kCFBooleanFalse,$.kSecAttrSynchronizable);
- query.setObjectForKey($.kSecUseAuthenticationUIFail,$.kSecUseAuthenticationUI);
+ query.setObjectForKey(native($.kSecClassGenericPassword),native($.kSecClass));
+ query.setObjectForKey($('Native Agent Workspace mobile pairing v1'),native($.kSecAttrService));
+ query.setObjectForKey($(value.account),native($.kSecAttrAccount));
+ query.setObjectForKey(native($.kCFBooleanFalse),native($.kSecAttrSynchronizable));
+ query.setObjectForKey(native($.kSecUseAuthenticationUIFail),native($.kSecUseAuthenticationUI));
  if(value.action==='put'){
   const attributes=$.NSMutableDictionary.alloc.init,data=$(JSON.stringify(value.value)).dataUsingEncoding($.NSUTF8StringEncoding);
-  attributes.setObjectForKey(data,$.kSecValueData);
+  attributes.setObjectForKey(data,native($.kSecValueData));
   let status=$.SecItemUpdate(query,attributes);
-  if(status===-25300){query.setObjectForKey(data,$.kSecValueData);status=$.SecItemAdd(query,null);}
+  if(status===-25300){query.setObjectForKey(data,native($.kSecValueData));status=$.SecItemAdd(query,null);}
   if(status!==0)throw Error('Recovery unavailable');
   return JSON.stringify({value:null});
  }
- query.setObjectForKey($.kCFBooleanTrue,$.kSecReturnData);
- query.setObjectForKey($.kSecMatchLimitOne,$.kSecMatchLimit);
+ query.setObjectForKey(native($.kCFBooleanTrue),native($.kSecReturnData));
+ query.setObjectForKey(native($.kSecMatchLimitOne),native($.kSecMatchLimit));
  const result=Ref(),status=$.SecItemCopyMatching(query,result);
  if(status===-25300)return JSON.stringify({value:null});
  if(status!==0)throw Error('Recovery unavailable');
- const data=ObjC.wrap(result[0]);if(Number(data.length)>512*1024)throw Error('Recovery unavailable');
+ const data=native(result[0]);if(Number(data.length)>512*1024)throw Error('Recovery unavailable');
  return JSON.stringify({value:JSON.parse($.NSString.alloc.initWithDataEncoding(data,$.NSUTF8StringEncoding).js)});
 }
