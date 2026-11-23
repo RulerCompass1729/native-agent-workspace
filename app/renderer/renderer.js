@@ -7330,7 +7330,7 @@ $('close-invite').onclick = () => $('invite-dialog').close();
 // Resume every session awaiting recovery (the person, 2026-11-23: 「有没有法子让我一键恢复所有会话」). The click is the
 // person's own action, as the header's single Resume is: each chosen session takes that same api.resume, two at a time.
 // `finished`: the last run, until state shows its resumed sessions no longer waiting (its reply can come first).
-const resumeAll = { run: null, finished: null, listed: [], unchecked: new Set() };
+const resumeAll = { run: null, finished: null, listed: [], nativeIds: new Map(), unchecked: new Set() };
 function resumeAllCandidates() {
   if (!state) return [];
   const all = window.nativeWorkspaceResumeAll.eligible(state.sessions, canResume), stale = s => resumeAll.finished?.row(s.id)?.state === 'done';
@@ -7399,11 +7399,11 @@ function renderResumeAllDialog() {
   cancel.hidden = Boolean(run) && !pending;
   for (const row of $('resume-all-list').children) updateResumeAllRow(row);
 }
-// A session already back (resumed elsewhere meanwhile) counts as done; one that changed otherwise is not touched.
+// A session already back (resumed elsewhere meanwhile) counts as done; one no longer the same recoverable native session is not touched.
 async function resumeAllOne(id) {
   const s = state?.sessions.find(record => record.id === id);
   if (s && nativeUsable(s)) return;
-  if (!s || s.archived || !canResume(s)) throw uiError('error.resumeAllChanged');
+  if (!s || s.archived || s.state !== 'recoverable' || s.nativeId !== resumeAll.nativeIds.get(id) || !canResume(s)) throw uiError('error.resumeAllChanged');
   await api.resume(id);
 }
 function settleResumeAll(run, finished) {
@@ -7435,7 +7435,12 @@ function openResumeAll() {
   if ($('resume-all-dialog').open) return;
   contentMenu?.close(); sessionMenu?.close();
   if (resumeAll.run) resumeAll.listed = resumeAll.run.ids();
-  else { resumeAll.listed = resumeAllCandidates().map(s => s.id); resumeAll.unchecked.clear(); }
+  else {
+    const listed = resumeAllCandidates();
+    resumeAll.listed = listed.map(s => s.id);
+    resumeAll.nativeIds = new Map(listed.map(s => [s.id, s.nativeId]));
+    resumeAll.unchecked.clear();
+  }
   if (!resumeAll.listed.length) return;
   $('resume-all-list').replaceChildren(...resumeAll.listed.map(resumeAllRow));
   openTransientDialog('resume-all-dialog');

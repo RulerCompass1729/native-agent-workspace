@@ -56,3 +56,27 @@ test('the module loads before renderer.js in the page and in the built bundle', 
   assert.ok(build.indexOf("'resume-all.js'") > 0 && build.indexOf("'resume-all.js'") < build.indexOf("'renderer.js'"));
 });
 
+
+// Reviewer finding (merge-check 288): a session that left `recoverable` or changed native session after listing is not resumed.
+test('a listed session is resumed only while it is still the same recoverable native session', async () => {
+  const vm = require('node:vm');
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  const start = source.indexOf('async function resumeAllOne('), end = source.indexOf('function settleResumeAll(');
+  assert.ok(start > 0 && end > start);
+  const calls = [];
+  const context = vm.createContext({
+    state: { sessions: [] }, calls,
+    resumeAll: { nativeIds: new Map([['a', 'n1'], ['b', 'n2'], ['c', 'n3'], ['d', 'n4']]) },
+    nativeUsable: s => s.state === 'idle', canResume: s => ['recoverable', 'ended', 'error'].includes(s.state),
+    uiError: key => Object.assign(Error(key), { key }), api: { resume: async id => { calls.push(id); } },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.state.sessions = [
+    { id: 'a', state: 'recoverable', nativeId: 'n1' }, { id: 'b', state: 'ended', nativeId: 'n2' },
+    { id: 'c', state: 'recoverable', nativeId: 'other' }, { id: 'd', state: 'idle', nativeId: 'n5' },
+  ];
+  await context.resumeAllOne('a');
+  for (const id of ['b', 'c']) await assert.rejects(context.resumeAllOne(id), { key: 'error.resumeAllChanged' });
+  await context.resumeAllOne('d');
+  assert.deepEqual(calls, ['a']);
+});
