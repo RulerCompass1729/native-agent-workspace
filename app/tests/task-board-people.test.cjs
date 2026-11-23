@@ -180,8 +180,12 @@ test('the header shows +N for squares that do not fit, and every square comes ba
   assert.equal(more.hidden, false); assert.equal(more.textContent, '+' + hidden()); assert.ok(hidden() > 0);
   assert.ok(!host.textContent.includes('…'));
   const orphans = () => host.querySelectorAll('.agent-group').filter(g => !g.hidden && g.querySelectorAll('.agent-cell').every(c => c.hidden)).length;
-  assert.equal(host.querySelector('[data-group="status:working"]').hidden, true, 'all five 在做 squares are cut, so their group goes too');
+  const working = () => host.querySelectorAll('[data-agent-status="working"]').filter(c => !c.hidden).length;
+  assert.equal(working(), 1, 'extra squares go first: 在做 keeps one square and its count');
   assert.equal(orphans(), 0, 'no group count is left without squares beside +N');
+  room = 60; f.win.fire('resize'); f.tick(0);
+  assert.equal(host.querySelector('[data-group="status:working"]').hidden, true, 'only when one square each does not fit does a whole group go');
+  assert.equal(orphans(), 0); assert.equal(more.textContent, '+' + hidden());
   room = 1000; f.win.fire('resize'); f.tick(0);
   assert.equal(hidden(), 0); assert.equal(more.hidden, true, 'the 2px hit-area overhang alone does not make a +N');
   assert.equal(host.querySelectorAll('.agent-group').filter(g => g.hidden).length, 0, 'every group comes back');

@@ -130,6 +130,9 @@ const CREW = [
   await page.locator('.task-board-toggle').click();
   await page.locator('.task-board-people-stale').first().click();
   check(await page.locator('[data-board-tab="stale"]').getAttribute('aria-selected') === 'true' && await page.locator('[data-board-tab="stale"]').getAttribute('data-count') === '1', 'The old-dispatch line opens its own tab with one item');
+  const opened = await page.evaluate(() => { const panel = document.getElementById('task-board-panel'), row = panel.querySelector('.task-board-entry'), head = panel.querySelector('.task-board-heading').getBoundingClientRect();
+    const r = row?.getBoundingClientRect(), p = panel.getBoundingClientRect(); return r ? { top: Math.round(r.top - head.bottom), bottom: Math.round(p.bottom - r.bottom) } : null; });
+  check(opened && opened.top >= -1 && opened.bottom >= -1, `The old dispatch it opens is in view, below the heading (${JSON.stringify(opened)})`);
   const queued = await page.locator('#stream-waiting-list [data-waiting-id^="queue:"]').allTextContents();
   check(queued.length === 1 && queued[0].includes('keep the old tab order') && !queued.some(t => t.includes('has ended')), `The header's 等你 list holds the live decision and leaves the old dispatch out (${queued.length} queue rows)`);
   await page.keyboard.press('Escape');

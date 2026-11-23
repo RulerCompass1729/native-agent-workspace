@@ -85,11 +85,15 @@
       if (host.hidden || !over()) { host.classList.remove('agent-distribution-cut'); return; }
       more.hidden = false; more.textContent = '+' + cells.length;
       let hidden = 0;
-      for (let i = cells.length - 1; i > 0 && over(); i--) {
-        cells[i].hidden = true; hidden++;
-        // A group whose squares are all cut goes too, so no bare count sits beside +N.
-        const group = cells[i].parentElement?.parentElement;
-        if (group && [...group.querySelectorAll('.agent-cell')].every(c => c.hidden)) group.hidden = true;
+      // Extra squares go first, so each state keeps one square and its count; then whole groups, never a bare count.
+      for (const keepFirst of [true, false]) {
+        for (let i = cells.length - 1; i > 0 && over(); i--) {
+          const own = cells[i].parentElement;
+          if (cells[i].hidden || keepFirst && own?.firstElementChild === cells[i]) continue;
+          cells[i].hidden = true; hidden++;
+          const group = own?.parentElement;
+          if (group && [...group.querySelectorAll('.agent-cell')].every(c => c.hidden)) group.hidden = true;
+        }
       }
       more.textContent = '+' + hidden; more.title = t('more', { count: hidden }); more.setAttribute('aria-label', more.title);
     }
