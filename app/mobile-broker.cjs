@@ -98,6 +98,15 @@ class MobileBroker {
     this.#access.owner();if(!this.#persistence||this.#access.initialized)return null;
     try{const c=this.#persistence.checkpoint();if(c.authority.device.until<=this.#access.time()||c.authority.device.until>this.#access.time()+SESSION_MS)return null;return structuredClone(c.details.endpoint);}catch{return null;}
   }
+  // Why the saved pairing needs a new pairing instead of a resume; null when it can resume or nothing is saved.
+  resumeBlocker(){
+    this.#access.owner();if(!this.#persistence||this.#access.initialized)return null;
+    let c;try{c=this.#persistence.checkpoint();}catch{return null;}
+    const until=c.authority.device?.until,now=this.#access.time();
+    if(!(until>now))return 'expired';
+    if(until>now+SESSION_MS)return 'refused';
+    return c.details?.endpoint?.binding===null?'unbound':null;
+  }
   async resume(validate){
     this.#access.owner();if(typeof validate!=='function'||!this.#persistence||this.#access.initialized)throw denied();
     await this.preparePersistence('restore');
@@ -566,9 +575,9 @@ class MobileBroker {
   approvalStatus() {
     try { const s = this.#desktopConsentState(); return { paired: true, origin: s.origin, ...this.#consent.status(s),...(this.#persistence?.status?.()==='temporary'?{temporaryPairing:true}:{}) }; }
     catch {
-      const resumeRequired = Boolean(this.resumeInfo());
+      const blocked = this.resumeBlocker(), resumeRequired = !blocked && Boolean(this.resumeInfo());
       return { paired: false, enabled: false, registered: false, pending: null, ...(resumeRequired ? { resumeRequired: true } :
-        this.#persistence && !this.#access.initialized && fs.existsSync(path.join(this.#root, FILE)) ? { reconnectRequired: true } : {}) };
+        this.#persistence && !this.#access.initialized && fs.existsSync(path.join(this.#root, FILE)) ? { reconnectRequired: true, ...(blocked ? { resumeReason: blocked } : {}) } : {}) };
     }
   }
   approvalBegin() { try{return this.#consent.beginRegistration(this.#desktopConsentState());}finally{this.#checkpoint();} }

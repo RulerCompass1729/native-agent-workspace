@@ -1,6 +1,7 @@
 /* Explicit local setup, inside the existing setup dialog. Opening is read-only. */
 (function (global) {
   'use strict';
+  const RESUME_REASONS = ['not-ready', 'expired', 'unbound', 'refused', 'changed', 'port-in-use', 'other'];
   // Text comes from the catalog (mobile.*). The renderer passes its interface-language text and display bindings, so a
   // language switch repaints the panel in place; without them (unit tests) the Chinese catalog text is used.
   // remembered/remember carry the last checked address, Tailscale user and port across restarts. Never secrets or links.
@@ -115,7 +116,7 @@
       fingerprint.value = ((value?.pending?.fingerprint || value?.fingerprint || '').match(/.{1,8}/g) || []).join(' ');
       if (value?.pending) say(approvalInfo, 'mobile.approvalCode', { code: value.pending.code }); else say(approvalInfo, value?.paired ? 'mobile.approvalHelp' : 'mobile.approvalPairFirst');
       updateAdvanced();showScope();
-      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(value?.resumeRequired)say(status,'mobile.resumeReady');else if(value?.reconnectRequired)say(status,'mobile.reconnectRequired');
+      if(value?.paired&&value?.temporaryPairing)say(status,'mobile.temporaryPairing');else if(!value?.paired&&RESUME_REASONS.includes(value?.resumeReason))say(status,'mobile.resumeReason.'+value.resumeReason,{port:value.resumePort});else if(value?.resumeRequired)say(status,'mobile.resumeReady');else if(value?.reconnectRequired)say(status,'mobile.reconnectRequired');
     }
     async function approvalAction(method, value) {
       if (!opened || typeof api[method] !== 'function') return;
