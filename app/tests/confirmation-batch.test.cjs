@@ -78,3 +78,22 @@ test('create permissions may carry a risk mark, but archive keeps its risk-free 
   assert.deepEqual(keys(plan(skip)), [['a', 'b']]);
   assert.equal(batchable(card('r', { summary: { action: 'archiveSession', method: 'archiveSession', risks: ['skipPermissions'] } })), false);
 });
+function input(id, target, changes = {}, detail = JSON.stringify({ method: 'input', arguments: [target, 'synthetic text for ' + target] })) {
+  return card(id, { summary: { action: 'input', method: 'input', target, risks: [] }, ...changes },
+    { confirmation: { kind: 'message', options: { buttons: ['Cancel', 'Confirm'], cancelId: 0, ...(detail === null ? {} : { detail }) } } });
+}
+test('two input cards from one sender become one batch; another sender keeps its own', () => {
+  const elsewhere = input('e', 'Target E', { sessionId: 'other', nativeId: 'other-native', key: 'other:other-native:e' });
+  assert.deepEqual(keys(plan([input('a', 'Target A'), input('b', 'Target B'), elsewhere])), [['a', 'b']]);
+});
+test('input and archive cards present together each merge on their own', () => {
+  const batches = plan([input('i1', 'Target A'), card('a1'), input('i2', 'Target B'), card('a2')]);
+  assert.deepEqual(keys(batches).sort(), [['a1', 'a2'], ['i1', 'i2']]);
+  assert.deepEqual(batches.map(b => b.cards[0].summary.method).sort(), ['archiveSession', 'input']);
+});
+test('an input card whose full text cannot be shown, or with a risk mark, is never merged', () => {
+  const blank = input('blank', 'Target C', {}, ''), missing = input('missing', 'Target D', {}, null);
+  const risky = input('risky', 'Target E', { summary: { action: 'input', method: 'input', target: 'Target E', risks: ['shared'] } });
+  for (const c of [blank, missing, risky]) assert.equal(batchable(c), false, c.operationId);
+  assert.deepEqual(keys(plan([input('a', 'Target A'), blank, missing, risky, input('b', 'Target B')])), [['a', 'b']]);
+});

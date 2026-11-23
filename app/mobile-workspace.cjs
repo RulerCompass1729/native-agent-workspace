@@ -7,6 +7,7 @@ const { createHash } = require('node:crypto');
 const presentation = card => 'sha256:' + createHash('sha256').update(JSON.stringify([card.title, card.detail])).digest('hex');
 const { nonBlockingQuestion } = require('./approval-policy.js');
 const { confirmationSummary } = require('./confirmation-inbox.cjs');
+const confirmationBatch = require('./renderer/confirmation-batch.js');
 const { tempSummary } = require('./temp-reminders.cjs');
 const { currentTarget } = require('./mobile-session.cjs');
 const { storedQueueSource } = require('./butler-ingress.cjs');
@@ -168,6 +169,17 @@ class MobileWorkspace {
           Object.assign(card, original, { version: binding.version }); delete card.titles;
         }
       } catch { /* Readable cards without complete, current proof remain disabled. */ }
+    }
+    // The desktop's own grouping rule, so risk marks and the full-text condition for input stay one rule. A batch
+    // needs every member here with current content; otherwise its cards stay single on the phone. Only cards whose
+    // session passed the grants above are looked at.
+    const granted = (state.backgroundConfirmations || []).filter(card => permitted.get(card.sessionId)?.nativeId === card.nativeId);
+    for (const batch of confirmationBatch.plan(granted)) {
+      const members = batch.cards.map(c => cards.get(c.key || [c.sessionId, c.nativeId, c.operationId].join(':')));
+      if (!members.every(card => card?.version && (card.summary?.method !== 'input' || card.detail))) continue;
+      // Bound cards carry the native prompt as their title; the batch heading is the action from NAW's catalog.
+      const batchTitles = confirmationSummary(batch.cards[0]).titles;
+      for (const card of members) Object.assign(card, { batch: members[0].id, batchTitles });
     }
     const roomRows = (state.rooms || [state.room]).filter(r => r && grant.roomIds.includes(r.id) && !r.archived);
     if (selection?.kind === 'session' && !permitted.has(selection.id) || selection?.kind === 'room' && !roomRows.some(r => r.id === selection.id)) throw denied();

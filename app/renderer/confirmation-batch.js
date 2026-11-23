@@ -1,14 +1,16 @@
 // Waiting cards that one "Confirm all" may answer together: the same agent, the same reversible method with no risk
 // mark, each actionable on its own. Creation may carry its permission risk: it is part of the shared configuration
-// shown once, and every card is still checked and receipted one by one in the main process.
+// shown once, and every card is still checked and receipted one by one in the main process. Input joins a batch only
+// with its complete text, which each row opens to.
 (function (root) {
-  const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession']);
+  const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession', 'input']);
   function batchable(card) {
     const op = card?.message?.backgroundOperation, summary = card?.summary;
     const riskless = Array.isArray(summary?.risks) && (summary.risks.length === 0 || summary.method === 'create');
     return Boolean(card && op && card.state === 'confirmation-required' && card.actionable === true && !card.replacedBy && !op.replacedBy &&
       !op.repeated && !op.answer && !op.disposition && op.confirmation?.kind === 'message' && METHODS.has(summary?.method) &&
-      riskless && (summary.method !== 'create' || typeof summary.createKey === 'string' && summary.createKey));
+      riskless && (summary.method !== 'create' || typeof summary.createKey === 'string' && summary.createKey) &&
+      (summary.method !== 'input' || typeof op.confirmation.options?.detail === 'string' && op.confirmation.options.detail !== ''));
   }
   // `started`: batches the person already answered, by the card keys they covered, kept together until they are gone.
   function plan(cards, started = []) {
@@ -36,11 +38,14 @@
     return out;
   }
   // The batch is drawn once, on its newest card still waiting; cards run oldest first, so that card holds it to the end.
+  function holder(batch) {
+    const waiting = batch.cards.filter(card => card.state === 'confirmation-required');
+    return (waiting.length ? waiting : batch.cards).at(-1);
+  }
   function find(batches, key) {
     const batch = batches.find(item => item.cards.some(card => card.key === key));
     if (!batch) return null;
-    const waiting = batch.cards.filter(card => card.state === 'confirmation-required'), holder = (waiting.length ? waiting : batch.cards).at(-1);
-    return { batch, anchor: holder.key === key };
+    return { batch, anchor: holder(batch).key === key };
   }
   function itemState(card) {
     const op = card.message?.backgroundOperation || {};
@@ -52,5 +57,8 @@
     if (op.state === 'cancelled' && !op.disposition) return 'cancelled';
     return op.disposition || op.replacedBy || card.replacedBy || ['not-executed', 'expired'].includes(op.state) ? 'void' : 'unconfirmed';
   }
-  root.nativeWorkspaceConfirmationBatch = { METHODS, batchable, plan, find, itemState };
+  const api = { METHODS, batchable, plan, find, holder, itemState };
+  root.nativeWorkspaceConfirmationBatch = api;
+  // The phone service groups with this same rule (mobile-workspace.cjs).
+  if (typeof module === 'object' && module.exports) module.exports = api;
 })(globalThis);

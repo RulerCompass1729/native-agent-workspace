@@ -224,6 +224,7 @@ async function build() {
       'regular-popup-worker.mjs',
       'regular-popup.cjs',
       'renderer/cmd-links.js',
+      'renderer/confirmation-batch.js',
       'renderer/disclosure-list.js',
       'renderer/fleet-observation.js',
       'renderer/local-search.js',

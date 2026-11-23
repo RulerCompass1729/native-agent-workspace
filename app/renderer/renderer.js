@@ -2760,7 +2760,8 @@ let backgroundExpiryClock;
 function backgroundRemaining(line) {
   const seconds = Math.max(0, Math.ceil((Number(line.dataset.expiresAt) - Date.now()) / 1000));
   const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  ui.display.text(line, seconds ? 'background.card.remaining' : 'background.card.elapsed', { time });
+  const row = line.classList.contains('background-batch-remaining');
+  ui.display.text(line, seconds ? (row ? 'background.batch.item.remaining' : 'background.card.remaining') : 'background.card.elapsed', { time });
 }
 function scheduleBackgroundExpiryClock() {
   clearTimeout(backgroundExpiryClock);
@@ -2770,18 +2771,19 @@ function scheduleBackgroundExpiryClock() {
     // Cached conversation rows can outlive their confirmation. Only the current
     // human waiting list owns a countdown; never retain a row between ticks.
     const pending = new Set((state?.backgroundConfirmations || []).map(card => card.id));
-    for (const line of document.querySelectorAll('.background-state[data-expires-at]')) {
+    for (const line of document.querySelectorAll('.background-state[data-expires-at], .background-batch-remaining[data-expires-at]')) {
       const row = line.closest('[data-message-id], [data-waiting-id]');
       if (!pending.has(row?.dataset.messageId || row?.dataset.waitingId)) { delete line.dataset.expiresAt; continue; }
       backgroundRemaining(line);
     }
     for (const line of document.querySelectorAll('.background-elapsed[data-started-at]')) backgroundElapsed(line);
-    if (!document.querySelector('.background-state[data-expires-at], .background-elapsed[data-started-at]')) return;
+    renderSessionTimers();
+    if (!sessionTimerItems.length && !document.querySelector('.background-state[data-expires-at], .background-elapsed[data-started-at]')) return;
     scheduleBackgroundExpiryClock();
   }, 1000);
 }
 // Batches the person answered with one click (kept until their cards are gone) and batches opened one by one; memory only.
-const confirmationBatchStarted = new Map(), confirmationBatchOpen = new Set();
+const confirmationBatchStarted = new Map(), confirmationBatchOpen = new Set(), confirmationRowOpen = new Set();
 const confirmationCardAnswers = new Map();
 const backgroundExecutionUnavailable = () => disconnected || state?.backgroundConfirmationsAvailable === false;
 const confirmationCardKey = op => [op.sessionId, op.nativeId, op.id].join(':');
@@ -2838,6 +2840,81 @@ function appendBackgroundElapsed(parent, op) {
   elapsed.dataset.startedAt = String(op.startedAt); elapsed.setAttribute('aria-live', 'off');
   backgroundElapsed(elapsed); parent.append(elapsed); scheduleBackgroundExpiryClock();
 }
+// The input box's timer for the open conversation: its soonest confirmation deadline, else its running operation, then +N.
+// It reads the confirmation list already on the page; the card clock rewrites its words and it is rebuilt only when its timers change.
+let sessionTimerItems = [], sessionTimerSession = null, sessionTimerShape = '[]', sessionTimerOpen = false, sessionTimerFlash;
+function sessionTimerPlace(card) {
+  const role = confirmationBatchRole(card.message?.backgroundOperation);
+  if (role && !role.open) {
+    const anchor = globalThis.nativeWorkspaceConfirmationBatch.holder(role.batch), summary = role.batch.cards[0].summary, count = role.batch.cards.length;
+    return { id: anchor.id, title: () => uiText('background.batch.title', { action: backgroundActionText(summary), count }) };
+  }
+  return { id: card.id, title: () => card.summary ? backgroundSummaryText(card.summary) : card.title || '' };
+}
+function sessionTimerWords(el, item, now) {
+  const { text, name } = window.nativeWorkspaceSessionTimers.label(item, now), words = () => text.map(([key, params]) => uiText(key, params)).join(' ');
+  el.dataset.kind = item.kind;
+  if (el.classList.contains('session-timer')) { ui.display.computed(el, 'text', words); ui.display.attribute(el, 'aria-label', ...name); return; }
+  ui.display.computed(el.querySelector('.session-timer-row-time'), 'text', words);
+  ui.display.computed(el.querySelector('.session-timer-row-title'), 'text', item.title);
+  ui.display.computed(el, 'aria-label', () => [item.title(), uiText(...name)].filter(Boolean).join(' · '));
+}
+function setSessionTimerList(open) {
+  const more = $('session-timers').querySelector('.session-timer-more'), list = $('session-timer-list');
+  sessionTimerOpen = Boolean(open && more && list);
+  if (more) more.setAttribute('aria-expanded', String(sessionTimerOpen));
+  if (list) list.hidden = !sessionTimerOpen;
+}
+function jumpToSessionTimer(id, from) {
+  const list = $('messages');
+  if (from?.closest('.session-timer-list')) { setSessionTimerList(false); $('session-timers').querySelector('.session-timer-more')?.focus(); }
+  if (!pointToMessage(list, focusedReadingKey(sessionTimerSession), id)) { toastMessage('toast.selectionMissing'); return; }
+  const target = list.querySelector('[data-search-target]');
+  clearTimeout(sessionTimerFlash);
+  sessionTimerFlash = setTimeout(() => { if (target?.dataset.searchTarget === 'true') delete target.dataset.searchTarget; }, 2000);
+}
+// `s` undefined: the clock's tick, for the conversation drawn last.
+function renderSessionTimers(s) {
+  const box = $('session-timers'), timers = window.nativeWorkspaceSessionTimers, now = Date.now();
+  if (s !== undefined && (s?.id || null) !== sessionTimerSession) { sessionTimerSession = s?.id || null; sessionTimerItems = []; sessionTimerOpen = false; }
+  const cards = sessionTimerSession ? (state?.backgroundConfirmations || []).filter(card => !confirmationCardAnswers.has(card.key)) : [];
+  const items = sessionTimerSession ? timers.collect({ sessionId: sessionTimerSession, cards, place: sessionTimerPlace, held: sessionTimerItems, now })
+    .filter(item => item.kind !== 'running' || !backgroundExecutionUnavailable()) : [];
+  sessionTimerItems = items;
+  const shape = timers.shape(items);
+  if (shape !== sessionTimerShape) {
+    sessionTimerShape = shape;
+    for (const el of box.querySelectorAll('*')) ui.display.unbind(el);
+    box.replaceChildren(); box.hidden = !items.length;
+    if (items.length < 2) sessionTimerOpen = false;
+    if (!items.length) return;
+    const [first, ...rest] = items, main = node('button', undefined, 'session-timer');
+    main.type = 'button'; main.addEventListener('click', () => jumpToSessionTimer(first.target, main));
+    box.append(main);
+    if (rest.length) {
+      const more = node('button', undefined, 'session-timer-more'), list = node('div', undefined, 'session-timer-list');
+      more.type = 'button'; more.setAttribute('aria-controls', 'session-timer-list');
+      ui.display.text(more, 'background.timer.more', { count: rest.length }); ui.display.attribute(more, 'aria-label', 'background.timer.moreName', { count: rest.length });
+      more.addEventListener('click', () => setSessionTimerList(!sessionTimerOpen));
+      list.id = 'session-timer-list';
+      for (const item of rest) {
+        const row = node('button', undefined, 'session-timer-row');
+        row.type = 'button'; row.append(node('span', undefined, 'session-timer-row-time'), node('span', undefined, 'session-timer-row-title'));
+        row.addEventListener('click', () => jumpToSessionTimer(item.target, row));
+        list.append(row);
+      }
+      const close = event => { if (event.key === 'Escape' && sessionTimerOpen) { event.stopPropagation(); setSessionTimerList(false); more.focus(); } };
+      more.addEventListener('keydown', close); list.addEventListener('keydown', close);
+      box.append(more, list);
+    }
+    setSessionTimerList(sessionTimerOpen);
+  }
+  if (!items.length) return;
+  const [first, ...rest] = items;
+  sessionTimerWords(box.querySelector('.session-timer'), first, now);
+  [...box.querySelectorAll('.session-timer-row')].forEach((row, index) => sessionTimerWords(row, rest[index], now));
+  if (backgroundExpiryClock === undefined) scheduleBackgroundExpiryClock();
+}
 
 // Release only failed submissions that a later authoritative read still shows as unanswered and actionable.
 function reconcileConfirmationBatch(started, cards) {
@@ -2855,6 +2932,7 @@ function confirmationBatchRole(op) {
   const batch = globalThis.nativeWorkspaceConfirmationBatch, cards = state?.backgroundConfirmations || [];
   if (!batch || !op) return null;
   const present = new Set(cards.map(card => card.key));
+  if (!disconnected && state.backgroundConfirmationsAvailable !== false) for (const key of confirmationRowOpen) if (!present.has(key)) confirmationRowOpen.delete(key);
   for (const [key, started] of confirmationBatchStarted) {
     if (!disconnected && state.backgroundConfirmationsAvailable !== false && !started.keys.some(k => present.has(k))) confirmationBatchStarted.delete(key);
     else if (started.failedKeys?.length && cards !== started.observed && state.backgroundConfirmationsAvailable !== false) {
@@ -2926,12 +3004,21 @@ function backgroundBatchConfig(summary) {
   if (summary.worktree) parts.push(uiText('background.card.worktree'));
   return parts.join(' · ');
 }
+// What a card opens to: its question's full text while it waits, its arguments afterwards. Single and merged cards share it.
+function backgroundDetailText(op) {
+  const question = op?.state === 'confirmation-required' && op.confirmation;
+  return question?.kind === 'message' && Array.isArray(question.options?.buttons) ? question.options.detail : op?.arguments;
+}
+function backgroundDetails(summary, raw, cls = 'background-details') {
+  const details = node('details', undefined, cls); details.append(summary, node('pre', raw)); return details;
+}
 function renderConfirmationBatch(box, role) {
   const { itemState } = globalThis.nativeWorkspaceConfirmationBatch, cards = role.batch.cards, count = cards.length;
   const create = cards[0].summary?.method === 'create';
   const states = cards.map(itemState), tally = name => states.filter(s => s === name).length;
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('strong', undefined, 'background-sentence');
   ui.display.computed(sentence, 'text', () => uiText('background.batch.title', { action: backgroundActionText(cards[0].summary), count }));
+  let ownDeadlines = false;
   state.setAttribute('role', 'status');
   if (role.batch.started && backgroundExecutionUnavailable() && states.some(value => ['waiting', 'queued', 'running'].includes(value))) {
     ui.display.text(state, 'background.card.statusUnknown');
@@ -2940,7 +3027,8 @@ function renderConfirmationBatch(box, role) {
     if (blocked) ui.display.text(state, blocked.key, blocked.params);
     else {
       ui.display.text(state, 'background.card.waiting');
-      const soonest = Math.min(...cards.map(c => c.expiresAt).filter(Number.isSafeInteger));
+      const deadlines = cards.map(c => c.expiresAt).filter(Number.isSafeInteger), soonest = Math.min(...deadlines);
+      ownDeadlines = new Set(deadlines).size > 1;
       if (Number.isSafeInteger(soonest)) { state.dataset.expiresAt = String(soonest); backgroundRemaining(state); scheduleBackgroundExpiryClock(); }
     }
   } else if (tally('waiting') && !tally('queued') && !tally('running')) {
@@ -2966,19 +3054,30 @@ function renderConfirmationBatch(box, role) {
   const list = node('ul', undefined, 'background-batch-list');
   cards.forEach((card, index) => {
     const item = node('li', undefined, 'background-batch-item'), target = node('span', undefined, 'background-batch-target');
+    const op = card.message?.backgroundOperation, raw = op && backgroundDetailText(op);
+    const head = raw ? node('summary', undefined, 'background-batch-summary') : item;
     ui.display.computed(target, 'text', () => !card.summary ? card.title
       : create ? card.summary.name || uiText('background.batch.unnamed') : backgroundSummaryText(card.summary));
-    item.append(target);
+    head.append(target);
     if (role.batch.started) {
       item.dataset.state = states[index];
-      const op = card.message?.backgroundOperation, notice = op?.resultNotice, label = op && backgroundProgressLabel(op);
+      const notice = op?.resultNotice, label = op && backgroundProgressLabel(op);
       const status = uiNode('span', label?.key || 'background.batch.item.' + states[index], label?.params, 'background-batch-state');
-      status.setAttribute('role', 'status'); item.append(status); if (op) appendBackgroundElapsed(item, op);
+      status.setAttribute('role', 'status'); head.append(status); if (op) appendBackgroundElapsed(head, op);
       if (notice || op?.error) {
         const why = node('span', undefined, 'background-batch-why');
         if (notice) ui.display.text(why, notice.key, notice.params); else why.textContent = op.error;
-        item.append(why);
+        head.append(why);
       }
+    } else if (ownDeadlines && Number.isSafeInteger(card.expiresAt)) {
+      const left = node('span', undefined, 'background-batch-remaining'); left.dataset.expiresAt = String(card.expiresAt);
+      backgroundRemaining(left); head.append(left);
+    }
+    if (raw) {
+      const details = backgroundDetails(head, raw, 'background-details background-batch-details');
+      details.open = confirmationRowOpen.has(card.key);
+      details.addEventListener('toggle', () => { if (details.open) confirmationRowOpen.add(card.key); else confirmationRowOpen.delete(card.key); });
+      item.append(details);
     }
     list.append(item);
   });
@@ -2991,7 +3090,7 @@ function renderConfirmationBatch(box, role) {
   for (const button of [cancel, review, all]) button.disabled = backgroundExecutionUnavailable();
   cancel.addEventListener('click', () => answerConfirmationBatch(role.batch, true));
   all.addEventListener('click', () => answerConfirmationBatch(role.batch, false));
-  review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); render(); });
+  review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); lastMessages = ''; lastRoomMessages = ''; render(); });
   buttons.append(cancel, review, all); box.append(buttons);
 }
 function renderBackgroundControls(entry, message) {
@@ -3041,11 +3140,8 @@ function renderBackgroundControls(entry, message) {
   const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
   if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
   if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
-  const raw = card ? question.options.detail : op.arguments;
-  if (raw) {
-    const details = node('details', undefined, 'background-details'), label = uiNode('summary', 'background.card.details');
-    details.append(label, node('pre', raw)); box.append(details);
-  }
+  const raw = backgroundDetailText(op);
+  if (raw) box.append(backgroundDetails(uiNode('summary', 'background.card.details'), raw));
   const mergedAway = batchRole && !batchRole.open;
   if (mergedAway) {
     const merged = node('p', undefined, 'background-note');
@@ -3062,7 +3158,7 @@ function renderBackgroundControls(entry, message) {
   });
   if (batchRole?.open && batchRole.anchor) {
     const collapse = node('button', '', 'small'); ui.display.text(collapse, 'background.batch.collapse'); collapse.disabled = disconnected;
-    collapse.addEventListener('click', () => { confirmationBatchOpen.delete(batchRole.batch.key); render(); });
+    collapse.addEventListener('click', () => { confirmationBatchOpen.delete(batchRole.batch.key); lastMessages = ''; lastRoomMessages = ''; render(); });
     buttons.append(collapse);
   }
   box.append(buttons);
@@ -5620,7 +5716,7 @@ function render() {
       ui.display.text($('title'), 'panorama.title'); $('subtitle').textContent = '';
       document.title = uiText('panorama.windowTitle');
     }
-    if (!s) renderNativeActivity(null);
+    if (!s) { renderNativeActivity(null); renderSessionTimers(null); }
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
       if (inRoom && !$('native-pane-tabs').hidden) ui.display.computed($('native-pane-title'), 'text', () => participantLabel(s, state.sessions));
@@ -5639,7 +5735,7 @@ function render() {
       $('terminal-controls').hidden = !terminalVisible;
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
-      renderComposer(s); takeFreeSession(soloComposer, s); renderNativeActivity(s);
+      renderComposer(s); takeFreeSession(soloComposer, s); renderNativeActivity(s); renderSessionTimers(s);
       $('interrupt').hidden = !own || !(['working', 'approval'].includes(s.state) || s.capacityRecovery?.status === 'scheduled');
       ui.display.text($('interrupt'), s.capacityRecovery?.status === 'scheduled' ? 'native.cancelContinue' : 'native.interrupt');
       $('interrupt').disabled = interruptPending(s);
