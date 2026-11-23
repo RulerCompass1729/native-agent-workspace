@@ -971,6 +971,36 @@ test('an open decision goes with the session: the successor is told it whole, th
   assert.throws(() => room.queueResolve(decided, 'shared', null, '删。', newId), /./, 'never twice');
 });
 
+test('a space being updated as the successor takes over gives it the decision on a later pass: the old session is not ended first', async t => {
+  const asked = '需要你决定：要不要删旧分支？';
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  fakeMembership(room, client);
+  const decided = room.queueAdd('清理旧分支，然后报告。', 'a');
+  room.queueMarkSent('shared', decided, 'a', 'Agent a', NOW - 60000, false, 'native-a');
+  room.queueSetDelivery('shared', decided, 'tag-decision', 0);
+  client.state.sessions[0].messages.push(
+    { id: 'tag-decision', role: 'user', text: 'NAW task', origin: 'naw-dispatch', status: 'submitted', dispatchItem: decided },
+    { id: 'asked', role: 'assistant', text: asked, inputTag: 'tag-decision' });
+  room.queueSettle('shared', decided, 'waiting', '', 'Agent a', rules.replyLine(asked), '要不要删旧分支？');
+  const find = id => room.queueItems('shared').find(entry => entry.id === id);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：没有别的。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  await dispatcher.schedule();
+  assert.equal(client.sends(newId).length, 1);
+  // The pass that sees the handoff accepted cannot write the space's items (room-state.cjs writable).
+  room.gates.add('room');
+  await dispatcher.schedule();
+  assert.equal(client.calls.some(call => call[0] === 'stop'), false, 'the old session stays while its decision has not moved');
+  assert.equal(find(decided).sentTo, 'a');
+  room.gates.delete('room');
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  assert.equal(find(decided).sentTo, newId);
+});
+
 test('a decision moved to a successor remembers who asked; an answer already on its way to the old session closes it there', t => {
   const { room, dir } = roomSetup(t);
   const add = (text, reason) => {

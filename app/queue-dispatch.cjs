@@ -4064,11 +4064,16 @@ class QueueDispatcher {
       this.save();
       // The successor has the handoff: the old session's open decisions are answered there from now on. Run on
       // every pass until the rotation ends; a decision already moved is left as it is.
+      let updating = false;
       for (const roomId of record.roomIds || []) {
         try {
           this.roomState.queueCarry(roomId, oldId, record.newId, record.newNativeId || null);
-        } catch {
-          // A space that is gone or read-only keeps its items; the rotation goes on.
+        } catch (error) {
+          // A space being updated takes them on a later pass, and the old session waits for that (below). A space
+          // that is gone keeps its items; the rotation goes on.
+          if (error?.uiMessage?.key === 'error.room.updatingDraftRetained') {
+            updating = true;
+          }
         }
       }
       this.releaseTrustSuccessor(record);
@@ -4086,7 +4091,7 @@ class QueueDispatcher {
       }
       const live = old && !['ended', 'background'].includes(old.state);
       const waitedTooLong = now - (record.handedAt || now) > STOP_WAIT_MS;
-      if (live && collaborating && !waitedTooLong) {
+      if ((live && collaborating || updating) && !waitedTooLong) {
         return;
       }
       let inUse = false;
