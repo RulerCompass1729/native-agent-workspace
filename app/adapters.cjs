@@ -536,7 +536,7 @@ function claudePromptIdentity(file, nativeId, promptId) {
 // A prompt typed during a turn waits in native's queue, and the person can take it back before it is read: ↑
 // (popAll) or picking it (popOne) moves it into the editor, cancelling clears it (remove, cleared_on_cancel). Native
 // journals each as a `queue-operation` row with the prompt's text (2.1.321–2.1.323 bundles; measured on 2.1.323,
-// 11-15). Read this session's queue rows from `offset`, bounded, with where each starts. Delivery rows (dequeue)
+// 11-15, and on 2.1.331, 11-23). Read this session's queue rows from `offset`, bounded, with where each starts. Delivery rows (dequeue)
 // carry no text: the caller keeps any text with an enqueue left.
 const QUEUE_TAKEN_BACK = new Set(['popAll', 'popOne']);
 function claudeQueueRows(file, nativeId, offset) {
