@@ -426,11 +426,16 @@ test('a saved-pairing reason seen at boot is not shown once the broker says the 
   f.context.blocker = null;
   const value = await f.status(); assert.equal(value.resumeRequired, true); assert.equal(value.resumeReason, undefined);
 });
-test('a person\'s action while the attempt is still preparing is newer, even when the attempt fails before its own step', async () => {
+test('a person\'s action while the attempt is still preparing is newer, whether or not the attempt takes its own step afterwards', async () => {
   const f = bootFixture(); f.context.holdPrepare = true;
   const attempt = f.context.resumeAppMobileOnBoot(); await f.settle();
   f.context.revokeAppMobile(); f.context.savedEndpoint = null; f.context.releasePrepare(); await attempt;
   assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, []); assert.equal((await f.status()).resumeReason, undefined);
+  // The same action, and the attempt still takes its own step afterwards and finds the carrier starting.
+  const g = bootFixture(); g.context.holdPrepare = true; g.context.recoveryErrors = [notReady()];
+  const later = g.context.resumeAppMobileOnBoot(); await g.settle();
+  g.context.revokeAppMobile(); g.context.releasePrepare(); await later;
+  assert.deepEqual(g.delays(), []); assert.deepEqual(g.logs, []);
 });
 test('waking from sleep runs a pending retry at once and starts its backoff over', async () => {
   const f = bootFixture(); f.context.recoveryErrors = Array.from({ length: 4 }, notReady);

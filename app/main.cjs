@@ -361,7 +361,7 @@ async function resumeAppMobileOnBoot(attempt=0){
     if(attempt)appMobileLog('boot-retry','ok',Math.max(0,Date.now()-started));
   }catch(error){
     // Anything past the generation this attempt took (or the one before it, if it failed first) is a newer action by the person.
-    if(mobileGeneration>Math.max(before,mobileBootGeneration)||quitting)return;
+    if(mobileGeneration>Math.max(before,mobileBootGeneration)||mobileBootGeneration>before+1||quitting)return;
     let reason='other',port;
     try{reason=mobileResumeReason(error);port=mobileBroker?.resumeInfo?.()?.port;}catch{}
     const generation=mobileGeneration;
