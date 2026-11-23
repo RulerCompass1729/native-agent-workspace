@@ -377,7 +377,7 @@
       move(crewSpaces, view.groups.map(g => {
         let v = spaceViews.get(g.id);
         if (!v) {
-          v = { element: make('section', 'task-board-people-space'), heading: make('h3'), cards: make('div', 'task-board-people-cards'), strips: make('div', 'task-board-people-strips'), stale: control(() => { chooseTab('stale'); tablist.scrollIntoView({ block: 'start' }); }, 'task-board-people-stale') };
+          v = { element: make('section', 'task-board-people-space'), heading: make('h3'), cards: make('div', 'task-board-people-cards'), strips: make('div', 'task-board-people-strips'), stale: control(() => { chooseTab('stale'); tablist.scrollIntoView({ block: 'start' }); tabs.get('stale').focus({ preventScroll: true }); }, 'task-board-people-stale') };
           v.element.dataset.peopleSpace = g.id; spaceViews.set(g.id, v);
         }
         set(v.heading, f('people.space', { name: g.id === '@independent' ? f('independent') : g.name, count: g.members.length }));

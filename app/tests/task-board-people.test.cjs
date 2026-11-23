@@ -123,6 +123,7 @@ test('the old-dispatch line in a space opens their tab', () => {
     assert.equal(f.space('ops').querySelector('.task-board-people-stale'), null);
     line.fire('click');
     assert.equal(f.host.querySelector('[data-board-tab="stale"]').getAttribute('aria-selected'), 'true');
+    assert.ok(f.doc.activeElement === f.host.querySelector('[data-board-tab="stale"]'), 'keyboard focus follows to the tab it opened');
   } finally { f.board.dispose(); }
 });
 
