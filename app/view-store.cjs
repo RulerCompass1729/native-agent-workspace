@@ -13,7 +13,7 @@ function validRoomView(view, id) {
   if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
   if (view.draftRevision !== undefined && (!Number.isSafeInteger(view.draftRevision) || view.draftRevision < 0)) return false;
   if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
-  if (view.roomSurface !== undefined && !['overview', 'records'].includes(view.roomSurface)) return false;
+  if (view.roomSurface !== undefined && !['overview', 'records', 'conversation'].includes(view.roomSurface)) return false;
   if (view.roomRecordScope !== undefined && !text(view.roomRecordScope, 100)) return false;
   if (view.roomRecordReturn !== undefined && view.roomRecordReturn !== null && (!object(view.roomRecordReturn) ||
       Object.keys(view.roomRecordReturn).some(key => !['id', 'nativeId'].includes(key)) || !text(view.roomRecordReturn.id, 100) || !view.roomRecordReturn.id || !text(view.roomRecordReturn.nativeId, 512))) return false;

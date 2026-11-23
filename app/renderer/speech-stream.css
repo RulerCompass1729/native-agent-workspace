@@ -1,0 +1,26 @@
+.speech-stream{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;height:100%;overflow:hidden}
+.speech-stream[hidden]{display:none}
+.speech-names{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid var(--border);overflow-x:auto;flex:none;scrollbar-width:thin}
+.speech-name{flex:none;padding:4px 10px;font-size:12px;border-radius:999px;background:none;white-space:nowrap}
+.speech-name[aria-pressed=true]{background:var(--green);border-color:var(--green);color:white;font-weight:600}
+.speech-list{flex:1;min-height:0;overflow:auto;padding:6px 16px 24px;overscroll-behavior:contain}
+.speech-list:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+.speech-earlier{display:block;margin:8px auto}
+.speech-day{font-size:11px;color:var(--muted);font-weight:500;margin:16px 0 6px;text-align:center}
+.speech-msg{max-width:860px;padding:8px 10px;margin:2px 0;border-radius:8px;overflow-wrap:anywhere}
+.speech-msg:focus-visible{outline:2px solid var(--green)}
+.speech-msg.speech-person{background:color-mix(in srgb,var(--green) 7%,transparent)}
+.speech-head{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;font-size:13px}
+.speech-from{font-weight:600}.speech-arrow{color:var(--muted)}.speech-to{font-weight:600}
+.speech-time{color:var(--muted);font-size:11px}
+.speech-original{margin-left:auto;padding:2px 8px;font-size:11px;border:0;background:none;color:var(--muted);opacity:0}
+.speech-msg:hover .speech-original,.speech-msg:focus-within .speech-original{opacity:1}
+.speech-original:focus-visible{opacity:1}
+.speech-body{margin-top:4px;white-space:pre-wrap;line-height:1.55;font-size:14px}
+.speech-body.folded{max-height:calc(1.55em * 8);overflow:hidden;-webkit-mask-image:linear-gradient(#000 70%,transparent)}
+.speech-toggle{margin-top:4px;padding:2px 8px;font-size:12px}
+.speech-new{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:3;padding:6px 14px;border-radius:999px;background:var(--green);border-color:var(--green);color:white;font-size:12px;box-shadow:0 4px 14px #0003}
+.speech-empty{margin:40px auto;text-align:center}
+@media(max-width:899px){.speech-list{padding:6px 10px 24px}.speech-names{padding:8px 10px}}
+#room-tabs #room-overview,#room-tabs #room-conversation{background:transparent;border-color:transparent;box-shadow:none;font-weight:500;border-radius:0}
+#room-tabs #room-overview[aria-current=page],#room-tabs #room-conversation[aria-current=page]{font-weight:650;box-shadow:inset 0 -2px 0 var(--green)}
