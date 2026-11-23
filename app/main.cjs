@@ -36,6 +36,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
+const { VersionEvents, VersionNotices } = require('./version-events.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
 const { ButlerReadAudit } = require('./butler-read-audit.cjs');
@@ -88,6 +89,7 @@ function observePersonActions(snapshot) {
 }
 // The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
 const answerNotices = new AnswerNotices();
+const versionNotices = new VersionNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -1102,6 +1104,8 @@ async function startQueueDispatcher() {
       stewardWake: stewardWake || undefined,
       // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
       answerNotices,
+      // What this start brought, owed to the queue secretary (version-events.cjs).
+      versionNotices,
       // A member whose own conversation was compacted COMPACT_LIMIT times continues in a new session.
       countCompactions: true,
     };
@@ -1352,7 +1356,7 @@ function connectionUpdateOptions(client, applicationVersion, profile = roomState
     // Moving idle sessions too (T-122): automatic only where the runtime proves nothing would be lost.
     const plan = old && !unavailable && entry !== client.active ? backendSwitch.backendPlan(entry.state, value => client.sessionState?.(value) || value.state, runningRelays(client)) : null;
     options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
-      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, reasonUiMessage: plan.reasonUiMessage || null, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
+      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, blocked: Boolean(plan.blocked), reason: plan.reason, reasonUiMessage: plan.reasonUiMessage || null, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
       count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
       // Which sessions this backend holds, so a menu can name them (T-131).
       sessions: visible.map(value => ({ id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 80) : '' })),
@@ -1561,10 +1565,43 @@ async function autoBackendSwitch() {
   if (autoSwitchRunning) return;
   autoSwitchRunning = true;
   try {
+    try { observeVersion(); } catch { /* Looked at again next minute. */ }
     await autoBackendSwitchOnce();
   } finally {
     autoSwitchRunning = false;
   }
+}
+let versionEvents = null;
+// What this start brought and the backends still on an old version, with what each waits for, told once and again
+// as each moves or fails (version-events.cjs). The window's state as pushed, no refresh: a report, not a move.
+function observeVersion() {
+  if (!versionEvents?.pending()) return;
+  const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
+  if (!c) return;
+  const settings = backendSwitch.readSettings(dataDir), version = app.getVersion(), now = Date.now();
+  const sessions = roomState.apply(c.client.snapshot()).sessions;
+  const humanAt = queueDispatcher ? queueDispatcher.humanAt : new Map();
+  const behind = connectionUpdateOptions(c.client, version, roomState).map(option => {
+    let wait;
+    if (backendSwitching === option.backendKey) {
+      wait = { code: 'moving' };
+    } else if (!(settings.auto || settings.migrate)) {
+      wait = { code: 'needs-person' };
+    } else if (option.ready && !autoSwitchFailed.has(option.backendKey)) {
+      // All its sessions ended: continued at the next automatic pass.
+      wait = { code: 'next' };
+    } else {
+      wait = queueRules.moveWait(option, settings, sessions, humanAt, now, autoSwitchFailed, migrateQuietMs(), migrateUnprovenQuietMs()) || { code: 'next' };
+    }
+    return { key: option.backendKey, version: option.version, sessions: option.sessions, wait };
+  });
+  const placed = new Map();
+  for (const entry of c.client.entries) {
+    for (const s of entry.state.sessions || []) {
+      if (!placed.has(s.id) || entry.state.runtimeVersion === version) placed.set(s.id, entry.state.runtimeVersion);
+    }
+  }
+  versionEvents.observe(behind, id => placed.get(id));
 }
 // Only a verified isolated test run may shorten how long sessions stay quiet before a migration.
 function migrateQuietMs() {
@@ -1740,6 +1777,20 @@ async function boot() {
       changed: stewardWakeChanged,
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
+  // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
+  try {
+    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),
+      record: event => {
+        if (!butlerIngress) throw Error('The butler record is unavailable');
+        butlerIngress.record(event);
+      },
+      owe: text => {
+        const secretary = queueSecretary.current(), steward = stewardRole.current();
+        // A secretary that is also the butler reads it in its event record.
+        if (!secretary || steward && steward.sessionId === secretary.sessionId) return false;
+        return versionNotices.add(secretary, text);
+      } });
+  } catch { versionEvents = null; }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   creationDefaults = new CreationDefaults(dataDir, { defaultWorkspace, newWorkspaceRoot: `${path.resolve(defaultWorkspace)}-sessions` });
   viewStore = new ViewStore(dataDir);

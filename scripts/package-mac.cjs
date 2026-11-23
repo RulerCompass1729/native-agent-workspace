@@ -269,6 +269,7 @@ async function build() {
       'ui-messages.js',
       'ui-parent-lease.cjs',
       'vendor-icons.cjs',
+      'version-events.cjs',
       'view-drafts.cjs',
       'view-store.cjs',
       'window-frames.cjs',
