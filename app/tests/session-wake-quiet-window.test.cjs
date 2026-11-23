@@ -72,14 +72,22 @@ async function fixture(t) {
   };
   const rows = () => source.get(a).messages.filter(m => m.wake);
   const retry = async () => { wake.retryHeld(source); await settle(); };
-  return { root, file, source, target, a, b, ra, rb, writes, turn, reply, open, close, move, rows, retry, advance: ms => { now += ms; }, now: () => now };
+  // A turn of a session on any backend here, to any recipient.
+  const turnOf = async (w, sender, id, text, to) => {
+    const r = w.runtimes.get(sender), nativeId = w.get(sender).nativeId;
+    r.turnId = id; r.emit('nativeTurnStart', { nativeId, turnId: id }); r.emit('state', 'working');
+    const result = await r.addressedCall({ nativeId, turnId: id, callId: 'call-' + id }, { recipient_id: to, message: text });
+    const finish = async () => { r.turnId = null; r.emit('state', 'idle'); r.emit('nativeTurnEnd', { nativeId, turnId: id, status: 'completed' }); await settle(); };
+    return { result, finish };
+  };
+  return { root, file, source, target, a, b, ra, rb, writes, turn, turnOf, reply, open, close, move, rows, retry, advance: ms => { now += ms; }, now: () => now };
 }
 
 test('held, not refused, while the recipient\'s backend is in a quiet window; tried once it closes, counted as any other', async t => {
   const f = await fixture(t); f.open(40);
   const one = await f.turn('one', 'First.');
   assert.equal(one.result.status, 'staged'); assert.equal(one.result.readiness, 'held');
-  assert.equal(one.result.message, '已保存，尚未投递。收件方的后台在安静窗口（迁移 aaaaaaa）中，最迟约 40 分钟后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。');
+  assert.equal(one.result.message, '已保存，尚未投递。收件方的后台在安静窗口（迁移 aaaaaaa）中，窗口最长还有约 40 分钟，结束后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。');
   await one.finish();
   const row = f.rows().at(-1);
   assert.equal(row.wake.status, 'held'); assert.equal(f.writes.length, 0, 'nothing goes into the window');
@@ -173,4 +181,28 @@ test('the person\'s own words to the recipient are not held by the window', asyn
   const f = await fixture(t); f.open(40);
   await f.target.send(f.b, 'The person writes.', 'target-owner');
   assert.deepEqual(f.writes.map(w => w.text), ['The person writes.']);
+});
+
+test('a sender on the backend being moved is refused at once, not held: the move would end its store and the held row', async t => {
+  const f = await fixture(t);
+  const peer = await f.target.create('codex', f.root, 'target-owner', 'Peer');
+  const notice = '自动消息没有发出；不会自动重发。\n收件方和你在同一个后台上，这个后台在迁移前的安静窗口里：迁移前这里不开新回合，迁移也带不走存着的消息，所以这条不存、不补送。';
+  f.open(40);
+  const one = await f.turnOf(f.target, f.b, 'one', 'Same backend.', peer);
+  assert.equal(one.result.status, 'not-sent');
+  assert.equal(one.result.message, `${notice}\nSame backend.`);
+  await one.finish();
+  const row = f.target.get(f.b).messages.filter(m => m.wake).at(-1);
+  assert.equal(row.wake.status, 'not-sent'); assert.equal(f.writes.length, 0);
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), "Automatic message was not sent; it will not be retried automatically.\nThe recipient is on your own backend, which is in the quiet window before a migration: no new turn starts there before the move, and the move cannot carry a held message, so this one is not kept or resent.\nSame backend.");
+  // Staged before the window opened: refused at its turn end, as honestly.
+  f.close();
+  const two = await f.turnOf(f.target, f.b, 'two', 'Before the window.', peer);
+  assert.equal(two.result.status, 'staged');
+  f.open(40); await two.finish();
+  const later = f.target.get(f.b).messages.filter(m => m.wake).at(-1);
+  assert.equal(later.wake.status, 'not-sent'); assert.equal(later.text, `${notice}\nBefore the window.`); assert.equal(f.writes.length, 0);
+  // From another backend it is held as before.
+  const three = await f.turn('three', 'From the root backend.');
+  assert.equal(three.result.readiness, 'held');
 });

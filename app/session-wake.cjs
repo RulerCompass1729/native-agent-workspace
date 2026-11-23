@@ -204,6 +204,10 @@ function quietRows(w) {
   return count;
 }
 const quietFull = () => notSent(uiError('error.wake.quietWindowFull', { limit: QUIET_HELD_MAX }));
+// A sender on the backend being moved: the move ends this backend's store and every row held in it, so it is
+// refused now, not held (the reviewer's B1, 11-23). Its key as peer-handoffs.cjs computes it.
+const ownKey = w => path.relative(root(w), w.dataDir) || '.';
+const quietSame = () => notSent(uiError('error.wake.quietWindowSameBackend'));
 const shortKey = key => key === '.' ? 'root' : String(key).split('/').pop().slice(0, 7);
 // Looked at again each minute (and at its deadline), so a window that closes early lets it go then.
 function holdQuiet(w, row, window) {
@@ -320,17 +324,19 @@ async function stageOnce(w, s, r, native, args) {
   if (native.valid?.() === false || after || r.turnId !== native.turnId) throw Object.assign(uiError("error.wake.authorizationInvalidated"), after ? { sourceIssue: after.code } : {});
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const quiet = quietWindow(w, target.key), refused = target.readiness?.status === 'not-sent';
-  let full = false;
+  let full = false, same = false;
   if (quiet && (!refused || QUIET_PASSING.includes(target.readiness.reasonUiMessage?.key))) {
-    if (quietRows(w) >= QUIET_HELD_MAX) full = true;
+    if (target.key === ownKey(w)) same = true;
+    else if (quietRows(w) >= QUIET_HELD_MAX) full = true;
     else intent.quietWindow = { id: quiet.id, deadline: quiet.deadline };
   }
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.registered', params: { name: target.session.name, body: args.message } }, 'notice.', row.text) || undefined;
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
   // The butler's limit can open before this turn ends: the message stays staged, and is held then if it has not.
-  const waits = !intent.quietWindow && !full && refused && holdable(w, intent, target.readiness);
-  if (full) refusedNotice(row, quietFull());
+  const waits = !intent.quietWindow && !full && !same && refused && holdable(w, intent, target.readiness);
+  if (same) refusedNotice(row, quietSame());
+  else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
@@ -340,7 +346,7 @@ async function stageOnce(w, s, r, native, args) {
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
-    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方的后台在安静窗口（迁移 ${shortKey(target.key)}）中，最迟约 ${minutes} 分钟后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。` };
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方的后台在安静窗口（迁移 ${shortKey(target.key)}）中，窗口最长还有约 ${minutes} 分钟，结束后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。` };
   }
   if (waits) {
     // About when: the ones held here for the same recipient go first, a minute apart from the earliest, and none
@@ -394,6 +400,7 @@ function complete(w, s, r, info) {
 function deliver(w, row) {
   const intent = row.wake, quiet = quietWindow(w, intent.targetKey);
   if (!quiet) return transfer(w, row, Boolean(intent.quietWindow));
+  if (intent.targetKey === ownKey(w)) { refusedNotice(row, quietSame()); durable(w); return; }
   if (!intent.quietWindow && quietRows(w) >= QUIET_HELD_MAX) { refusedNotice(row, quietFull()); durable(w); return; }
   intent.quietWindow = { id: quiet.id, deadline: quiet.deadline };
   holdQuiet(w, row, quiet);
