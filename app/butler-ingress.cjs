@@ -132,9 +132,10 @@ class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory), now = Date.now } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
     this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
-    this.now = now; this.humanSince = now(); this.humanInputs = new Set();
+    this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
+      if (/^control-refused:[a-f0-9]{64}$/.test(event.eventId)) this.controlRefusals.add(event.eventId);
       if (event.eventId.startsWith('human-input:') && event.kind === 'blocked' &&
           ['human-message', 'human-message-content-unavailable'].includes(event.payload.reason)) this.humanInputs.add(event.eventId);
       const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
@@ -246,6 +247,37 @@ class ButlerIngress {
         catch { delete payload.text; delete payload.memberName; payload.reason = 'human-message-content-unavailable'; }
         this.record(event); this.humanInputs.add(eventId);
       }
+    }
+  }
+  // One refused workspace_control call of the designated butler, so NAW wakes it (steward-wake.cjs REFUSAL_WAKES).
+  // Only the reason code is kept, never the call's arguments. `occurrence` tells one refusal from another.
+  controlRefused(memberId, nativeId, occurrence, code) {
+    if (![memberId, nativeId].every(v => typeof v === 'string' && v) || occurrence === undefined || !/^[a-z0-9-]{1,80}$/.test(code)) return false;
+    const eventId = `control-refused:${hash([memberId, nativeId, occurrence])}`;
+    if (this.controlRefusals.has(eventId)) return false;
+    this.record({ eventId, sourceRef: `control-refused:${memberId}`, kind: 'blocked', payload: { memberId, reason: 'control-refused', outcome: code } });
+    this.controlRefusals.add(eventId);
+    return true;
+  }
+  // One workspace_control call NAW answered (main.cjs control): 'refused' when the designated butler's call was
+  // refused and is now recorded, 'succeeded' when it went through, otherwise null. A repeated answer is neither.
+  controlResult(sender, args, result, { steward } = {}) {
+    let current = null; try { current = steward?.(); } catch { return null; }
+    if (!current || sender?.id !== current.sessionId || sender.nativeId !== current.nativeId || result?.duplicate === true) return null;
+    if (['complete', 'received', 'awaiting-native'].includes(result?.state)) return 'succeeded';
+    if (result?.state !== 'not-executed') return null;
+    const code = /^[a-z0-9-]{1,80}$/.test(result.reason) ? result.reason : 'refused';
+    return this.controlRefused(sender.id, sender.nativeId, ['gui', args?.operation_id ?? null, this.now()], code) ? 'refused' : null;
+  }
+  // A Claude butler's own plugin refuses some calls before NAW sees them (claude-bridge register.js); its backend
+  // counts them on the session (workspace.cjs controlRefusal).
+  observeControlRefusals(sessions = [], { steward } = {}) {
+    let current = null; try { current = steward?.(); } catch { return; }
+    if (!current) return;
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      const r = s?.controlRefusal;
+      if (s?.id !== current.sessionId || s.nativeId !== current.nativeId || !r || !Number.isSafeInteger(r.count) || !Number.isSafeInteger(r.at)) continue;
+      this.controlRefused(s.id, s.nativeId, ['plugin', r.at, r.count], r.reason);
     }
   }
   // The backend validates the live failed turn; intake never settles or replays its task.

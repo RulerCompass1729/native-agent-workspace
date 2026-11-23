@@ -151,6 +151,10 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall, backg
         try { return res.end(JSON.stringify(await target.promptIdentity(message))); }
         catch { res.writeHead(409); res.end('{}'); return; }
       }
+      if (req.url === '/control-refused') {
+        if (!target.validRootBinding?.(message) || !['root-call-unconfirmed', 'root-changed'].includes(message.reason) || typeof target.controlRefused !== 'function') { res.writeHead(409); res.end('{}'); return; }
+        return res.end(JSON.stringify({ status: target.controlRefused(message.reason) ? 'recorded' : 'ignored' }));
+      }
       if (req.url === '/background-control') {
         const abort = new AbortController(), closed = () => abort.abort();
         res.once('close', closed);

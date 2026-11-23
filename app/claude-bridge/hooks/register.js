@@ -910,20 +910,32 @@ function resumeCompactedTurn($, turnId) {
   enqueueBlock($, { id: 'control:turn-continue', kind: 'control', turnId, promptId: kept.prompt.id, status: 'running' });
 }
 
+// Only a reason code; never awaited, and a failed report changes nothing about the refusal.
+function reportRefusal($, reason) {
+  if (stopped || !rootBinding) return;
+  request($, '/control-refused', { reason }, undefined).catch(() => {});
+}
+
 export function register(on) {
   on('tool.describe', { tool: 'mcp__native_workspace__workspace_control' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
   on('tool.call', { tool: 'mcp__native_workspace__workspace_control' }, async ($, e, next) => {
     if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
     const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
     if (stopped || !nativeBlocks || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
-        next.origin?.plugin !== 'engine' || e.tool_use_id === undefined || observationGap) return { deny: 'Background control requires the actual native root call.' };
+        next.origin?.plugin !== 'engine' || e.tool_use_id === undefined || observationGap) {
+      // A subagent's call is refused by design; the root's is counted so NAW can wake a butler left idle by it.
+      if (!e.agentId) reportRefusal($, 'root-call-unconfirmed');
+      return { deny: 'Background control requires the actual native root call.' };
+    }
     const args = Object.fromEntries(['action', 'view_id', 'method', 'arguments', 'operation_id', 'paths'].filter(k => Object.hasOwn(e, k)).map(k => [k, e[k]]));
     const executed = await next(e); let approved;
     try { approved = JSON.parse(executed.text); } catch {}
     if (executed.deny || executed.isError) return executed;
     const canonical = v => v && typeof v === 'object' ? Array.isArray(v) ? v.map(canonical) : Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
-    if (approved?.approved !== true || JSON.stringify(canonical(approved.background)) !== JSON.stringify(canonical(args)) || stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap)
+    if (approved?.approved !== true || JSON.stringify(canonical(approved.background)) !== JSON.stringify(canonical(args)) || stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap) {
+      reportRefusal($, 'root-changed');
       return { deny: 'Native permission, arguments or root connection changed; no operation was taken.' };
+    }
     try {
       const result = await request($, '/background-control', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
       return { result: JSON.stringify(result), isError: !['complete', 'received', 'awaiting-native'].includes(result.state) };

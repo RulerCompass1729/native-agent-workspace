@@ -21,10 +21,15 @@ const { randomUUID } = require('node:crypto');
 
 const FILE = 'steward-wake.json', RECORD_MAX = 4096, GAP_MS = 60 * 1000;
 const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
+// The person, 2026-11-23: 「如果我不理你的话感觉就卡在这里了」. A refused butler call is recorded as an event
+// (butler-ingress.cjs controlRefused) so the butler is woken; wakes that only announce refusals stop after this many
+// in a row, until one of its calls succeeds, so a call refused every time cannot keep waking it.
+const REFUSAL_WAKES = 3, REFUSED = 'control-refused';
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
-  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold']);
+  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold',
+  'control-refused-limit']);
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -77,6 +82,8 @@ class StewardWake {
     this.file = path.join(directory, FILE);
     Object.assign(this, { ledger, selected, record, now, gapMs, changed });
     this.blocked = null;
+    // In memory only: a restart allows the butler REFUSAL_WAKES more.
+    this.refusalWakes = 0;
     this.state = { version: 1, on: false, designation: null, woken: null, at: null };
     // A saved state that cannot be read is off, and says so, until the person or the butler sets it again.
     this.failed = false;
@@ -109,7 +116,8 @@ class StewardWake {
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked, previous = blocked.reason;
     blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable';
-    if (now - blocked.since < STALL_MS) return;
+    // The refusal limit is said at once: no later pass would clear it by itself.
+    if (now - blocked.since < STALL_MS && blocked.reason !== 'control-refused-limit') return;
     if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
       blocked.recordedReason = blocked.reason; blocked.records++;
       try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); }
@@ -164,6 +172,18 @@ class StewardWake {
   due() {
     try { return this.active() && newer(this.latest(), this.state.woken); } catch { return false; }
   }
+  // Whether everything recorded after the position last named is a refused butler call. Unreadable counts as not.
+  refusalsOnly(latest) {
+    try {
+      const { events, more } = this.ledger().eventsAfter(from(latest, this.state.woken), 100);
+      return !more && events.length > 0 && events.every(e => e.kind === 'blocked' && e.payload?.reason === REFUSED);
+    } catch { return false; }
+  }
+  // One of the butler's calls went through: refusals may wake it again.
+  controlSucceeded() {
+    this.refusalWakes = 0;
+    if (this.blocked?.reason === 'control-refused-limit') this.clearBlocked();
+  }
   // A minute since the last attempt (condition 3). A clock set back does not hold wakes off for longer.
   rested(now) { const at = this.state.at; return at === null || now < at || now - at >= this.gapMs; }
   // One wake of `session`, the butler as the dispatcher names it now (after a rotation, the successor the role followed
@@ -177,6 +197,8 @@ class StewardWake {
     if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
     if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
     const latest = this.latest(), position = from(latest, this.state.woken), id = randomUUID();
+    const refusals = this.refusalsOnly(latest);
+    if (refusals && this.refusalWakes >= REFUSAL_WAKES) { this.skip('control-refused-limit'); return null; }
     try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
     catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
     let tag = null, outcome;
@@ -194,10 +216,10 @@ class StewardWake {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a wake without an outcome. */ }
-    if (outcome.state === 'sent') this.clearBlocked();
+    if (outcome.state === 'sent') { this.clearBlocked(); if (refusals) this.refusalWakes++; }
     else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
     return { state: outcome.state, position, through: latest };
   }
 }
 
-module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, wakeText, newer, from });
+module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });

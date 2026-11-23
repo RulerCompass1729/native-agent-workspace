@@ -982,6 +982,7 @@ function bindClient(context) {
     try { butlerIngress?.observeTerminalDialogs(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeNativeQuestions(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
+    try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }
     const name = s => sessionLabels.labels.get(s.id) || s.name, wrote = ['recordStuck', 'recordVersionGates'].map(writer => { try { return roomState[writer](data?.sessions, name); } catch { return false; } });
@@ -1678,6 +1679,9 @@ async function boot() {
           if (!backgroundControl) throw Error('Background control storage is unavailable');
           // The butler's own calls are written to 「大管家的记录」 first (steward-record.cjs); others run as they are.
           const result = await (stewardRecord ? stewardRecord.around(binding.sender, args, () => backgroundControl.call(binding, args)) : backgroundControl.call(binding, args));
+          // A refused butler call is an event that wakes it; one that went through lets refusals wake it again (steward-wake.cjs).
+          try { if (butlerIngress?.controlResult(binding.sender, args, result, { steward: () => stewardRole?.current() }) === 'succeeded') stewardWake?.controlSucceeded(); }
+          catch { /* The answer goes back as it is. */ }
           // The agent gets its answer without NAW's own guard (queue 794d3cd7).
           return background.agentReply(result);
         },

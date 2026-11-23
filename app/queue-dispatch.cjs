@@ -1825,6 +1825,17 @@ function notSent(error) {
   return typeof key === 'string' && NOT_SENT_KEYS.includes(key);
 }
 
+const RELEASE_RETRIES = 2, RELEASE_RETRY_MS = 3000;
+const RELEASE_ANSWER_LOST = ['error.serviceClosed', 'error.serviceDisconnected', 'error.confirmationTimeout', 'release-timeout'];
+function releaseBackendOutdated(version) {
+  const match = /^0\.1\.0-alpha\.(\d+)$/.exec(typeof version === 'string' ? version : '');
+  return Boolean(match && Number(match[1]) < 284);
+}
+function releaseSaved(entry, id, nativeId, epoch, tag) {
+  const episode = entry?.state?.sessions?.find(s => s.id === id)?.rotationEpisode;
+  return Boolean(episode && episode.nativeId === nativeId && episode.epoch === epoch && episode.tag === tag &&
+    episode.state === 'released' && episode.disposition?.action === 'release');
+}
 function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -3394,10 +3405,26 @@ class QueueDispatcher {
     }
   }
 
+  // A backend before alpha.284 closes the connection on this six-argument call (fixed in dfa418e5), so it is not
+  // asked. An answer lost to a closed connection or a timeout is asked again, a bounded number of times: the backend
+  // saves a release once, and a release already in its state is confirmed without asking.
   async releaseRotation(id, nativeId, epoch, tag, actor, reason) {
-    const client = this.client || await this.source();
-    const entry = client.route(id);
-    const result = await withTimeout(entry.client.call('releaseRotation', id, nativeId, epoch, tag, actor, reason), CALL_TIMEOUT_MS, 'release-timeout');
+    let result;
+    for (let attempt = 0; ; attempt++) {
+      const client = this.client || await this.source();
+      const entry = client.route(id);
+      if (releaseBackendOutdated(entry?.state?.runtimeVersion)) throw Object.assign(uiError('error.queue.releaseBackendUpdate'), { notSent: true });
+      if (releaseSaved(entry, id, nativeId, epoch, tag)) { result = { epoch, tag, state: 'released' }; break; }
+      try {
+        result = await withTimeout(entry.client.call('releaseRotation', id, nativeId, epoch, tag, actor, reason), CALL_TIMEOUT_MS, 'release-timeout');
+        break;
+      } catch (error) {
+        let saved = false; try { saved = releaseSaved((this.client || await this.source()).route(id), id, nativeId, epoch, tag); } catch { /* Asked again below. */ }
+        if (saved) { result = { epoch, tag, state: 'released' }; break; }
+        if (!RELEASE_ANSWER_LOST.includes(error?.uiMessage?.key ?? error?.message) || attempt >= RELEASE_RETRIES) throw error;
+        await new Promise(resolve => setTimeout(resolve, this.releaseRetryMs ?? RELEASE_RETRY_MS));
+      }
+    }
     if (result?.epoch !== epoch || result.tag !== tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
     const record = this.rotations[id];
     if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag) { delete this.rotations[id]; this.save(); }
