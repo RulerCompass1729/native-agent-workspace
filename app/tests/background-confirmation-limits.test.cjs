@@ -33,7 +33,7 @@ function fixture(t, provider = 'codex') {
     runConnectionContinuation: async () => { effects.push({ method: 'backend.continue' }); return true; }, app: { getVersion: () => 'fixture', quit() { effects.push({ method: 'app.quit' }); } } };
   vm.createContext(scope);
   vm.runInContext(part('function register(', '\nasync function replaceBackendSockets('), scope);
-  vm.runInContext(part("  for (const name of ['prepareInput'", "  register('retrySave',"), scope);
+  vm.runInContext(part("  register('operatorAction',", "  register('retrySave',"), scope);
   vm.runInContext(part("  register('quitService',", "  register('draft',"), scope);
   vm.runInContext(part("  register('backendSwitchSettings',", "  register('openExternal',"), scope);
   const binding = (n = 0) => ({ sender: { id: actors[n].id, nativeId: actors[n].nativeId, provider: actors[n].provider, name: actors[n].name }, identity: { callId: 'native-call-' + n, turnId: 'native-turn' }, valid: () => true });

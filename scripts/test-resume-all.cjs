@@ -28,6 +28,8 @@ let profile, cwd, child, client, app, page, win, sequence = 0;
 const zh = (key, params) => locale.format('zh', key, params);
 const save = (name, value) => fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(value, null, 2), { mode: 0o600 });
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Session names are test data, not interface text.
+const sessionName = n => 'Synthetic ' + String(n).padStart(2, '0');
 async function until(fn, label, rounds = 250) {
   for (let n = 0; n < rounds; n++) { if (await fn()) return; await wait(40); }
   throw Error(label);
@@ -92,7 +94,7 @@ async function run() {
   const ids = [], folders = [];
   for (let n = 1; n <= COUNT + 1; n++) {
     const folder = path.join(profile, 'work', 's' + String(n).padStart(2, '0')); fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-    const id = await client.call('create', { provider: 'codex', cwd: folder, name: 'Synthetic ' + String(n).padStart(2, '0'), view: 'chat' });
+    const id = await client.call('create', { provider: 'codex', cwd: folder, name: sessionName(n), view: 'chat' });
     await until(async () => (await client.call('initial')).sessions.find(s => s.id === id)?.state === 'idle', 'Synthetic session ready');
     ids.push(id); folders.push(folder);
   }
@@ -148,7 +150,7 @@ async function run() {
     await page.getByRole('button', { name: zh('resumeAll.selectNone') }).click();
     assert.ok(await page.locator('#resume-all-start').isDisabled(), 'Nothing chosen: nothing to start');
     await page.getByRole('button', { name: zh('resumeAll.selectAll') }).click();
-    const box = page.getByRole('checkbox', { name: /^Synthetic 03\b/ });
+    const third = new RegExp('^' + sessionName(3) + '\\b'), box = page.getByRole('checkbox', { name: third });
     await box.focus(); await page.keyboard.press('Space');
     assert.equal(await box.isChecked(), false);
     assert.equal(await page.locator('#resume-all-start').textContent(), zh('resumeAll.start', { count: COUNT - 1 }));
