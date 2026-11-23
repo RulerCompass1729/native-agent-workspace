@@ -374,7 +374,7 @@ prove runtime compatibility. Record untested requirements explicitly.
 
 ## Push rules
 
-- Ask the maintainer before pushing, unless the maintainer overlay grants a
+- Ask the person before pushing, unless the maintainer overlay grants a
   standing authorization.
 - Never push `backup/*` or `lane/*`.
 - Never use `--no-verify` or bypass hooks or publication checks.
