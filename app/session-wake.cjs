@@ -54,7 +54,7 @@ function revoke(w) {
       try { const stat = fs.lstatSync(file); if (stat.isFile() && stat.uid === process.getuid()) fs.unlinkSync(file); } catch { /* The local automatic path stays disabled. */ }
     }
   } finally { try { fs.unlinkSync(temp); } catch { /* Never block human controls on cleanup. */ } }
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { w.edited?.(s); m.wake.status = 'cancelled'; m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { w.edited?.(s); m.wake.status = 'cancelled'; m.wake.settledAt = Date.now(); m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
   return saved;
 }
 function initialize(w) {
@@ -182,8 +182,9 @@ function holdable(w, intent, result) {
 function stillButler(w, intent) {
   try { const steward = stewardNow(w); return Boolean(steward) && steward.sessionId === intent.recipientId && steward.nativeId === intent.targetProof?.nativeId; } catch { return false; }
 }
+// settledAt: when it finally did not go out; the butler is told of it by then, not by when it was staged (R119).
 function refusedNotice(row, result) {
-  row.wake.status = 'not-sent';
+  row.wake.status = 'not-sent'; row.wake.settledAt = Date.now();
   row.text = `自动消息没有发出；不会自动重发。\n${result.reason}\n${row.wake.body}`;
   const cause = { message: result.reason, uiMessage: result.reasonUiMessage };
   row.uiMessage = displayMessage(uiError('error.wake.notSent', { reason: result.reason, body: row.wake.body }, { cause, param: 'reason' }).uiMessage, 'error.', row.text) || undefined;
@@ -356,7 +357,7 @@ function transfer(w, row) {
       if (result.status === 'submitted') for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
     }
     durable(w);
-  }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
+  }).catch(error => { intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
     .finally(() => arm(w));
 }
 function heldRows(w) {
@@ -420,7 +421,7 @@ function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
   for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
-    w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
+    w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.wake.settledAt = Date.now(); row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);
     if (cause && why) row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason: rawReason, body: row.wake.body }, cause, causeParam: 'reason' }, 'notice.', row.text) || row.uiMessage;

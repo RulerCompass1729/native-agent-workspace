@@ -27,12 +27,15 @@ function keyCode(key) {
 function undeliveredRow(row) {
   const intent = row?.wake;
   if (row?.origin !== 'agent-wake-intent' || typeof row.id !== 'string' || !row.id || !intent || typeof intent.recipientId !== 'string') return null;
-  if (intent.status === 'not-sent') return { outcome: 'not-sent', code: keyCode(row.uiMessage?.cause?.key), at: intent.time };
+  // When it failed, not when it was staged: a row staged before main restarted can fail after. A backend without
+  // settledAt gives the staging time.
+  const at = Number.isSafeInteger(intent.settledAt) ? intent.settledAt : intent.time;
+  if (intent.status === 'not-sent') return { outcome: 'not-sent', code: keyCode(row.uiMessage?.cause?.key), at };
   if (intent.status === 'cancelled') {
     const code = isCode(intent.cancellation?.code) ? intent.cancellation.code : keyCode(row.uiMessage?.key);
-    return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? intent.time };
+    return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? at };
   }
-  if (intent.status === 'unconfirmed' && row.uiMessage?.key === 'error.wake.deliveryUnconfirmed') return { outcome: 'unconfirmed', code: 'delivery-failed', at: intent.time };
+  if (intent.status === 'unconfirmed' && row.uiMessage?.key === 'error.wake.deliveryUnconfirmed') return { outcome: 'unconfirmed', code: 'delivery-failed', at };
   return null;
 }
 const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);

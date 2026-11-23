@@ -199,3 +199,23 @@ test('main hands every backend state to the intake: the real state listener reco
   client.emit('state', f.source.snapshot());
   assert.deepEqual(f.events().map(e => e.payload.outcome), ['cancelled:turn-not-completed']);
 });
+
+// Review F1: backends outlive main. A message staged before main restarted that fails after it is still announced,
+// at the time it failed.
+test('staged before main restarts, failed after: one event at the failure time', async t => {
+  const statuses = rows => rows.map(row => row.wake.status);
+  for (const [name, fail] of [
+    ['its one attempt failed', async f => f.finish()],
+    ['withdrawn by the person', async f => { wake.revoke(f.source); await f.finish(); }],
+    ['withdrawn at an observation boundary', async f => { wake.cancelParticipant(f.source, f.a, 'synthetic boundary'); await f.finish(); }],
+  ]) {
+    const f = await fixture(t, { receiveFails: true });
+    f.ra.emit('state', 'idle'); f.start('staged'); await f.call('Staged before the restart.', 'call-staged');
+    assert.equal(f.rows().at(-1).wake.status, 'staged', name);
+    f.advance(5000); const restarted = f.open(path.join(f.root, 'main-restarted-' + name.length)); f.advance(1000);
+    const failedAt = f.now(); await fail(f);
+    assert.notEqual(f.rows().at(-1).wake.status, 'staged', `${name}: ${statuses(f.rows())}`);
+    f.observe(restarted);
+    assert.deepEqual(f.events(restarted).map(e => e.payload.title), [new Date(failedAt).toISOString()], name);
+  }
+});
