@@ -148,3 +148,17 @@ test('legacy and translated gap growth both fit the complete serialized array on
     assert.ok(first.length <= 200); assert.equal(JSON.stringify(persistedMessages(first)), JSON.stringify(first)); assert.equal(JSON.stringify(rows), original);
   }
 });
+test('M58: live Codex replies carry their receive time; native history stays without one', () => {
+  const { applyCodexDelta, applyCodexMessage, applyCodexHistory } = require('../native-blocks.cjs');
+  const s = { nativeId: 'root', provider: 'codex', messages: [] }, before = Date.now();
+  const streamed = applyCodexDelta(s, { id: 'live-a', text: 'he', turnId: 't1' });
+  assert.equal(typeof streamed.time, 'number'); assert.ok(streamed.time >= before && streamed.time <= Date.now());
+  const first = streamed.time;
+  applyCodexDelta(s, { id: 'live-a', text: 'llo', turnId: 't1' }); applyCodexMessage(s, { id: 'live-a', text: 'hello', turnId: 't1' });
+  assert.equal(s.messages[0].time, first, 'Later deltas and completion keep the first receive time.');
+  const whole = applyCodexMessage(s, { id: 'live-b', text: 'done', turnId: 't1' });
+  assert.equal(typeof whole.time, 'number');
+  const h = { nativeId: 'root', provider: 'codex', messages: [] };
+  applyCodexHistory(h, [{ type: 'agentMessage', id: 'old-a', text: 'old', turnId: 't0' }], {});
+  assert.equal(h.messages.length, 1); assert.equal(h.messages[0].time, undefined, 'History has no native time; reconnect time is not its time.');
+});

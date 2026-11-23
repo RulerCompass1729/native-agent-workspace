@@ -1118,7 +1118,7 @@ class Workspace extends EventEmitter {
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; setActivity(s, ''); if (!this.approvalRoutes.has(s.id)) s.approval = null; }
-      if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
+      if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete', time: Date.now() });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && spaces.isMember(s, forward.roomId || 'shared') && forward.member === spaces.membershipRevision(s, forward.roomId || 'shared') && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
       const displayedPlan = forward && forwardTag === info.tag && !info.text && this.sharedReplies.hasCompletedPlan(s, forwardTag);
