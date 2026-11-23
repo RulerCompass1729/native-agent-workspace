@@ -212,7 +212,23 @@ function stewardLimit(taken, recipient) {
   if (taken.includes(recipient)) throw uiError("error.wake.turnRecipientRepeated");
   if (new Set(taken).size >= STEWARD_RECIPIENTS) throw uiError("error.wake.turnRecipientLimit", { limit: STEWARD_RECIPIENTS });
 }
+// R119 (the person, 11-23: 「不能错过项目经理的内容」): a message refused before it had a row of its own keeps only
+// its code, recipient and time here; main tells the butler about those addressed to it (butler-ingress.cjs
+// observeWakeUndelivered). Runtime-only, the last few.
+const UNDELIVERED_KEPT = 20;
+function undelivered(w, s, r, args, error) {
+  const recipientId = args?.recipient_id;
+  if (!r || typeof recipientId !== 'string' || !recipientId || recipientId.length > 100 || recipientId === s?.id) return;
+  const entry = { id: randomUUID(), at: Date.now(), recipientId, key: error?.uiMessage?.key || null };
+  if (error?.sourceIssue) entry.sourceIssue = error.sourceIssue;
+  r.wakeUndelivered = [...(r.wakeUndelivered || []), entry].slice(-UNDELIVERED_KEPT);
+  try { w.changed?.(s?.id); } catch { /* Shown with the next state. */ }
+}
 function stage(w, s, r, native, args) {
+  try { return stageCall(w, s, r, native, args); }
+  catch (error) { undelivered(w, s, r, args, error); throw error; }
+}
+function stageCall(w, s, r, native, args) {
   if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError(awaitingRead(w, r, s, native) ? "error.wake.turnAwaitingHumanRead" : "error.wake.turnRevokedByHuman");
   // Item 3: the calls the turn made before it read the person's words do not count against what it sends after.
   const epoch = r.wakeTurn.epoch || 0;
@@ -230,7 +246,7 @@ function stage(w, s, r, native, args) {
   }
   const promise = stageOnce(w, s, r, native, args);
   const call = { callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise, failed: false };
-  promise.catch(() => { call.failed = true; });
+  promise.catch(error => { call.failed = true; undelivered(w, s, r, args, error); });
   if (turn) turn.calls.push(call);
   else r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, epoch, calls: [call] };
   return promise;
@@ -258,11 +274,14 @@ async function stageOnce(w, s, r, native, args) {
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
     sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
-  if (!sourceValid(w, s, r, intent)) throw uiError("error.wake.turnRevokedByHumanOrSetting");
+  // The code says which (closed, storage, runtime changed…); the person reads one sentence for all of them.
+  const issue = sourceIssue(w, s, r, intent);
+  if (issue) throw Object.assign(uiError("error.wake.turnRevokedByHumanOrSetting"), { sourceIssue: issue.code });
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
   const target = await w.peerRunner.lookupWake(args.recipient_id, {
     id: intent.id, boundary: intent.boundary, senderId: s.id, senderNativeId: s.nativeId });
-  if (native.valid?.() === false || !sourceValid(w, s, r, intent) || r.turnId !== native.turnId) throw uiError("error.wake.authorizationInvalidated");
+  const after = sourceIssue(w, s, r, intent);
+  if (native.valid?.() === false || after || r.turnId !== native.turnId) throw Object.assign(uiError("error.wake.authorizationInvalidated"), after ? { sourceIssue: after.code } : {});
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.registered', params: { name: target.session.name, body: args.message } }, 'notice.', row.text) || undefined;

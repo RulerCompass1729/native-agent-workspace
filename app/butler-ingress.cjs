@@ -14,6 +14,27 @@ const unavailable = () => Object.assign(Error('Butler source unavailable'), { co
 const clipped = (value, limit) => typeof value === 'string' && value ? value.slice(0, limit) : undefined;
 const recoveryFailureReasons = Object.freeze({ capacity: 'capacity-retry-exhausted', routing: 'routing-retry-exhausted',
   forbidden: 'forbidden-retry-exhausted', connection: 'connection-retry-exhausted' });
+const CODE = /^[a-z0-9-]{1,80}$/;
+// Not CODE.test alone: it reads undefined as the string 'undefined'.
+const isCode = value => typeof value === 'string' && CODE.test(value);
+// A message key as a code: 'error.wake.recipientIdentityChanged' is 'recipient-identity-changed'.
+function keyCode(key) {
+  const last = typeof key === 'string' ? key.split('.').pop() : '';
+  const code = last.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase());
+  return isCode(code) ? code : 'unknown';
+}
+// A sender's row of an automatic message that did not go out: refused, withdrawn, or its one attempt failed.
+function undeliveredRow(row) {
+  const intent = row?.wake;
+  if (row?.origin !== 'agent-wake-intent' || typeof row.id !== 'string' || !row.id || !intent || typeof intent.recipientId !== 'string') return null;
+  if (intent.status === 'not-sent') return { outcome: 'not-sent', code: keyCode(row.uiMessage?.cause?.key), at: intent.time };
+  if (intent.status === 'cancelled') {
+    const code = isCode(intent.cancellation?.code) ? intent.cancellation.code : keyCode(row.uiMessage?.key);
+    return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? intent.time };
+  }
+  if (intent.status === 'unconfirmed' && row.uiMessage?.key === 'error.wake.deliveryUnconfirmed') return { outcome: 'unconfirmed', code: 'delivery-failed', at: intent.time };
+  return null;
+}
 const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
 const exactFields = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   [Object.prototype, null].includes(Object.getPrototypeOf(value)) &&
@@ -132,10 +153,11 @@ class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory), now = Date.now } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
     this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
-    this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set();
+    this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set(); this.undeliveredWakes = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
       if (/^control-refused:[a-f0-9]{64}$/.test(event.eventId)) this.controlRefusals.add(event.eventId);
+      if (/^wake-undelivered:[a-f0-9]{64}$/.test(event.eventId)) this.undeliveredWakes.add(event.eventId);
       if (event.eventId.startsWith('human-input:') && event.kind === 'blocked' &&
           ['human-message', 'human-message-content-unavailable'].includes(event.payload.reason)) this.humanInputs.add(event.eventId);
       const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
@@ -279,6 +301,35 @@ class ButlerIngress {
       if (s?.id !== current.sessionId || s.nativeId !== current.nativeId || !r || !Number.isSafeInteger(r.count) || !Number.isSafeInteger(r.at)) continue;
       this.controlRefused(s.id, s.nativeId, ['plugin', r.at, r.count], r.reason);
     }
+  }
+  // R119: an automatic message to the designated butler that did not go out, so NAW wakes the butler (the ordinary
+  // stewardWake path). Only the sender, the outcome with its code, and the time; never the message. Rows come from any
+  // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
+  // Only failures since this intake started: the history before it is not announced again.
+  observeWakeUndelivered(sessions = [], { steward } = {}) {
+    let current = null; try { current = steward?.(); } catch { return; }
+    if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      if (typeof s?.id !== 'string' || !s.id || s.id === current.sessionId) continue;
+      for (const row of Array.isArray(s.messages) ? s.messages : []) {
+        const failed = undeliveredRow(row);
+        if (failed && row.wake.recipientId === current.sessionId && row.wake.senderId === s.id) this.undeliveredWake(s.id, row.id, failed);
+      }
+      for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
+        if (entry?.recipientId !== current.sessionId) continue;
+        const code = isCode(entry.sourceIssue) ? entry.sourceIssue : keyCode(entry.key);
+        this.undeliveredWake(s.id, entry.id, { outcome: 'not-sent', code, at: entry.at });
+      }
+    }
+  }
+  undeliveredWake(memberId, id, { outcome, code, at }) {
+    if (typeof id !== 'string' || !id || !Number.isSafeInteger(at) || at < this.humanSince) return false;
+    const eventId = `wake-undelivered:${hash([memberId, id])}`;
+    if (this.undeliveredWakes.has(eventId)) return false;
+    this.record({ eventId, sourceRef: `wake-undelivered:${memberId}`, kind: 'blocked',
+      payload: { memberId, reason: 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
+    this.undeliveredWakes.add(eventId);
+    return true;
   }
   // The backend validates the live failed turn; intake never settles or replays its task.
   observeRecoveryFailures(sessions = []) {
