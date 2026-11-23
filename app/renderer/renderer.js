@@ -5335,7 +5335,12 @@ function renderStewardWakeWarning(wakeBlock) {
   if (wakeWarning) {
     wakeWarning.hidden = !wakeBlock;
     if (wakeBlock) {
-      wakeWarning.querySelector('p').textContent = uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason: uiText(`stewardWake.reason.${wakeBlock.reason}`) });
+      // The butler's own handoff: only the person's step in its sidebar menu ends it (steward-wake.cjs hold).
+      const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId), name = butler?.name || butler?.id;
+      const action = name ? uiText('queue.releaseRotation', { name }) : '';
+      wakeWarning.querySelector('p').textContent = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release'
+        ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
+        : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason: uiText(`stewardWake.reason.${wakeBlock.reason}`) });
       wakeWarning.querySelector('button').textContent = uiText('stewardWake.openRecord');
       wakeWarning.querySelector('button').onclick = () => stewardSteps?.open();
     }

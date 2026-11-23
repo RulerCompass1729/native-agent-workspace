@@ -25,6 +25,7 @@ const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // (butler-ingress.cjs controlRefused) so the butler is woken; wakes that only announce refusals stop after this many
 // in a row, until one of its calls succeeds, so a call refused every time cannot keep waking it.
 const REFUSAL_WAKES = 3, REFUSED = 'control-refused';
+const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
@@ -106,6 +107,7 @@ class StewardWake {
   view({ held = false } = {}) {
     const on = this.active(), blocked = on && this.blocked?.reason && (this.blocked.visible || held) ? {
       since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
+      ...(this.blocked.step ? { step: this.blocked.step } : {}),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };
   }
@@ -130,6 +132,26 @@ class StewardWake {
     blocked.visible = true; blocked.minute = minute;
     if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
   }
+  // The butler's own handoff left unresolved (queue-dispatch.cjs ownHandoffStep): no wake reaches it until the person
+  // takes `step`. Said at once and kept whether or not anything is due (R117, the person, 2026-11-23: 「我点了卡,但是你这边
+  // 完全没反应」); one record line per hold. Sends nothing.
+  hold(reason, step) {
+    if (!this.active()) { this.clearBlocked(); return; }
+    const now = this.now(), before = this.blocked && now >= this.blocked.since ? this.blocked : null;
+    const previous = before && `${before.reason}/${before.step}`;
+    if (!before) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
+    const blocked = this.blocked;
+    blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable'; blocked.step = HOLD_STEPS.includes(step) ? step : 'release';
+    if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
+      blocked.recordedReason = blocked.reason; blocked.records++;
+      try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); } catch { /* The step is still said. */ }
+    }
+    const minute = Math.floor((now - blocked.since) / 60000), changed = !blocked.visible || previous !== `${blocked.reason}/${blocked.step}` || minute !== blocked.minute;
+    blocked.visible = true; blocked.minute = minute;
+    if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
+  }
+  // The hold no longer applies (released, or no longer the butler's own): the ordinary checks take over.
+  endHold() { if (this.blocked?.step) this.clearBlocked(); }
   latest() {
     const ledger = this.ledger();
     if (!ledger) throw fault('The event record is unavailable', 'STEWARD_WAKE_UNAVAILABLE');
@@ -225,4 +247,4 @@ class StewardWake {
   }
 }
 
-module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });
+module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, HOLD_STEPS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });

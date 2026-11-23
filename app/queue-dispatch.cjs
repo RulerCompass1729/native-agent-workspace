@@ -2807,6 +2807,9 @@ class QueueDispatcher {
   // left the butler at work, which the fresh read below sees.
   async wakeSteward(current, holding) {
     try {
+      const own = this.ownHandoffStep(current.snapshot.sessions);
+      if (own) return this.stewardWake.hold('rotation-control-unresolved', own);
+      this.stewardWake.endHold();
       if (!this.stewardWake.due()) { this.stewardWake.clearBlocked(); return; }
       const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
@@ -2970,6 +2973,17 @@ class QueueDispatcher {
       return null;
     }
     return { steward, session };
+  }
+
+  // The step the person can take when the designated butler, in no space, is held by its own rotation episode left
+  // invalid: the backend refuses every dispatch send to it (workspace.cjs send) until the person discards that handoff
+  // (renderer.js rotationReleaseAction), on a backend before alpha.284 after updating it (releaseRotation). Null otherwise.
+  ownHandoffStep(sessions) {
+    const steward = this.stewardOutside(sessions), session = steward && sessions.find(s => s.id === steward.sessionId);
+    if (!session || session.archived || rotationEpoch(session) === null || session.rotationEpisode.state !== 'invalid') return null;
+    let version = session.runtimeVersion;
+    try { version = this.client?.route(session.id)?.state?.runtimeVersion ?? version; } catch { /* The session's own field. */ }
+    return releaseBackendOutdated(version) ? 'update-backend' : 'release';
   }
 
   // The designated butler when it is this very native session and in no space; anything else names nobody.
