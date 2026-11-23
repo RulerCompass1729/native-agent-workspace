@@ -5132,6 +5132,8 @@ function renderPaneSwitches(s, inRoom) {
   $('open-native-terminal').hidden = !paired || !$('native-pane').hidden;
   $('open-native-terminal').setAttribute('aria-expanded', String(!$('native-pane').hidden));
   $('return-to-chat').hidden = !paired || terminalLayout !== 'maximized';
+  $('edge-chat').hidden = $('return-to-chat').hidden || $('native-pane').hidden;
+  $('edge-terminal').hidden = $('open-native-terminal').hidden;
 }
 function visibleModeControl(next) {
   const ids = next === 'chat' ? ['chat-tab', 'return-to-chat'] : ['terminal-tab', 'open-native-terminal'];
@@ -6543,8 +6545,12 @@ for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace
   };
 }
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
-$('open-native-terminal').onclick = () => attempt(() => switchMode('terminal'));
-$('return-to-chat').onclick = () => attempt(() => switchMode('chat'));
+const openTerminal = () => attempt(() => switchMode('terminal'));
+const returnToChat = () => attempt(() => switchMode('chat'));
+$('open-native-terminal').onclick = openTerminal;
+$('edge-terminal').onclick = openTerminal;
+$('return-to-chat').onclick = returnToChat;
+$('edge-chat').onclick = returnToChat;
 $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
 // The chat's own full-width toggle: hide the terminal, or bring it back beside the chat.
 $('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });

@@ -32,10 +32,41 @@ test('mode buttons belong to their panes, without a full-width mode row', () => 
   }
 });
 
+test('fullscreen edge handles are real buttons on the collapsed side, in visual order', () => {
+  const children = [...html.matchAll(/<(?:div|section|button) id="([\w-]+)"/g)].map(match => match[1]);
+  const at = id => children.indexOf(id);
+  for (const [id, pane, name, text, side] of [
+    ['edge-chat', 'conversation-pane', 'edge.expandChat', 'view.chat', 'before'],
+    ['edge-terminal', 'native-pane', 'edge.expandTerminal', 'edge.terminal', 'after'],
+  ]) {
+    const button = html.match(new RegExp(`<button id="${id}"[^>]*>([\\s\\S]*?)</button>`));
+    assert.ok(button, id + ' is a button');
+    const attrs = Object.fromEntries([...button[0].slice(0, button[0].indexOf('>')).matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
+    assert.equal(attrs.type, 'button');
+    assert.equal(attrs['aria-controls'], pane);
+    assert.equal(attrs['data-naw-aria-label'], name);
+    assert.equal(attrs['data-naw-title'], 'terminal.restoreSplit');
+    assert.match(button[0], /^<button[^>]* hidden[ >]/, id + ' starts hidden');
+    assert.ok(button[1].includes(`data-naw-text="${text}"`), id + ' shows a short visible label');
+    for (const lang of ['zh', 'en']) {
+      assert.ok(catalog[lang][name] && catalog[lang][text]);
+      assert.ok(catalog[lang][name].toLowerCase().includes(catalog[lang][text].toLowerCase()), `${lang} ${id}: accessible name contains the visible label`);
+    }
+    if (side === 'before') assert.ok(at(id) < at(pane) && at(pane) < at('native-pane'));
+    else assert.ok(at('conversation-pane') < at(pane) && at(pane) < at(id));
+  }
+  const handler = id => new RegExp(`\\$\\('${id}'\\)\\.onclick = ([\\w$]+);`);
+  for (const [handle, existing] of [['edge-chat', 'return-to-chat'], ['edge-terminal', 'open-native-terminal']]) {
+    const shared = source.match(handler(existing))?.[1];
+    assert.ok(shared, existing + ' uses a named handler');
+    assert.equal(source.match(handler(handle))?.[1], shared, handle + ' runs the same function as ' + existing);
+  }
+});
+
 function harness() {
   const make = id => ({ id, hidden: false, disabled: false, visible: true, attrs: {},
     setAttribute(k, v) { this.attrs[k] = v; }, getClientRects() { return this.visible && !this.hidden ? [{}] : []; } });
-  const ids = ['conversation-pane', 'native-pane', 'chat-tab', 'terminal-tab', 'chat-pane-tabs', 'native-pane-tabs', 'native-pane-title', 'open-native-terminal', 'return-to-chat'];
+  const ids = ['conversation-pane', 'native-pane', 'chat-tab', 'terminal-tab', 'chat-pane-tabs', 'native-pane-tabs', 'native-pane-title', 'open-native-terminal', 'return-to-chat', 'edge-chat', 'edge-terminal'];
   const nodes = Object.fromEntries(ids.map(id => [id, make(id)]));
   const context = vm.createContext({ $: id => nodes[id], mode: 'chat', terminalLayout: 'split' });
   vm.runInContext(source.slice(source.indexOf('function renderPaneSwitches('), source.indexOf('function renderHeaderLayout(')), context);
@@ -52,13 +83,21 @@ test('pane-local entry and return controls follow split, closed, maximized and r
     assert.equal(nodes['open-native-terminal'].hidden, layout !== 'hidden');
     assert.equal(nodes['open-native-terminal'].attrs['aria-expanded'], String(layout !== 'hidden'));
     assert.equal(nodes['return-to-chat'].hidden, layout !== 'maximized');
+    assert.equal(nodes['edge-chat'].hidden, layout !== 'maximized', 'conversation handle only while the terminal is fullscreen');
+    assert.equal(nodes['edge-terminal'].hidden, layout !== 'hidden', 'terminal handle only while the conversation is fullscreen');
     assert.equal(nodes['native-pane-title'].hidden, true);
   }
+  // A space member restored to chat while the shared layout stays maximized.
+  context.terminalLayout = 'maximized'; context.mode = 'chat'; nodes['native-pane'].hidden = true;
+  vm.runInContext('renderPaneSwitches({ id: "synthetic" }, true)', context);
+  assert.equal(nodes['edge-chat'].hidden, true, 'no expand-conversation handle while the conversation is already shown');
+  assert.equal(nodes['edge-terminal'].hidden, false);
+  context.terminalLayout = 'split'; nodes['native-pane'].hidden = false;
   vm.runInContext('renderPaneSwitches({ id: "synthetic" }, true)', context);
   assert.equal(nodes['native-pane-title'].hidden, false, 'focused space member keeps its identity beside the terminal control');
   nodes['conversation-pane'].hidden = true;
   vm.runInContext('renderPaneSwitches({ id: "synthetic" }, true)', context);
-  for (const id of ['chat-pane-tabs', 'native-pane-tabs', 'open-native-terminal', 'return-to-chat']) assert.equal(nodes[id].hidden, true);
+  for (const id of ['chat-pane-tabs', 'native-pane-tabs', 'open-native-terminal', 'return-to-chat', 'edge-chat', 'edge-terminal']) assert.equal(nodes[id].hidden, true);
   assert.equal(nodes['native-pane-title'].hidden, false);
 });
 
