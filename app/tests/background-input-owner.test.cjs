@@ -252,6 +252,17 @@ test('the person taking the target after the card was sent does not by itself vo
   assert.equal(f.w.get(f.target).owner, 'person-window');
 });
 
+test('once the target\'s terminal moved on (the person opened it), the card says before the click that it cannot be sent; nothing is typed', async t => {
+  const f = await cards(t);
+  const card = await f.ask([f.target, 'synthetic text']);
+  assert.equal(f.message(card).deliveryBlocked, undefined);
+  f.w.runtimes.get(f.target).terminal.journal.append('output', 'Synthetic resize', 100, 30, () => 'Synthetic resize');
+  assert.equal(f.shown(card).actionable, false);
+  assert.equal(f.message(card).deliveryBlocked, 'state-changed', 'the conversation card says what a click would find');
+  assert.notEqual((await f.confirm(card)).state, 'complete');
+  assert.deepEqual(f.bytes, []);
+});
+
 test('only a card the person confirmed can carry a confirmation into input: callers cannot pass their own', () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const start = source.indexOf("  for (const name of ['prepareInput', 'observe',"), end = source.indexOf('\n  });', start) + '\n  });'.length;

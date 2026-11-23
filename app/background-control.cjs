@@ -1132,6 +1132,11 @@ class BackgroundControl {
     return DELIVERY_REASONS.has(reason) ? reason : '';
   }
   deliveryNote(row, snapshot) {
+    // A terminal that moved on (e.g. the person opened the target) voids the card on click; say so first.
+    if (row.command.method === 'input' && row.state === 'confirmation-required') {
+      const checked = operation.checkTerminalInput(row.terminalConsent, snapshot, row.command.arguments[0]);
+      if (checked.status === 'invalid') return { deliveryBlocked: checked.reason };
+    }
     const reason = this.deliveryBlocked(row, snapshot);
     return reason ? { deliveryBlocked: reason } : {};
   }
