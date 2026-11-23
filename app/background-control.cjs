@@ -1084,7 +1084,7 @@ class BackgroundControl {
         return this.receipt(row.actor, id);
       }
     }
-    this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); delete r.reason; delete r.resultNotice; delete r.stateUiMessage; Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
+    this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); delete r.reason; delete r.resultNotice; delete r.stateUiMessage; delete r.standingFallback; Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
     return this.perform(row.actor, row.command, context, async () => { authorize?.(); await context.checkActor(); authorize?.(); }, { operationId: id, confirmation: row.confirmation, response, terminalConsent: row.terminalConsent, expiresAt: confirmationExpiresAt(row), authorize });
     }).then(result => {
       // Whatever came of it (carried out, cancelled, or not carried out because the asking session changed), the agent

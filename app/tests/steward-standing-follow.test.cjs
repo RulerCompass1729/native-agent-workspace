@@ -45,6 +45,13 @@ test('turned off, never turned on, or unreadable: no reason', t => {
   assert.deepEqual(f.policy.view(), { on: false, limit: 30, unavailable: true });
 });
 
+test('the person revokes the butler: nobody to turn it on for, so no reason and no code', t => {
+  const f = fixture(t);
+  f.role.set(null);
+  assert.deepEqual(f.policy.view(), { on: false, limit: 30, unavailable: false });
+  assert.equal(f.policy.fallback(NEW, order('revoked'), f.state, 'shared'), null);
+});
+
 test('the person turns it on again: it is for the current butler, which may order members directly', t => {
   const f = fixture(t);
   assert.deepEqual(f.policy.set(f.human, true), { on: true, limit: 30, unavailable: false });
@@ -52,7 +59,7 @@ test('the person turns it on again: it is for the current butler, which may orde
   const grant = f.policy.take(NEW, order('again'), f.state, 'shared');
   assert.equal(grant?.action, 'memberOrder');
   assert.equal(f.policy.take(OLD, order('old'), f.state, 'shared'), null, 'not for the previous butler');
-  assert.equal(f.policy.fallback(NEW, order('again')), null);
+  assert.equal(f.policy.fallback(NEW, order('again'), f.state, 'shared'), null);
 });
 
 test('a rotation keeps the designation: the successor keeps the permission and gets no fallback', t => {
@@ -64,21 +71,34 @@ test('a rotation keeps the designation: the successor keeps the permission and g
   assert.deepEqual(f.role.selected, as(NEW), 'the person\'s designation is unchanged');
   assert.deepEqual(f.policy.view(), { on: true, limit: 30, unavailable: false });
   assert.equal(f.policy.take(next, order('rotated'), state, 'shared')?.action, 'memberOrder');
-  assert.equal(f.policy.fallback(next, order('rotated')), null);
+  assert.equal(f.policy.fallback(next, order('rotated'), f.state, 'shared'), null);
 });
 
 test('the fallback code: only the current butler, only a covered local action, only while it is on for another', t => {
   const f = fixture(t);
-  assert.equal(f.policy.fallback(NEW, order('a')), CODE);
-  assert.equal(f.policy.fallback(OLD, order('b')), null, 'the previous butler is no longer the butler');
-  assert.equal(f.policy.fallback(MEMBER, order('c')), null);
-  assert.equal(f.policy.fallback({ ...NEW, nativeId: 'native-other' }, order('d')), null);
+  assert.equal(f.policy.fallback(NEW, order('a'), f.state, 'shared'), CODE);
+  assert.equal(f.policy.fallback(OLD, order('b'), f.state, 'shared'), null, 'the previous butler is no longer the butler');
+  assert.equal(f.policy.fallback(MEMBER, order('c'), f.state, 'shared'), null);
+  assert.equal(f.policy.fallback({ ...NEW, nativeId: 'native-other' }, order('d'), f.state, 'shared'), null);
   for (const method of ['initial', 'openLocalFile', 'interrupt', 'input', 'spaceMerge'])
-    assert.equal(f.policy.fallback(NEW, { method, arguments: [], operation_id: method }), null, method);
+    assert.equal(f.policy.fallback(NEW, { method, arguments: [], operation_id: method }, f.state, 'shared'), null, method);
+  // Turning it on again would not cover these either, so the card does not say it would (review round 1, finding 1).
+  const create = { method: 'create', arguments: [{ provider: 'codex', cwd: f.dir, name: 'Synthetic' }], operation_id: 'create' };
+  assert.equal(f.policy.fallback(NEW, create, f.state, 'shared'), null, 'a creation the permission never covers');
+  const inSpace = { ...f.state, sessions: f.state.sessions.map(x => x.id === NEW.id ? { ...x, roomId: 'shared', roomIds: ['shared'] } : x) };
+  assert.equal(f.policy.fallback(NEW, order('g'), inSpace, 'shared'), null, 'the butler in a space');
+  const archived = { ...f.state, sessions: f.state.sessions.map(x => x.id === NEW.id ? { ...x, archived: true } : x) };
+  assert.equal(f.policy.fallback(NEW, order('h'), archived, 'shared'), null, 'the butler archived');
+  const kept = f.policy.read(), now = Date.now();
+  f.policy.write({ ...kept, used: Array.from({ length: 30 }, (_, i) => ({ at: now - i, id: 'slot-' + i })) });
+  assert.equal(f.policy.fallback(NEW, order('i'), f.state, 'shared'), null, 'the hourly limit is used up');
+  f.policy.write({ ...kept, used: Array.from({ length: 30 }, (_, i) => ({ at: now - 3600001 - i, id: 'old-' + i })) });
+  assert.equal(f.policy.fallback(NEW, order('j'), f.state, 'shared'), CODE, 'slots older than an hour do not count');
+  f.policy.write(kept);
   f.policy.set(f.human, false);
-  assert.equal(f.policy.fallback(NEW, order('e')), null, 'off: nothing to explain');
+  assert.equal(f.policy.fallback(NEW, order('e'), f.state, 'shared'), null, 'off: nothing to explain');
   fs.writeFileSync(f.policy.file, '{', { mode: 0o600 });
-  assert.equal(f.policy.fallback(NEW, order('f')), null, 'unreadable: no claim');
+  assert.equal(f.policy.fallback(NEW, order('f'), f.state, 'shared'), null, 'unreadable: no claim');
 });
 
 function control(t, f, standingFallback) {
@@ -101,7 +121,7 @@ test('a card in place of the permission carries the code to the butler and to th
   const f = fixture(t);
   const plain = control(t, f, () => null);
   const without = await plain.ask('without-code');
-  const c = control(t, f, (actor, command) => f.policy.fallback(actor, command));
+  const c = control(t, f, (actor, command) => f.policy.fallback(actor, command, f.state, 'shared'));
   const result = await c.ask('with-code');
   assert.equal(result.state, 'confirmation-required');
   assert.equal(result.standingFallback, CODE);
@@ -110,6 +130,12 @@ test('a card in place of the permission carries the code to the butler and to th
   const card = c.controller.rows(NEW.id).find(row => row.backgroundOperation.id === 'with-code').backgroundOperation;
   assert.equal(card.standingFallback, CODE);
   assert.equal(plain.controller.rows(NEW.id).find(row => row.backgroundOperation.id === 'without-code').backgroundOperation.standingFallback, undefined);
+  // Once the person answers, the question it explained is closed (review round 1, finding 3).
+  const answered = await c.controller.decide(NEW.id, NEW.nativeId, 'with-code', 1);
+  assert.equal(answered.state, 'complete', JSON.stringify(answered));
+  assert.deepEqual(c.effects, ['join']);
+  assert.equal(Object.hasOwn(answered, 'standingFallback'), false, 'not in the result the butler reads');
+  assert.equal(Object.hasOwn(c.controller.rows(NEW.id).find(row => row.backgroundOperation.id === 'with-code').backgroundOperation, 'standingFallback'), false);
 });
 
 test('only the known code is recorded: other values or a failing hook leave the card as it was', async t => {
@@ -129,7 +155,7 @@ test('the permission applies: no card and no code', async t => {
   const f = fixture(t);
   f.policy.set(f.human, true);
   f.state.sessions.find(s => s.id === NEW.id).roomId = null;
-  const c = control(t, f, (actor, command) => f.policy.fallback(actor, command));
+  const c = control(t, f, (actor, command) => f.policy.fallback(actor, command, f.state, 'shared'));
   const result = await c.ask('direct');
   assert.equal(result.state, 'complete');
   assert.equal(result.approvedBy, 'standing');
@@ -152,9 +178,9 @@ test('the switch stays the person\'s: a background or member call cannot turn it
 
 test('main passes the fallback hook; the card and the switch have their words in both languages', () => {
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
-  assert.match(main, /standingFallback: \(actor, command\) => stewardStanding\.fallback\(actor, command\)/u);
+  assert.match(main, /standingFallback: \(actor, command, context\) => stewardStanding\.fallback\(actor, command,\s+sessionLabels\.apply\(roomState\.apply\(context\.client\.snapshot\(\)\)\), context\.view\.spaceId \|\| 'shared'\)/u);
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
-  assert.match(renderer, /op\.standingFallback === 'standing-other-designation'/u);
+  assert.match(renderer, /card && !op\.replacedBy && !op\.disposition && op\.standingFallback === 'standing-other-designation'/u);
   for (const language of ['zh', 'en']) for (const key of ['standing.offOther', 'background.card.standingOtherDesignation']) {
     const words = locale.format(language, key);
     assert.ok(words && words !== key, `${language} ${key}`);
