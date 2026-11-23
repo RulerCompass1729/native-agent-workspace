@@ -334,7 +334,10 @@ function transfer(w, row) {
     else {
       intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
       // It took one: the others held here for it wait out its new minute instead of being refused for it first.
-      if (result.status === 'submitted') for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
+      if (result.status === 'submitted') {
+        for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
+        answeredButler(w, intent);
+      }
     }
     durable(w);
   }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
@@ -446,6 +449,22 @@ function reserveBudget(s, id, senderId, senderKey = senderId) {
   s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0,
     senders: { ...senders, [senderKey]: { id, streak: streak + 1 } } };
   return s.wakeBudget;
+}
+// The person, 2026-11-23: a member's message the designated butler took clears the butler's run to that member. Both
+// live here, in the member's backend: receive() counts the butler's messages on this session, transfer() sees this one
+// taken. The receiver-wide minute (lastAt) and every other sender's run stay.
+function clearSenderStreak(s, senderId, senderKey = senderId) {
+  const budget = budgetView(s), senders = { ...budget.senders };
+  let cleared = false;
+  for (const key of new Set([senderKey, senderId])) {
+    if (senders[key]?.streak) { senders[key] = { ...senders[key], streak: 0 }; cleared = true; }
+  }
+  if (cleared) s.wakeBudget = { ...budget, senders };
+  return cleared;
+}
+function answeredButler(w, intent) {
+  const s = w.sessions.get(intent.senderId);
+  if (s && stillButler(w, intent)) clearSenderStreak(s, intent.recipientId, intent.targetProof.nativeId);
 }
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }
 async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
@@ -566,4 +585,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };
