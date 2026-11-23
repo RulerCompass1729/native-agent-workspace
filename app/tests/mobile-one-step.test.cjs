@@ -59,7 +59,7 @@ test('QR pixel expiry does not cancel a redeemed enrollment window; closing stil
 });
 test('a restore that stopped says why and offers the one action that helps',async()=>{
  const cases=[
-  [{paired:false,resumeRequired:true,resumeReason:'not-ready'},'手机入口未恢复：Tailscale 还没就绪。就绪后会自动接回，不用操作。','恢复手机连接'],
+  [{paired:false,resumeRequired:true,resumeReason:'not-ready'},'手机入口未恢复：Tailscale 还没就绪。就绪后会自动接回；几分钟后还是这样，请打开 Tailscale 并确认已登录。','恢复手机连接'],
   [{paired:false,resumeRequired:true,resumeReason:'port-in-use',resumePort:45123},'手机入口未恢复：端口 45123 被别的程序占用。关掉它后点“恢复手机连接”。','恢复手机连接'],
   [{paired:false,resumeRequired:true,resumeReason:'other'},'手机入口未恢复：本机没能完成恢复。点“恢复手机连接”再试。','恢复手机连接'],
   [{paired:false,reconnectRequired:true,resumeReason:'expired'},'手机入口未恢复：配对已到期（每次配对保留 7 天）。点“连接手机”重新扫码。','连接手机'],

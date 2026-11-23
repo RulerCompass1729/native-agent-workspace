@@ -10,6 +10,7 @@ function fixture() {
     openUntil() { return context.openUntil === undefined ? context.now + 120000 : context.openUntil; }
     resumeInfo(){return context.savedEndpoint||null;}
     resumeBlocker(){return context.blocker||null;}
+    async preparePersistence(){if(context.holdPrepare)await new Promise(r=>{context.releasePrepare=r;});}
     approvalStatus(){return {paired:false,enabled:false,registered:false,pending:null,...(context.savedEndpoint&&!context.blocker?{resumeRequired:true}:{})};}
     setEndpoint(value){this.endpoint=value;}
     async resume(validate){if(!await validate())throw Error('Synthetic changed carrier');calls.push({method:'resume'});return {restored:true};}
@@ -417,6 +418,19 @@ test('a revoke during an attempt keeps a late "not ready" answer from scheduling
   const attempt = f.context.resumeAppMobileOnBoot(); await f.settle();
   f.context.revokeAppMobile(); f.timers.clear(); f.context.releaseRecovery(); await attempt;
   assert.deepEqual(f.delays(), []); assert.equal(f.servers.length, 0); assert.deepEqual(f.logs, []);
+});
+test('a saved-pairing reason seen at boot is not shown once the broker says the pairing can resume', async () => {
+  const f = bootFixture(); f.context.blocker = 'refused'; f.context.recoveryErrors = [notReady()];
+  await f.context.resumeAppMobileOnBoot();
+  assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, ['[mobile-pairing] boot refused']);
+  f.context.blocker = null;
+  const value = await f.status(); assert.equal(value.resumeRequired, true); assert.equal(value.resumeReason, undefined);
+});
+test('a person\'s action while the attempt is still preparing is newer, even when the attempt fails before its own step', async () => {
+  const f = bootFixture(); f.context.holdPrepare = true;
+  const attempt = f.context.resumeAppMobileOnBoot(); await f.settle();
+  f.context.revokeAppMobile(); f.context.savedEndpoint = null; f.context.releasePrepare(); await attempt;
+  assert.deepEqual(f.delays(), []); assert.deepEqual(f.logs, []); assert.equal((await f.status()).resumeReason, undefined);
 });
 test('waking from sleep runs a pending retry at once and starts its backoff over', async () => {
   const f = bootFixture(); f.context.recoveryErrors = Array.from({ length: 4 }, notReady);

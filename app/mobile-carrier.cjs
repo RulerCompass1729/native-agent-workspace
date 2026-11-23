@@ -5,7 +5,7 @@ const { execFile } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { validActor } = require('./mobile-identity.js');
 const fail = (code = 'MOBILE_CARRIER_UNAVAILABLE') => Object.assign(Error('The private mobile entry could not be verified.'), { code });
-// Tailscale not started, not logged in or offline yet, or the entry not served yet: a later check may pass.
+// Tailscale not started, not logged in or offline yet, or nothing served for this host yet: a later check may pass.
 const notReady = () => Object.assign(fail(), { carrierNotReady: true });
 const bindings = new WeakMap();
 const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object' ?
@@ -78,7 +78,8 @@ function inspect(status, serve, { port = 48765, sharedHostConfirmed = false } = 
     }
    }
   }
-  if (matches.length !== 1) throw matches.length ? fail() : notReady();
+  // Entries for this host that no longer reach the port are a changed setup, not a slow start.
+  if (matches.length !== 1) throw matches.length || peers.size ? fail() : notReady();
   if ((peers.size !== 1 || unproven) && !sharedHostConfirmed) throw Object.assign(fail('MOBILE_SHARED_HOST'), { otherPorts: [...peers].filter(site => site !== matches[0]).map(site => Number(new URL(site).port || 443)).sort((a,b)=>a-b) });
   const result = Object.freeze({ origin: matches[0], actor, port });
   if (!unproven && knownTopology(configs) && (typeof status.Self.UserID !== 'number' || Number.isSafeInteger(status.Self.UserID))) {

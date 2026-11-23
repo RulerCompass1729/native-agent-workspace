@@ -24,11 +24,13 @@ test('a carrier still starting, logged out, offline or not yet serving is "not r
   assert.equal(caught(() => carrier.findExecutable({ realpathSync() { throw Error('ENOENT'); } })).carrierNotReady, true);
 });
 
-test('a changed account, a funnel, a second entry or a bad shape is never "not ready"', () => {
+test('a changed account, an entry moved to another port, a funnel, a second entry or a bad shape is never "not ready"', () => {
   const expected = carrier.binding(carrier.inspect(status(), serve()));
   const funnel = { ...serve(), AllowFunnel: { [host + ':10000']: true } };
   const twice = serve(); twice.TCP[10001] = { HTTPS: true }; twice.Web[host + ':10001'] = { Handlers: { '/': { Proxy: 'http://127.0.0.1:48765' } } };
+  const moved = serve(); moved.Web[host + ':10000'].Handlers['/'].Proxy = 'http://127.0.0.1:50000';
   const cases = [
+    () => carrier.inspect(status(), moved),
     () => carrier.inspectRestored({ ...status({ UserID: 8 }), User: { 8: { LoginName: actor } } }, serve(), expected),
     () => carrier.inspect(status(), funnel),
     () => carrier.inspect(status(), twice),

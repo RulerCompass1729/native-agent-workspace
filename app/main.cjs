@@ -318,7 +318,7 @@ async function startAppMobileListener(options,handler,generation) {
 async function resumeAppMobile(context,value){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||typeof value.sharedHostConfirmed!=='boolean'||!primary||quitting||mobileOpening)throw uiError('error.mobile.carrierUnavailable');
   const broker=appMobileBroker();await broker.preparePersistence?.(context?'restore':'boot');if(!primary||quitting||mobileOpening||context&&!isCurrentHumanContext(context))throw uiError('error.mobile.carrierUnavailable');const endpoint=broker.resumeInfo();if(!endpoint)throw uiError('error.mobile.carrierUnavailable');
-  const generation=++mobileGeneration,request=++mobileQrRequest;mobileOpening=true;let currentEndpoint;
+  const generation=++mobileGeneration,request=++mobileQrRequest;mobileOpening=true;let currentEndpoint;if(!context)mobileBootGeneration=generation;
   const current=()=>generation===mobileGeneration&&request===mobileQrRequest&&!quitting&&primary&&(!context||isCurrentHumanContext(context));
   const validate=async()=>{
     const carrier=context?await detectAppMobile({view:{mobileEndpoint:{port:endpoint.port}}},value):
@@ -342,7 +342,7 @@ function appMobileLog(phase,category,elapsedMs){
 // After an outage Tailscale can come up after NAW. Only "not ready yet" is retried, with the full checks each time and
 // capped exponential backoff (5 s doubling to 1 min); a pairing action, revoke or quit since the attempt cancels it.
 const MOBILE_RESUME_DELAYS=[5000,10000,20000,40000,60000];
-let mobileResumeRetry,mobileResumeNow,mobileResumeState=null;
+let mobileResumeRetry,mobileResumeNow,mobileResumeState=null,mobileBootGeneration=0;
 function mobileResumeReason(error){
   const blocked=mobileBroker?.resumeBlocker?.();
   if(blocked)return blocked;
@@ -360,10 +360,12 @@ async function resumeAppMobileOnBoot(attempt=0){
     mobileResumeState=null;
     if(attempt)appMobileLog('boot-retry','ok',Math.max(0,Date.now()-started));
   }catch(error){
-    // The attempt itself advances the generation once; anything more is a newer action by the person.
-    if(mobileGeneration>before+1||quitting)return;
-    const reason=mobileResumeReason(error),generation=mobileGeneration;
-    mobileResumeState={reason,generation,port:mobileBroker?.resumeInfo?.()?.port};
+    // Anything past the generation this attempt took (or the one before it, if it failed first) is a newer action by the person.
+    if(mobileGeneration>Math.max(before,mobileBootGeneration)||quitting)return;
+    let reason='other',port;
+    try{reason=mobileResumeReason(error);port=mobileBroker?.resumeInfo?.()?.port;}catch{}
+    const generation=mobileGeneration;
+    mobileResumeState={reason,generation,port};
     if(reason!==previous)appMobileLog(attempt?'boot-retry':'boot',reason==='other'?'unavailable':reason,Math.max(0,Date.now()-started));
     if(reason!=='not-ready')return;
     const run=next=>{
@@ -381,7 +383,8 @@ function wakeAppMobileResume(){
 }
 function appMobileApprovalStatus(value){
   const status=appMobileBroker().approvalStatus(value),s=mobileResumeState;
-  if(!status.resumeRequired||!s||s.generation!==mobileGeneration)return status;
+  // The broker states saved-pairing reasons itself, live; only reasons it cannot see are remembered here.
+  if(!status.resumeRequired||!s||s.generation!==mobileGeneration||!['not-ready','port-in-use','other','changed'].includes(s.reason))return status;
   if(s.reason==='changed')return {...status,resumeRequired:false,reconnectRequired:true,resumeReason:'changed'};
   return {...status,resumeReason:s.reason,...(s.reason==='port-in-use'&&s.port?{resumePort:s.port}:{})};
 }
