@@ -1790,6 +1790,7 @@ async function boot() {
     },
     standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
       sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
+    inputDelivery: (id, owner, seen) => require('./workspace-client.cjs').consentedInputBlocked(dataDir, id, owner, seen),
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
@@ -1861,7 +1862,8 @@ async function boot() {
   for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy', 'operatorAction']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
     const approved = c.background && backgroundOperation.request()?.approved;
-    if (name === 'input' && approved) return c.client.call(name, args[0], args[1], { proof: approved.terminalConsent, expiresAt: approved.expiresAt });
+    // Only a card the person confirmed carries a confirmation into input; a caller's own fourth argument is dropped.
+    if (name === 'input') return approved ? c.client.call(name, args[0], args[1], { proof: approved.terminalConsent, expiresAt: approved.expiresAt }) : c.client.call(name, args[0], args[1]);
     return c.client.call(name, ...args);
   });
   register('retrySave', async c => {

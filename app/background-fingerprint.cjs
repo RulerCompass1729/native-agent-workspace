@@ -40,7 +40,8 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
     const placement = s => ({ id: s.id, nativeId: s.nativeId, connectionRevision: s.connectionRevision,
       nativeContextPending: s.nativeContextPending, archived: s.archived, roomIds: roomIds(s), placementRevision: s.placementRevision,
       memberRevision: s.memberRevision, roomMembershipRevisions: s.roomMembershipRevisions,
-      ...(s.id === controlTarget && s.id !== actor.id ? { owner: s.owner, controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
+      // Confirmed input does not depend on which window holds the target; a takeover still moves controlRevision.
+      ...(s.id === controlTarget && s.id !== actor.id ? { ...(command.method === 'input' ? {} : { owner: s.owner }), controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
         approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
     // These operations do not depend on another member's progress, roster
     // ordering, unrelated archives or space notes. Keep identity/placement
