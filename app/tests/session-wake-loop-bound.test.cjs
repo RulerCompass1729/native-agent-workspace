@@ -97,3 +97,30 @@ test('an empty sender id fails closed and reserves no edge budget', t => {
   assert.equal(wake.reserveBudget(sessions.B, 'empty', '', 'native-A'), null);
   assert.equal(sessions.B.wakeBudget, undefined);
 });
+
+// 2026-11-23 (the person approved the butler's recommendation): a member's message the designated butler took clears
+// the butler's run to that member. The member's own run to the butler is cleared only by the person, so the pair stays
+// finite: at most 3 from the member, and at most 3 before and 3 after each of those from the butler.
+for (const [name, pattern] of [
+  ['the butler and a member answer each other', [['B', 'M'], ['M', 'B']]],
+  ['the butler sends three, the member answers once', [['B', 'M'], ['B', 'M'], ['B', 'M'], ['M', 'B']]],
+]) {
+  test(`with no person input, the loop stops: ${name}`, t => {
+    const tick = clock(t), sessions = {}, delivered = { 'B->M': 0, 'M->B': 0 };
+    let step = 0, lastRound = [];
+    for (let round = 0; round < 3 * PER_PAIR * pattern.length; round++) {
+      lastRound = [];
+      for (const [from, to] of pattern) {
+        tick(); step++;
+        const ok = attempt(sessions, from, to, `b${step}`);
+        if (ok) delivered[`${from}->${to}`]++;
+        if (ok && from === 'M') wake.clearSenderStreak(sessions.M ??= { wakeHumanRevision: 0 }, 'B');
+        lastRound.push(ok);
+      }
+    }
+    t.diagnostic(`B->M ${delivered['B->M']}, M->B ${delivered['M->B']} of ${step} attempts`);
+    assert.ok(delivered['M->B'] <= PER_PAIR);
+    assert.ok(delivered['B->M'] <= PER_PAIR * (PER_PAIR + 1));
+    assert.deepEqual(lastRound, pattern.map(() => false), 'after the bound, every further attempt is refused');
+  });
+}

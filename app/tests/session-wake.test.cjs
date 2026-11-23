@@ -43,12 +43,12 @@ async function fixture(t, sourceProvider = 'codex', preflight = true, nativeSour
   const finish = async (status = 'completed') => { const turnId = ra.turnId; if (sourceProvider === 'claude') ra.liveTurn = null; else ra.turnId = null; ra.emit('state', 'idle'); ra.emit('nativeTurnEnd', { nativeId: source.get(a).nativeId, turnId, status }); for (let i = 0; i < 8; i++) await tick(); };
   return { root, source, target, a, b, ra, rb, call, finish, start, writes };
 }
-async function runTurn(f, senderId, recipientId, turnId, text) {
+async function runTurn(f, senderId, recipientId, turnId, text, status = 'completed') {
   const w = f.source.sessions.has(senderId) ? f.source : f.target;
   const s = w.get(senderId), r = w.runtimes.get(senderId);
   r.turnId = turnId; r.emit('nativeTurnStart', { nativeId: s.nativeId, turnId }); r.emit('state', 'working');
   const result = await r.addressedCall({ nativeId: s.nativeId, turnId, callId: 'call-' + turnId }, { recipient_id: recipientId, message: text });
-  r.turnId = null; r.emit('state', 'idle'); r.emit('nativeTurnEnd', { nativeId: s.nativeId, turnId, status: 'completed' });
+  r.turnId = null; r.emit('state', 'idle'); r.emit('nativeTurnEnd', { nativeId: s.nativeId, turnId, status });
   await settle();
   return result;
 }
@@ -1370,4 +1370,70 @@ test('a message the turn registers after reading the person is held for the butl
   assert.equal(f.writes.length, 2);
   assert.match(f.writes[1].text, /\nThe new plan\.$/);
   assert.equal(after.wake.status, 'submitted');
+});
+
+// The person, 2026-11-23 (「可以,按你推荐的来」): a member's automatic message that the designated butler actually took
+// clears the butler's three-in-a-row to that member. The 3, the 60 seconds and every other edge stay as they were.
+async function butlerAndMember(t, options) {
+  const f = await toButler(t, options), member = f.a, butler = f.b;
+  f.ra.emit('state', 'idle');
+  let n = 0;
+  const send = async (from, to, status) => {
+    f.advance(60001); const before = f.writes.length;
+    const result = await runTurn(f, from, to, `edge-${++n}`, `Message ${n}.`, status);
+    const sent = f.writes.length > before;
+    if (sent) replyTo(f, to);
+    return { result, sent, row: (f.source.sessions.has(from) ? f.source : f.target).get(from).messages.findLast(m => m.wake) };
+  };
+  const streak = key => f.source.get(member).wakeBudget?.senders?.[key]?.streak;
+  return { ...f, member, butler, send, streak, butlerKey: f.target.get(butler).nativeId };
+}
+test('the butler\'s fourth message to a member goes once the member\'s message to the butler was delivered; other senders keep their count', async t => {
+  const f = await butlerAndMember(t), other = await f.source.create('codex', f.root, 'source-owner', 'Other member');
+  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
+  assert.equal((await f.send(other, f.member)).sent, true);
+  const otherKey = f.source.get(other).nativeId, lastAt = f.source.get(f.member).wakeBudget.lastAt;
+  assert.deepEqual([f.streak(f.butlerKey), f.streak(otherKey)], [3, 1]);
+  const reply = await f.send(f.member, f.butler);
+  assert.deepEqual([reply.sent, reply.row.wake.status], [true, 'submitted']);
+  assert.deepEqual([f.streak(f.butlerKey), f.streak(otherKey)], [0, 1], 'only the butler\'s run to this member is cleared');
+  assert.equal(f.source.get(f.member).wakeBudget.lastAt, lastAt, 'the 60-second limit keeps its time');
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'))).sessions.find(s => s.id === f.member);
+  assert.equal(saved.wakeBudget.senders[f.butlerKey].streak, 0, 'saved with the delivery');
+  const fourth = await f.send(f.butler, f.member);
+  assert.deepEqual([fourth.result.status, fourth.sent], ['staged', true]);
+  assert.equal(f.streak(f.butlerKey), 1);
+});
+test('without a delivered message from the member, the butler\'s fourth is refused as before', async t => {
+  const f = await butlerAndMember(t);
+  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
+  const fourth = await f.send(f.butler, f.member);
+  assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false]);
+  assert.match(fourth.result.message, /连续 3 次/);
+  assert.equal(f.streak(f.butlerKey), 3);
+});
+test('a member\'s message to the butler that was not sent, cancelled or unconfirmed clears nothing', async t => {
+  const outcomes = {
+    'not-sent': [f => { f.target.get(f.butler).wakeDisabled = true; }, f => { f.target.get(f.butler).wakeDisabled = false; }],
+    cancelled: [() => {}, () => {}, 'interrupted'],
+    unconfirmed: [f => { f.real = f.source.peerRunner.transferWake; f.source.peerRunner.transferWake = async () => { throw Error('Synthetic lost acknowledgement'); }; }, f => { f.source.peerRunner.transferWake = f.real; }],
+  };
+  for (const [status, [before, after, turnEnd]] of Object.entries(outcomes)) {
+    const f = await butlerAndMember(t);
+    for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true, status);
+    before(f); const reply = await f.send(f.member, f.butler, turnEnd); after(f);
+    assert.deepEqual([reply.sent, reply.row.wake.status], [false, status], status);
+    assert.equal(f.streak(f.butlerKey), 3, status);
+    const fourth = await f.send(f.butler, f.member);
+    assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false], status);
+  }
+});
+test('between ordinary sessions, a delivered answer still clears nothing', async t => {
+  const f = await butlerAndMember(t, { designate: false });
+  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
+  const reply = await f.send(f.member, f.butler);
+  assert.deepEqual([reply.sent, reply.row.wake.status], [true, 'submitted']);
+  assert.equal(f.streak(f.butlerKey), 3);
+  const fourth = await f.send(f.butler, f.member);
+  assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false]);
 });
