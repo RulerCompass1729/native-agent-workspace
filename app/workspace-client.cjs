@@ -22,6 +22,35 @@ const sharedDisplayMessage = (message, source) => message.id === 'shared-native-
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
 let creationQueue = Promise.resolve();
 const controls = new Map();
+// Input the person confirmed reaches its target whichever window holds it (2026-11-23). A backend from before
+// consentedInputV1 takes input only from the holding window, so it goes through that window's connection; who
+// holds the session does not change. null: no open window holds it there.
+function inputCarrier(control, target, id) {
+  const record = target.state.sessions.find(s => s.id === id);
+  if (!record) return null;
+  if (target.state.capabilities?.includes('consentedInputV1') || record.owner === target.state.owner) return target;
+  if (record.owner == null) return null;
+  for (const view of control?.views || []) {
+    if (view.closing) continue;
+    const entry = view.entries.find(e => e.key === target.key && !e.closed && !e.closing && e.state.owner === record.owner);
+    if (entry) return entry;
+  }
+  return null;
+}
+// Why input confirmed for the view `owner` could not be delivered ('' when it could), asked before the card is
+// shown. `seen` is the target as the asking window shows it: another view's copy can lag a state event behind.
+// Only open views' state is read; nothing is sent.
+function consentedInputBlocked(scope, id, owner, seen) {
+  const control = controls.get(scope);
+  for (const view of control?.views || []) {
+    if (view.closing) continue;
+    const entry = view.entries.find(e => !e.closed && !e.closing && e.state.sessions.some(s => s.id === id));
+    if (!entry) continue;
+    const record = seen?.id === id ? seen : entry.state.sessions.find(s => s.id === id);
+    return inputCarrier(control, { ...entry, state: { ...entry.state, owner, sessions: [record] } }, id) ? '' : 'holder-unavailable';
+  }
+  return '';
+}
 // A state event can arrive with the reply to `initial`, before an entry listens to its client: the entry starts
 // from that event, not from the older reply.
 function newestState(entry) {
@@ -430,6 +459,12 @@ class WorkspaceClient extends EventEmitter {
     if (record?.owner === entry.state.owner) return entry.state.owner;
     if (!entry.state.capabilities?.includes('sharedInputOwnershipV1') || this.control.legacyInput?.connected(record)) throw uiError('error.sharedInputOwnershipUnavailable');
     return record.owner;
+  }
+  inputSender(target, args) {
+    if (args[2] === undefined) return target;
+    const sender = inputCarrier(this.control, target, args[0]);
+    if (!sender) throw uiError('error.background.inputHolderUnavailable');
+    return sender;
   }
   invoke(entry, roomId, method, args, scopedPause = false, inputProofs) {
     const sharedInput = ['forward', 'queueShared', 'steerShared'].includes(method) && entry.state.capabilities?.includes('sharedInputOwnershipV1');
@@ -841,6 +876,7 @@ class WorkspaceClient extends EventEmitter {
     if (!['prepareInput', 'observe', 'unobserve', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget'].includes(method)) throw uiError("error.unsupportedLocalAction");
     const target = this.route(args[0]);
     const guard = this.operationGuard(target); guard();
+    if (method === 'input') this.inputSender(target, args);
     if (method === 'join' && scoped) return this.intervene(async () => {
       guard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args);
     }, undefined, false, false, roomId);
@@ -964,9 +1000,10 @@ class WorkspaceClient extends EventEmitter {
     const ownView = ['claim', 'terminal'].includes(method) && this.controlPauseScope(method, args, target) === 'target';
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && this.controlPauseScope(method, args, target) === 'all')) return this.intervene(async () => {
-      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args, false, sharedInputProofs);
+      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId);
+      return this.invoke(method === 'input' ? this.inputSender(target, args) : target, roomId, method, args, false, sharedInputProofs);
     }, args[0], false, false, scoped && method === 'forward' ? roomId : undefined);
-    return target.client.call(method, ...args);
+    return (method === 'input' ? this.inputSender(target, args) : target).client.call(method, ...args);
   }
   // leave: the person closed this window. Each service is told before its connection ends, so the window
   // holds none of its sessions against the windows still open.
@@ -998,4 +1035,4 @@ class WorkspaceClient extends EventEmitter {
     return true;
   }
 }
-module.exports = { WorkspaceClient };
+module.exports = { WorkspaceClient, consentedInputBlocked };

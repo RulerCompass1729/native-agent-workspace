@@ -1904,7 +1904,8 @@ class Workspace extends EventEmitter {
     backgroundOperation.inputGuard(this, [id]);
     const s = this.get(id);
     if (typeof data !== 'string' || data.length > 65536) throw uiError("error.workspace.invalidTerminalInput");
-    if (s.owner !== owner) throw uiError("error.workspace.controlledByAnotherWindow");
+    // Input the person confirmed reaches the session whichever window holds it, and does not change who does (2026-11-23).
+    if (!consent && s.owner !== owner) throw uiError("error.workspace.controlledByAnotherWindow");
     const runtime = this.runtime(id);
     if (runtime.backendExitConfirmed) throw uiError("error.workspace.nativeExitedReadOnly");
     // Terminal-generated device/cursor replies are not human instructions.

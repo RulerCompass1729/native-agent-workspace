@@ -23,6 +23,8 @@ const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 // Person-approved 2026-11-15: one policy point for new and retained pending cards.
+// Why a confirmed input cannot be delivered, shown on its card before the click. Codes only.
+const DELIVERY_REASONS = new Set(['holder-unavailable']);
 const CONFIRMATION_TTL_MS = Object.freeze({ input: 2 * 60 * 1000, other: 10 * 60 * 1000 });
 const confirmationExpiresAt = row => Number.isSafeInteger(row?.at) && row.at >= 0 ? row.at + (row.command?.method === 'input' ? CONFIRMATION_TTL_MS.input : CONFIRMATION_TTL_MS.other) : null;
 const REFUSAL_WINDOW_MS = 60000, MAX_REFUSAL_SUMMARIES = 128, NOTIFY_SHARE_MS = 60000;
@@ -159,7 +161,7 @@ const compactRefusal = row => { row.guard = { auditRooms: row.guard?.auditRooms 
 const queuedDelivery = args => ['queue', 'queueShared'].includes(args.method === 'spaceAction' ? args.arguments?.[1] : args.method);
 class BackgroundControl {
   constructor({ dataDir, handlers, context, confirmation, audit, confirmationPending, project = record => record, changed = () => {}, now = Date.now, readCopyBytes = MAX_RECORD_BYTES,
-    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {}, confirmationFingerprint = null }) {
+    retireAfter = RETIRE_AFTER, retireHold = () => false, unasked = () => false, standing = () => null, standingValid = () => false, stagedPollMs = 200, decided = () => {}, receiptRead = () => {}, confirmationFingerprint = null, inputDelivery = () => '' }) {
     if (!Number.isSafeInteger(readCopyBytes) || readCopyBytes < 1 || readCopyBytes > MAX_RECORD_BYTES) throw Error('Invalid read copy budget');
     this.file = path.join(dataDir, 'background-operations.json'); this.handlers = handlers; this.context = context; this.changed = changed; this.now = now;
     this.data = { version: STATE_VERSION, records: [], views: {}, refusals: [], refusalActors: {}, refusalReceipts: [] }; this.inflight = new Map(); this.contexts = new Map(); this.failed = false;
@@ -179,6 +181,8 @@ class BackgroundControl {
     // only for the designated butler in no space (the person, 2026-11-12 14:24). Its preconditions are still checked.
     this.unasked = unasked;
     this.standing = standing; this.standingValid = standingValid;
+    // Why confirmed input could not reach its target now (workspace-client.cjs consentedInputBlocked), '' when it could.
+    this.inputDelivery = inputDelivery;
     this.confirmationPending = confirmationPending;
     this.confirmationFingerprint = confirmationFingerprint;
     // The person's answer on a card, once its outcome is recorded, and the agent reading a receipt itself: what main.cjs
@@ -1074,6 +1078,12 @@ class BackgroundControl {
         this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor)); Object.assign(r, { reason: check.reason, resultNotice: { key: 'background.card.reason.' + check.reason, params: {} } }); });
         return this.receipt(row.actor, id);
       }
+      // The card already said so before the click; it stays waiting until the input can be delivered.
+      const blocked = this.deliveryBlocked(row, snapshot);
+      if (blocked) {
+        this.commit(d => { const r = d.records.find(r => r.id === id && this.key(r.actor) === this.key(row.actor)); Object.assign(r, { reason: blocked, resultNotice: { key: 'background.card.reason.' + blocked, params: {} } }); });
+        return this.receipt(row.actor, id);
+      }
     }
     this.commit(d => { const r = d.records.find(r => r.id === id && r.actor.id === sessionId && r.actor.nativeId === nativeId); delete r.reason; delete r.resultNotice; delete r.stateUiMessage; Object.assign(r, { state: 'running', humanDecision: response, humanDecisionAt: this.now() }); });
     return this.perform(row.actor, row.command, context, async () => { authorize?.(); await context.checkActor(); authorize?.(); }, { operationId: id, confirmation: row.confirmation, response, terminalConsent: row.terminalConsent, expiresAt: confirmationExpiresAt(row), authorize });
@@ -1111,6 +1121,25 @@ class BackgroundControl {
       .map(({ r }) => r.humanDecisionAt ?? r.finishedAt ?? r.at);
     return done.length ? { time: Math.max(...done) } : null;
   }
+  // `snapshot` is the state the card is shown or decided against.
+  deliveryBlocked(row, snapshot) {
+    if (row.command.method !== 'input' || row.state !== 'confirmation-required') return '';
+    const key = this.key(row.actor) + ':' + (row.command.view_id || 'default');
+    const owner = (this.opened.get(key)?.context?.view || this.data.views[key])?.owner;
+    const target = snapshot?.sessions?.find(s => s.id === row.command.arguments[0]);
+    let reason = '';
+    try { reason = this.inputDelivery(row.command.arguments[0], owner, target); } catch { return ''; }
+    return DELIVERY_REASONS.has(reason) ? reason : '';
+  }
+  deliveryNote(row, snapshot) {
+    // A terminal that moved on (e.g. the person opened the target) voids the card on click; say so first.
+    if (row.command.method === 'input' && row.state === 'confirmation-required') {
+      const checked = operation.checkTerminalInput(row.terminalConsent, snapshot, row.command.arguments[0]);
+      if (checked.status === 'invalid') return { deliveryBlocked: checked.reason };
+    }
+    const reason = this.deliveryBlocked(row, snapshot);
+    return reason ? { deliveryBlocked: reason } : {};
+  }
   // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
   rows(sessionId, names = {}, { expire = true } = {}) {
     if (expire) this.expirePending();
@@ -1123,7 +1152,7 @@ class BackgroundControl {
         resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
         ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
           ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),
-          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own) } : {}) } : {}) } }); });
+          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own), ...this.deliveryNote(r, names) } : {}) } : {}) } }); });
   }
   // Human-window waiting strip: reuse the conversation card and its warnings.
   confirmationState(row, snapshot) {
@@ -1155,6 +1184,8 @@ class BackgroundControl {
         if (!isDeepStrictEqual(row.guard, controlGuard(context, row.command))) return unknown('temporarily-unavailable');
       } catch (error) { return error.uiMessage?.key === 'error.planWorking' ? unknown('temporarily-unavailable') : unknown('evidence-unavailable'); }
     }
+    const blocked = this.deliveryBlocked(row, snapshot);
+    if (blocked) return unknown(blocked);
     return { state: 'confirmation-required', actionable: true, reason: null };
   }
   // One ledger projection for the bell, waiting strip and scoped phone reader.

@@ -3036,6 +3036,9 @@ function renderBackgroundControls(entry, message) {
     ui.display.computed(note, 'text', () => uiText('background.card.repeated', { time: backgroundClock(op.repeated.time) }));
     box.append(note);
   }
+  // Said before the click: confirming cannot deliver this input now (background-control.cjs deliveryBlocked).
+  const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
+  if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
   if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
   const raw = card ? question.options.detail : op.arguments;
   if (raw) {
@@ -3051,7 +3054,7 @@ function renderBackgroundControls(entry, message) {
   const buttons = node('div', undefined, 'background-buttons'), keys = backgroundButtonKeys(question.options, summary);
   question.options.buttons.forEach((label, response) => {
     const cancel = response === (question.options.cancelId ?? 0);
-    const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = backgroundExecutionUnavailable() || Boolean(pending);
+    const button = node('button', keys ? '' : label, cancel ? 'small' : 'small primary'); button.disabled = backgroundExecutionUnavailable() || Boolean(pending) || !cancel && Boolean(blocked);
     if (keys) ui.display.text(button, response === 1 ? 'background.card.confirm' : keys[response]);
     button.addEventListener('click', () => answerConfirmationCard(op, response));
     buttons.append(button);
