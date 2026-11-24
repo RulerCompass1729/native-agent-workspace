@@ -16,6 +16,7 @@ const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
 const { codexQuotaBlock } = require('./native-usage.js');
 const { rotationBlocked, rotationEpoch, queuePurposeValid } = require('./submission-policy.cjs');
+const { detached } = require('./background-operation.cjs');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
 const { sessionPlan, endedByThisStop } = require('./backend-switch.cjs');
 
@@ -2789,7 +2790,9 @@ class QueueDispatcher {
       this.again = true;
       return this.pending;
     }
-    this.pending = this.loop();
+    // A pass an agent's call asked for (queueAdd, queueClaim): run in that call's scope, each item it sent carried the
+    // agent, so the input read as the agent's and its reply settled 'input-purpose-unconfirmed' (加项 3, 2026-11-23).
+    this.pending = detached(() => this.loop());
     return this.pending;
   }
 
