@@ -12,7 +12,7 @@ Conflicts:
 
 Rule change (`8230df91`, and the maintainer overlay outside Git):
 - Release cadence: "Fixed per-version overhead ... otherwise batch, except urgent items" became three tiers by urgency. Tier 1, daily use broken or stuck or anything hurting NAW development or function: each fix with READY and a non-author PASS is installed alone within about 2 hours. Tier 2, other fixes: a new version once the last is installed, no batching. Tier 3, improvements: the next version. Push main after each install; all gates stay. Same text in CLAUDE.md and the overlay.
-- Review records (R158 step 1): one file per lane and day, `docs/review/YYYY-MM-DD/<lane>.md`, so merging lanes does not conflict there. Existing day files stay where they are.
+- Review records (R158 step 1): one file per lane and day, `docs/review/YYYY-MM-DD/<lane>.md`, so merges do not conflict there. Existing day files stay where they are.
 - `app/tests/docs-size.test.cjs`: the PM asked for the header comment only; its failure message also changed, because it pointed new records to the day file. The check is unchanged. Red: a 1.5 MiB probe file in a lane folder fails; green 2/2.
 - CLAUDE.md is 34774 bytes, 4 fewer than in the installed 290. Codex reads only its first 32 KiB, and since 290 (`0f6047a0`, 34778 bytes) that cut falls at the start of "Scope agent and reviewer file searches", which main still shows almost whole. This batch makes it no worse; the fix belongs with the public/private split (R144) or a separate trim.
 - Loaders: `codex debug prompt-input` in the worktree shows both new paragraphs; Claude `/memory` lists `./CLAUDE.md` and the lanes overlay; the SessionStart hook output carries the overlay's tier text in its last 4.9 KB, the part Codex keeps.
@@ -33,3 +33,11 @@ Batch review: one fresh read-only session over the merge interactions and the ru
 5. The comment above `schedule()` in `app/queue-dispatch.cjs` reads as if the old behaviour were current. Wording only; left for the stall-notice lane.
 6. A rotation-stalled line makes the butler's wake chip due, so a butler that cannot be woken shows "wake stalled" where it showed nothing. Accurate and one line per gate; the chip neither reopens nor re-announces. No change.
 Checked with no finding: the butler-ingress resolution; running the dispatcher pass outside the caller's scope against W3's input policy and every pass entry; W3 against dispatch sends and R141 part 2's answered replies; the hotfix's join retry against the stall notice, steward-rotate's quiet hold and notidle.
+
+Round 2, the same session over `4b5515b1..2905da76` (the three records and the CLAUDE.md wording) and the overlay's change: PASS-WITH-NOTES, nothing blocking. Findings 1-3 fixed in both files, 4-6 stated. Notes:
+1. The Codex 32 KiB cut, as above: Codex does not load the end of "Evidence and public boundaries" or "Push rules" from CLAUDE.md; the push authorization still reaches it through the overlay in the hook. Needs an owner (R144 or a trim).
+2. The W3 record rests on the lane's report for the merge review's raw output, as it says.
+3. A wording drift in this record, fixed.
+The reviewer could not tell from single-line JSON whether the loaders carry the new text. Author-run: parsing `codex debug prompt-input` after the edit finds "or function (butler", "Tier 3, improvements", "so merges do not conflict there" and "docs/review/YYYY-MM-DD/<lane>.md" once each; the hook output has the overlay's tier text 1.2-1.8 KB from its end.
+
+Not in 293: `lane/ext-rotation-deferral-20261124` `b76bb429` (Tier 1, to ship alone as the PM schedules it); `lane/claude-install-no-quiet-20261124` `04d887f3` (READY and PASS, but a side effect awaits the PM or the person, and it changes the installer this version would run); `lane/claude-w3-followup-20261124` (not READY); the push-record lanes for 290 and 292 (not created yet).
