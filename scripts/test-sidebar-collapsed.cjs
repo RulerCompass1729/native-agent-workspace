@@ -130,9 +130,14 @@ async function routes(){
  }
 }
 const viewState=()=>page.evaluate(()=>workspace.initial().then(s=>s.viewState));
+// #independent-nav exists only inside a space (renderer renderSpaceRail); outside one the session's own row is the way back.
 async function openSolo(){
- await page.locator('#independent-nav').click();const names=await page.getByRole('menuitem').allTextContents(),matches=names.filter(n=>n.startsWith(NAMES.sessions[9]+' · '));assert.equal(matches.length,1,JSON.stringify(names));
- await page.getByRole('menuitem',{name:matches[0],exact:true}).click();await until(async()=>(await viewState()).selected===ids[9],'Independent session selected');await settle();await delay(350);
+ const from=(await viewState()).selected;if(from===ids[9])return;
+ if(from==='room'){
+  await page.locator('#independent-nav').click();const names=await page.getByRole('menuitem').allTextContents(),matches=names.filter(n=>n.startsWith(NAMES.sessions[9]+' · '));assert.equal(matches.length,1,JSON.stringify(names));
+  await page.getByRole('menuitem',{name:matches[0],exact:true}).click();
+ }else await page.locator(S(ids[9])+' .session-link').first().click();
+ await until(async()=>(await viewState()).selected===ids[9],'Independent session selected');await settle();await delay(350);
 }
 const sidebarBox=()=>page.evaluate(()=>{const e=document.querySelector('.naw[data-native-surface="sidebar"]');return {collapsed:e.dataset.collapsed,width:e.getBoundingClientRect().width};});
 function readMembers(){
