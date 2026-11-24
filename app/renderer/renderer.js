@@ -2977,7 +2977,11 @@ function reconcileConfirmationBatch(started, cards) {
     return card.actionable === true && card.state === 'confirmation-required' && op?.state === 'confirmation-required' &&
       !card.replacedBy && !op.replacedBy && !op.answer && !op.disposition;
   }).map(card => card.key));
-  const release = new Set((started.failedKeys || []).filter(key => retryable.has(key)));
+  const failed = new Set(started.failedKeys || []), first = started.keys[0];
+  const { itemState } = globalThis.nativeWorkspaceConfirmationBatch;
+  const keepFirst = failed.has(first) && cards.some(card => started.keys.includes(card.key) &&
+    card.key !== first && ['queued', 'running'].includes(itemState(card)));
+  const release = new Set([...failed].filter(key => retryable.has(key) && !(keepFirst && key === first)));
   started.keys = started.keys.filter(key => !release.has(key));
   started.failedKeys = (started.failedKeys || []).filter(key => !release.has(key));
   if (!started.keys.length && confirmationBatchStarted.get(started.key) === started) confirmationBatchStarted.delete(started.key);

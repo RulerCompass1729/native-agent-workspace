@@ -72,7 +72,7 @@ function render(cards, started) {
     vm.runInContext("confirmationBatchStarted.set('agent\\nnative\\narchiveSession',{key:'agent\\nnative\\narchiveSession',keys});", sandbox);
   }
   const entry = { item: node('div'), actions: { before() {} } };
-  sandbox.entry = entry; sandbox.message = cards.at(-1).message;
+  sandbox.entry = entry; sandbox.message = cards[0].message;
   vm.runInContext('renderBackgroundControls(entry,message)', sandbox);
   return { shown: entry.backgroundControls.textContent, itemState: sandbox.nativeWorkspaceConfirmationBatch.itemState(cards.at(-1)), sandbox };
 }

@@ -17,8 +17,8 @@ test('archive cards of one agent with no risk mark become one batch, oldest firs
   const cards = [card('a'), card('b'), card('c')];
   assert.deepEqual(keys(plan(cards)), [['a', 'b', 'c']]);
   const batches = plan(cards);
-  assert.deepEqual(find(batches, cards[2].key), { batch: batches[0], anchor: true });
-  assert.equal(find(batches, cards[0].key).anchor, false);
+  assert.deepEqual(find(batches, cards[0].key), { batch: batches[0], anchor: true });
+  assert.equal(find(batches, cards[2].key).anchor, false);
 });
 test('cards are not merged across risk, method, agent, replacement, repetition, an answer already given or a single card', () => {
   const risky = card('r', { summary: { action: 'archiveSession', method: 'archiveSession', risks: ['shared'] } });
@@ -35,6 +35,7 @@ test('a started batch keeps exactly the cards it was shown with while they settl
   const started = [{ key: 'batch', keys: [a.key, b.key] }];
   const settled = [card('a', { state: 'complete', actionable: false }, { state: 'complete' }), card('b', {}, { answer: 'running' }), later];
   assert.deepEqual(keys(plan(settled, started)), [['a', 'b']]);
+  assert.equal(find(plan(settled, started), a.key).anchor, true);
   assert.deepEqual(settled.slice(0, 2).map(itemState), ['done', 'running']);
   assert.equal(itemState(card('v', { state: 'not-executed' }, { state: 'not-executed', disposition: 'invalidated' })), 'void');
   assert.equal(itemState(card('x', {}, { answer: 'queued' })), 'queued');
