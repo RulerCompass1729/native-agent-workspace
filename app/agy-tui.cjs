@@ -23,8 +23,8 @@ const RULE_LINE = /^[─━═]{10,}$/;
 const EMPTY_PROMPT_LINE = /^[>❯](?:\s*|\s+(?:Auto mode|Plan mode|Accept edits|Ask before edits|Default mode|Bypass permissions)\b.*\(shift\+tab to cycle\))$/;
 // Keys that cannot insert text or recall history into an already-empty composer.
 const EMPTY_NOOP_INPUT = /^(?:[\x7f\x08\x15\x0b\x17]|\x1b\[(?:3~|[CDHF]))+$/;
-// Keys used only to navigate/confirm the startup directory-trust prompt without queueing composer text.
-const TRUST_PROMPT_KEYS = /^(?:\r|\n|\x1b\[[AB])+$/;
+// Enter-only confirmation on the startup directory-trust prompt (never Up/Down history recall or text).
+const TRUST_PROMPT_KEYS = /^[\r\n]+$/;
 
 function validConversationId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);

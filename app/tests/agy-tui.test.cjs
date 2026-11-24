@@ -617,6 +617,38 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true, 'accepting trust prompt with Enter + SessionStart restores dispatch after settle');
 
+  // r9 check: Enter followed by Up arrow while the cached trust frame is still shown MUST enter 'unseen' (never admit history recall).
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
+  ws.input(sessionId, '\r', 'owner-1');
+  ws.input(sessionId, '\x1b[A', 'owner-1');
+  const writesAfterTrustUp = activeTerm.writes.length;
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, false, 'Enter+Up on cached trust frame stays unseen');
+  await assert.rejects(rt.send('after trust enter+up', 't-trust-up', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesAfterTrustUp);
+
+  // Recover via normal draft -> Ctrl+U -> settle before continuing tests.
+  await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> recalled', rule, '']);
+  ws.input(sessionId, '\x15', 'owner-1');
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, true);
+
   // r6 #2: No-op deletion key (Backspace) on an already-empty prompt settles cleanly and never permanently blocks dispatch.
   ws.input(sessionId, '\x7f', 'owner-1');
   assert.equal(rt.chatAvailable, false, 'briefly settles even on empty-prompt Backspace');
