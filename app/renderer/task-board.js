@@ -328,9 +328,11 @@
       const time = status.cardCount ? remaining(status.nextExpiry) : '';
       set(cardTime, status.cardCount ? f('cardChipTime', { time }) : '');
       cardTime.hidden = !cardTime.textContent;
-      attr(cardTime, 'aria-label', status.cardCount ? f(status.cardCount === 1 ? 'cardChipLabelOne' : 'cardChipLabel', { count: status.cardCount, time }) : '');
-      set(warning, status.stale ? f('unupdated') : status.unknown ? f('unknownChip', { count: status.unknown }) : status.failed ? f('failedChip', { count: status.failed }) : '');
+      attr(cardTime, 'aria-label', status.cardCount ? f('cardChipDeadline', { time }) : '');
+      set(warning, status.stale ? f('unupdated') : status.unknown ? f(status.unknown === 1 ? 'unknownChipOne' : 'unknownChip', { count: status.unknown }) : status.failed ? f('failedChip', { count: status.failed }) : '');
       warning.hidden = !warning.textContent; warning.classList.toggle('failed', !status.stale && !status.unknown && status.failed > 0); attr(warning, 'aria-label', f('unknownChipLabel', { text: warning.textContent }));
+      const help = !status.stale && status.unknown ? f('unknownChipHelp') : '';
+      attr(warning, 'title', help); attr(warning, 'aria-description', help);
       set(board, f('boardButton')); attr(toggle, 'aria-label', f('boardButton'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
     }

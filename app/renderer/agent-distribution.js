@@ -68,11 +68,31 @@
     const panel = make('section', 'agent-strip-panel'); panel.id = 'agent-strip-panel'; panel.hidden = true;
     panel.setAttribute('popover', 'auto'); toggle.setAttribute('aria-controls', panel.id); toggle.setAttribute('aria-expanded', 'false');
     host.classList.add('agent-distribution'); host.append(strip, more, toggle, panel);
-    const open = () => { draw(true); panel.hidden = false; if (!panel.matches(':popover-open')) panel.showPopover({ source: toggle }); place(); toggle.setAttribute('aria-expanded', 'true'); };
+    let invoker = toggle;
+    const visibleInvoker = () => invoker.isConnected && !invoker.closest?.('[hidden]') ? invoker : toggle;
+    const expanded = shown => {
+      for (const button of [toggle, more, ...strip.querySelectorAll('.agent-group-trigger')]) button.setAttribute('aria-expanded', String(shown));
+    };
+    const open = source => {
+      invoker = source;
+      drawPanel(groupBy(entries, mode, t)); panel.hidden = false;
+      if (!panel.matches(':popover-open')) panel.showPopover({ source });
+      place(); expanded(true);
+    };
     const close = () => { if (panel.matches(':popover-open')) panel.hidePopover(); };
-    panel.addEventListener('toggle', () => { const shown = panel.matches(':popover-open'); panel.hidden = !shown; toggle.setAttribute('aria-expanded', String(shown)); });
-    toggle.onclick = () => panel.matches(':popover-open') ? close() : open();
-    more.onclick = () => open();
+    const togglePanel = source => panel.matches(':popover-open') ? close() : open(source);
+    panel.addEventListener('toggle', () => { const shown = panel.matches(':popover-open'); panel.hidden = !shown; expanded(shown); });
+    panel.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault(); event.stopPropagation();
+      close(); visibleInvoker().focus({ preventScroll: true });
+    });
+    function wireTrigger(button) {
+      button.setAttribute('popovertarget', panel.id); button.setAttribute('aria-controls', panel.id);
+      button.setAttribute('aria-expanded', 'false');
+      button.onclick = event => { event.preventDefault(); togglePanel(button); };
+    }
+    wireTrigger(toggle); wireTrigger(more);
     // While cut, the host takes the header's free space (CSS), so a neighbour that shrinks resizes it and the
     // observer refits; without that the hidden squares stayed hidden after the space came back.
     // Geometry, not scrollWidth: each square's wider hit area (::after) overflows the strip by 2px with nothing cut.
@@ -107,7 +127,7 @@
     doc.defaultView?.addEventListener?.('resize', refit);
     if (doc.defaultView?.ResizeObserver) { const watch = new doc.defaultView.ResizeObserver(refit); watch.observe(host); if (host.parentElement) watch.observe(host.parentElement); }
     function place() {
-      const r = toggle.getBoundingClientRect(), width = Math.min(340, innerWidth - 16);
+      const r = visibleInvoker().getBoundingClientRect(), width = Math.min(340, innerWidth - 16);
       panel.style.width = width + 'px';
       panel.style.left = Math.max(8, Math.min(r.right - width, innerWidth - width - 8)) + 'px';
       panel.style.top = (r.bottom + 6) + 'px';
@@ -116,21 +136,28 @@
     function cell(entry) {
       const b = make('button', 'agent-cell ' + entry.look); b.type = 'button';
       b.dataset.sessionId = entry.id; b.dataset.agentStatus = entry.status;
-      b.setAttribute('aria-label', [entry.name, entry.statusText, entry.model || t('modelUnknown')].join(' · '));
+      b.classList.toggle('agent-steward', Boolean(entry.stewardRole));
+      b.setAttribute('aria-label', [entry.name, entry.stewardRole, entry.statusText, entry.model || t('modelUnknown')].filter(Boolean).join(' · '));
       b.onclick = () => jump(entry.id);
       return b;
     }
     function drawStrip(groups) {
       const parts = groups.map(item => {
         const g = make('span', 'agent-group'); g.dataset.group = item.key;
-        const label = make('span', 'agent-group-label');
-        label.textContent = item.label;
+        const control = make('button', 'agent-group-trigger'); control.type = 'button'; control.dataset.group = item.key;
+        wireTrigger(control);
+        const label = make('span', 'agent-group-label'); label.textContent = item.label;
         const count = make('span', 'agent-group-count'); count.textContent = String(item.members.length);
         const cells = make('span', 'agent-group-cells'); cells.append(...item.members.map(cell));
-        g.append(label, count, cells);
+        control.append(label, count); g.append(control, cells);
         return g;
       });
+      const focused = doc.activeElement;
       strip.replaceChildren(...parts);
+      const groupButton = key => parts.find(part => part.dataset.group === key)?.querySelector('.agent-group-trigger') || toggle;
+      if (invoker.dataset.group) invoker = groupButton(invoker.dataset.group);
+      if (focused?.classList?.contains('agent-group-trigger')) groupButton(focused.dataset.group).focus({ preventScroll: true });
+      expanded(panel.matches(':popover-open'));
       const summary = groups.map(item => item.label + ' ' + item.members.length).join(' · ');
       strip.setAttribute('aria-label', t('aria', { count: entries.length, summary }));
       toggle.setAttribute('aria-label', t('open', { mode: t('mode.' + mode) }));
@@ -139,6 +166,9 @@
       fit();
     }
     function drawPanel(groups) {
+      const focused = doc.activeElement;
+      const member = focused?.classList?.contains('agent-strip-member') ? focused.dataset.sessionId : '';
+      const modeButton = focused?.classList?.contains('agent-strip-mode') ? focused.dataset.mode : '';
       const head = make('div', 'agent-strip-modes'); head.setAttribute('role', 'radiogroup'); head.setAttribute('aria-label', t('modes'));
       for (const value of MODES) {
         const b = make('button', 'agent-strip-mode'); b.type = 'button'; b.textContent = t('mode.' + value);
@@ -152,7 +182,7 @@
         for (const entry of item.members) {
           const li = make('li'), b = make('button', 'agent-strip-member'); b.type = 'button'; b.dataset.sessionId = entry.id;
           const dot = make('span', entry.look); dot.setAttribute('aria-hidden', 'true');
-          const name = make('span', 'agent-strip-member-name'); name.textContent = entry.name;
+          const name = make('span', 'agent-strip-member-name'); name.textContent = [entry.name, entry.stewardRole].filter(Boolean).join(' · ');
           const detail = make('span', 'agent-strip-member-detail'); detail.textContent = mode === 'status' ? entry.model || t('modelUnknown') : entry.statusText;
           b.append(dot, name, detail); b.onclick = () => jump(entry.id); li.append(b); ul.append(li);
         }
@@ -166,6 +196,11 @@
       const note = make('p', 'agent-strip-note');
       note.textContent = excluded.archived || excluded.other ? t('excluded', { archived: excluded.archived, other: excluded.other }) : t('excludedNone');
       panel.replaceChildren(head, legend, ...lists, note);
+      if (member || modeButton) {
+        const current = member ? [...panel.querySelectorAll('.agent-strip-member')].find(button => button.dataset.sessionId === member)
+          : [...head.children].find(button => button.dataset.mode === modeButton);
+        (current || head.firstElementChild)?.focus({ preventScroll: true });
+      }
     }
     function draw(force = false) {
       const groups = groupBy(entries, mode, t);

@@ -10,7 +10,7 @@ test('the bar keeps only things to act on; progress counts live in the panel and
 test('native popover lifecycle does not move content and returns focus to the same trigger',()=>{const f=setup(),before=f.content.getBoundingClientRect();f.button.focus();f.button.fire('click');assert.equal(f.doc.modal,undefined);assert.equal(f.panel.matches(':popover-open'),true);assert.equal(f.button.getAttribute('aria-expanded'),'true');assert.deepEqual(f.content.getBoundingClientRect(),before);assert.ok(parseFloat(f.panel.style.width)<=826);assert.ok(parseFloat(f.panel.style.top)+parseFloat(f.panel.style.maxHeight)<=600);f.key('Escape');assert.equal(f.panel.matches(':popover-open'),false);assert.equal(f.doc.activeElement,f.button);assert.equal(f.button.getAttribute('aria-expanded'),'false');f.board.dispose();});
 test('another modal Escape is never consumed by a closed task board',()=>{const f=setup(),other=f.doc.createElement('dialog');f.doc.body.append(other);other.showModal();f.key('Escape');assert.equal(other.open,false);f.board.dispose();});
 test('state pushes retain the actual trigger and open popover',()=>{const f=setup();f.button.focus();f.button.fire('click');const trigger=f.button,waiting=()=>f.host.querySelectorAll('.task-board-tab').find(b=>b.dataset.boardTab==='waiting').dataset.count;assert.equal(waiting(),'0');f.input.rooms[0].queue.push({id:'wait',status:'waiting'});f.board.update(f.input);assert.equal(f.host.querySelector('.task-board-toggle'),trigger);assert.equal(f.panel.matches(':popover-open'),true);assert.equal(waiting(),'1');f.board.dispose();});
-test('pending cards count down while the panel is closed and expire without an RPC',()=>{const f=setup();f.input.confirmations=[{key:'actor:native:operation',id:'message',sessionId:'actor',nativeId:'native',operationId:'operation',state:'confirmation-required',actionable:true,expiresAt:f.now()+100000}];f.board.update(f.input);const chip=f.host.querySelector('.task-status-card-time');assert.equal(chip.textContent,'卡 1:40 后失效');assert.equal(chip.getAttribute('aria-label'),'1 张确认卡，1:40 后失效，打开它');f.advance(1000);assert.equal(chip.textContent,'卡 1:39 后失效');f.advance(99000);assert.equal(chip.hidden,true);assert.equal(f.timers.size,0);f.board.dispose();});
+test('pending cards count down while the panel is closed and expire without an RPC',()=>{const f=setup();f.input.confirmations=[{key:'actor:native:operation',id:'message',sessionId:'actor',nativeId:'native',operationId:'operation',state:'confirmation-required',actionable:true,expiresAt:f.now()+100000}];f.board.update(f.input);const chip=f.host.querySelector('.task-status-card-time');assert.equal(chip.textContent,'卡 1:40 后失效');assert.equal(chip.getAttribute('aria-label'),'打开最早到期的确认卡，剩余 1:40');f.advance(1000);assert.equal(chip.textContent,'卡 1:39 后失效');f.advance(99000);assert.equal(chip.hidden,true);assert.equal(f.timers.size,0);f.board.dispose();});
 test('unavailable and disconnected snapshots show a visible uncertainty chip instead of a healthy zero',()=>{const healthy=setup();assert.equal(healthy.host.querySelector('.task-status-warning').hidden,true);healthy.board.dispose();for(const change of [f=>f.input.connected=false,f=>f.input.confirmationsAvailable=false,f=>f.input.rooms[0].unavailable=true]){const f=setup();change(f);f.board.update(f.input);const bar=f.host.querySelector('.task-status-chips').textContent;assert.equal(/\b0 /u.test(bar),false);assert.ok(bar.includes('未')||bar.includes('待核实'),bar);f.board.dispose();}});
 test('midnight refresh keeps unfinished work and the finished outcome stays reachable',()=>{const f=setup();f.input.rooms[0].queue.push({id:'done',status:'done',finishedAt:f.now()});f.board.update(f.input);f.board.open();const count=tab=>f.host.querySelectorAll('.task-board-tab').find(b=>b.dataset.boardTab===tab).dataset.count;assert.deepEqual([count('sent'),count('done')],['1','1']);f.advance(86400000);assert.equal(count('sent'),'1');assert.equal(count('done'),'1');f.board.dispose();});
 test('dispose detaches contents, observers and listeners without a countdown lease',()=>{const f=setup();f.board.dispose();assert.equal(f.host.children.length,0);assert.equal(f.timers.size,0);assert.equal(f.win.listeners.get('resize')?.size||0,0);assert.equal(f.doc.listeners.get('visibilitychange')?.size||0,0);f.advance(1000);});
@@ -43,7 +43,7 @@ test('ordinary waiting is neutral, complete and separate from review',()=>{
 test('unverified sources get their own neutral chip without claiming an exact total',()=>{
  for(const lang of ['zh','en']){const f=setup(lang);f.input.rooms[0].queue.push({id:'wait',status:'waiting'});f.input.rooms.push(...Array.from({length:7},(_,i)=>({id:'off'+i,name:'Off '+i,unavailable:true})));f.board.update(f.input);
   const warn=f.host.querySelector('.task-status-warning');
-  assert.equal(warn.textContent,lang==='zh'?'7 件待核实':'7 to verify');
+  assert.equal(warn.textContent,lang==='zh'?'7 个状态待核实':'7 statuses to verify');
   assert.equal(warn.hidden,false);assert.equal(warn.classList.contains('failed'),false);
   assert.equal(f.host.querySelector('.task-status-card-time').hidden,true);
   f.board.dispose();}
@@ -58,7 +58,7 @@ test('only a failure, not an unverified status, marks the warning chip',()=>{
 test('an unverifiable card is listed for checking without an urgent chip or countdown',()=>{
  for(const lang of ['zh','en']){const f=setup(lang);f.input.confirmations=[{key:'actor:native:operation',id:'message',sessionId:'actor',nativeId:'native',operationId:'operation',state:'unverifiable',actionable:false,expiresAt:f.now()+100000}];f.board.update(f.input);
   assert.equal(f.host.querySelector('.task-status-card-time').hidden,true);
-  assert.equal(f.host.querySelector('.task-status-warning').textContent,lang==='zh'?'1 件待核实':'1 to verify');
+  assert.equal(f.host.querySelector('.task-status-warning').textContent,lang==='zh'?'1 个状态待核实':'1 status to verify');
   f.board.open();f.host.querySelector('[data-board-tab="unknown"]').fire('click');const row=f.host.querySelectorAll('.task-board-entry').find(e=>e.dataset.kind==='unknown'),state=row.querySelector('.task-board-status').textContent;
   assert.equal(state,locale.format(lang,'taskBoard.cardsUnverified'));
   assert.equal(/[0-9]+:[0-9]{2}/.test(state),false);
@@ -67,7 +67,7 @@ test('an unverifiable card is listed for checking without an urgent chip or coun
 test('unavailable cards are counted once, in the neutral chip',()=>{
  for(const lang of ['zh','en']){const f=setup(lang);f.input.confirmationsAvailable=false;f.board.update(f.input);
   assert.equal(f.host.querySelector('.task-status-card-time').hidden,true);
-  assert.equal(f.host.querySelector('.task-status-warning').textContent,lang==='zh'?'1 件待核实':'1 to verify');
+  assert.equal(f.host.querySelector('.task-status-warning').textContent,lang==='zh'?'1 个状态待核实':'1 status to verify');
   f.board.dispose();}
 });
 test('a dispatched review keeps its reason on the row before opening the session',()=>{
