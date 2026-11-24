@@ -157,8 +157,10 @@ class ButlerIngress {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
     this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
     this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set(); this.undeliveredWakes = new Set(); this.unbound = new Set();
+    this.rotationStalls = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
+      if (/^rotation-stalled:[a-f0-9]{64}$/.test(event.eventId)) this.rotationStalls.add(event.eventId);
       if (/^control-refused:[a-f0-9]{64}$/.test(event.eventId)) this.controlRefusals.add(event.eventId);
       if (/^wake-undelivered:[a-f0-9]{64}$/.test(event.eventId)) this.undeliveredWakes.add(event.eventId);
       if (/^native-unbound:[a-f0-9]{64}$/.test(event.eventId) && event.kind === 'failure' && event.payload?.reason === 'native-unbound' &&
@@ -351,6 +353,17 @@ class ButlerIngress {
       this.record({ eventId, sourceRef: `native-unbound:${s.id}`, kind: 'failure', payload: { memberId: s.id, reason: 'native-unbound' } });
       this.unbound.add(eventId);
     }
+  }
+  // A session due for rotation an hour and still not rotated (queue-dispatch.cjs noteRotationStalls): one line per
+  // native session, reason and gate, kept across restarts by its id.
+  rotationStalled({ memberId, nativeId, reason, gate, since }) {
+    if (!Number.isSafeInteger(since)) return false;
+    const eventId = `rotation-stalled:${hash([memberId, nativeId, reason, gate])}`;
+    if (this.rotationStalls.has(eventId)) return false;
+    this.record({ eventId, sourceRef: `rotation-stalled:${memberId}`, kind: 'blocked',
+      payload: { memberId, reason: 'rotation-stalled', outcome: `${reason}:${gate}`, title: new Date(since).toISOString() } });
+    this.rotationStalls.add(eventId);
+    return true;
   }
   // The backend validates the live failed turn; intake never settles or replays its task.
   observeRecoveryFailures(sessions = []) {

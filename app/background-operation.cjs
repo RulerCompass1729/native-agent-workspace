@@ -221,6 +221,8 @@ function operationSummary(command, actor, names = {}) {
   return summary;
 }
 function run(value, fn, request = null) { return scope.run({ actor: actor(value), request }, fn); }
+// NAW's own work an agent's call set going: what it sends is NAW's, not that agent's.
+function detached(fn) { return scope.exit(fn); }
 function message(recipient) {
   const a = current();
   return a ? { origin: 'agent-control', name: recipient ? `${a.name} → ${recipient}` : a.name, agentControl: { ...a } } : {};
@@ -287,4 +289,4 @@ function inputGuard(workspace, ids, origin = current()) {
   return valid;
 }
 function controlFingerprint(command, state) { return require('./background-fingerprint.cjs').fingerprint(command, state); }
-module.exports = { controlFingerprint, actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { controlFingerprint, actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, detached, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
