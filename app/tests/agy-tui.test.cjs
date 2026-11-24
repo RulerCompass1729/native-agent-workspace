@@ -136,6 +136,7 @@ test('Workspace creates agy as terminal-only, enforces claim=terminal, delivers 
     create(record) {
       const rt = new AgyTui(record, host, {
         sendTimeoutMs: 500,
+        humanInputQuietMs: 0,
         brainRoot,
         Terminal: class extends SyntheticTerminal {
           constructor(argv, cwd, env) {
@@ -453,7 +454,7 @@ test('Finding 1 (R2 #1): renderAgyProvider fallback to Claude clears auto-checke
   assert.equal(els['skip-permissions'].checked, true);
 });
 
-test('R2 #3: bound nativeId is immutable and rejects hooks from another conversationId', t => {
+test('R2 #3 (r3 #3): bound nativeId is immutable and rejects mismatched, malformed, or missing conversationId hooks', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-lock-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const brainRoot = path.join(dir, 'brain');
@@ -478,16 +479,33 @@ test('R2 #3: bound nativeId is immutable and rejects hooks from another conversa
   assert.equal(record.nativeId, ownId);
 
   // Subsequent hook claiming another conversationId (or malformed ID) is dropped before mutating nativeId or starting a turn.
-  rt.hook({ hookEventName: 'PreInvocation', conversationId: otherId, initialNumSteps: 0, transcriptPath: otherTranscript });
-  assert.equal(record.nativeId, ownId);
-  assert.equal(rt.turnId, null);
+  for (const badId of [otherId, 'not-a-uuid', '', 12345, null, {}]) {
+    rt.hook({ hookEventName: 'PreInvocation', conversationId: badId, initialNumSteps: 0, transcriptPath: otherTranscript });
+    assert.equal(record.nativeId, ownId);
+    assert.equal(rt.turnId, null);
+  }
 
-  rt.hook({ hookEventName: 'PreInvocation', conversationId: 'not-a-uuid', initialNumSteps: 0, transcriptPath: otherTranscript });
-  assert.equal(record.nativeId, ownId);
-  assert.equal(rt.turnId, null);
+  // Start a legitimate bound turn, then attempt to complete it with malformed, empty, numeric, null, missing, or foreign IDs.
+  rt.hook({ hookEventName: 'PreInvocation', conversationId: ownId, initialNumSteps: 0, transcriptPath: ownTranscript });
+  const activeTurn = rt.turnId;
+  assert.ok(activeTurn);
+  for (const badStop of [
+    { hookEventName: 'Stop', conversationId: otherId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: otherTranscript },
+    { hookEventName: 'Stop', conversationId: 12345, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript },
+    { hookEventName: 'Stop', conversationId: '', terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript },
+    { hookEventName: 'Stop', conversationId: null, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript },
+    { hookEventName: 'Stop', terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript },
+  ]) {
+    rt.hook(badStop);
+    assert.equal(rt.turnId, activeTurn, 'malformed or missing conversationId never closes a bound turn');
+    assert.equal(completes.length, 0);
+  }
 
-  rt.hook({ hookEventName: 'Stop', conversationId: otherId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: otherTranscript });
-  assert.equal(completes.length, 0);
+  // Matching conversationId completes the bound turn cleanly.
+  rt.hook({ hookEventName: 'Stop', conversationId: ownId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript });
+  assert.equal(rt.turnId, null);
+  assert.equal(completes.length, 1);
+  assert.equal(completes[0].text, 'own reply');
 
   // Pre-bound resumed session also rejects retargeting on the very first hook.
   const resumedRecord = { id: 's-resumed', provider: 'agy', cwd: dir, nativeId: ownId, recovering: true, state: 'idle' };
@@ -499,12 +517,14 @@ test('R2 #3: bound nativeId is immutable and rejects hooks from another conversa
   assert.equal(resumedRecord.nativeId, ownId);
 });
 
-test('R2 #4: xterm screen editorState allows send after TUI use while blocking live drafts, overlays and trust prompts', async t => {
+test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale composer above selection, cursor outside composer, and live drafts while allowing send after clear', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-screen-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const rule = '─'.repeat(80);
-  const paint = async (term, lines) => {
-    const payload = '\x1b[2J\x1b[H' + lines.join('\r\n');
+  // cursorRow is 0-indexed viewport row; defaults to the first `>` line when present.
+  const paint = async (term, lines, cursorRow = lines.findIndex(l => l.startsWith('>'))) => {
+    const move = cursorRow >= 0 ? `\x1b[${cursorRow + 1};3H` : '';
+    const payload = '\x1b[2J\x1b[H' + lines.join('\r\n') + move;
     await new Promise(resolve => term.screen.write(payload, resolve));
     term.emit('data', { data: payload });
   };
@@ -517,6 +537,7 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
   }
 
   let activeTerm;
+  let clock = 1000;
   const host = {
     privateDir: dir,
     binaries: { agy: '/synthetic/bin/agy', python: '/synthetic/bin/python3' },
@@ -526,6 +547,8 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
     create(record) {
       return new AgyTui(record, host, {
         sendTimeoutMs: 500,
+        humanInputQuietMs: 500,
+        now: () => clock,
         Terminal: class extends XtermTerminal {
           constructor(argv, cwd, env) { super(argv, cwd, env); activeTerm = this; }
         },
@@ -548,7 +571,33 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
   await assert.rejects(rt.send('blocked on trust', 't1', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, 0);
 
-  // Default Auto mode idle placeholder is empty and dispatchable.
+  // r3 #2: Old empty composer above a newer selection prompt (non-empty rows below ? for shortcuts) is rejected.
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts',
+    'Select a model:',
+    '> Gemini 4 Neon',
+  ], 6);
+  assert.equal(editorState(activeTerm.screen), 'unknown');
+  assert.equal(rt.chatAvailable, false);
+  await assert.rejects(rt.send('blocked on selection below composer', 't-below', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, 0);
+
+  // r3 #2: Even with nothing below ? for shortcuts, cursor outside the composer box is rejected.
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts',
+  ], 4);
+  assert.equal(editorState(activeTerm.screen), 'unknown');
+  assert.equal(rt.chatAvailable, false);
+
+  // Default Auto mode idle placeholder with cursor inside composer is empty and dispatchable.
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -559,9 +608,29 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true);
 
-  // Human uses the TUI (setting sticky record.terminalInputPending = true) and types a draft.
-  ws.input(sessionId, 'hello draft', 'owner-1');
+  // r3 #1: Human types into TUI -> BEFORE any PTY repaint (screen still holds old empty frame), dispatch MUST refuse with 0 extra bytes written!
+  ws.input(sessionId, 'h', 'owner-1');
   assert.equal(record.terminalInputPending, true);
+  assert.equal(rt.chatAvailable, false);
+  const writesRightAfterKey = activeTerm.writes.length;
+  await assert.rejects(rt.send('race before echo', 't-race', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero dispatch bytes written during un-echoed keystroke window');
+
+  // Even an unrelated repaint arriving during the quiet window cannot re-enable dispatch before settling.
+  clock += 100;
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  assert.equal(rt.chatAvailable, false);
+  await assert.rejects(rt.send('race during settle', 't-settle', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesRightAfterKey);
+
+  // Once agy echoes the draft and the quiet window elapses, editorState still blocks dispatch.
+  clock += 500;
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -571,9 +640,8 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
   ]);
   assert.equal(editorState(activeTerm.screen), 'unknown');
   assert.equal(rt.chatAvailable, false);
-  const writesWithDraft = activeTerm.writes.length;
   await assert.rejects(rt.send('auto while drafting', 't2', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesWithDraft, 'zero bytes written while human draft is present');
+  assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero bytes written while human draft is present');
 
   // Even if ? for shortcuts were visible alongside non-placeholder text, editorState still reports draft.
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> hello draft', rule, '? for shortcuts']);
@@ -584,7 +652,9 @@ test('R2 #4: xterm screen editorState allows send after TUI use while blocking l
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> ', 'second line', rule, '? for shortcuts']);
   assert.equal(editorState(activeTerm.screen), 'draft');
 
-  // Human clears draft (Ctrl+U) or finishes turn -> empty skipPermissions prompt re-enables automated send() even while terminalInputPending remains true!
+  // Human clears draft (Ctrl+U) -> empty skipPermissions prompt re-enables automated send() after quiet window even while terminalInputPending remains true!
+  ws.input(sessionId, '\x15', 'owner-1');
+  clock += 600;
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,

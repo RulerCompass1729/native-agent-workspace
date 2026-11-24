@@ -15,6 +15,7 @@ const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]() -]{0,119}$/;
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
+const DEFAULT_HUMAN_INPUT_QUIET_MS = 500;
 const MCP_PROOF_WAIT_MS = 2500;
 const DEFAULT_BRAIN_ROOT = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
 const WORKSPACE_MESSAGE_MATCHER = '^.*workspace_message$';
@@ -53,6 +54,9 @@ function editorState(screen) {
     if (lines[i].includes('? for shortcuts')) { statusIdx = i; break; }
   }
   if (statusIdx < 3) return 'unknown';
+  for (let i = statusIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim()) return 'unknown';
+  }
   let bottomRule = -1;
   for (let i = statusIdx - 1; i >= 0; i--) {
     if (RULE_LINE.test(lines[i].trim())) { bottomRule = i; break; }
@@ -64,6 +68,7 @@ function editorState(screen) {
     if (RULE_LINE.test(lines[i].trim())) { topRule = i; break; }
   }
   if (topRule < 0 || bottomRule - topRule <= 1) return 'unknown';
+  if (!Number.isInteger(buf.cursorY) || buf.cursorY <= topRule || buf.cursorY >= bottomRule) return 'unknown';
   const box = lines.slice(topRule + 1, bottomRule).map(l => l.trim()).filter(Boolean);
   if (!box.length || !/^[>❯]/.test(box[0])) return 'unknown';
   if (box.length > 1) return 'draft';
@@ -170,12 +175,14 @@ function launchSpec({ record, binary, bridgeDir = null, hookToken = null, hookSo
 
 class AgyTui extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
-  constructor(record, host, { Terminal, sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS, brainRoot = DEFAULT_BRAIN_ROOT } = {}) {
+  constructor(record, host, { Terminal, sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS, humanInputQuietMs = DEFAULT_HUMAN_INPUT_QUIET_MS, now = () => Date.now(), brainRoot = DEFAULT_BRAIN_ROOT } = {}) {
     super();
     this.record = record;
     this.host = host;
     this.Terminal = Terminal;
     this.sendTimeoutMs = sendTimeoutMs;
+    this.humanInputQuietMs = humanInputQuietMs;
+    this.now = now;
     this.brainRoot = brainRoot;
     this.terminal = null;
     this.bridgeDir = null;
@@ -186,10 +193,31 @@ class AgyTui extends EventEmitter {
     this.addressedSendAvailable = false;
     this.liveTurn = null;
     this.pendingSend = null;
+    this.lastHumanInputAt = -Infinity;
+    this.humanInputTimer = null;
     this.mcpCalls = new Map();
     // Separate per-session secrets: hookToken is in the child env; mcpToken is written only to mcp_config.json.
     this.token = randomBytes(32).toString('hex');
     this.mcpToken = randomBytes(32).toString('hex');
+  }
+  clearHumanInputTimer() {
+    if (this.humanInputTimer) { clearTimeout(this.humanInputTimer); this.humanInputTimer = null; }
+  }
+  humanInputSettling() {
+    return this.lastHumanInputAt >= 0 && (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
+  }
+  noteHumanTerminalInput() {
+    this.lastHumanInputAt = this.now();
+    this.promptReady = false;
+    this.clearHumanInputTimer();
+    this.syncCapabilities();
+    if (this.humanInputQuietMs > 0 && !this.stopped && this.terminal?.alive) {
+      this.humanInputTimer = setTimeout(() => {
+        this.humanInputTimer = null;
+        if (!this.stopped && this.terminal?.alive && this.terminal.screen) this.syncScreenState(this.terminal.screen);
+      }, this.humanInputQuietMs);
+      this.humanInputTimer.unref?.();
+    }
   }
   cleanupBridge() {
     const dir = this.bridgeDir;
@@ -254,7 +282,7 @@ class AgyTui extends EventEmitter {
   syncScreenState(screen) {
     const state = editorState(screen);
     this.trustPromptActive = state === 'blocked';
-    this.promptReady = state === 'empty';
+    this.promptReady = state === 'empty' && !this.humanInputSettling();
     this.syncCapabilities();
   }
   observeTerminalText(text) {
@@ -294,6 +322,7 @@ class AgyTui extends EventEmitter {
     });
     terminal.on('closed', result => {
       if (this.terminal !== terminal) return;
+      this.clearHumanInputTimer();
       this.clearTokens();
       this.cleanupBridge();
       this.promptReady = false;
@@ -319,7 +348,7 @@ class AgyTui extends EventEmitter {
   }
   send(text, tag, guard = () => true) {
     const screen = this.terminal?.screen;
-    const promptBlocked = screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true;
+    const promptBlocked = this.humanInputSettling() || (screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true);
     if (this.stopped || !this.terminal?.alive || !this.chatAvailable || !this.promptReady || this.trustPromptActive ||
       promptBlocked || this.pendingSend || this.liveTurn) {
       return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
@@ -402,10 +431,11 @@ class AgyTui extends EventEmitter {
   }
   hook(event) {
     if (!event || typeof event !== 'object' || this.stopped || !this.terminal?.alive) return;
-    if (typeof event.conversationId === 'string' && event.conversationId && !validConversationId(event.conversationId)) return;
-    const incomingId = validConversationId(event.conversationId) ? event.conversationId : null;
+    const hasConversationId = Object.prototype.hasOwnProperty.call(event, 'conversationId') && event.conversationId !== undefined;
+    if (hasConversationId && !validConversationId(event.conversationId)) return;
+    const incomingId = hasConversationId ? event.conversationId : null;
     if (validConversationId(this.record.nativeId)) {
-      if (incomingId && incomingId !== this.record.nativeId) return;
+      if (incomingId !== this.record.nativeId) return;
     } else if (incomingId) {
       this.record.nativeId = incomingId;
       this.emit('capability');
@@ -542,6 +572,7 @@ class AgyTui extends EventEmitter {
   }
   async stop() {
     this.stopped = true;
+    this.clearHumanInputTimer();
     this.promptReady = false;
     this.trustPromptActive = false;
     this.chatAvailable = false;
