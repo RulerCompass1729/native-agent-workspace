@@ -108,7 +108,8 @@ test('a message refused before it was registered (the turn lost its authority, o
   assert.equal(f.rows().length, 1, 'only the first has a row');
   f.observe();
   const outcomes = f.events().map(e => e.payload.outcome);
-  assert.deepEqual(outcomes, ['not-sent:source-runtime-changed', 'not-sent:turn-revoked-by-human', 'not-sent:turn-already-requested']);
+  // A control change NAW has no name for is 'control', never 「真人」.
+  assert.deepEqual(outcomes, ['not-sent:source-runtime-changed', 'not-sent:control', 'not-sent:turn-already-requested']);
   for (const e of f.events()) assert.deepEqual(Object.keys(e.payload).sort(), ['memberId', 'outcome', 'reason', 'title']);
   assert.ok(!/Secret (one|two|three)/.test(JSON.stringify(f.main.ledger.snapshot())), 'never the message');
   await f.finish();
@@ -245,6 +246,6 @@ test('a message to the session the butler continued from is recorded for the cur
   f.main.ingress.observeWakeUndelivered(sessions, { steward: next, formerly: () => { throw Error('unreadable'); } });
   assert.deepEqual(f.events(), [], 'an unreadable rotation log is the current session alone');
   f.main.ingress.observeWakeUndelivered(sessions, { steward: next, formerly: id => id === 'butler-next' ? [f.b] : [] });
-  assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:turn-revoked-by-human']);
+  assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:control']);
   assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret to the old'));
 });

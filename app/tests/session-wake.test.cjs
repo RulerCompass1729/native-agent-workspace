@@ -728,7 +728,7 @@ test('an identical repeated Claude prompt neither withdraws nor reauthorizes a w
     assert.equal((await f.call()).status, 'staged', 'a mid-turn prompt is ordinary input');
     f.source.claim(f.a, 'another-window');
     typed();
-    await assert.rejects(async () => f.call('After the takeover.', 'second-call'), error => error.uiMessage?.key === 'error.wake.turnRevokedByHuman');
+    await assert.rejects(async () => f.call('After the takeover.', 'second-call'), error => error.uiMessage?.key === 'error.wake.revokedByTakeover');
     await f.finish('boundary');
     assert.equal(f.writes.length, 0);
     f.start('fresh-turn');
@@ -964,21 +964,21 @@ test('words this turn will not read leave its message as it was: not sent, uncon
 });
 test('after the person speaks into a turn, a takeover, pausing everything or another agent\'s background queue still ends its messages; typing does not', async t => {
   const cases = {
-    'a takeover': [async f => { f.source.claim(f.a, 'another-window'); }, false],
-    'pausing all handoffs': [async f => { f.source.pauseAll('stop'); }, false],
+    'a takeover': [async f => { f.source.claim(f.a, 'another-window'); }, 'error.wake.revokedByTakeover'],
+    'pausing all handoffs': [async f => { f.source.pauseAll('stop'); }, 'error.wake.revokedByPause'],
     // An agent using the person's own queue command through NAW's background control is not message input.
     'another agent queueing through background control': [async f => {
       const actor = { id: 'other-session', name: 'Other agent', nativeId: 'other-native', provider: 'claude', callId: 'call-1', turnId: 'turn-1', operationId: 'operation-1' };
       await require('../background-operation.cjs').run(actor, () => f.say('From another agent.'));
-    }, false],
-    'the person typing in the terminal': [async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); }, true],
+    }, 'error.wake.revokedByBackground'],
+    'the person typing in the terminal': [async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); }, null],
   };
-  for (const [name, [act, keeps]] of Object.entries(cases)) {
-    const f = await personSpeaks(t), words = await f.say('Hold on.');
+  for (const [name, [act, refused]] of Object.entries(cases)) {
+    const f = await personSpeaks(t), words = await f.say('Hold on.'), keeps = !refused;
     f.read(words);
     await act(f);
     if (keeps) assert.equal((await f.send(f.b, 'Goes.', 'after')).status, 'staged', name);
-    else await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs('error.wake.turnRevokedByHuman'), name);
+    else await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs(refused), name);
     await f.finish();
     assert.equal(f.writes.length, keeps ? 1 : 0, name);
   }
@@ -1006,18 +1006,54 @@ for (const steward of [true, false]) test(`late first prompt hook after turn-sta
   assert.equal((await f.send(f.b, 'First call of the new turn.', 'first')).status, 'staged');
   await f.finish(); assert.equal(f.writes.length, 1);
 });
-for (const [name, act] of Object.entries({
-  stop: async f => { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); },
-  takeover: f => f.source.claim(f.a, 'another-owner'),
-  'pause all': f => f.source.pauseAll('Explicit stop.'),
-  'automatic messages off': f => require('../session-wake.cjs').setPolicy(f.source, null, false),
+for (const [name, [act, key]] of Object.entries({
+  stop: [async f => { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); }, 'error.wake.revokedByInterrupt'],
+  takeover: [f => f.source.claim(f.a, 'another-owner'), 'error.wake.revokedByTakeover'],
+  'pause all': [f => f.source.pauseAll('Explicit stop.'), 'error.wake.revokedByPause'],
+  'automatic messages off': [f => require('../session-wake.cjs').setPolicy(f.source, null, false), 'error.wake.revokedBySwitch'],
 })) for (const steward of [true, false]) test(`${steward ? 'butler' : 'ordinary'} input cannot restore authority after ${name}`, async t => {
   const f = await personSpeaks(t, { steward });
   await f.send(f.b, 'Pending task.', 'before');
   await act(f);
   f.ra.emit('nativeInput', 'Later words.', { id: 'later-words', source: 'user' });
-  await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs('error.wake.turnRevokedByHuman'));
+  await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs(key));
   await f.finish(); assert.equal(f.writes.length, 0);
+});
+// The person, 11-23 「又是 communication 的 bug」: a withdrawn turn says what withdrew it, not always 「真人操作」.
+test('a withdrawn turn names what changed, in its text, its code and its withdrawn rows; none of these says a person did it', async t => {
+  const wake = require('../session-wake.cjs'), locale = require('../ui-locale.js');
+  const actor = { id: 'other-session', name: 'Other agent', nativeId: 'other-native', provider: 'claude', callId: 'call-1', turnId: 'turn-1', operationId: 'operation-1' };
+  const cases = {
+    'a window opening a session none held': ['opened', f => f.source.claim(f.a, 'new-window'), f => { f.s.owner = null; f.start('unheld'); }],
+    'pausing all on the other backend': ['pause', f => f.target.pauseAll('stop')],
+    'an upgrade pausing the old backend': ['upgrade', f => f.source.pauseAll('stop', undefined, 'upgrade')],
+    'the automatic-message switch': ['switch', f => wake.setPolicy(f.source, f.a, true)],
+    'an older backend rotating the boundary': ['boundary', f => fs.writeFileSync(path.join(f.root, 'agent-wake-boundary'), require('node:crypto').randomUUID(), { mode: 0o600 })],
+    'another agent\'s terminal keys through background control': ['background', async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; await require('../background-operation.cjs').run(actor, () => f.source.input(f.a, 'x', 'source-owner')); }],
+    'a control change NAW has no name for': ['control', f => { f.s.controlRevision++; }],
+  };
+  for (const [name, [code, act, before]] of Object.entries(cases)) {
+    const f = await personSpeaks(t);
+    if (before) before(f);
+    const staged = await f.send(f.b, 'Pending task.', 'before'); assert.equal(staged.status, 'staged', name);
+    await act(f);
+    const error = await f.send(f.b, 'Must not go.', 'after').then(() => null, e => e);
+    assert.ok(error, name);
+    assert.equal(error.sourceIssue, code, name);
+    assert.equal(error.uiMessage?.key, `error.wake.revokedBy${{ opened: 'Open' }[code] || code[0].toUpperCase() + code.slice(1)}`, name);
+    assert.doesNotMatch(error.message, /真人/, name);
+    assert.doesNotMatch(locale.errorText('en', error), /human|person/i, name);
+    assert.equal(f.ra.wakeUndelivered.at(-1).sourceIssue, code, `${name}: the butler's event carries it`);
+    // Withdrawn at once by its own backend's change; the other backend's change reaches it at the turn's end.
+    if (['upgrade', 'switch'].includes(code)) {
+      const row = f.sent()[0];
+      assert.equal(row.wake.status, 'cancelled', name); assert.equal(row.wake.cancellation?.code, code, name);
+      assert.doesNotMatch(row.text, /真人/, name);
+      assert.doesNotMatch(locale.displayText('en', row.text, row.uiMessage), /human|person/i, name);
+    }
+    await f.finish();
+    assert.equal(f.writes.length, 0, name);
+  }
 });
 
 for (const [steward, end, permission] of [[true, 'complete', false], [false, 'complete', false], [true, 'failed', false], [false, 'failed', false], [true, 'complete', true], [false, 'complete', true]]) test(`observed native input and turn end preserve a completed input-only turn only (${steward}/${end}/${permission})`, async t => {
@@ -1044,7 +1080,7 @@ for (const [name, data, keeps] of [['text', 'hello\r', true], ['paste', '\x1b[20
   f.source.input(f.a, data, 'source-owner');
   assert.deepEqual(keys, [data]);
   if (keeps) assert.equal((await f.send(f.ids[1], 'After input.', 'second')).status, 'staged');
-  else await assert.rejects(f.send(f.ids[1], 'After stop.', 'second'), refusedAs('error.wake.turnRevokedByHuman'));
+  else await assert.rejects(f.send(f.ids[1], 'After stop.', 'second'), refusedAs('error.wake.revokedByInterrupt'));
   await f.finish(); assert.equal(f.writes.length, keeps ? 2 : 0);
 });
 // R163 (11-24): fullscreen Claude turns on mouse tracking, so a scroll or click in its terminal arrives as input.
@@ -1057,7 +1093,7 @@ for (const [name, data, keeps] of [['one unsent key', 'x', true], ['text', 'hell
     assert.deepEqual(keys, [data]);
     if (order === 'input first') {
       if (keeps) assert.equal((await f.send(f.b, 'After input.', 'first')).status, 'staged');
-      else await assert.rejects(f.send(f.b, 'After stop.', 'first'), refusedAs('error.wake.turnRevokedByHuman'));
+      else await assert.rejects(f.send(f.b, 'After stop.', 'first'), refusedAs('error.wake.revokedByInterrupt'));
     }
     await f.finish(); assert.equal(f.writes.length, keeps ? 1 : 0, order);
   }
@@ -1086,7 +1122,7 @@ for (const steward of [true, false]) test(`${steward ? 'butler' : 'ordinary'} in
       await f.say('A clarification while looking up the receiver.');
       return result;
     };
-    if (stop) await assert.rejects(f.send(f.b, 'Must not go.', 'one'), refusedAs('error.wake.authorizationInvalidated'));
+    if (stop) await assert.rejects(f.send(f.b, 'Must not go.', 'one'), refusedAs('error.wake.revokedByInterrupt'));
     else assert.equal((await f.send(f.b, 'Still authorized.', 'one')).status, 'staged');
     await f.finish(); assert.equal(f.writes.length, stop ? 0 : 1);
   }
@@ -1184,7 +1220,7 @@ test('a held message is not sent once the person acts on the butler or the sende
     'butler-input': ['not-sent', '自动消息没有发出；不会自动重发。\n收件方已不是登记时的那个会话。\nSecond.'],
     'sender-input': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
     'pause-all': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
-    'pause-all-here': ['cancelled', '真人操作或交接边界已变化；自动消息未投递。\nSecond.'],
+    'pause-all-here': ['cancelled', '全部交接已暂停；自动消息未投递。\nSecond.'],
   };
   for (const act of Object.keys(outcomes)) {
     const f = await toButler(t);

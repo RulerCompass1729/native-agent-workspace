@@ -203,7 +203,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
       for (const old of layout.entries) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
-        try { await client.call('pause', { withdrawWakes: true }); } finally { client.close(); }
+        try { await client.call('pause', { withdrawWakes: true, cause: 'upgrade' }); } finally { client.close(); }
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);

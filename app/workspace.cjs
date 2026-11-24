@@ -1032,7 +1032,7 @@ class Workspace extends EventEmitter {
       this.cancelCapacity(s.id);
       // It still interrupts a desktop send it displaced; that send is not retried.
       if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入', undefined, false, uiActivity('notice.run.humanTerminalInput')[1]); s.controlRevision++; wake.messageInput(this, s, { control: 1 }); }
-      else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。', undefined, false, uiActivity('notice.run.machineSuperseded')[1]); s.controlRevision++; }
+      else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。', undefined, false, uiActivity('notice.run.machineSuperseded')[1]); s.controlRevision++; wake.cause(s, 'native-input'); }
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId }, s);
       // Machine turns keep their place but are not shown as the person's words.
@@ -1159,7 +1159,7 @@ class Workspace extends EventEmitter {
       this.forwards.delete(s.pendingTag);
     }
     s.pendingTag = null; s.approval = null; s.approvalResolved = false; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(s.id);
-    s.controlRevision++; s.memberRevision++; if (s.roomMembershipRevisions) s.roomMembershipRevisions.shared = s.memberRevision; s.connectionRevision = (s.connectionRevision || 0) + 1;
+    s.controlRevision++; s.memberRevision++; if (s.roomMembershipRevisions) s.roomMembershipRevisions.shared = s.memberRevision; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'identity');
     s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
     s.nativeContextPending = ['clear', 'resume', 'terminal-switch'].includes(info.reason) ? { nativeId: info.nativeId, reason: info.reason } : null;
     setActivity(s, ...uiActivity(info.reason === 'resume' ? 'notice.activity.contextResumeUnsupported' : info.reason === 'terminal-switch' ? 'notice.activity.contextChecking' : info.reason === 'clear' ? 'notice.activity.contextChangedChecking' : 'notice.activity.contextEnding'));
@@ -1402,6 +1402,7 @@ class Workspace extends EventEmitter {
       if (heldOpen) { if (!backgroundOperation.current()) wake.human(this, id); if (roomId === undefined) this.pause('真人接管会话', undefined, false, uiActivity('notice.run.humanControl')[1]); else { this.pauseParticipant(id, '真人接管会话', false, uiActivity('notice.run.humanControl')[1]); this.pauseRoom(roomId, '真人接管会话', uiActivity('notice.run.humanControl')[1]); } s.controlRevision++; }
       // Viewing the same session is not a new instruction. Real terminal input
       // still invalidates queued work; taking control from another view does too.
+      if (s.owner !== owner) wake.cause(s, heldOpen ? 'takeover' : 'opened');
       s.owner = owner; s.view = view;
       // A closed or hidden window that no longer holds anything is not kept.
       if (previous !== owner && this.pagelessOwners.has(previous) && !this.viewOwners.has(previous) && ![...this.sessions.values()].some(x => x.owner === previous)) this.pagelessOwners.delete(previous);
@@ -1566,7 +1567,7 @@ class Workspace extends EventEmitter {
     const dispatchAllowed = () => { try { return s.nativeId === nativeId && (episode ? s.rotationEpisode === episode && episode.state === 'open' :
       !rotationBlocked(s) && rotationEpoch(s) === inputEpoch) && !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
     if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
-    if (mobile) mobile.human();
+    if (mobile) { mobile.human(); wake.cause(s, 'input'); }
     else if (dispatch) {
       if ((this.drafts.get(id) || '').trim()) throw uiError("error.queue.personTyping");
       if (!dispatchAllowed()) throw uiError("error.backgroundMessagesDisabled");
@@ -1578,6 +1579,7 @@ class Workspace extends EventEmitter {
       if (s.owner !== owner) throw uiError("error.workspace.takeControlFirst");
       s.peerRevision = (s.peerRevision || 0) + 1;
       if (!recovery && !backgroundOperation.current()) wake.messageInput(this, s, { peer: 1 });
+      else if (!recovery) wake.cause(s, 'background');
       if (recovery) this.pauseParticipant(id, `${RECOVERY_REASONS[recovery.reason].pause}自动继续；原协作交接保持暂停`, true, uiActivity(`notice.run.automatic${RECOVERY_REASONS[recovery.reason].key}`)[1]);
       else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
@@ -1689,6 +1691,7 @@ class Workspace extends EventEmitter {
       // Private input still ends the old public reply scope; the session's wake permission survives.
       if (!shared) s.controlRevision++;
       if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
+      else wake.cause(s, 'input');
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
@@ -1774,6 +1777,7 @@ class Workspace extends EventEmitter {
     else {
       if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
       if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
+      else wake.cause(s, 'input');
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
@@ -1911,11 +1915,13 @@ class Workspace extends EventEmitter {
     if (!response) {
       if (!backgroundOperation.current()) wake.human(this, id);
       this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++;
+      const interrupt = data === '\x1b' || data.includes('\x03');
       if (!backgroundOperation.current()) {
         this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1);
         // Text, paste and editing keep the session's wake permission; native Esc/Ctrl-C still withdraw it.
-        if (data !== '\x1b' && !data.includes('\x03')) wake.messageInput(this, s, { control: 1 });
+        if (!interrupt) wake.messageInput(this, s, { control: 1 });
       }
+      if (interrupt || backgroundOperation.current()) wake.cause(s, interrupt ? 'interrupt' : 'input');
       s.terminalInputPending = true;
     }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
@@ -1930,7 +1936,7 @@ class Workspace extends EventEmitter {
     if (runtime.nativeAbortRequest && runtime.nativeAbortCurrent?.(runtime.nativeAbortRequest)) return runtime.nativeAbortRequest.done;
     // The turn this interrupt is for; a turn that began while the native side was asked is not waiting on it.
     const turn = runtime.turnId || null;
-    s.controlRevision++; this.pause('真人中断当前回复', undefined, false, uiActivity('notice.run.humanInterrupt')[1]); const result = await runtime.interrupt();
+    s.controlRevision++; wake.cause(s, 'interrupt'); this.pause('真人中断当前回复', undefined, false, uiActivity('notice.run.humanInterrupt')[1]); const result = await runtime.interrupt();
     setActivity(s, ...(result?.interrupted ? ['', null] : interruptActivity(s)));
     if (!result?.interrupted && (runtime.turnId || null) === turn) this.noteWait(s, 'interrupt', turn);
     this.changed();
@@ -1945,7 +1951,7 @@ class Workspace extends EventEmitter {
   // workspace message. Input, takeover or interruption in one session is narrower:
   // it changes that session's control/peer revision, which both the sender and the
   // receiver proof of a wake carry, so only wakes involving that session are voided.
-  pauseAll(reason, uiMessage) { wake.revoke(this); this.pause(reason, undefined, false, uiMessage); }
+  pauseAll(reason, uiMessage, cause = 'pause') { wake.revoke(this, cause); this.pause(reason, undefined, false, uiMessage); }
   goalContinuationCancel(scopeId, sessionId) {
     try { this.goalContinuation?.invalidate(scopeId, sessionId); }
     catch {
@@ -2246,16 +2252,16 @@ class Workspace extends EventEmitter {
     const failedGeneration = this.preflightFailures?.get(s);
     if (!maintenance && s.state === 'error' && failedGeneration !== undefined && failedGeneration === (s.connectionRevision || 0) &&
         !this.runtimes.has(id) && s.pid == null && !s.processIdentity && !s.serverIdentity) {
-      this.preflightFailures.delete(s); s.state = 'ended'; s.owner = null; s.controlRevision++;
+      this.preflightFailures.delete(s); s.state = 'ended'; s.owner = null; s.controlRevision++; wake.cause(s, 'stop');
       this.changed(); this.persist(); return Promise.resolve();
     }
     if (s.worktreePreparation && s.state === 'starting' && !this.runtimes.has(id)) {
-      s.state = 'ended'; s.owner = null; s.controlRevision++;
+      s.state = 'ended'; s.owner = null; s.controlRevision++; wake.cause(s, 'stop');
       setActivity(s, ...uiActivity("notice.activity.gitStartCancelled", { arg1: s.worktreePreparation.target, arg2: s.worktreePreparation.branch }));
       this.changed(); this.persist(); return Promise.resolve();
     }
     if (s.externalHistory && s.recovering && s.state === 'starting' && !this.runtimes.has(id)) {
-      s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'recoverable';
+      s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'stop'); s.recovering = false; s.state = 'recoverable';
       setActivity(s, ...uiActivity("notice.activity.connectionCancelled")); this.changed(); return Promise.resolve();
     }
     const runtime = this.runtime(id);
@@ -2267,7 +2273,7 @@ class Workspace extends EventEmitter {
       committed = true;
       if (maintenance?.participantOnly) this.pauseParticipant(id, '正在断开原生会话', false, uiActivity('notice.run.disconnecting')[1]);
       else this.pause('正在断开原生会话', undefined, false, uiActivity('notice.run.disconnecting')[1]);
-      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
+      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, maintenance ? 'migration' : 'stop'); s.recovering = false; s.state = 'stopping'; setActivity(s, ...uiActivity("notice.activity.waitingNativeConfirmation")); this.changed();
       stoppedState = { ...maintenance?.expected, controlRevision: s.controlRevision, connectionRevision: s.connectionRevision };
       this.stops.set(id, operation);
     };
@@ -2301,7 +2307,7 @@ class Workspace extends EventEmitter {
         this.forwards.delete(s.pendingTag);
       }
       s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
-      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
+      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect');
       const generation = s.connectionRevision;
       s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
       this.pause('重新连接原会话；之前的交接不会自动继续。', undefined, false, uiActivity('notice.run.reconnecting')[1]); this.changed();
@@ -2320,7 +2326,7 @@ class Workspace extends EventEmitter {
     const sameServer = s.provider === 'codex' && s.serverIdentity?.pid === this.host.codexProcess?.pid;
     if ((!sameServer && processMayBeAlive(s.serverIdentity)) || (processMayBeAlive(s.processIdentity) && !(sameServer && s.processIdentity.pid === s.serverIdentity.pid))) throw uiError("error.workspace.previousProcessMayRun");
     if (!fs.statSync(s.cwd).isDirectory()) throw uiError("error.workspace.originalDirectoryUnavailable");
-    s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
+    s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect'); s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
     // Membership is retained, but an interrupted automatic run never restarts.
     this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]); this.changed();
     let runtime;

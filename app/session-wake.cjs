@@ -7,6 +7,7 @@ const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
 const spaces = require('./collaboration-spaces.cjs');
+const backgroundOperation = require('./background-operation.cjs');
 const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', COOLDOWN = 60000, MAX_STREAK = 3;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
@@ -32,7 +33,48 @@ function boundary(w) {
   if (!/^[a-f0-9-]{36}$/i.test(value)) throw uiError("error.wake.humanInputBoundaryUnconfirmed");
   return value;
 }
-function revoke(w) {
+// What withdrew a turn's automatic messages, for its refusal text and code only (the person, 11-23 「又是 communication
+// 的 bug」): the proofs below stay the only check. 'boundary' and 'control' are the fallbacks when NAW has no name.
+const REVOKED = Object.freeze({ input: 'Input', interrupt: 'Interrupt', takeover: 'Takeover', opened: 'Open', background: 'Background',
+  stop: 'Stop', migration: 'Migration', reconnect: 'Reconnect', identity: 'Identity', 'native-input': 'NativeInput', control: 'Control',
+  'native-turn': 'NativeTurn', switch: 'Switch', pause: 'Pause', upgrade: 'Upgrade', boundary: 'Boundary',
+  'workspace-closed': 'Closed', 'storage-unavailable': 'Storage', 'source-runtime-changed': 'Runtime', 'automatic-messages-disabled': 'Disabled' });
+const BOUNDARY_CAUSES = new Set(['switch', 'pause', 'upgrade', 'input', 'background', 'boundary']);
+const revokedError = code => Object.assign(uiError('error.wake.revokedBy' + REVOKED[code]), { sourceIssue: code });
+const labelled = code => backgroundOperation.current() ? 'background' : code;
+// Runtime-only: the uncompensated control changes of each session, newest last.
+const causes = new WeakMap();
+let causeSeq = 0;
+function cause(s, code) {
+  if (!s || !Object.hasOwn(REVOKED, code)) return;
+  causes.set(s, [...(causes.get(s) || []), { seq: ++causeSeq, code: labelled(code) }].slice(-8));
+}
+function controlCause(s, since, fallback = 'control') { return (causes.get(s) || []).find(e => e.seq > (since ?? 0))?.code || fallback; }
+// Which change replaced each shared boundary, so another backend's turn can name it. Advisory: unreadable means 'boundary'.
+const CAUSES_FILE = 'agent-wake-boundary-causes';
+function boundaryCauses(w) {
+  const file = marker(w, CAUSES_FILE);
+  if (!safeFile(file)) return [];
+  const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return Array.isArray(list) ? list : [];
+}
+function boundaryCause(w, replaced) {
+  try {
+    const found = boundaryCauses(w).find(e => Array.isArray(e) && e[0] === replaced);
+    return found && BOUNDARY_CAUSES.has(found[1]) ? found[1] : 'boundary';
+  } catch { return 'boundary'; }
+}
+function noteBoundary(w, replaced, code) {
+  if (!replaced) return;
+  const file = marker(w, CAUSES_FILE), temp = file + '.' + randomUUID() + '.tmp';
+  try {
+    let list = [];
+    try { list = boundaryCauses(w); } catch { /* Started again. */ }
+    fs.writeFileSync(temp, JSON.stringify([...list, [replaced, code]].slice(-8)), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, file);
+  } catch { /* Only the text falls back to 'boundary'. */ } finally { try { fs.unlinkSync(temp); } catch { /* Gone. */ } }
+}
+function revoke(w, code = 'boundary') {
+  code = labelled(BOUNDARY_CAUSES.has(code) ? code : 'boundary');
   const file = marker(w, 'agent-wake-boundary'), temp = file + '.' + randomUUID() + '.tmp';
   let previous = null, saved = false;
   try { previous = boundary(w); } catch { /* Missing/invalid markers are never authority. */ }
@@ -40,6 +82,7 @@ function revoke(w) {
     safeFile(file);
     fs.writeFileSync(temp, randomUUID(), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, file);
     w.wakeGuardFailure = null; delete w.wakeGuardFailureUiMessage; saved = true;
+    noteBoundary(w, previous, code);
   } catch {
     // Automatic input fails closed, but a new optional feature cannot take
     // away human control when its own storage is unavailable.
@@ -54,7 +97,11 @@ function revoke(w) {
       try { const stat = fs.lstatSync(file); if (stat.isFile() && stat.uid === process.getuid()) fs.unlinkSync(file); } catch { /* The local automatic path stays disabled. */ }
     }
   } finally { try { fs.unlinkSync(temp); } catch { /* Never block human controls on cleanup. */ } }
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { w.edited?.(s); m.wake.status = 'cancelled'; m.wake.settledAt = Date.now(); m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) {
+    w.edited?.(s); m.wake.status = 'cancelled'; m.wake.settledAt = Date.now(); m.wake.cancellation = { code, at: m.wake.settledAt };
+    const [text, uiMessage] = uiActivity('notice.wake.revokedBy' + REVOKED[code], { body: m.wake.body });
+    m.text = text; m.uiMessage = uiMessage || undefined;
+  }
   return saved;
 }
 function initialize(w) {
@@ -69,7 +116,7 @@ function setPolicy(w, id, value) {
     if (value) { if (safeFile(file)) fs.unlinkSync(file); }
     else if (!safeFile(file)) { const fd = fs.openSync(file, 'wx', 0o600); fs.closeSync(fd); }
   } else { const s = w.get(id); s.wakeDisabled = !value; human(w, id); }
-  const saved = revoke(w); w.changed(); w.persist();
+  const saved = revoke(w, 'switch'); w.changed(); w.persist();
   if (!saved) throw Object.assign(Error(w.wakeGuardFailure), { uiMessage: w.wakeGuardFailureUiMessage });
   if (w.storageWarning) throw uiError("error.wake.settingsIncomplete");
   return true;
@@ -102,7 +149,7 @@ function nativeStart(w, r, info, s) {
     const earlier = new Set((s?.messages || []).filter(m => m.wake?.status === 'staged' && m.wake.nativeId === info.nativeId && m.wake.turnId !== info.turnId).map(m => m.wake.turnId));
     for (const turnId of earlier) complete(w, s, r, { nativeId: info.nativeId, turnId, status: 'unreported' });
   } catch { /* Withdrawn at the next start, or at reopen. */ }
-  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(w, s) }; }
+  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(w, s), since: causeSeq }; }
   catch { r.wakeTurn = null; }
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
@@ -237,8 +284,18 @@ function stage(w, s, r, native, args) {
   try { return stageCall(w, s, r, native, args); }
   catch (error) { undelivered(w, s, r, args, error); throw error; }
 }
+// The refused turn's error names its change; with none, the same refusal as before.
+function issueCause(w, s, issue, intent, since) {
+  if (issue.code === 'authorization-boundary-changed') return boundaryCause(w, intent.boundary);
+  if (issue.code === 'source-identity-changed') return controlCause(s, since);
+  return Object.hasOwn(REVOKED, issue.code) ? issue.code : 'control';
+}
 function stageCall(w, s, r, native, args) {
-  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError("error.wake.turnRevokedByHuman");
+  const started = r.wakeTurn, now = boundary(w);
+  if (!started) throw uiError("error.wake.turnAuthorizationUnconfirmed");
+  if (started.boundary !== now) throw revokedError(boundaryCause(w, started.boundary));
+  if (native?.valid?.() === false) throw revokedError(controlCause(s, started.since, 'native-turn'));
+  if (started.human !== humanProof(w, s)) throw revokedError(controlCause(s, started.since));
   const turn = r.wakeStagePending?.turnId === native?.turnId && r.wakeStagePending.nativeId === native?.nativeId ? r.wakeStagePending : null;
   const pending = turn?.calls.find(call => call.callId === native?.callId);
   if (pending) {
@@ -280,14 +337,15 @@ async function stageOnce(w, s, r, native, args) {
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
     sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, time: Date.now(), status: 'staged' };
-  // The code says which (closed, storage, runtime changed…); the person reads one sentence for all of them.
   const issue = sourceIssue(w, s, r, intent);
-  if (issue) throw Object.assign(uiError("error.wake.turnRevokedByHumanOrSetting"), { sourceIssue: issue.code });
+  if (issue) throw revokedError(issueCause(w, s, issue, intent, turn.since));
+  const since = causeSeq;
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
   const target = await w.peerRunner.lookupWake(args.recipient_id, {
     id: intent.id, boundary: intent.boundary, senderId: s.id, senderNativeId: s.nativeId });
   const after = sourceIssue(w, s, r, intent);
-  if (native.valid?.() === false || after || r.turnId !== native.turnId) throw Object.assign(uiError("error.wake.authorizationInvalidated"), after ? { sourceIssue: after.code } : {});
+  if (after) throw revokedError(issueCause(w, s, after, intent, since));
+  if (native.valid?.() === false || r.turnId !== native.turnId) throw revokedError(controlCause(s, since, 'native-turn'));
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const quiet = quietWindow(w, target.key), refused = target.readiness?.status === 'not-sent';
   let full = false, same = false;
@@ -650,4 +708,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

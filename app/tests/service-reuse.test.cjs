@@ -132,7 +132,7 @@ test('reusing an older live service pauses unsafe routing without replacing its 
 
 test('a live legacy socket survives an update, current service boot and repeated reconnect without replay', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-test-'));
-  const endpoint = path.join(directory, 's.sock'), calls = [], clients = new Set();
+  const endpoint = path.join(directory, 's.sock'), calls = [], pauses = [], clients = new Set();
   const oldVersion = process.env.NAW_APP_VERSION;
   const state = { runtimeVersion: 'previous-fixture', capabilities: ['resume', 'forget', 'clearSharedHistory'], owner: 'test', sessions: [{ id: 'retained', provider: 'claude', state: 'idle', nativeId: 'unchanged', pid: 321, messages: [], roomId: null }], room: { messages: [], run: null }, diagnostics: { dispatches: 0, shellModelCalls: 0 } };
   const server = net.createServer(socket => {
@@ -143,7 +143,8 @@ test('a live legacy socket survives an update, current service boot and repeated
       for (let end; (end = buffer.indexOf('\n')) >= 0;) {
         const r = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
         if (!ready) { ready = true; socket.write(JSON.stringify({ ready: true }) + '\n'); continue; }
-        calls.push(r.method); socket.write(JSON.stringify({ id: r.id, ok: true, value: r.method === 'initial' ? state : null }) + '\n');
+        calls.push(r.method); if (r.method === 'pause') pauses.push(r.args);
+        socket.write(JSON.stringify({ id: r.id, ok: true, value: r.method === 'initial' ? state : null }) + '\n');
       }
     });
   });
@@ -168,6 +169,7 @@ test('a live legacy socket survives an update, current service boot and repeated
     assert.equal(snapshot.servicePid, pid); assert.equal(snapshot.diagnostics.dispatches, 0);
     assert.ok(calls.every(method => ['initial', 'pause'].includes(method)));
     assert.equal(calls.filter(method => method === 'pause').length, 1);
+    assert.deepEqual(pauses, [[{ withdrawWakes: true, cause: 'upgrade' }]], 'the old backend learns it is an upgrade, not the person');
     await assert.rejects(c.call('shutdown'), /先结束/);
   } finally {
     c?.close();
