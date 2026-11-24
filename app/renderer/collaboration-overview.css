@@ -179,3 +179,5 @@
 .collaboration-overview[data-aligned-tabs="true"] .page-end { padding-right:46px!important; }
 /* The wrapper changes no list or focused-member layout. */
 .collaboration-overview:not([data-aligned-tabs="true"]) .collaboration-strip { display:contents; }
+@media(prefers-reduced-motion:no-preference){.collaboration-member-status.revealed{animation:collaboration-revealed .9s ease-out}}
+@keyframes collaboration-revealed{from{background:color-mix(in srgb,var(--green) 22%,var(--surface))}}

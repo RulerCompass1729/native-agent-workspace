@@ -211,7 +211,7 @@ let activityStream, speechStream;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
-let spaceNavigationMenu = null, spaceRailBefore = null;
+let spaceNavigationMenu = null;
 let sidebarCollapsedGroups = new Set();
 let sidebarCollapsedFolders = new Set();
 // T-135: each grid column's terminal height, by session, saved with this window's view.
@@ -915,6 +915,17 @@ function orderedMembers(id = spaceId) {
   const fallback = ranks.size;
   return people.map((record, index) => ({ record, rank: ranks.get(record.id) ?? fallback + index }))
     .sort((a, b) => a.rank - b.rank).map(item => item.record);
+}
+// A left member row points at that member's column; in one member's view it switches to that member.
+async function revealSpaceMember(id) {
+  if (selected !== 'room' || !members().some(s => s.id === id)) return;
+  if (focusedRoomMember()) { if (roomSession !== id) roomOverview?.focus(id); return; }
+  if (roomSurface !== 'overview') {
+    captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview';
+    await selectRoom('', true);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+  }
+  if (selected === 'room' && roomSurface === 'overview') roomOverview?.reveal(id);
 }
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
@@ -3903,15 +3914,12 @@ function renderSpaceSwitch(room) {
   button.querySelector('.space-switch-name').textContent = name;
   ui.display.computed(button, 'aria-label', () => uiText('navigation.switchNamed', { name }));
 }
+// 11-23: entering a space keeps the sidebar's width; its member list replaces the session list there.
 function renderSpaceRail() {
-  const active = selected === 'room', surface = $('sidebar-toggle').closest('.naw[data-native-surface="sidebar"]');
+  const active = selected === 'room';
   $('space-rail-routes').hidden = !active;
   $('switch-space').hidden = !active || Boolean(focusedRoomMember());
   renderSpaceSwitch(active && !focusedRoomMember() ? spaceRecord(spaceId) : null);
-  if (!surface) return;
-  const collapsed = surface.dataset.collapsed === 'true';
-  if (active && spaceRailBefore === null) { spaceRailBefore = collapsed; if (!collapsed) ui.toggleSidebar(); }
-  else if (!active && spaceRailBefore !== null) { const before = spaceRailBefore; spaceRailBefore = null; if (before !== collapsed) ui.toggleSidebar(); }
 }
 // Every unarchived session but the butler the person talks to, which has its own place above the lists.
 function sidebarSessions() {
@@ -4002,6 +4010,14 @@ function sidebarPresentation(record) {
   return { compact: compact + goalSuffix, full: full + goalSuffix, tone, workTone: childTone, marker, waiting: live && (waiting || record.state === 'approval'),
     detail: Boolean(goal.text || waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
 }
+function sidebarRailLabel(record) {
+  const p = sidebarPresentation(record), group = window.nativeWorkspaceAgentDistribution.group(p);
+  const ended = record.state === 'ended' && !disconnected && !record.backendUnavailable && !record.transportDisconnected && !record.nativeContextPending;
+  const key = p.tone === 'disconnected' ? ended ? 'ended' : 'unverified' : group === 'waiting' ? 'needsYou'
+    : p.workTone === 'goal-stopped' ? 'paused' : p.workTone === 'bg-unknown' ? 'unverified'
+    : group === 'stuck' ? 'stuck' : p.workTone === 'bg-work' ? 'background' : group === 'working' ? 'working' : 'ready';
+  return uiText('sidebar.rail.' + key);
+}
 function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
   const notice = backendVersionNotice(record, state.appVersion), provider = providerName(record.provider);
@@ -4032,6 +4048,7 @@ function renderVersions() {
   ui.display.attribute(control, 'aria-label', 'version.copyAria', () => ({ version: version() }));
   ui.display.attribute(control, 'title', 'version.copyTitle', () => ({ version: version() }));
   const summary = backendVersionSummary(state.sessions, state.appVersion), action = $('backend-version-summary');
+  ui.display.attribute(action, 'aria-description', 'sidebar.rail.versions');
   // Sessions an unfinished move ended keep the control reachable even with no old backend left.
   const ended = Array.isArray(state.switchEnded) ? state.switchEnded.length : 0;
   action.hidden = summary.count === 0 && !ended;
@@ -4157,31 +4174,31 @@ async function moveSidebarSession(id, target, after) {
 }
 function renderSidebarGroups() {
   const spaceView = selected === 'room', grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
-  $('sessions-group').hidden = spaceView;
   $('workspace-group').hidden = spaceView || grouped && renameTarget?.id !== 'room';
   document.querySelector('.session-view-switch').hidden = spaceView;
+  $('sessions-create-slot').hidden = spaceView;
   $('workspace-group').dataset.groupedSessions = String(grouped);
   const createSlot = $(grouped ? 'sessions-create-slot' : 'workspace-create-slot');
   if ($('new-space').parentElement !== createSlot) createSlot.append($('new-space'));
   const discoveryGroup = $(grouped ? 'sessions-group' : 'workspace-group');
   if ($('space-discovery').parentElement !== discoveryGroup) discoveryGroup.insertBefore($('space-discovery'), discoveryGroup.querySelector('.sidebar-group-body'));
   $('space-discovery').hidden = Boolean(count) || Boolean(state.sidebar?.[grouped ? 'sessionsCollapsed' : 'workspaceCollapsed']);
-  ui.display.text($('session-group-label'), grouped ? 'sidebar.spaces' : 'sidebar.sessions');
+  ui.display.text($('session-group-label'), spaceView ? 'sidebar.spaceMembers' : grouped ? 'sidebar.spaces' : 'sidebar.sessions');
   const visible = state.sessions.filter(s => !s.archived && s.id !== state.steward?.sessionId);
   const working = visible.filter(s => s.state === 'working').length;
-  ui.display.computed($('session-group-summary'), 'text', () => grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
+  ui.display.computed($('session-group-summary'), 'text', () => spaceView ? String(members().length) : grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
   ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
   // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
   document.querySelector('.drop-hint').hidden = spaceView || !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    const name = () => uiText({ sessions: grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
-    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
+    const name = () => uiText({ sessions: spaceView ? 'sidebar.spaceMembers' : grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
+    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? spaceView ? uiText('sidebar.memberCount', { count: members().length }) : grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' && !grouped ? uiText('sidebar.sessionDrop') : name() }));
+    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' && !grouped && !spaceView ? uiText('sidebar.sessionDrop') : name() }));
   }
   sidebarLayout?.update(state.sidebar);
 }
@@ -4203,12 +4220,16 @@ function renderSessions() {
     if (!model || model.actionsKey !== sessionMenu.actionsKey) sessionMenu.close();
     else if (sessionMenu.factsKey !== sidebarFactsKey(current)) { sessionMenu.factsKey = sidebarFactsKey(current); sessionMenu.close.update(model.items); }
   }
-  const visible = sidebarSessions();
-  const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
+  // In a space the list is that space's members, in its column order, one row per column.
+  const visible = selected === 'room' ? orderedMembers() : sidebarSessions();
+  const spaceView = selected === 'room', grouped = !spaceView && sidebarView === 'grouped', occurrences = [], containers = new Map();
   const list = $('session-list');
-  const folderOf = typeof hierFolderContainers === 'function' ? hierFolderContainers(grouped ? null : visible, list) : null;
-  $('sessions-flat').setAttribute('aria-pressed', String(!grouped)); $('sessions-grouped').setAttribute('aria-pressed', String(grouped));
-  if (grouped) {
+  const folderOf = typeof hierFolderContainers === 'function' ? hierFolderContainers(grouped || spaceView ? null : visible, list) : null;
+  $('sessions-flat').setAttribute('aria-pressed', String(sidebarView !== 'grouped')); $('sessions-grouped').setAttribute('aria-pressed', String(sidebarView === 'grouped'));
+  if (spaceView) {
+    for (const group of sidebarGroups.values()) group.element.remove();
+    for (const record of visible) occurrences.push({ record, key: `member:${spaceId}:${record.id}`, group: spaceId, container: list, member: true });
+  } else if (grouped) {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, room: r, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
@@ -4284,25 +4305,27 @@ function renderSessions() {
   if (sessionMenu && !sessionMenu.anchor && sessionMenu.rowKey && !keys.has(sessionMenu.rowKey)) sessionMenu.close();
   for (const [key, row] of sessionRows) if (!keys.has(key) && renameTarget?.row !== row.element) { row.element.remove(); sessionRows.delete(key); }
   const positions = new Map(), repeated = sameNameSessions(visible);
-  for (const { record, key, group, container, steward = false } of occurrences) {
+  for (const { record, key, group, container, steward = false, member = false } of occurrences) {
     let row = sessionRows.get(key);
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id; element.dataset.occurrence = key;
-      const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id;
-      // The butler's row is not reordered and not dragged into a space.
-      if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
+      const link = button('', () => member ? revealSpaceMember(record.id) : select(record.id), 'session-link'); link.dataset.sessionId = record.id;
+      // The butler's row is not reordered and not dragged into a space; a member row only points at its column.
+      if (member) element.classList.add('space-member-row');
+      else if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
       const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
       const metadata = node('span', undefined, 'session-metadata'), time = node('time', undefined, 'session-time'), marker = node('span', undefined, 'sidebar-state-marker');
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
       metadata.append(badges, status, time); label.append(name, version, shortId, metadata);
       // T-142: the status mark sits on the avatar's top-right corner, where a glance finds it.
-      const avatar = icon(record, false); avatar.append(dot); link.append(avatar, label, marker);
+      const avatar = icon(record, false), railStatus = node('span', undefined, 'sidebar-rail-status');
+      railStatus.setAttribute('aria-hidden', 'true'); avatar.append(dot); link.append(avatar, label, marker, railStatus);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }, key); });
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
-      element.append(link, more); row = { element, link, more, avatar, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
+      element.append(link, more); row = { element, link, more, avatar, name, shortId, badges, status, dot, marker, railStatus, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = () => memberships.map(r => spaceName(r)).join('、');
     const presentation = sidebarPresentation(record);
@@ -4314,7 +4337,7 @@ function renderSessions() {
     const version = () => backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`);
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, spaceName(r)]));
-    row.badges.hidden = Boolean(grouped && group);
+    row.badges.hidden = Boolean((grouped || member) && group);
     if (row.badgeKey !== badgeKey) {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
       // shortens it only by the width it has (T-144). The full list is in the hover card and the row's label.
@@ -4326,8 +4349,9 @@ function renderSessions() {
     // Compact version marks keep the three cases apart: older alpha, different, unreported.
     const notice = version(), versionMark = notice ? { old: '↑', different: '≠', unknown: '?' }[notice.kind] : '';
     row.version.textContent = versionMark; row.version.dataset.marker = versionMark; ui.display.computed(row.version, 'title', () => version()?.title || ''); row.version.hidden = !notice;
-    row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
-    if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
+    const current = member ? focusedRoomMember() && roomSession === record.id : record.id === selected;
+    row.link.classList.toggle('active', current); row.element.classList.toggle('active', current);
+    if (current) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     ui.display.computed(row.more, 'aria-description', () => sidebarDetails(record).join(' · '));
     // The butler's row is named for what it is; which session it is stands on the line below, before its state.
@@ -4337,6 +4361,7 @@ function renderSessions() {
     const timeText = sessionActivityTime(record); if (row.time.textContent !== timeText) row.time.textContent = timeText;
     row.dot.className = window.nativeWorkspaceAgentDistribution.look(presentation); row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; row.element.classList.toggle('has-status-detail', presentation.detail);
+    ui.display.computed(row.railStatus, 'text', () => sidebarRailLabel(record));
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);
@@ -4909,7 +4934,8 @@ function sidebarDropRow(element, target, group = null) {
   });
 }
 function dropTarget(element, join, destination = 'shared') {
-  const active = () => !(element.id === 'solo-drop' && sidebarView === 'grouped');
+  // In a space the left list shows its members; dropping there must not take a member out.
+  const active = () => !(element.id === 'solo-drop' && sidebarView === 'grouped') && !(selected === 'room' && !join && ['solo-drop', 'session-list'].includes(element.id));
   element.addEventListener('dragover', event => { if (active() && event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; element.classList.add('drag-over'); } });
   element.addEventListener('dragleave', event => { if (!element.contains(event.relatedTarget)) element.classList.remove('drag-over'); });
   element.addEventListener('drop', event => {

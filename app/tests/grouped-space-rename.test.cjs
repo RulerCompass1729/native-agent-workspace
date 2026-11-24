@@ -80,7 +80,8 @@ test('an open space reuses the inline name editor in its title without reviving 
   f.context.renderSidebarGroups(); f.open('room', null, 'A');
   assert.equal(f.target().row, f.$('header-identity'));
   assert.equal(f.$('rename-editor').getClientRects().length, 1);
-  assert.equal(f.$('workspace-group').hidden, true); assert.equal(f.$('sessions-group').hidden, true);
+  // 11-23 requirement change: the sessions group stays and lists the space's members; the workspace group stays hidden.
+  assert.equal(f.$('workspace-group').hidden, true); assert.equal(f.$('sessions-group').hidden, false);
   assert.equal(f.$('title').hidden, true); assert.deepEqual(f.writes, []);
   f.close(); assert.equal(f.$('title').hidden, false); assert.equal(f.$('rename-editor').hidden, true);
 });

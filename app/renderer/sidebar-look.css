@@ -12,20 +12,18 @@
   .sidebar-toggle:hover{background:var(--hover);color:var(--ink)}
   /* Avatar letters in the interface's sans-serif instead of the serif face. */
   .agent-icon{font-family:inherit;font-weight:650;letter-spacing:-.02em}
+  .session-link .agent-icon>.state-dot{display:block!important;top:-1px;right:-1px;width:8px;height:8px;border-radius:2px}
   /* Three steps: space name 14px bold, session name 13px, status 11px (today names and spaces are both 14px). */
   .session-row .session-title{font-size:13px}
   #new-session .rail-label{margin-right:auto}
 }
-/* The rail: the toggle on top; no version label, short ids, ⋯ or scrollbar. Names, ids and actions stay in each
-   row's tooltip, accessible name, right-click and Shift+F10 menu. */
+/* Full names and actions remain available through the row and its keyboard menu. */
 &[data-native-surface="sidebar"][data-collapsed="true"]{
   .brand{flex-direction:column;align-items:center;gap:4px;margin-bottom:6px}
   #app-version{display:none}
   /* Session rows only: a space's ⋯ stays, since its keyboard menu anchors and returns focus there. */
   .session-short-id,.session-row .session-more{display:none!important}
   #search-button{text-align:center}
-  #session-list{scrollbar-width:none}
-  #session-list::-webkit-scrollbar{display:none}
 }
 
 /* ---------- B 「卡片分层」: toggle at the top left, black ＋ 新会话 with a square search button beside it ---------- */
@@ -41,11 +39,7 @@
     #search-button .rail-icon{display:inline;font-size:17px;color:var(--ink)}
     #search-button .rail-label{display:none}
   }
-  &[data-collapsed="true"]{
-    #new-session{width:34px;height:34px;padding:0;justify-content:center;border:0;border-radius:999px;background:var(--ink);color:var(--surface,#fff)}
-    #new-session .rail-icon{margin:0;font-size:18px}
-    #search-button{width:34px;height:34px;padding:0;border-color:transparent;background:transparent}
-  }
+
 }
 
 /* Complete B: a card per space, two-level identity/status rows. */
@@ -103,16 +97,7 @@
     #archive-button,#setup-button{display:flex!important;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
     #archive-button .group-chevron{display:none}
   }
-  &[data-collapsed="true"]{
 
-    #new-session{flex:none;width:34px!important;height:34px!important;padding:0!important;justify-content:center;border-radius:999px}
-    #new-session .rail-icon{margin:0;font-size:18px}
-    #search-button{width:34px;height:34px;border-color:transparent!important;background:transparent!important}
-    .session-space-group:not([data-session-group="independent"]){margin:8px 2px;padding:4px 0 2px;border-radius:12px;background:var(--raised);box-shadow:0 0 0 1px var(--border)}
-    .session-space-group h3{margin:2px 0 2px!important}
-    .sidebar-space-tile{width:28px;height:28px;border-radius:8px;font-size:12px;font-weight:700}
-    .agent-icon{width:26px!important;height:26px!important;border-radius:999px!important;font-size:10px!important}
-  }
 
   .session-space-heading{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:4px 0;background:transparent;border:0;text-align:left}
   .session-space-heading::before{display:none}
@@ -128,14 +113,7 @@
     .session-space-group[data-session-group="independent"] .sidebar-space-name{font-size:12px}
     .session-metadata{display:grid!important;grid-template-columns:minmax(0,1fr) auto}
   }
-  &[data-collapsed="true"]{
-    .session-space-group h3{display:flex!important;align-items:center;justify-content:center;min-height:30px!important;background:none!important;padding:0!important;gap:0!important}
-    .session-space-heading{display:flex!important;flex:1;width:22px;min-height:30px;padding:0;justify-content:center}
-    .sidebar-space-tile{width:22px;height:24px}
-    .sidebar-space-lines,.session-space-enter,.session-space-toggle{display:none!important}
-    .space-group-more{display:block;flex:0 0 18px;width:18px;height:30px;padding:0;opacity:1}
-    .session-space-group[data-session-group="independent"] h3{display:none!important}
-  }
+
 
 }
 
@@ -150,4 +128,52 @@
     .sidebar-space-name{min-width:0;font-size:13px;line-height:18px}
     .sidebar-space-meta{flex:0 1 auto;min-width:0;max-width:100%;font-size:11px;line-height:15px;white-space:normal;overflow:visible;text-overflow:clip}
   }
+}
+
+.sidebar-rail-status{display:none}
+:root[data-sidebar-look="b"] &[data-native-surface="sidebar"][data-collapsed="true"] {
+ .sidebar{padding:10px 6px;gap:4px;min-height:0}
+ .brand{flex:none;gap:2px;margin:0;padding:0;align-items:center}
+ .brand .brand-version-row{margin:0}
+ #sidebar-toggle,#new-session,#search-button,#panorama-nav,#discoveries-button,#records-button,#setup-button,#privacy-button,#archive-button{display:flex!important;align-items:center;justify-content:center;flex:none;width:32px!important;height:32px!important;min-height:32px;padding:0!important;margin:0!important;border:1px solid transparent!important;border-radius:8px!important;background:transparent!important;color:var(--ink);box-sizing:border-box}
+ #sidebar-toggle:hover,#new-session:hover,#search-button:hover,#panorama-nav:hover,#discoveries-button:hover,#records-button:hover,#setup-button:hover,#privacy-button:hover,#archive-button:hover{background:var(--hover)!important;border-color:var(--border)!important}
+ #new-session{background:var(--ink)!important;color:var(--surface)!important}
+ #new-session:hover{background:var(--ink)!important}
+ .sidebar>#new-session,.sidebar>#search-button,.sidebar>#panorama-nav{align-self:center}
+ #backend-version-summary{min-height:24px;width:40px;max-width:100%;padding:0;border:0;border-radius:6px;color:var(--muted)}
+ #backend-version-summary::before{content:attr(aria-description);font-size:10px}
+ #steward-entry{flex:none;margin:0}
+ .session-backend-version,.session-row .label,.sidebar-state-marker{display:none!important}
+ .sidebar-navigation{flex:1;min-height:0;margin:0;padding:0}
+ .sidebar-navigation>#sessions-group{flex:1;min-height:0}
+ .sidebar-navigation>#archive-group{flex:none;margin:2px 0 0;padding:2px 0 0;border:0}
+ #archive-group .nav-label{display:flex;justify-content:center}
+ #solo-drop{display:flex;align-items:center;justify-content:center;min-height:24px;width:100%;padding:0}
+ #session-list{margin:0;min-height:0;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--muted) transparent;scroll-padding-block:6px}
+ #session-list::-webkit-scrollbar{display:block;width:4px}
+ .session-space-group:not([data-session-group="independent"]){margin:6px 1px;padding:3px 2px;border:1px solid var(--border);box-shadow:none;border-radius:10px}
+ .session-space-group h3{display:grid!important;grid-template-columns:minmax(0,1fr);justify-items:center;min-height:48px!important;margin:0!important;padding:0!important;gap:0!important}
+ .session-space-heading{flex:none;width:24px;min-width:24px;min-height:24px;padding:0}
+ .sidebar-space-tile{width:22px;height:22px;border-radius:6px}
+ .sidebar-space-lines,.session-space-enter,.session-space-toggle{display:none!important}
+ .session-space-group[data-session-group="independent"] h3{display:none!important}
+ .space-group-more{flex:none;width:24px;height:24px;min-height:24px;margin:0;padding:0;border:0;background:transparent}
+ .session-space-group>div{margin:0!important;padding:0;border:0!important}
+ .session-row{min-height:44px!important;margin:0;border-radius:7px}
+ .session-row .session-link{display:flex;flex-direction:column;align-items:center;gap:2px;width:100%;min-height:44px;padding:3px 0!important}
+ .session-row .session-link:focus-visible{outline-offset:-2px}
+ .session-row .agent-icon{width:24px!important;height:24px!important;border-radius:999px!important}
+ .sidebar-rail-status{display:block;position:static;max-width:100%;font-size:10px;line-height:14px;color:var(--muted);white-space:nowrap}
+ .session-row:has(.state-dot.approval) .sidebar-rail-status{color:var(--approval-ink);font-weight:600}
+ .sidebar-tools{flex:none;display:flex;flex-direction:column;align-items:center;gap:2px;padding-top:6px}
+ .sidebar-bottom{margin:0}
+}
+:root[data-sidebar-look="b"] &[data-native-surface="sidebar"][data-collapsed="true"] #session-list {
+ container-type:scroll-state;
+ &::-webkit-scrollbar-thumb{background:var(--muted);border-radius:4px}
+ &::before,&::after{content:'';display:block;position:sticky;height:8px;z-index:3;pointer-events:none;opacity:0}
+ &::before{top:0;margin-bottom:-8px;background:linear-gradient(var(--panel),transparent)}
+ &::after{bottom:0;margin-top:-8px;background:linear-gradient(transparent,var(--panel))}
+ @container scroll-state(scrollable:block-start){&::before{opacity:1}}
+ @container scroll-state(scrollable:block-end){&::after{opacity:1}}
 }
