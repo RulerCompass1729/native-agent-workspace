@@ -27,4 +27,14 @@ test('pause rotates the shared wake boundary only with the explicit withdraw fla
   assert.equal(boundary(), first, 'An implicit pause leaves other agents\' wakes alone');
   await client.call('pause', { withdrawWakes: true });
   assert.notEqual(boundary(), first, 'The explicit pause withdraws every staged wake');
+  // Which change replaced each boundary, for the refusal text only (the person, 11-23 「又是 communication 的 bug」).
+  const causes = () => JSON.parse(fs.readFileSync(path.join(dir, 'agent-wake-boundary-causes'), 'utf8'));
+  assert.deepEqual(causes().at(-1), [first, 'pause']);
+  const second = boundary();
+  await client.call('pause', { withdrawWakes: true, cause: 'upgrade' });
+  assert.deepEqual(causes().at(-1), [second, 'upgrade'], 'an upgrade is not the person pausing');
+  const third = boundary();
+  await client.call('pause', { withdrawWakes: true, cause: 'switch' });
+  assert.deepEqual(causes().at(-1), [third, 'pause'], 'no other cause through this call');
+  assert.equal(fs.statSync(path.join(dir, 'agent-wake-boundary-causes')).mode & 0o077, 0);
 });

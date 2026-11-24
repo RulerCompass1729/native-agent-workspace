@@ -324,8 +324,8 @@ test('the entry is wired: the record is built from the data folder, shown in the
   assert.equal(wake.match(/StewardRole/g).length, 1);
   assert.ok(wake.includes("new (require('./steward-role.cjs').StewardRole)(root(w)).current();"));
   // Runtime input counters may use their own WeakMap; designation writes remain forbidden.
-  assert.match(wake, /const inputChanges = new WeakMap\(\);/);
-  assert.equal(/stewardRole|steward\.json|\.set\(/.test(wake.replace(/\binputChanges\.set\(/g, '(')), false);
+  assert.match(wake, /const inputChanges = new WeakMap\(\);/); assert.match(wake, /const causes = new WeakMap\(\);/);
+  assert.equal(/stewardRole|steward\.json|\.set\(/.test(wake.replace(/\b(inputChanges|causes)\.set\(/g, '(')), false);
   // The record module shares nothing writable with the other two roles.
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));

@@ -374,7 +374,7 @@ class WorkspaceClient extends EventEmitter {
     // path that requires a confirmed revocation, still withdraw every staged wake.
     if (strictWake || revokeWakes) {
       if (typeof this.scope === 'string' && (strictWake || this.entries.some(e => e.state.capabilities?.includes('agentWakeV1')))) {
-        const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
+        const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() }, strictWake ? 'input' : 'pause');
         if (strictWake && confirmed !== true) throw Object.assign(uiError("error.client.mobileRevocationUnconfirmed"), { notSent: true });
       } else if (strictWake) throw Object.assign(uiError("error.client.mobileLocalScopeUnconfirmed"), { notSent: true });
     }

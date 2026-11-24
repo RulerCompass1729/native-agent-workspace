@@ -154,7 +154,7 @@ test('the person still ends a held one: pausing handoffs at once, typing into th
   const f = await fixture(t); f.open(40);
   const one = await f.turn('one', 'Paused.'); await one.finish();
   f.source.pauseAll('你暂停了后续交接');
-  assert.deepEqual([f.rows().at(-1).wake.status, f.rows().at(-1).text], ['cancelled', '真人操作或交接边界已变化；自动消息未投递。\nPaused.']);
+  assert.deepEqual([f.rows().at(-1).wake.status, f.rows().at(-1).text], ['cancelled', '全部交接已暂停；自动消息未投递。\nPaused.']);
   const g = await fixture(t); g.open(40);
   const two = await g.turn('two', 'Typed over.'); await two.finish();
   g.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
