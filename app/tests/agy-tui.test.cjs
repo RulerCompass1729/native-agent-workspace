@@ -564,13 +564,17 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   const rt = ws.runtimes.get(sessionId);
   activeTerm.emit('started', 61616);
 
-  // Trust prompt blocks dispatch; accepting it with Enter + SessionStart + settled empty composer restores dispatch cleanly (r8).
-  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
+  // Trust prompt blocks dispatch; navigating Down/Up then accepting with Enter + SessionStart + settled empty composer restores dispatch cleanly (r8/r10).
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder', '  No, exit']);
   assert.equal(editorState(activeTerm.screen), 'blocked');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('blocked on trust', 't1', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, 0);
 
+  ws.input(sessionId, '\x1b[B', 'owner-1');
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '  Yes, I trust this folder', '> No, exit']);
+  ws.input(sessionId, '\x1b[A', 'owner-1');
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder', '  No, exit']);
   ws.input(sessionId, '\r', 'owner-1');
   const writesAfterTrustEnter = activeTerm.writes.length;
   assert.equal(rt.chatAvailable, false, 'still blocked while trust prompt is on screen');

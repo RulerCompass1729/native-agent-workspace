@@ -23,8 +23,9 @@ const RULE_LINE = /^[─━═]{10,}$/;
 const EMPTY_PROMPT_LINE = /^[>❯](?:\s*|\s+(?:Auto mode|Plan mode|Accept edits|Ask before edits|Default mode|Bypass permissions)\b.*\(shift\+tab to cycle\))$/;
 // Keys that cannot insert text or recall history into an already-empty composer.
 const EMPTY_NOOP_INPUT = /^(?:[\x7f\x08\x15\x0b\x17]|\x1b\[(?:3~|[CDHF]))+$/;
-// Enter-only confirmation on the startup directory-trust prompt (never Up/Down history recall or text).
-const TRUST_PROMPT_KEYS = /^[\r\n]+$/;
+// Startup directory-trust prompt keys: Up/Down navigation before confirmation, and Enter confirmation (never text or post-Enter arrows).
+const TRUST_NAV_KEYS = /^(?:\x1b\[[AB])+$/;
+const TRUST_CONFIRM_KEYS = /^(?:\x1b\[[AB])*[\r\n]+$/;
 
 function validConversationId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
@@ -222,6 +223,7 @@ class AgyTui extends EventEmitter {
     this.liveTurn = null;
     this.pendingSend = null;
     this.humanInputState = 'none';
+    this.trustConfirmSent = false;
     this.lastHumanInputAt = -Infinity;
     this.humanInputTimer = null;
     this.mcpCalls = new Map();
@@ -248,8 +250,13 @@ class AgyTui extends EventEmitter {
     // type+erase stays conservatively blocked rather than risking submission of an un-echoed draft).
     if (this.humanInputState === 'none' && screen && state === 'empty' && typeof data === 'string' && EMPTY_NOOP_INPUT.test(data)) {
       this.humanInputState = 'none';
-    } else if (this.humanInputState !== 'unseen' && screen &&
-      (state === 'draft' || (state === 'blocked' && typeof data === 'string' && TRUST_PROMPT_KEYS.test(data)))) {
+    } else if (this.humanInputState !== 'unseen' && screen && state === 'draft') {
+      this.humanInputState = 'editing';
+    } else if (this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' && !this.trustConfirmSent &&
+      (TRUST_NAV_KEYS.test(data) || TRUST_CONFIRM_KEYS.test(data))) {
+      if (TRUST_CONFIRM_KEYS.test(data)) this.trustConfirmSent = true;
+      this.humanInputState = 'editing';
+    } else if (this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' && /^[\r\n]+$/.test(data)) {
       this.humanInputState = 'editing';
     } else {
       this.humanInputState = 'unseen';
@@ -327,6 +334,7 @@ class AgyTui extends EventEmitter {
   }
   syncScreenState(screen) {
     const state = editorState(screen);
+    if (state !== 'blocked') this.trustConfirmSent = false;
     if (state === 'draft' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
     if (state === 'empty' && this.humanInputState === 'editing' && !this.humanInputSettling()) this.humanInputState = 'none';
     this.trustPromptActive = state === 'blocked';
