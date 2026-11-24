@@ -136,7 +136,8 @@ class ButlerIngress {
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
       if (/^control-refused:[a-f0-9]{64}$/.test(event.eventId)) this.controlRefusals.add(event.eventId);
-      if (/^native-unbound:[a-f0-9]{64}$/.test(event.eventId)) this.unbound.add(event.eventId);
+      if (/^native-unbound:[a-f0-9]{64}$/.test(event.eventId) && event.kind === 'failure' && event.payload?.reason === 'native-unbound' &&
+          event.sourceRef === `native-unbound:${event.payload.memberId}`) this.unbound.add(event.eventId);
       if (event.eventId.startsWith('human-input:') && event.kind === 'blocked' &&
           ['human-message', 'human-message-content-unavailable'].includes(event.payload.reason)) this.humanInputs.add(event.eventId);
       const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);

@@ -441,3 +441,40 @@ for (const occupied of [false, true]) test('carried recoverable records pass the
   assert.equal(record(h.dataDir, h.key), null);
   assert.ok(!methods(h.services[1]).some(m => m.endsWith(':saved')), 'Do not start a merely carried session');
 });
+
+// Bug ③ (2026-11-23 18:11Z): the restarted backend was still checking the installed Claude version when the moved
+// sessions resumed, so they launched without a qualified version and never bound to NAW for their whole life.
+const checkFile = h => path.join(h.directory, 'claude-qualification.json');
+const writeCheck = (h, status, at) => fs.writeFileSync(checkFile(h), JSON.stringify({ format: 1, checks: { '2.1.330': { version: '2.1.330', status, at: new Date(at).toISOString() } } }), { mode: 0o600 });
+// As the real daemon: its version check marks 'checking' before the service accepts connections.
+const checking = (h, at = () => Date.now()) => async (dir, exe, k) => { writeCheck(h, 'checking', at()); await h.ensure()(dir, exe, k); };
+const resumes = s => s.calls.filter(([m]) => m === 'maintenanceResume').length;
+const move = (h, old, ensure, extra = {}) => switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', ensure, owner: 'view-a',
+  applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: h.signal(old), now: () => now, checkPollMs: 10, ...extra });
+test('moved Claude sessions resume only after the restarted backend finishes its own version check', async t => {
+  const h = harness(t, [claudeNew(), codexNew()]); const old = await h.old();
+  let atSettle = null;
+  const ensure = async (...args) => {
+    await checking(h)(...args);
+    setTimeout(() => { atSettle = resumes(h.services[1]); try { writeCheck(h, 'passed', Date.now()); } catch { /* Test already ended. */ } }, 150);
+  };
+  const result = await move(h, old, ensure, { checkWaitMs: 5000 });
+  assert.equal(atSettle, 0, 'Nothing resumed while the check ran');
+  assert.deepEqual(result.resumed, ['c', 'x']);
+});
+test('a check that does not finish in time no longer holds the moved sessions back', async t => {
+  const h = harness(t, [claudeNew()]); const old = await h.old();
+  const started = Date.now();
+  const result = await move(h, old, checking(h), { checkWaitMs: 200 });
+  assert.ok(Date.now() - started >= 200);
+  assert.deepEqual(result.resumed, ['c']);
+});
+test('a move with no Claude session, or a check left over from before the restart, does not wait', async t => {
+  for (const [sessions, at] of [[[codexNew()], () => Date.now()], [[claudeNew()], () => Date.now() - 3600000]]) {
+    const h = harness(t, sessions); const old = await h.old();
+    const started = Date.now();
+    const result = await move(h, old, checking(h, at), { checkWaitMs: 5000 });
+    assert.ok(Date.now() - started < 3000, sessions[0].provider);
+    assert.deepEqual(result.resumed, [sessions[0].id]);
+  }
+});

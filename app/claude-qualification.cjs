@@ -55,19 +55,16 @@ function siblingFiles(file) {
   }
   return files;
 }
+// A sibling's pass of this exact code basis, reference and binary is this check's result; any sibling's
+// current failure (other than its own timeout or cancellation) means checking again here.
+function siblingPass({ file, binary, version }) {
+  const records = siblingFiles(file).map(sibling => load(sibling)[version]).filter(r => r?.version === version && current(r, binary));
+  if (records.some(r => r.status === 'failed' && !['timed-out', 'cancelled'].includes(r.reason))) return null;
+  return records.find(passed) || null;
+}
 function approvedVersions(file, dir) {
-  const fingerprint = basis(), own = load(file);
-  const valid = ([version, record]) => exact(version) && record?.version === version && passed(record) && current(record, path.join(dir, version), fingerprint);
-  const versions = new Set(Object.entries(own).filter(valid).map(([version]) => version));
-  // A restarted backend re-checks while its sessions resume (2026-11-23 18:11Z). A sibling's pass of the
-  // same code basis and binary identity is the same result; this backend's own current failure still wins.
-  for (const sibling of siblingFiles(file)) {
-    for (const entry of Object.entries(load(sibling)).filter(valid)) {
-      const mine = own[entry[0]];
-      if (!(mine?.version === entry[0] && mine.status === 'failed' && current(mine, path.join(dir, entry[0]), fingerprint))) versions.add(entry[0]);
-    }
-  }
-  return [...versions];
+  const fingerprint = basis();
+  return Object.entries(load(file)).filter(([version, record]) => exact(version) && record?.version === version && passed(record) && current(record, path.join(dir, version), fingerprint)).map(([version]) => version);
 }
 function launch({ launcher, file }) {
   const current = require('./claude-pin.cjs').installed(launcher);
@@ -202,6 +199,9 @@ async function checkOnce({ file, binary, version, privateDir, signal, runMod = m
   if (!exact(version)) return null;
   const existing = decision({ file, binary, version });
   if (existing && ['passed', 'failed'].includes(existing.status)) return existing;
+  // Before the first await: a backend restarted for new app code has this before its sessions resume (2026-11-23 18:11Z).
+  const adopted = siblingPass({ file, binary, version });
+  if (adopted) { save(file, adopted); return adopted; }
   const record = { version, reference: REFERENCE, binary: identity(binary), basis: basis(), at: new Date().toISOString(), status: 'checking', journeys: {} };
   if (!record.binary) return null;
   save(file, record);
