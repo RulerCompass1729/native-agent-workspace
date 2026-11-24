@@ -222,7 +222,8 @@ function views() {
     return { state, views: views(), restarting: restartedKeys(view), expectedActive: predictActive(view), view };
   }
   // A session still working may finish its turn, reply or start the next one meanwhile; it stays on its backend.
-  // Only a loss stops the install: a backend or session gone or restarted, a session ended, a record dropped or a
+  // Only a loss stops the install: a backend or session gone or restarted, a running session leaving the running
+  // states (ended, recoverable, disconnected, error or a state this check does not know), a record dropped or a
   // draft changed (alpha.284 rolled back on a session going from working to idle).
   function retained(before, after) {
     const was = before.state, now = after.state;
@@ -234,12 +235,12 @@ function views() {
       assert.ok(kept.sessions >= service.sessions, 'Sessions kept: ' + service.key);
       assert.ok(kept.messages >= service.messages, 'Room records kept: ' + service.key);
     }
-    const stopped = ['ended', 'recoverable'];
+    const running = ['starting', 'working', 'approval', 'stopping', 'background', 'idle'];
     for (const session of was.sessions) {
       const kept = now.sessions.find(s => s.id === session.id);
       assert.ok(kept, 'Session retained: ' + session.id);
       assert.deepEqual([kept.nativeId, kept.backend, kept.settings, kept.draft], [session.nativeId, session.backend, session.settings, session.draft], 'Session, settings and native draft retained: ' + session.id);
-      assert.ok(stopped.includes(session.state) || !stopped.includes(kept.state), 'Session not ended: ' + session.id);
+      assert.ok(!running.includes(session.state) || running.includes(kept.state), `Session still running: ${session.id} ${session.state} -> ${kept.state}`);
       if (session.identity) {
         assert.deepEqual([kept.pid, kept.identity], [session.pid, session.identity], 'Native process retained: ' + session.id);
       }

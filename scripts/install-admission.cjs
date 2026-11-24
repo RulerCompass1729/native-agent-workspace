@@ -45,8 +45,9 @@ function describe(reading) {
 
 function stopReasons(reading, estimate) {
   const reasons = [];
-  if (!Number.isInteger(reading.pressure) || !Number.isFinite(reading.freeBytes)) {
-    reasons.push({ code: 'unreadable', text: '读不到内存压力或磁盘余量，不冒险装' });
+  const amounts = [reading.freeBytes, reading.swapUsed, reading.swapTotal, reading.segments, reading.segmentLimit];
+  if (!Number.isInteger(reading.pressure) || !amounts.every(Number.isFinite)) {
+    reasons.push({ code: 'unreadable', text: '读不全内存压力、swap、压缩段或磁盘余量，不冒险装' });
     return reasons;
   }
   if (reading.pressure >= 4) {
@@ -187,14 +188,14 @@ function writePrivate(file, value) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // "等等" waits here, bounded, and keeps its record saying what it waits for.
-async function check(o) {
+async function check(o, read = readMachine) {
   const directory = o.disk || process.cwd();
   const settings = { version: o.version, commit: o.commit, consent: readJson(o.consent), estimate: readJson(o.estimate) };
   const waitMs = Number(o['wait-minutes'] || 0) * 60e3;
   const everyMs = Number(o['every-seconds'] || 30) * 1000;
   const since = new Date().toISOString();
   const deadline = Date.now() + waitMs;
-  let result = admit(readMachine(directory), settings);
+  let result = admit(read(directory), settings);
   let told = null;
   while (result.decision !== 'go' && Date.now() + everyMs <= deadline) {
     const waiting = { ...result, waitingFor: '内存压力降到 1 级、压缩段和磁盘回到安全线', since, until: new Date(deadline).toISOString(), purpose: o.purpose || null };
@@ -207,7 +208,7 @@ async function check(o) {
       told = result.reading.pressure;
     }
     await sleep(everyMs);
-    result = admit(readMachine(directory), settings);
+    result = admit(read(directory), settings);
   }
   result = { ...result, purpose: o.purpose || null, waitedSince: waitMs ? since : null };
   if (o.out) {
@@ -262,4 +263,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { admit, growth, readMachine, LIMITS, EXIT };
+module.exports = { admit, check, growth, readMachine, LIMITS, EXIT };

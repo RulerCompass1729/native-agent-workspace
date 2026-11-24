@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { admit, growth } = require('../../scripts/install-admission.cjs');
+const { admit, check, growth } = require('../../scripts/install-admission.cjs');
 
 const GiB = 2 ** 30;
 const NOW = Date.parse('2026-11-24T05:00:00Z');
@@ -74,6 +74,10 @@ const stops = [
   ['swap almost full with too little disk to grow (the out-of-memory stop: 96.6%, 14 GB)', { swapUsed: 36.6 * GiB, swapTotal: 37.9 * GiB, freeBytes: 14 * GiB }, 'swap-cannot-grow'],
   ['less than 8 GiB of disk', { freeBytes: 7.9 * GiB }, 'disk-low'],
   ['an unreadable pressure level', { pressure: null }, 'unreadable'],
+  ['unreadable compressor segments', { segments: null }, 'unreadable'],
+  ['an unreadable segment limit', { segmentLimit: null }, 'unreadable'],
+  ['unreadable swap use', { swapUsed: null }, 'unreadable'],
+  ['an unreadable swap size', { swapTotal: null }, 'unreadable'],
 ];
 for (const [name, extra, code] of stops) {
   test(`${name} stops without asking, even with consent`, () => {
@@ -110,8 +114,9 @@ test('the command reads this machine, writes its record and exits by the decisio
   const run = spawnSync(process.execPath, [script, 'check', '--version', INSTALL.version, '--commit', INSTALL.commit, '--out', out], { encoding: 'utf8' });
   const record = JSON.parse(fs.readFileSync(out, 'utf8'));
   assert.equal(run.status, { go: 0, stop: 75, ask: 76 }[record.decision], run.stderr);
-  assert.equal(typeof record.reading.pressure, 'number');
-  assert.equal(typeof record.reading.freeBytes, 'number');
+  for (const field of ['pressure', 'freeBytes', 'swapUsed', 'swapTotal', 'segments', 'segmentLimit']) {
+    assert.equal(typeof record.reading[field], 'number', field);
+  }
   assert.ok(run.stdout.split('\n').some(line => line.startsWith('NOTICE ') || line.startsWith('GO ')), run.stdout);
 
   const consentFile = path.join(dir, 'consent.json');
@@ -119,4 +124,46 @@ test('the command reads this machine, writes its record and exits by the decisio
   const written = JSON.parse(fs.readFileSync(consentFile, 'utf8'));
   assert.deepEqual([written.answer, written.version, written.commit, written.by], ['照装', INSTALL.version, INSTALL.commit, 'synthetic person reply']);
   assert.equal(fs.statSync(consentFile).mode & 0o777, 0o600);
+});
+
+test('waiting (等等) is bounded, says what it waits for and until when, and goes once pressure drops', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-admission-wait-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const out = path.join(dir, 'admission.json');
+  const readings = [reading({ pressure: 2 }), reading({ pressure: 2 }), reading({ pressure: 1 })];
+  const seen = [];
+  const lines = [];
+  const log = console.log;
+  console.log = line => lines.push(String(line));
+  t.after(() => { console.log = log; });
+  const read = () => {
+    const next = readings.shift();
+    if (readings.length === 1) {
+      seen.push(JSON.parse(fs.readFileSync(out, 'utf8')));
+    }
+    return next;
+  };
+  const code = await check({ version: INSTALL.version, commit: INSTALL.commit, out, 'wait-minutes': '1', 'every-seconds': '0.01' }, read);
+  console.log = log;
+  assert.equal(code, 0);
+  assert.equal(seen[0].decision, 'ask');
+  assert.match(seen[0].waitingFor, /内存压力降到 1 级/u);
+  assert.ok(Date.parse(seen[0].until) - Date.parse(seen[0].since) === 60e3, JSON.stringify(seen[0]));
+  assert.equal(lines.filter(line => line.startsWith('NOTICE 装机在等：')).length, 1, lines.join('\n'));
+  assert.match(lines.find(line => line.startsWith('NOTICE 装机在等：')), /最多等到 \d\d:\d\d PT/u);
+  const record = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.equal(record.decision, 'go');
+  assert.ok(record.waitedSince);
+  assert.ok(lines.some(line => line.startsWith('GO ')), lines.join('\n'));
+});
+
+test('waiting ends at its deadline with the question still open', async t => {
+  const lines = [];
+  const log = console.log;
+  console.log = line => lines.push(String(line));
+  t.after(() => { console.log = log; });
+  const code = await check({ version: INSTALL.version, commit: INSTALL.commit, 'wait-minutes': '0.001', 'every-seconds': '0.01' }, () => reading({ pressure: 2 }));
+  console.log = log;
+  assert.equal(code, 76);
+  assert.ok(lines.some(line => line.startsWith('ASK 需要你决定：')), lines.join('\n'));
 });
