@@ -153,7 +153,9 @@ test('the answer goes once, to the item\'s own session; only its native receipt 
   f.deliver('submitted');
   r.send.click(); f.context.followQueueAnswers(); await flush();
   assert.equal(f.calls.length, 1, 'never sent again');
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g']], 'handled once, as the button does, with the answer and who received it');
+  // R141② acceptance 5: the message row the answer was delivered as goes with it, so what the session writes
+  // after that row can be recorded on this decision (queue-dispatch.cjs answeredReply).
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g', 'tag-1']], 'handled once, as the button does, with the answer, who received it and as which row');
   f.room.queue[0] = { ...f.room.queue[0], status: 'done', answer: { text: 'Pick A.', deliveredAt: 5 } };
   f.context.followQueueAnswers();
   r = f.row();
@@ -171,7 +173,7 @@ test('a busy member: queued, still waiting for the person, handled once it is re
   assert.equal(r.line.textContent, 'To Codex G · Queued; sends when idle');
   assert.deepEqual(f.resolves, []);
   f.g.messages[0].status = 'submitted'; f.context.followQueueAnswers(); await flush();
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick B.', 'g']]);
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick B.', 'g', 'q-row']], 'the queued row is the one it was delivered as');
 });
 
 test('an unconfirmed send is never sent again and never marks the row handled', async () => {
@@ -252,7 +254,7 @@ test('a decision moved to the successor: the box and its button follow, the word
   r = f.row();
   assert.equal(r.line.textContent, 'To Codex H · Awaiting native confirmation');
   h.messages.push({ id: 'tag-1', role: 'user', text: 'x', status: 'submitted' }); f.context.followQueueAnswers(); await flush();
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'h']]);
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'h', 'tag-1']], 'the successor\'s own row');
   f.room.queue[0] = { ...f.room.queue[0], status: 'done', answer: { text: 'Pick A.', deliveredAt: 5 } };
   f.context.followQueueAnswers();
   assert.equal(f.row().answer.children[0].children[0].textContent, 'To Codex H · Received by native session');
@@ -268,7 +270,7 @@ test('an answer on its way to the old session when the decision moves: not sent 
   assert.equal(r.box.readOnly, true);
   f.deliver('submitted'); await flush();
   assert.equal(f.calls.length, 1, 'nothing more goes to the successor');
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g']], 'handled once, naming the session that received it');
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g', 'tag-1']], 'handled once, naming the session that received it and its row there');
 });
 
 test('proof that nothing reached the old session after the move: the same words go to the successor on the next press', async () => {
@@ -284,7 +286,7 @@ test('proof that nothing reached the old session after the move: the same words 
   r.send.click(); await flush();
   assert.deepEqual(f.calls, [{ id: 'g', text: 'Pick A.' }, { id: 'h', text: 'Pick A.' }]);
   h.messages.push({ id: 'tag-1', role: 'user', text: 'x', status: 'submitted' }); f.context.followQueueAnswers(); await flush();
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'h']]);
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'h', 'tag-1']]);
 });
 
 // The real spaceAction handler from main.cjs and the real room state.
@@ -335,6 +337,27 @@ test('the window says which session received the answer: a decision that moved m
   await assert.rejects(again({}, 'shared', 'queueResolve', [other.id, 'Pick A.', { id: 'g' }]), error => error.uiMessage?.key === 'error.queue.invalid');
   await again({}, 'shared', 'queueResolve', [other.id, 'Pick A.', 'h']);
   assert.deepEqual([other.room.queueItems('shared')[0].status, other.room.queueItems('shared')[0].sentTo], ['done', 'h']);
+});
+
+// R141② acceptance 5: the row the answer was delivered as is kept on the handled item until the dispatcher has read
+// what the session wrote after it (queue-dispatch.test.cjs).
+test('the window says as which message row the answer was delivered: kept on the item for the session that holds it', async t => {
+  const { dir, room, id } = waitingRoom(t), handler = spaceAction(room);
+  await assert.rejects(handler({}, 'shared', 'queueResolve', [id, 'Pick A.', 'g', { id: 'row-1' }]), error => error.uiMessage?.key === 'error.queue.invalid');
+  await assert.rejects(handler({}, 'shared', 'queueResolve', [id, 'Pick A.', 'g', 'x'.repeat(101)]), error => error.uiMessage?.key === 'error.queue.invalid');
+  assert.equal(room.queueItems('shared')[0].status, 'waiting', 'a refused answer changes nothing');
+  await handler({}, 'shared', 'queueResolve', [id, 'Pick A.', 'g', 'row-1']);
+  const item = new RoomState(dir).queueItems('shared')[0];
+  assert.deepEqual([item.status, item.answer.text, item.answerTag], ['done', 'Pick A.', 'row-1']);
+  // Delivered to the session before, after the decision moved: closed once there, with no row to read later.
+  const moved = waitingRoom(t), again = spaceAction(moved.room);
+  moved.room.queueCarry('shared', 'g', 'h', 'native-h');
+  await again({}, 'shared', 'queueResolve', [moved.id, 'Pick A.', 'g', 'row-1']);
+  assert.deepEqual([moved.room.queueItems('shared')[0].sentTo, moved.room.queueItems('shared')[0].answerTag], ['g', undefined]);
+  // An older window passes no row: handled as before.
+  const plain = waitingRoom(t);
+  await spaceAction(plain.room)({}, 'shared', 'queueResolve', [plain.id, 'Pick A.', 'g']);
+  assert.deepEqual([plain.room.queueItems('shared')[0].status, plain.room.queueItems('shared')[0].answerTag], ['done', undefined]);
 });
 
 test('the butler still marks handled without an answer, and a null filler is no answer', async t => {
@@ -388,7 +411,7 @@ test('after a reload the row sends to the same native session it went to, and is
   r.send.click(); await flush();
   assert.deepEqual(sent, [{ id: 'g', native: 'native-g' }]);
   f.deliver('submitted'); await flush();
-  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g']]);
+  assert.deepEqual(f.resolves, [['space', 'queueResolve', 'item-1', 'Pick A.', 'g', 'tag-1']]);
 });
 
 // F's review Q1: the receipt comes through the member's messages, which main sends only for subscribed sessions.
@@ -416,7 +439,7 @@ test('answers still waiting for their receipt keep their members subscribed when
   assert.equal(c.state.sessions.find(s => s.id === 'g').messagesOmitted, undefined, 'the receipt reaches the page');
   held.get('g')('tag-g'); held.get('h')('tag-h'); await first; await second; await flush();
   c.updateState(shown.omitHidden(full, serverShown)); await flush();
-  assert.deepEqual(f.resolves.map(r => [...r]), [['space', 'queueResolve', 'item-1', 'Answer G', 'g'], ['space', 'queueResolve', 'item-2', 'Answer H', 'h']], 'each row once, from its own receipt');
+  assert.deepEqual(f.resolves.map(r => [...r]), [['space', 'queueResolve', 'item-1', 'Answer G', 'g', 'tag-g'], ['space', 'queueResolve', 'item-2', 'Answer H', 'h', 'tag-h']], 'each row once, from its own receipt');
   assert.equal(f.calls.length, 2, 'nothing resent');
   // Handled: the follows end and so does the subscription.
   for (const item of f.room.queue) Object.assign(item, { status: 'done', answer: { text: 'x', deliveredAt: 3 } });
@@ -458,7 +481,7 @@ test('the person presses 已处理 while an answer is on its way: its own final 
   assert.deepEqual(f.resolves.map(x => [...x]), [['space', 'queueResolve', 'item-1']], 'the person\'s 已处理 only: no answer is written');
   full.sessions.find(s => s.id === 'h').messages.push({ id: 'tag-2', role: 'user', text: 'Answer H', status: 'submitted' });
   c.updateState(shown.omitHidden(full, serverShown)); await flush();
-  assert.deepEqual(f.resolves.at(-1), ['space', 'queueResolve', 'item-2', 'Answer H', 'h'], 'H is still handled on its own receipt');
+  assert.deepEqual(f.resolves.at(-1), ['space', 'queueResolve', 'item-2', 'Answer H', 'h', 'tag-2'], 'H is still handled on its own receipt');
   assert.equal(f.calls.length, 2, 'nothing resent');
 });
 

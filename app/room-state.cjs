@@ -105,7 +105,10 @@ const queueRound = value => Number.isSafeInteger(value) && value >= 0 ? value : 
 const toSend = item => ['queued', 'sent'].includes(item.status);
 function queueFacts(room, roomId, previous, next, queue, replyTitle, memberName) {
   const facts = [], fields = {};
-  if (previous && next && previous.status !== 'done' && next.status === 'done' && next.ready) {
+  // A delivery line is recorded when its item becomes done, or when the reply to the person's answer is added to a
+  // decision that had none (queueAnswered).
+  const answered = previous?.status === 'done' && Boolean(previous.answerTag) && !next?.answerTag && !previous.ready;
+  if (previous && next && (previous.status !== 'done' || answered) && next.status === 'done' && next.ready) {
     // The name NAW recorded when it sent this member its item; a member holds one item at a time.
     const name = room.events.findLast(e => e.sessionId === next.sentTo && e.uiMessage?.key === 'notice.queue.dispatched')?.uiMessage?.params?.name;
     const params = { text: queueRules.shortText(next.text), branch: next.ready.branch, commit: next.ready.commit.slice(0, 12) };
@@ -770,7 +773,10 @@ class RoomState {
   // their window passes it (main.cjs spaceAction).
   // recipient: the session that received the answer. A decision can go to a successor (queueCarry) while an answer
   // is on its way to the session before: the record then names that one, which did receive it.
-  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null, answer, recipient) {
+  // tag: the message row the answer was delivered as in the session that holds the item. It stays on the item as
+  // answerTag until what that session wrote after it is read (queueAnswered); an answer the session before received
+  // closes the item there and keeps no row.
+  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null, answer, recipient, tag) {
     const item = this.queueFind(id, itemId);
     const assigned = item.status === 'queued' && typeof item.assignee === 'string' && item.assignee.length > 0;
     if (!assigned && !['waiting', 'sent'].includes(item.status) || answer !== undefined && (by !== null || item.status !== 'waiting')) {
@@ -793,12 +799,33 @@ class RoomState {
           delete next.sentNative;
         }
         delete next.carriedFrom;
+      } else if (tag !== undefined) {
+        next.answerTag = tag;
       }
       next.answer = { text: answer, deliveredAt: now };
       try { queueRules.validateQueue([next]); } catch { throw uiError("error.queue.invalid"); }
     }
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
+  }
+  // The dispatcher read the session after the row an answered decision names: the reply and its READY line go on
+  // the item, which stays handled, and the row's mark goes. Once an item; false when there is nothing to do.
+  queueAnswered(id, itemId, tag, reply = '', ready) {
+    const item = this.queueFind(id, itemId);
+    if (item.status !== 'done' || !item.answerTag || item.answerTag !== tag) {
+      return false;
+    }
+    const next = { ...item };
+    delete next.answerTag;
+    if (reply) {
+      next.reply = reply;
+    }
+    // A question that carried a delivery line had it recorded when the person handled it: one delivery an item.
+    if (ready && !item.ready) {
+      next.ready = ready;
+    }
+    this.queueReplace(id, itemId, next);
+    return true;
   }
   queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false, nativeId = null, notesSent = null) {
     const item = this.queueFind(id, itemId);

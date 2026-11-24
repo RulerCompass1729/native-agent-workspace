@@ -311,7 +311,7 @@ class MobileWorkspace {
         if (!target) throw refused;
         if (proof.requestId !== value.answerRequestId || proof.sessionId !== target.sessionId || proof.nativeId !== target.nativeId ||
             proof.serviceKey !== target.serviceKey || typeof proof.text !== 'string' || !proof.text.trim() || proof.text.length > 6000) throw denied();
-        this.roomState.queueResolve(itemId, value.roomId, null, proof.text, target.sessionId);
+        this.roomState.queueResolve(itemId, value.roomId, null, proof.text, target.sessionId, typeof proof.tag === 'string' ? proof.tag : undefined);
       } else this.roomState.queueResolve(itemId, value.roomId, null);
     }
     if (['queueCancel', 'queueResolve'].includes(value.action))

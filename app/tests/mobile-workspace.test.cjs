@@ -232,17 +232,18 @@ test('a decision moved to a successor keeps its question, answers the successor,
   assert.deepEqual([target.sessionId, target.nativeId], ['c', 'native-c']);
   const resolve = (itemId, sessionId, nativeId = 'native-' + sessionId) => f.adapter.action(f.client, f.grant,
     f.spec({ action: 'queueResolve', roomId: 'shared', itemId, questionId: view.rooms[0].queue.find(i => i.id === itemId).questionId, answerRequestId: 'answer-1' }),
-    () => {}, () => ({ requestId: 'answer-1', sessionId, nativeId, serviceKey: '.', text: 'Option A.' }));
+    () => {}, () => ({ requestId: 'answer-1', sessionId, nativeId, serviceKey: '.', text: 'Option A.', tag: 'phone-row' }));
   await assert.rejects(resolve(first, 'b'));
   await assert.rejects(resolve(first, 'a', 'native-other'));
   assert.equal(f.room.queueFind('shared', first).status, 'waiting');
   await resolve(first, 'a');
   const closed = f.room.queueFind('shared', first);
-  assert.deepEqual([closed.status, closed.sentTo, closed.sentNative, closed.answer.text], ['done', 'a', 'native-a', 'Option A.']);
+  assert.deepEqual([closed.status, closed.sentTo, closed.sentNative, closed.answer.text, closed.answerTag], ['done', 'a', 'native-a', 'Option A.', undefined]);
   await assert.rejects(resolve(first, 'c'));
   await resolve(second, 'c');
   const other = f.room.queueFind('shared', second);
-  assert.deepEqual([other.status, other.sentTo, other.sentNative, other.answer.text], ['done', 'c', 'native-c', 'Option A.']);
+  // R141② acceptance 5: the holder's own row is kept, so its reply can be recorded on the decision.
+  assert.deepEqual([other.status, other.sentTo, other.sentNative, other.answer.text, other.answerTag], ['done', 'c', 'native-c', 'Option A.', 'phone-row']);
   // The successor cannot be answered just now: nothing closes for it, and the answer the earlier session got still does.
   f.source.sessions.find(s => s.id === 'c').nativeContextPending = true;
   await assert.rejects(resolve(third, 'c'));

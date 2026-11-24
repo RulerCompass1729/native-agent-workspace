@@ -2126,7 +2126,10 @@ async function boot() {
         // The session whose native receipt the window saw: a decision may have gone to a successor meanwhile.
         const recipient = args[2] ?? undefined;
         if (recipient !== undefined && typeof recipient !== 'string') throw uiError("error.queue.invalid");
-        if (answer === undefined) roomState.queueResolve(args[0], roomId, by); else roomState.queueResolve(args[0], roomId, by, answer, recipient);
+        // The message row the window saw delivered: the reply that follows it is recorded on this item.
+        const tag = args[3] ?? undefined;
+        if (tag !== undefined && typeof tag !== 'string') throw uiError("error.queue.invalid");
+        if (answer === undefined) roomState.queueResolve(args[0], roomId, by); else roomState.queueResolve(args[0], roomId, by, answer, recipient, tag);
         queueDispatcher?.schedule();
       }
     }
