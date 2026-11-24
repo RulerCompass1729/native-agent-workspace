@@ -564,12 +564,16 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   const rt = ws.runtimes.get(sessionId);
   activeTerm.emit('started', 61616);
 
-  // Trust prompt blocks dispatch.
+  // Trust prompt blocks dispatch; accepting it with Enter + SessionStart + settled empty composer restores dispatch cleanly (r8).
   await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
   assert.equal(editorState(activeTerm.screen), 'blocked');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('blocked on trust', 't1', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, 0);
+
+  ws.input(sessionId, '\r', 'owner-1');
+  const writesAfterTrustEnter = activeTerm.writes.length;
+  assert.equal(rt.chatAvailable, false, 'still blocked while trust prompt is on screen');
 
   // r3 #2: Old empty composer above a newer selection prompt (non-empty rows below ? for shortcuts) is rejected.
   await paint(activeTerm, [
@@ -584,7 +588,7 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'unknown');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('blocked on selection below composer', 't-below', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, 0);
+  assert.equal(activeTerm.writes.length, writesAfterTrustEnter);
 
   // r3 #2: Even with nothing below ? for shortcuts, cursor outside the composer box is rejected.
   await paint(activeTerm, [
@@ -597,7 +601,9 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'unknown');
   assert.equal(rt.chatAvailable, false);
 
-  // Default Auto mode idle placeholder with cursor inside composer is empty and dispatchable.
+  // After trust Enter + SessionStart + settled idle placeholder, dispatch is enabled (r8 regression check).
+  const initialConvId = randomUUID();
+  rt.hook({ hookEventName: 'SessionStart', conversationId: initialConvId });
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -605,8 +611,11 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
     rule,
     '? for shortcuts                                      auto · Gemini 4 Neon · high',
   ]);
+  assert.equal(rt.chatAvailable, false, 'still settling immediately after trust Enter');
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
   assert.equal(editorState(activeTerm.screen), 'empty');
-  assert.equal(rt.chatAvailable, true);
+  assert.equal(rt.chatAvailable, true, 'accepting trust prompt with Enter + SessionStart restores dispatch after settle');
 
   // r6 #2: No-op deletion key (Backspace) on an already-empty prompt settles cleanly and never permanently blocks dispatch.
   ws.input(sessionId, '\x7f', 'owner-1');
@@ -730,10 +739,9 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true);
 
-  const convId = randomUUID();
   const sendOk = ws.send(sessionId, 'Dispatched after TUI use', 'owner-1');
   assert.equal(activeTerm.writes.at(-1), '\x1b[200~Dispatched after TUI use\x1b[201~\r');
-  rt.hook({ hookEventName: 'PreInvocation', conversationId: convId, invocationNum: 1, initialNumSteps: 1 });
+  rt.hook({ hookEventName: 'PreInvocation', conversationId: initialConvId, invocationNum: 1, initialNumSteps: 1 });
   await sendOk;
   assert.equal(record.state, 'working');
 });
