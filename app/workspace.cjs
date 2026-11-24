@@ -1349,6 +1349,15 @@ class Workspace extends EventEmitter {
     next.placementReceipt = receipt;
     // Cleanup may only detach an already stopped successor. Check the owning
     // writer's current runs in this synchronous mutation, after any RPC wait.
+    const failedRuntime = proof.failedHandoff ? this.runtimes.get(id) : null;
+    const handoff = proof.failedHandoff ? require('./rotation-handoff.cjs') : null;
+    if (proof.failedHandoff && (proof.unusedSuccessor !== true ||
+        !handoff.sameStopReceipt(proof.failedHandoff.receipt, s.failedHandoffStop) || proof.failedHandoff.tag !== s.failedHandoffStop.tag ||
+        !handoff.owned({ ...s, liveDraft: this.drafts.get(id) || '', draftRevision: this.draftRevisions.get(id) || 0,
+          activeTurnId: failedRuntime?.turnId, pendingQueue: failedRuntime?.pendingQueue, pendingSteer: failedRuntime?.pendingSteer,
+          nativeInputRequired: failedRuntime?.nativeInputRequired, interruptPending: failedRuntime?.nativeAbortRequest,
+          nativeGoal: failedRuntime?.nativeGoalSnapshot?.() || s.nativeGoal },
+          proof.failedHandoff.receipt.proof, proof.failedHandoff.tag))) throw uiError('error.movePlacementChanged');
     if (proof.unusedSuccessor === true && (!['ended', 'recoverable', 'disconnected'].includes(s.state) ||
         previous.some(room => this.rooms.get(room)?.run?.status === 'running'))) throw uiError('error.movePlacementChanged');
     // Revoke old routing before committing; accepted native work is not stopped.
@@ -1499,8 +1508,9 @@ class Workspace extends EventEmitter {
     if (!episode || s.nativeId !== nativeId || episode.nativeId !== nativeId || episode.epoch !== epoch)
       throw uiError('error.workspace.handoffExpired');
     if (deferred !== undefined) {
-      if (!deferred || Object.keys(deferred).sort().join(',') !== 'reason,tag' || deferred.reason !== 'person-active' ||
-          deferred.tag !== episode.tag || !['invalid', 'complete'].includes(episode.state)) throw uiError('error.workspace.handoffExpired');
+      if (!deferred || Object.keys(deferred).sort().join(',') !== 'reason,tag' || !(deferred.reason === 'person-active' || require('./rotation-handoff.cjs').failedReason(deferred.reason)) ||
+          deferred.tag !== episode.tag || !(['invalid', 'complete'].includes(episode.state) || episode.state === 'released' && deferred.reason !== 'person-active')) throw uiError('error.workspace.handoffExpired');
+      if (episode.state === 'released') return { epoch, tag: episode.tag, state: 'released' };
       return this.retireRotation(s, { kind: 'naw', id: 'rotation-dispatcher' }, deferred.reason);
     }
     if (!['not-sent', 'complete', 'released'].includes(episode.state)) episode.state = 'invalid';
@@ -2184,6 +2194,37 @@ class Workspace extends EventEmitter {
     check();
     return this.stop(id, { check, expected, participantOnly: scope === 'participant' });
   }
+  async stopFailedSuccessor(id, proof, tag) {
+    const handoff = require('./rotation-handoff.cjs'), s = this.get(id);
+    const refuse = () => uiError('error.backendSwitchSessionChanged', { name: s.name || id });
+    if (!handoff.validOwner(proof) || typeof tag !== 'string') throw refuse();
+    const current = runtime => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0, liveDraft: this.drafts.get(id) || '',
+      activeTurnId: runtime?.turnId || null, pendingQueue: runtime?.pendingQueue, pendingSteer: runtime?.pendingSteer,
+      nativeInputRequired: runtime?.nativeInputRequired, interruptPending: runtime?.nativeAbortRequest,
+      nativeGoal: runtime?.nativeGoalSnapshot?.() });
+    const prior = s.failedHandoffStop;
+    if (handoff.validStopReceipt(prior) && prior.tag === tag && JSON.stringify(prior.owner) === JSON.stringify(proof) &&
+        ['ended', 'recoverable', 'disconnected'].includes(s.state) && handoff.owned(current(this.runtimes.get(id)), prior.proof, tag))
+      return { basis: prior.basis, state: s.state, receipt: prior };
+    if (['ended', 'recoverable', 'disconnected'].includes(s.state) && !this.runtimes.has(id) &&
+        !this.closed && !this.storageWarning && !this.stops.has(id)) {
+      return { basis: 'observed-inactive', state: s.state, proof: { nativeId: s.nativeId,
+        controlRevision: s.controlRevision || 0, draftRevision: this.draftRevisions.get(id) || 0, placementRevision: spaces.placementRevision(s) } };
+    }
+    const runtime = this.runtime(id), { maintenanceProof, sameStop } = require('./backend-switch.cjs');
+    const expected = maintenanceProof(current(runtime));
+    const check = () => {
+      if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
+          !sameStop(current(runtime), expected) || !handoff.owned(current(runtime), proof, tag) ||
+          !['starting', 'idle', 'working', 'error'].includes(s.state) ||
+          [...this.rooms.values()].some(r => r.run?.status === 'running' && r.run.ids?.includes(id)) ||
+          typeof runtime.stopForMaintenance !== 'function') throw refuse();
+    };
+    check();
+    await this.stop(id, { check, expected, participantOnly: true, failedHandoff: { tag, owner: proof } });
+    if (!s.failedHandoffStop || !handoff.owned(current(this.runtimes.get(id)), s.failedHandoffStop.proof, tag)) throw refuse();
+    return { basis: 'stopped-by-this-attempt', state: s.state, receipt: s.failedHandoffStop };
+  }
   async stopUnusedSuccessor(id, proof) {
     // Automatic cleanup has narrower authority than a person's Stop action.
     // A persisted caller proof cannot authorize stopping newer work or a new
@@ -2274,12 +2315,19 @@ class Workspace extends EventEmitter {
     // A maintenance observer may await current native state. Keep those events
     // visible until its final synchronous check; the ordinary stop still reserves now.
     let operation;
-    operation = Promise.resolve().then(() => maintenance ? runtime.stopForMaintenance(begin) : runtime.stop()).then(result => {
+    operation = Promise.resolve().then(() => maintenance?.failedHandoff && runtime.stopForFailedHandoff
+      ? runtime.stopForFailedHandoff(begin, require('./rotation-handoff.cjs').handoffInput(s, maintenance.failedHandoff.tag)?.turnId)
+      : maintenance ? runtime.stopForMaintenance(begin) : runtime.stop()).then(result => {
       if (!stillOurs()) throw uiError('error.backendSwitchDisconnectUnconfirmed', { name: s.name || id });
       if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw uiError("error.workspace.nativeEndUnconfirmed");
       s.state = result.state; s.pendingTag = null; s.approval = null; s.approvalResolved = false; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       setActivity(s, ...(result.state === 'ended' ? ['', null] : uiActivity(result.state === 'recoverable' ? 'notice.activity.backendExited' : 'notice.activity.connectionDetached')));
       if (['ended', 'recoverable'].includes(s.state)) { s.pid = null; this.runtimes.delete(id); }
+      if (maintenance?.failedHandoff) {
+        s.failedHandoffStop = { basis: 'stopped-by-this-attempt', ...maintenance.failedHandoff, proof: { nativeId: s.nativeId,
+          controlRevision: s.controlRevision || 0, draftRevision: this.draftRevisions.get(id) || 0, placementRevision: spaces.placementRevision(s) } };
+        if (!this.persist() || this.storageWarning) throw uiError('error.workspace.automaticRecordUnsaved');
+      }
       if (maintenance) return { stopped: true, expected: maintenance.expected, stoppedState: { ...stoppedState, state: s.state } };
     }).catch(error => { if (committed && stillOurs()) { s.state = 'error'; setActivity(s, error.message, error.uiMessage); } throw error; })
       .finally(() => { if (this.stops.get(id) === operation) { this.stops.delete(id); this.changed(); } });

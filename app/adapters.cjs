@@ -3105,6 +3105,14 @@ class Codex extends EventEmitter {
     this.emit('activity', ...uiActivity("notice.activity.guiDisconnected"));
     this.emit('state', this.stopped ? 'disconnected' : 'error');
   }
+  async stopForFailedHandoff(check, turnId) {
+    await this.observing;
+    if (this.stopped || this.backendExitConfirmed || this.transportDisconnected || this.turnId && this.turnId !== turnId)
+      throw uiError('error.backendSwitchSessionChanged', { name: this.record.name || this.record.id });
+    check();
+    if (this.turnId) await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId });
+    return this.stop({ maintenance: true });
+  }
   async stopForMaintenance(check) {
     const lifecycle = this.lifecycleRevision, state = this.stateRevision, observing = this.observing;
     await observing;

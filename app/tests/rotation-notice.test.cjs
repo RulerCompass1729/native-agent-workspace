@@ -41,3 +41,12 @@ test('the OS notice of a rotation that did not finish gives its reason in the pe
     assert.ok(shown[3].body.includes(sentence), 'a reason already written as a sentence is shown as it is');
   }
 });
+
+test('first-turn failure and timeout notices name the successor in both languages', () => {
+  for (const language of ['zh', 'en']) for (const reason of ['successor-turn-failed', 'handoff-unconfirmed']) {
+    const { shown, notify } = notifier(language);
+    notify('failed', { name: 'Synthetic old', newName: 'Synthetic successor', reason, failureCleanup: {} });
+    assert.equal(shown.length, 1); assert.ok(shown[0].body.includes('Synthetic successor'));
+    assert.equal(shown[0].body.includes(reason), false);
+  }
+});

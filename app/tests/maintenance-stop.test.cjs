@@ -176,3 +176,81 @@ test('an unknown stop scope is refused before anything stops', () => {
   assert.throws(() => f.w.maintenanceStop(f.s.id, f.expected, false, 'everyone-but-me'), error => error.uiMessage?.key === 'error.backendSwitchSessionChanged');
   assert.deepEqual(f.calls, []); assert.equal(f.s.state, 'idle');
 });
+
+function failedHandoffFixture() {
+  const f = fixture(); Object.assign(f.w, { drafts: new Map(), pauseParticipant: () => {}, persist: () => true });
+  f.s.placementRevision = 0; f.s.roomIds = ['shared']; f.s.state = 'error';
+  f.s.messages = [{ id: 'handoff', role: 'user', origin: 'naw-dispatch', nativeId: f.s.nativeId, turnId: 'handoff-turn', dispatchPurpose: { kind: 'rotation-handoff' } }];
+  f.proof = { nativeId: f.s.nativeId, controlRevision: f.s.controlRevision, draftRevision: 0, placementRevision: 0 };
+  return f;
+}
+
+test('failed handoff cleanup uses actual guarded Codex stop and its saved receipt survives a lost reply', async () => {
+  const f = failedHandoffFixture(); f.r.turnId = 'handoff-turn';
+  const first = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  assert.equal(first.state, 'disconnected'); assert.deepEqual(f.s.failedHandoffStop, first.receipt);
+  assert.deepEqual(f.calls.find(c => c[0] === 'turn/interrupt')[1], { threadId: 'saved-thread', turnId: 'handoff-turn' });
+  const calls = f.calls.length;
+  const second = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  assert.deepEqual(second, first); assert.equal(f.calls.length, calls, 'a lost reply never repeats native stop');
+});
+for (const change of ['input', 'draft', 'native turn', 'control', 'native identity']) test(`failed handoff stop refuses ${change} arriving during native observation`, async () => {
+  const f = failedHandoffFixture(); let release;
+  f.r.observing = new Promise(r => { release = r; });
+  const stopping = f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  if (change === 'input') f.s.messages.push({ id: 'person', role: 'user' });
+  if (change === 'draft') f.w.drafts.set(f.s.id, 'synthetic draft');
+  if (change === 'native turn') f.r.turnId = 'human-turn';
+  if (change === 'control') f.s.controlRevision++;
+  if (change === 'native identity') f.s.nativeId = 'other-thread';
+  release(); await assert.rejects(stopping); assert.deepEqual(f.calls, []); assert.equal(f.s.state, 'error');
+});
+test('failed successor removal refuses human use after a confirmed stop', async () => {
+  const f = failedHandoffFixture(); const receipt = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  f.s.messages.push({ id: 'person-after-stop', role: 'user' });
+  assert.throws(() => f.w.moveMembership(f.s.id, null, { operationId: '11111111-1111-4111-8111-111111111111',
+    nativeId: f.s.nativeId, revision: 0, connectionRevision: f.s.connectionRevision, unusedSuccessor: true,
+    failedHandoff: { receipt: receipt.receipt, tag: 'handoff' } }));
+  assert.deepEqual(f.s.roomIds, ['shared']);
+});
+
+for (const change of ['turn', 'queued input', 'goal']) test(`failed successor detach protects live runtime ${change} after stop`, async () => {
+  const f = failedHandoffFixture(); const receipt = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  if (change === 'turn') f.r.turnId = 'new-person-turn';
+  if (change === 'queued input') f.r.pendingQueue = ['new-person-input'];
+  if (change === 'goal') f.r.nativeGoalSnapshot = () => ({ status: 'active' });
+  assert.throws(() => f.w.moveMembership(f.s.id, null, { operationId: '11111111-1111-4111-8111-111111111111',
+    nativeId: f.s.nativeId, revision: 0, connectionRevision: f.s.connectionRevision, unusedSuccessor: true,
+    failedHandoff: { receipt: receipt.receipt, tag: 'handoff' } }));
+  assert.deepEqual(f.s.roomIds, ['shared']);
+});
+for (const change of ['none', 'person', 'native context']) test(`r3 ended successor yields only current writer observation: ${change}`, async () => {
+  const f = failedHandoffFixture(); f.s.state = 'ended'; f.w.runtimes.delete(f.s.id);
+  if (change === 'person') { f.s.messages.push({ id: 'person', role: 'user' }); f.s.controlRevision++; }
+  if (change === 'native context') f.s.nativeId = 'replacement-native';
+  const observed = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  assert.equal(observed.basis, 'observed-inactive'); assert.equal(observed.proof.nativeId, f.s.nativeId);
+  assert.equal(observed.proof.controlRevision, f.s.controlRevision); assert.equal(observed.receipt, undefined);
+  assert.equal(f.s.failedHandoffStop, undefined); assert.deepEqual(f.calls, []);
+});
+
+test('r3 authentic writer stop receipt authorizes the untouched stopped member leave', async () => {
+  const f = failedHandoffFixture(); f.w.pauseRoom = () => {}; f.w.sharedReplies = { refresh() {} };
+  f.w.rooms.get('shared').revision = 0;
+  const result = await f.w.stopFailedSuccessor(f.s.id, f.proof, 'handoff');
+  assert.equal(result.basis, 'stopped-by-this-attempt');
+  const moved = f.w.moveMembership(f.s.id, null, { operationId: '11111111-1111-4111-8111-111111111111', nativeId: f.s.nativeId,
+    revision: 0, connectionRevision: f.s.connectionRevision, unusedSuccessor: true,
+    failedHandoff: { receipt: result.receipt, tag: 'handoff' } });
+  assert.equal(moved.changed, true); assert.deepEqual(f.s.roomIds, []);
+});
+for (const kind of ['observation', 'legacy untyped', 'forged typed']) test(`r3 ${kind} evidence cannot authorize membership removal`, () => {
+  const f = failedHandoffFixture(); f.s.state = 'ended'; f.w.runtimes.delete(f.s.id);
+  const evidence = kind === 'observation' ? { basis: 'observed-inactive', state: 'ended', proof: f.proof }
+    : { ...(kind === 'forged typed' ? { basis: 'stopped-by-this-attempt' } : {}), tag: 'handoff', owner: f.proof, proof: f.proof };
+  if (kind !== 'forged typed') f.s.failedHandoffStop = evidence;
+  assert.throws(() => f.w.moveMembership(f.s.id, null, { operationId: '11111111-1111-4111-8111-111111111111', nativeId: f.s.nativeId,
+    revision: 0, connectionRevision: f.s.connectionRevision, unusedSuccessor: true,
+    failedHandoff: { receipt: evidence, tag: 'handoff' } }), e => e.uiMessage?.key === 'error.movePlacementChanged');
+  assert.deepEqual(f.s.roomIds, ['shared']);
+});

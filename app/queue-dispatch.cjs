@@ -1,3 +1,4 @@
+const firstHandoff = require('./rotation-handoff.cjs');
 'use strict';
 // Space task queues (board top 2026-11-08 16:12): when a member is truly idle,
 // NAW itself sends that member's next queued item through the backend's own
@@ -237,16 +238,23 @@ function trustFailure(record) {
     record.newId && record.newCwd && record.newCwd !== record.cwd;
 }
 function cleanupComplete(record) {
+  if (record?.failureCleanup) return ['done', 'retained'].includes(record.failureCleanup.stop.state) &&
+    Object.values(record.failureCleanup.rooms).every(row => row.leave !== 'pending');
   return record.trustCleanup?.stop.state === 'confirmed' && Object.values(record.trustCleanup.rooms).every(state => state === 'confirmed');
 }
 function noticesPending(effects) {
   return effects && [effects.log, effects.os, ...Object.values(effects.rooms)].includes('pending');
 }
 function trustRecoveryPending(record) {
-  return trustFailure(record) && (!cleanupComplete(record) || noticesPending(record.trustCleanup?.notices));
+  return !record?.failureCleanup && trustFailure(record) && (!cleanupComplete(record) || noticesPending(record.trustCleanup?.notices));
+}
+function failedHandoffPending(record) {
+  const c = record?.failureCleanup;
+  return Boolean(c && (c.log === 'pending' || c.os === 'pending' || c.release !== 'done' || ['pending', 'started'].includes(c.stop.state) ||
+    Object.values(c.rooms).some(r => r.queue !== 'done' || r.notice !== 'done' || r.leave === 'pending')));
 }
 function quarantinedSuccessor(record) {
-  return trustFailure(record) && !cleanupComplete(record);
+  return trustFailure(record) && !cleanupComplete(record) || Boolean(record?.failureCleanup && ['pending', 'started'].includes(record.failureCleanup.stop.state));
 }
 const dictionary = value => value && typeof value === 'object' && !Array.isArray(value);
 const trustRecord = record => dictionary(record) && (record.phase === 'waiting-trust' ||
@@ -1531,6 +1539,7 @@ const ROTATION_CAUSES = [
   [/^handoff-missing$/, 'handoffMissing'],
   [/^handoff-request-/, 'handoffRequest'],
   [/^handoff-unconfirmed$/, 'handoffUnconfirmed'],
+  [/^successor-turn-failed$/, 'successorTurnFailed'],
   [/^old-session-missing$/, 'oldMissing'],
   [/^(new-session-(missing|not-ready|ambiguous)|create-timeout)$/, 'newNotReady'],
   [/^(new-session-model-unreported|settings-differ:|cannot-carry:model-unknown$)/, 'settings'],
@@ -1550,12 +1559,18 @@ function rotationCauseKey(code) {
   return `notice.rotation.cause.${found ? found[1] : 'other'}`;
 }
 
+function rotationCause(record) {
+  const key = record.failureCleanup && record.reason === 'handoff-unconfirmed' ? 'notice.rotation.cause.successorTurnTimeout' : rotationCauseKey(record.reason);
+  return key ? uiNotice(key, ['notice.rotation.cause.successorTurnFailed', 'notice.rotation.cause.successorTurnTimeout'].includes(key)
+    ? { name: record.newName || record.name } : undefined) : null;
+}
+
 const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-needed', 'automatic-messages-off', 'paused',
   'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
   'team-running', 'quiet-window', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
   'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
 const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
-  'handoff-request-timeout', 'handoff-unconfirmed', 'old-session-missing', 'new-session-missing',
+  'handoff-request-timeout', 'handoff-unconfirmed', 'successor-turn-failed', 'old-session-missing', 'new-session-missing',
   'new-session-not-ready', 'new-session-ambiguous', 'create-timeout', 'new-session-model-unreported',
   'join-timeout', 'leave-timeout', 'stop-timeout', 'native-stop-unconfirmed', 'guarded-stop-unavailable',
   'invalid-worktree-directory', 'worktree-preview-timeout', 'new-session-directory-trust-unavailable',
@@ -2306,6 +2321,7 @@ function readRotations(file, now, faults = {}) {
     if (!validId(record.oldNativeId || '') || !Array.isArray(record.roomIds) || typeof record.name !== 'string') {
       reject(oldId, record); continue;
     }
+    if (Object.hasOwn(record, 'failureCleanup') && (record.oldId !== oldId || !firstHandoff.validCleanup(record))) { reject(oldId, record); continue; }
     if (record.phase === 'waiting-trust' && (!validId(record.newId) || !validTrustReceipt(record.trustNoticeId) || !validTime(record.trustWaitingAt) || !['claude', 'codex'].includes(record.provider) || !record.newCwd || record.newCwd === record.cwd)) { reject(oldId, record); continue; }
     if (record.episodeEpoch !== undefined && (!validTrustReceipt(record.episodeEpoch) || !['open', 'invalid', 'complete', 'waiting-provider'].includes(record.episodeState))) { reject(oldId, record); continue; }
     if (record.phase === 'waiting-provider' && (!validTrustReceipt(record.episodeEpoch) || !validId(record.tag) ||
@@ -2327,7 +2343,7 @@ function readRotations(file, now, faults = {}) {
         (record.trustCleanup !== undefined && (!trustFailure(record) || record.newId === oldId || !validTrustCleanup(record.trustCleanup, record)))) {
       reject(oldId, record); continue;
     }
-    if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record)) {
+    if (record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record) && !failedHandoffPending(record)) {
       continue;
     }
     // Recorded before a resumed Claude session's model was read from its transcript; not a reason to rest.
@@ -2516,7 +2532,7 @@ class QueueDispatcher {
           (record.trustNoticeId || null) !== hold.receiptId) {
         this.faultTrustSuccessor(id, this.rotationRead.error ? 'rotation-store-unreadable' : 'record-invalid');
       } else if (Object.hasOwn(this.isolation.faults, id)) this.faultedRotations.add(hold.oldId);
-      else if (cleanupComplete(record) && !trustRecoveryPending(record) || record.handoffConfirmed === true &&
+      else if (cleanupComplete(record) && !trustRecoveryPending(record) && !failedHandoffPending(record) || record.handoffConfirmed === true &&
           ['handed', 'done', 'kept'].includes(record.phase) && validId(record.handoffTag) && validTime(record.handedAt)) {
         // A crash between the primary confirmation and its hold release is
         // recoverable only for this exact, still-valid saved identity pair.
@@ -2935,7 +2951,7 @@ class QueueDispatcher {
     for (const id of Object.keys(this.rotations)) {
       const record = this.rotations[id];
       const keptOver = record.phase === 'kept' && now - (record.keptAt || 0) > ROTATE_AFTER_MS;
-      const failedOver = record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record);
+      const failedOver = record.phase === 'failed' && now - (record.failedAt || 0) > FAILED_ROTATION_KEEP_MS && !trustRecoveryPending(record) && !failedHandoffPending(record);
       if (keptOver || failedOver) {
         delete this.rotations[id];
         changed = true;
@@ -2958,7 +2974,7 @@ class QueueDispatcher {
 
   // Metadata only, no session state: is there anything to send, settle or rotate?
   hasOpenWork() {
-    if (this.activeRotations().length || Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && trustRecoveryPending(record))) {
+    if (this.activeRotations().length || Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)))) {
       return true;
     }
     // Integration work that can move without the person keeps the passes going: a space record
@@ -3160,7 +3176,7 @@ class QueueDispatcher {
     }
     this.listen(this.client);
     const rotating = this.activeRotations().length > 0;
-    const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && trustRecoveryPending(record));
+    const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
       this.answerSoon(now);
     if (!due) {
@@ -3912,13 +3928,16 @@ class QueueDispatcher {
   async advanceRotations(snapshot, now) {
     for (const [id, record] of Object.entries(this.rotations)) {
       const session = snapshot.sessions.find(s => s.id === id), episode = session?.rotationEpisode;
-      if (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
-          episode.epoch === record.episodeEpoch && episode.tag === record.tag || this.retiredProviderWait(session, record)) {
+      if (!record.failureCleanup && (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
+          episode.epoch === record.episodeEpoch && episode.tag === record.tag || this.retiredProviderWait(session, record))) {
         delete this.rotations[id]; this.save();
       }
     }
     for (const [oldId, record] of Object.entries(this.rotations)) {
       if (this.closed) return;
+      if (!this.faultedRotations.has(oldId) && record.failureCleanup) {
+        try { await this.resumeFailedHandoff(oldId, record); } catch { /* Durable intent remains pending. */ }
+      }
       if (!this.faultedRotations.has(oldId) && trustRecoveryPending(record)) {
         try { await this.resumeTrustCleanup(oldId, record, snapshot, now); }
         catch { if (!this.closed) await this.isolateTrustRecovery(oldId, record); }
@@ -3979,7 +3998,7 @@ class QueueDispatcher {
     // A step the person or the butler took went through, as one of the butler's calls does (steward-wake.cjs).
     this.stewardWake?.controlSucceeded();
     const record = this.rotations[id];
-    if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag) { delete this.rotations[id]; this.save(); }
+    if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag && !record.failureCleanup) { delete this.rotations[id]; this.save(); }
     this.schedule();
     return result;
   }
@@ -4021,6 +4040,15 @@ class QueueDispatcher {
   async failRotation(oldId, record, reason, now, snapshot) {
     reason = rotationReasonCode(reason);
     if (reason === 'handoff-missing' && await this.waitForProvider(oldId, record, snapshot)) return;
+    if (record.phase === 'handed' && !record.handoffConfirmed && firstHandoff.failedReason(reason)) {
+      record.phase = 'failed'; record.failedAt = now; record.reason = reason; record.oldId = oldId;
+      record.failureCleanup = { v: 1, id: randomUUID(), release: 'pending', log: 'pending', os: 'pending',
+        stop: { state: 'pending', receipt: null, observation: null },
+        rooms: Object.fromEntries(record.roomIds.map(id => [id, { queue: 'pending', leave: 'pending', notice: 'pending' }])) };
+      this.save();
+      if (!this.closed) await this.resumeFailedHandoff(oldId, record);
+      return;
+    }
     const phase = record.phase;
     const due = record.reason;
     const trustTimedOut = phase === 'waiting-trust' && reason === 'native-directory-trust-timeout';
@@ -4080,6 +4108,81 @@ class QueueDispatcher {
     }
     this.notify(outcome, record);
     await this.broadcast();
+  }
+
+  async resumeFailedHandoff(oldId, record) {
+    const c = record.failureCleanup;
+    this.save(); // No effects until the recovery intent is durable.
+    for (const key of ['log', 'os']) if (c[key] === 'pending') {
+      this.saveTrustState(c, key, 'attempted');
+      try { if (key === 'log') this.appendLog('failed', record, { reason: record.reason, noticeId: c.id }); else this.notify('failed', record); } catch { /* One attempt; space notices still recover. */ }
+    }
+    for (const roomId of record.roomIds) {
+      const row = c.rooms[roomId];
+      if (row.queue !== 'done') {
+        try { this.roomState.queueReassign(roomId, record.newId, oldId); this.saveTrustState(row, 'queue', 'done'); } catch { /* Retry this space. */ }
+      }
+      if (row.notice !== 'done') {
+        try { if (this.failedEvent([roomId], oldId, record, c.id) === 1) this.saveTrustState(row, 'notice', 'done'); } catch { /* Other spaces still recover. */ }
+      }
+    }
+    if (c.release !== 'done') {
+      try {
+        const target = this.client.route(oldId);
+        const result = await target.client.call('invalidateRotation', oldId, record.oldNativeId, record.episodeEpoch,
+          { tag: record.tag, reason: record.reason });
+        if (result?.state === 'released' && result.epoch === record.episodeEpoch && result.tag === record.tag) this.saveTrustState(c, 'release', 'done');
+      } catch { /* The exact old episode remains pending, never replaced. */ }
+    }
+    if (this.closed) return;
+    await this.client.refresh();
+    let fresh = this.client.snapshot().sessions.find(s => s.id === record.newId);
+    let owner = record.successorOwner;
+    const input = firstHandoff.handoffInput(fresh, record.handoffTag);
+    if (owner?.nativeId === null && input?.nativeId === fresh?.nativeId) owner = { ...owner, nativeId: input.nativeId };
+    if (['pending', 'started'].includes(c.stop.state)) {
+      const receipt = fresh?.failedHandoffStop;
+      if (firstHandoff.validStopReceipt(receipt) && receipt.tag === record.handoffTag && JSON.stringify(receipt.owner) === JSON.stringify(owner) &&
+          ['ended', 'recoverable', 'disconnected'].includes(fresh.state) && firstHandoff.owned(fresh, receipt.proof, record.handoffTag)) {
+        this.saveTrustState(c.stop, 'receipt', receipt); this.saveTrustState(c.stop, 'state', 'done');
+      } else if (!fresh || !firstHandoff.owned(fresh, owner, record.handoffTag)) this.saveTrustState(c.stop, 'state', 'retained');
+      else {
+        try {
+          const target = this.client.route(record.newId);
+          if (!target.state.capabilities?.includes('failedSuccessorCleanupV1')) return;
+          const guard = this.client.operationGuard?.(target) || (() => {}); guard();
+          this.saveTrustState(c.stop, 'state', 'started');
+          const receipt = await withTimeout(target.client.call('stopFailedSuccessor', record.newId, owner, record.handoffTag), CALL_TIMEOUT_MS, 'stop-timeout');
+          guard(); if (this.closed) return;
+          if (firstHandoff.validObservation(receipt)) {
+            this.saveTrustState(c.stop, 'observation', receipt); this.saveTrustState(c.stop, 'state', 'retained');
+          } else if (receipt?.basis === 'stopped-by-this-attempt' && ['ended', 'recoverable', 'disconnected'].includes(receipt.state) &&
+              firstHandoff.validStopReceipt(receipt.receipt) && receipt.receipt.tag === record.handoffTag &&
+              JSON.stringify(receipt.receipt.owner) === JSON.stringify(owner)) {
+            this.saveTrustState(c.stop, 'receipt', receipt.receipt); this.saveTrustState(c.stop, 'state', 'done');
+          }
+        } catch { /* Reconcile the same guarded stop on the next pass. */ }
+      }
+    }
+    if (c.stop.state === 'retained') {
+      for (const row of Object.values(c.rooms)) if (row.leave !== 'retained') this.saveTrustState(row, 'leave', 'retained');
+      this.releaseTrustSuccessor(record); return;
+    }
+    if (c.stop.state !== 'done') return;
+    await this.client.refresh(); fresh = this.client.snapshot().sessions.find(s => s.id === record.newId);
+    for (const roomId of record.roomIds) {
+      if (this.closed) return;
+      const row = c.rooms[roomId]; if (row.leave !== 'pending') continue;
+      if (fresh && !roomIds(fresh).includes(roomId)) { this.saveTrustState(row, 'leave', 'done'); continue; }
+      if (!fresh || !firstHandoff.owned(fresh, c.stop.receipt.proof, record.handoffTag)) { this.saveTrustState(row, 'leave', 'retained'); continue; }
+      try {
+        const expected = { nativeId: fresh.nativeId, revision: membershipRevision(fresh, roomId), placementRevision: placementRevision(fresh),
+          connectionRevision: fresh.connectionRevision || 0, unusedSuccessor: true, failedHandoff: { receipt: c.stop.receipt, tag: record.handoffTag } };
+        await withTimeout(this.roomState.membership(this.client, record.newId, false, record.newName, roomId, expected), CALL_TIMEOUT_MS, 'leave-timeout');
+        this.saveTrustState(row, 'leave', 'done');
+      } catch { /* A changed or unavailable writer leaves the successor in place. */ }
+    }
+    if (cleanupComplete(record)) this.releaseTrustSuccessor(record);
   }
 
   // The person used the old session while it was being rotated (the 11-14 drill, finding 1: a week's rest for it).
@@ -4160,8 +4263,8 @@ class QueueDispatcher {
 
   // Human-readable cause plus a structured code for space members/the butler.
   failedEvent(ids, oldId, record, receipt) {
-    const reason = rotationReasonCode(record.reason), cause = uiNotice(rotationCauseKey(reason));
-    this.roomState.rotationEvent(ids, 'failed', this.label(oldId, record.name), cause.text, receipt, cause.uiMessage,
+    const reason = rotationReasonCode(record.reason), cause = rotationCause({ ...record, reason });
+    return this.roomState.rotationEvent(ids, 'failed', this.label(oldId, record.name), cause.text, receipt, cause.uiMessage,
       { sessionId: oldId, reason });
   }
 
@@ -4465,6 +4568,7 @@ class QueueDispatcher {
       }
       // Its open decisions go in the same message, whole; the items move once the successor has it (below).
       const decisions = decisionsNote(record.name, openDecisions(snapshot.rooms || [], old || { id: oldId, messages: [] }, record.roomIds || []));
+      record.successorOwner = trustProof(fresh); this.save();
       record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record), decisions), `rotation-handoff:${oldId}`);
       record.handedAt = now;
       record.phase = 'handed';
@@ -4473,16 +4577,13 @@ class QueueDispatcher {
     }
     if (record.phase === 'handed') {
       const fresh = snapshot.sessions.find(s => s.id === record.newId);
-      let accepted = false;
-      if (fresh) {
-        const message = (fresh.messages || []).find(m => m.id === record.handoffTag);
-        accepted = Boolean(message && message.status === 'submitted') || fresh.state === 'working';
-      }
-      if (!accepted) {
-        if (now - (record.handedAt || now) > HANDOFF_ACCEPT_MS) {
-          throw Error('handoff-unconfirmed');
+      if (!record.handoffConfirmed) {
+        const outcome = firstHandoff.outcome(fresh, record.handoffTag);
+        if (outcome === 'failed') throw Error('successor-turn-failed');
+        if (outcome !== 'complete') {
+          if (now - (record.handedAt || now) > HANDOFF_ACCEPT_MS) throw Error('handoff-unconfirmed');
+          return;
         }
-        return;
       }
       // Effort and permission mode are often reported only with the first prompt: compare again.
       const mismatch = settingsMismatch(record.carry, fresh, record.modelProvider || null);
@@ -4642,6 +4743,7 @@ module.exports = {
   queueVacancies,
   planDispatch,
   rotationCauseKey,
+  rotationCause,
   replyAfter,
   startsWithDecision,
   AUTOMATIC_ORIGINS,

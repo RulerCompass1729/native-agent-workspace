@@ -717,7 +717,7 @@ class FakeClient extends EventEmitter {
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
-    this.capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
+    this.capabilities = ['failedSuccessorCleanupV1', rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
   }
   snapshot() {
     this.reads += 1;
@@ -760,6 +760,11 @@ class FakeClient extends EventEmitter {
         dispatchPurpose: { kind: args[4]?.kind || (args[3]?.startsWith('rotation-handoff:') ? 'rotation-handoff' : 'queue'),
           itemId: args[3], nativeId: session.nativeId, epoch: session.rotationEpisode?.nativeId === session.nativeId ? session.rotationEpisode.epoch : null } });
       session.state = 'working';
+      // Older journeys model a successful handoff; submission alone no longer proves it.
+      if (args[3]?.startsWith('rotation-handoff:')) {
+        Object.assign(session.messages.at(-1), { nativeId: session.nativeId, turnId: `turn-${tag}` });
+        session.messages.push({ id: `boundary-${tag}`, role: 'system', kind: 'turn', nativeId: session.nativeId, turnId: `turn-${tag}`, status: 'complete' });
+      }
       this.emit('state');
       return tag;
     }
@@ -812,6 +817,13 @@ class FakeClient extends EventEmitter {
     if (method === 'stop') {
       session.state = 'ended';
       return { state: 'ended' };
+    }
+    if (method === 'stopFailedSuccessor') {
+      assert.ok(require('../rotation-handoff.cjs').owned(session, args[1], args[2]));
+      session.state = 'ended'; session.controlRevision++; session.pendingTag = null;
+      const proof = { nativeId: session.nativeId, controlRevision: session.controlRevision, draftRevision: session.draftRevision, placementRevision: session.placementRevision };
+      session.failedHandoffStop = { basis: 'stopped-by-this-attempt', tag: args[2], owner: args[1], proof };
+      return { basis: 'stopped-by-this-attempt', state: session.state, receipt: session.failedHandoffStop };
     }
     if (method === 'stopUnusedSuccessor') {
       assert.deepEqual(args[1], trustProof(session), 'the server checks the exact current identity and person revisions');
@@ -2447,7 +2459,7 @@ test('a successor that reports another permission mode with its first prompt doe
   fresh.nativePermissionMode = 'manual';
   await dispatcher.schedule();
   assert.deepEqual(notices, [['failed', 'settings-differ:permission-mode']]);
-  assert.ok(client.calls.some(call => call[0] === 'stop' && call[1] === fresh.id), 'the successor is stopped');
+  assert.ok(client.calls.some(call => ['stop', 'stopFailedSuccessor'].includes(call[0]) && call[1] === fresh.id), 'the unused successor is stopped through its guarded path');
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false, 'the old session keeps running');
   assert.equal(room.value.queue[0].assignee, 'a', 'and gets its queued work back');
 });
@@ -4985,4 +4997,153 @@ test('R121 (a) review B1: control characters in the notes never reach the send, 
   const row = f.room.value.queue.find(i => i.id === first);
   assert.equal(row.status, 'sent'); assert.ok(row.tag && row.notesSent);
   assert.equal(rules.dispatchText('x', { text: 'y' }, '\u0001\u0002'), rules.dispatchText('x', { text: 'y' }), 'notes made only of control characters attach nothing');
+});
+
+async function firstHandoff(t, patch = {}) {
+  const input = { id: 'handoff-input', role: 'user', origin: 'naw-dispatch', dispatchItem: 'rotation-handoff:a',
+    dispatchPurpose: { kind: 'rotation-handoff', itemId: 'rotation-handoff:a', nativeId: 'native-b' },
+    status: 'submitted', nativeId: 'native-b', turnId: 'first-turn' };
+  const old = member('a', { messages: [{ id: 'request', role: 'user', status: 'submitted' }],
+    rotationEpisode: { nativeId: 'native-a', epoch: '11111111-1111-4111-8111-111111111111', tag: 'request', state: 'complete' } });
+  const fresh = member('b', { messages: [input], state: 'working', ...patch });
+  const f = dispatcherSetup(t, [old, fresh]); f.dispatcher.client = f.client; fakeMembership(f.room, f.client);
+  const task = f.room.queueAdd('Synthetic inherited task', 'b');
+  const decision = f.room.queueAdd('Synthetic pending decision', null);
+  f.room.queueMarkSent('shared', decision, 'a', 'Old', NOW); f.room.queueSetDelivery('shared', decision, 'request', 0);
+  f.room.queueSettle('shared', decision, 'waiting', '', 'Old');
+  f.record = f.dispatcher.rotations.a = { phase: 'handed', oldId: 'a', oldNativeId: 'native-a', oldControl: 0,
+    episodeEpoch: old.rotationEpisode.epoch, episodeState: 'complete', tag: 'request', requestedAt: NOW - 1000,
+    newId: 'b', newNativeId: 'native-b', name: 'Old', newName: 'Successor', provider: 'claude',
+    roomIds: ['shared'], handoffTag: input.id, handedAt: NOW, carry: { model: fresh.model },
+    successorOwner: { nativeId: 'native-b', controlRevision: 0, draftRevision: 0, placementRevision: 0 } };
+  f.dispatcher.save();
+  return { ...f, old, fresh, task, decision, input,
+    step: () => f.dispatcher.advanceRotations(f.client.snapshot(), NOW),
+    boundary(status, extra = {}) { fresh.messages.push({ id: 'first-boundary', role: 'system', kind: 'turn', nativeId: fresh.nativeId, turnId: 'first-turn', status, ...extra }); } };
+}
+
+test('handoff submission and working are not acceptance of the first turn', async t => {
+  const f = await firstHandoff(t); await f.step();
+  assert.notEqual(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'idle'); assert.equal(f.old.archived, undefined);
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a');
+});
+for (const status of ['failed', 'interrupted', 'incomplete']) test(`first snapshot already ${status} rolls back without retiring the old session`, async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary(status); await f.step();
+  assert.equal(f.record.phase, 'failed'); assert.notEqual(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'idle');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a');
+  assert.equal(f.old.rotationEpisode.state, 'released');
+});
+test('first snapshot already completed confirms nativeId and turnId without inputTag', async t => {
+  const f = await firstHandoff(t, { state: 'idle' }); f.boundary('complete'); await f.step();
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'b');
+});
+test('an unrelated successful turn cannot confirm a failed handoff and human use is preserved', async t => {
+  const f = await firstHandoff(t, { state: 'idle' });
+  f.fresh.messages.push({ id: 'human', role: 'user', nativeId: 'native-b', turnId: 'human-turn' },
+    { id: 'other-end', role: 'system', kind: 'turn', nativeId: 'native-b', turnId: 'human-turn', status: 'complete' });
+  await f.dispatcher.advanceRotations(f.client.snapshot(), NOW + 31 * 60000);
+  assert.equal(f.record.phase, 'failed'); assert.notEqual(f.record.handoffConfirmed, true);
+  assert.equal(f.fresh.state, 'idle'); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+
+test('failed handoff persists recovery before its first side effect and restarts from that intent', async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
+  const saved = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { saved(); if (f.record.failureCleanup) f.dispatcher.closed = true; };
+  await f.step(); assert.ok(f.record.failureCleanup); assert.equal(f.client.calls.some(c => c[0] === 'stopFailedSuccessor'), false);
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW);
+  assert.equal(f.old.rotationEpisode.state, 'released'); assert.equal(f.fresh.state, 'ended'); assert.deepEqual(f.fresh.roomIds, []);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 1);
+  assert.equal(reopened.rotations.a.phase, 'failed', 'released snapshots do not remove the week of rest');
+  reopened.pruneRotations(NOW + 6 * 24 * HOUR); assert.ok(reopened.rotations.a);
+  reopened.pruneRotations(NOW + 8 * 24 * HOUR); assert.equal(reopened.rotations.a, undefined);
+});
+for (const use of ['draft', 'human turn']) test(`handoff timeout rolls back while preserving successor ${use}`, async t => {
+  const f = await firstHandoff(t);
+  if (use === 'draft') { f.fresh.liveDraft = 'synthetic draft'; f.fresh.draftRevision++; }
+  else { f.fresh.activeTurnId = 'person-turn'; f.fresh.messages.push({ id: 'person', role: 'user', turnId: 'person-turn' }); }
+  await f.dispatcher.advanceRotations(f.client.snapshot(), NOW + 31 * 60000);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.failureCleanup.stop.state, 'retained');
+  assert.deepEqual(f.fresh.roomIds, ['shared']); assert.equal(f.fresh.state, 'working');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('one space notice failing repeatedly does not block another space or duplicate its notice', async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
+  const other = f.room.create('Synthetic second space'); f.record.roomIds.push(other);
+  const inherited = f.room.queueAdd('Synthetic second task', 'b', other);
+  const event = f.room.rotationEvent.bind(f.room);
+  f.room.rotationEvent = (ids, ...args) => { if (ids[0] === 'shared') throw Error('synthetic write failure'); return event(ids, ...args); };
+  await f.step(); await f.step();
+  assert.equal(f.room.queueItems(other).find(i => i.id === inherited).assignee, 'a');
+  assert.equal(f.record.failureCleanup.rooms.shared.notice, 'pending');
+  assert.equal(f.room.metadata(other).events.filter(e => e.rotationReceipt).length, 1);
+  f.room.rotationEvent = event; await f.step();
+  assert.equal(f.room.metadata('shared').events.filter(e => e.rotationReceipt).length, 1);
+  assert.equal(f.record.failureCleanup.rooms.shared.notice, 'done');
+});
+
+test('a rolled back old member is eligible for its original queued work', async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed'); await f.step();
+  const actions = plan(f.room.apply(f.client.snapshot()).rooms, f.client.state.sessions, { rotations: f.dispatcher.rotations });
+  assert.ok(actions.some(a => a.kind === 'dispatch' && a.sessionId === 'a' && a.itemId === f.task));
+});
+test('a stopped successor receipt reconciles a restart before the dispatcher saved the stop answer', async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => { const result = await call(method, ...args); if (method === 'stopFailedSuccessor') { f.dispatcher.closed = true; throw Error('synthetic lost answer'); } return result; };
+  await f.step(); assert.equal(f.record.failureCleanup.stop.state, 'started');
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW);
+  assert.deepEqual(f.fresh.roomIds, []); assert.equal(reopened.rotations.a.failureCleanup.stop.state, 'done');
+  assert.equal(f.client.calls.filter(c => c[0] === 'stopFailedSuccessor').length, 1);
+});
+
+for (const field of ['model', 'permission-mode']) for (const use of ['input', 'draft', 'active turn'])
+test(`r3 ${field} mismatch preserves successor with person ${use}`, async t => {
+  const f = await firstHandoff(t, { state: 'working' }); f.boundary('complete');
+  if (field === 'model') f.fresh.model = 'different-model';
+  else { f.record.carry.permissionMode = 'auto'; f.fresh.nativePermissionMode = 'manual'; }
+  if (use === 'input') f.fresh.messages.push({ id: 'person-followup', role: 'user', turnId: 'person-turn' });
+  if (use === 'draft') { f.fresh.liveDraft = 'Synthetic draft'; f.fresh.draftRevision++; }
+  if (use === 'active turn') f.fresh.activeTurnId = 'person-turn';
+  await f.step();
+  assert.equal(f.record.reason, 'settings-differ:' + field); assert.equal(f.record.failureCleanup.stop.state, 'retained');
+  assert.equal(f.fresh.state, 'working'); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a'); assert.equal(f.old.rotationEpisode.state, 'released');
+});
+
+test('r3 first intent restart retains an observed-inactive successor without a stop receipt', async t => {
+  const f = await firstHandoff(t, { state: 'ended' }); f.boundary('failed');
+  const saved = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { saved(); if (f.record.failureCleanup) f.dispatcher.closed = true; };
+  await f.step(); assert.equal(f.client.calls.some(c => c[0] === 'stopFailedSuccessor'), false);
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => method === 'stopFailedSuccessor'
+    ? { basis: 'observed-inactive', state: 'ended', proof: { ...f.record.successorOwner } } : call(method, ...args);
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW);
+  assert.equal(reopened.rotations.a.failureCleanup.stop.state, 'retained');
+  assert.equal(reopened.rotations.a.failureCleanup.stop.receipt, null); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+for (const change of ['native context', 'person input', 'draft']) test(`r3 ${change} changed after first intent stays in the space`, async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
+  const saved = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { saved(); if (f.record.failureCleanup) f.dispatcher.closed = true; };
+  await f.step();
+  if (change === 'native context') f.fresh.nativeId = 'replacement-native';
+  if (change === 'person input') f.fresh.messages.push({ id: 'person-after-intent', role: 'user' });
+  if (change === 'draft') { f.fresh.liveDraft = 'Synthetic draft'; f.fresh.draftRevision++; }
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client; await reopened.advanceRotations(f.client.snapshot(), NOW);
+  assert.equal(reopened.rotations.a.failureCleanup.stop.state, 'retained'); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.client.calls.some(c => c[0] === 'stopFailedSuccessor'), false);
 });
