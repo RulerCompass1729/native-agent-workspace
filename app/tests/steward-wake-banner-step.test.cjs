@@ -135,10 +135,15 @@ test('the person\'s own step opens the chip once per step and is read once, with
     assert.equal(b.box.open, false, 'closed by the person, it stays closed for the same step');
     b.show(butler(), { step: 'release', minutes: 9 });
     assert.equal(b.box.open, true); assert.deepEqual(b.said(), [update, release], 'the next step of the person\'s opens and is read');
+    // A gap in its item without the person's click (a passing state): still open, and not read again when it is back.
+    b.show(null, { step: 'release', minutes: 9 });
+    assert.equal(b.box.open, true, 'a gap does not fold the chip');
+    b.show(butler(), { step: 'release', minutes: 9 });
+    assert.equal(b.box.open, true); assert.deepEqual(b.said(), [update, release], 'its item back after a gap is not read again');
     b.box.open = false;
     b.show(null, { step: 'release', minutes: 9 });
     b.show(butler(), { step: 'release', minutes: 9 });
-    assert.equal(b.box.open, false, 'its item back after a gap: the same step, not opened again');
+    assert.equal(b.box.open, false, 'closed by the person, its item back after a gap: not opened again');
     assert.deepEqual(b.said(), [update, release], 'nor read again');
     b.show(butler(), { step: 'release', minutes: 9, since: 2000 });
     assert.deepEqual(b.said(), [update, release, release], 'a new hold is a new step');
@@ -171,8 +176,13 @@ test('once the person\'s step is taken, the chip folds back and names no menu it
       assert.ok(!shown.includes(say('menu.updateThisBackend')), shown);
     }
     assert.equal(b.text.role, 'status');
+    const writes = []; let value = b.text.textContent;
+    Object.defineProperty(b.text, 'textContent', { get: () => value, set: v => { writes.push(v); value = v; } });
+    b.show(butler({ rotationEpisode: { ...EPISODE, state: 'released' } }), { step: 'release', minutes: 8 });
+    assert.deepEqual(writes, [], 'the same chip text is not written again into the live status');
     const u = banner(language);
     u.show(butler({ backendVersion: '0.1.0-alpha.270' }), { step: 'update-backend' });
+    await u.click();
     u.show(butler({ backendVersion: '0.1.0-alpha.290' }), { step: 'update-backend' });
     assert.equal(u.box.open, false); assert.equal(u.p.textContent, say('stewardWake.ownHandoffButton.update-backend', { minutes: 7 }));
     assert.equal(u.step.hidden, true);

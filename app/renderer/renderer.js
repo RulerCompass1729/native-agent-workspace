@@ -5735,7 +5735,7 @@ function renderStewardWakeWarning(wakeBlock) {
   const announce = $('steward-wake-announce');
   if (!wakeBlock) {
     chip.open = false;
-    if (chip.dataset.ownStep || chip.dataset.ownStepRead) { chip.dataset.ownStep = chip.dataset.ownStepRead = ''; if (announce) announce.textContent = ''; }
+    if (chip.dataset.ownStep || chip.dataset.ownStepRead) { chip.dataset.ownStep = chip.dataset.ownStepRead = chip.dataset.ownStepTaken = ''; if (announce) announce.textContent = ''; }
     return;
   }
   const reason = uiText(`stewardWake.reason.${wakeBlock.reason}`);
@@ -5751,7 +5751,9 @@ function renderStewardWakeWarning(wakeBlock) {
   const live = chip.querySelector('.wake-chip-text');
   // The person's step is read once below; its minute count would be read again every minute.
   if (item) live.removeAttribute('role'); else live.setAttribute('role', 'status');
-  live.textContent = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
+  // Rewriting the same text in a live status can be read again; renders come often.
+  const chipText = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
+  if (live.textContent !== chipText) live.textContent = chipText;
   chip.querySelector('summary').setAttribute('aria-label', full);
   // An ordinary reason: the chip's own advice. The person's step: what only they can do.
   chip.querySelector('p').textContent = own ? full : uiText('stewardWake.chipDetail', { reason });
@@ -5761,20 +5763,22 @@ function renderStewardWakeWarning(wakeBlock) {
   step.onclick = () => {
     const record = state?.sessions?.find(s => s.id === butler?.id);
     if (disconnected || !record) return;
+    chip.dataset.ownStepTaken = chip.dataset.ownStep || '';
     if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) attempt(() => releaseSessionRotation(record));
     else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) attempt(() => updateSessionBackend(record.id));
   };
   const log = chip.querySelector('.steward-wake-record');
   log.textContent = uiText('stewardWake.openRecord');
   log.onclick = () => { chip.open = false; stewardSteps?.open(); };
-  // Once per step and hold: the person's step opens the chip without moving focus, and folds it back once taken.
-  // Closed by the person, it stays closed for that step, also when its item comes back after a gap.
+  // Once per step and hold: the person's step opens the chip without moving focus, and folds it back once taken here.
+  // A gap in its item (taken elsewhere, or a passing state) changes nothing; closed by the person, it stays closed.
   const key = item ? `${wakeBlock.since}/${wakeBlock.step}` : '';
   if ((chip.dataset.ownStep || '') !== key) {
     const first = Boolean(key) && chip.dataset.ownStepRead !== key;
+    const taken = !key && Boolean(chip.dataset.ownStep) && chip.dataset.ownStepTaken === chip.dataset.ownStep;
     chip.dataset.ownStep = key;
     if (first) { chip.dataset.ownStepRead = key; chip.open = true; }
-    else if (!key) chip.open = false;
+    else if (taken) chip.open = false;
     if (announce) announce.textContent = first ? full : '';
   }
 }
