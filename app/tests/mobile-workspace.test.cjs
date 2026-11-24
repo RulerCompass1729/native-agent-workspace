@@ -210,3 +210,44 @@ test('waiting questions come from this authorized item and original member, not 
   f.source.sessions[0].nativeId = 'successor';
   assert.throws(() => f.adapter.queueAnswerTarget(f.client, f.grant, { roomId: 'shared', itemId, questionId: item.questionId }));
 });
+
+// 11-23: an open decision goes with its session. The question is still the one the first member asked; the answer
+// goes to the session that holds the decision now, and an answer already delivered to the one before closes it once.
+test('a decision moved to a successor keeps its question, answers the successor, and closes once for an answer the earlier session got', async t => {
+  const f = fixture(t);
+  const ask = () => {
+    const id = f.room.queueAdd('Synthetic waiting task', 'a');
+    f.room.queueMarkSent('shared', id, 'a', 'Synthetic A', Date.now() - 100, false, 'native-a');
+    f.room.queueSettle('shared', id, 'waiting', '', 'Synthetic A', '', 'Which synthetic option?');
+    return id;
+  };
+  const first = ask(), second = ask(), third = ask();
+  const before = (await f.adapter.read(f.client, f.grant, f.scopes)).rooms[0].queue.find(i => i.id === first);
+  f.source.sessions.push({ id: 'c', nativeId: 'native-c', name: 'Synthetic C', provider: 'codex', state: 'idle', roomIds: ['shared'], messages: [] });
+  const scopes = [...f.scopes, { serviceKey: '.', sessionId: 'c', nativeId: 'native-c', actions: ['read', 'send'] }];
+  f.room.queueCarry('shared', 'a', 'c', 'native-c');
+  const view = await f.adapter.read(f.client, f.grant, scopes), item = view.rooms[0].queue.find(i => i.id === first);
+  assert.deepEqual([item.question, item.questionId, item.sentTo, item.canAnswer], ['Which synthetic option?', before.questionId, 'c', true]);
+  const target = f.adapter.queueAnswerTarget(f.client, f.grant, { roomId: 'shared', itemId: first, questionId: item.questionId });
+  assert.deepEqual([target.sessionId, target.nativeId], ['c', 'native-c']);
+  const resolve = (itemId, sessionId, nativeId = 'native-' + sessionId) => f.adapter.action(f.client, f.grant,
+    f.spec({ action: 'queueResolve', roomId: 'shared', itemId, questionId: view.rooms[0].queue.find(i => i.id === itemId).questionId, answerRequestId: 'answer-1' }),
+    () => {}, () => ({ requestId: 'answer-1', sessionId, nativeId, serviceKey: '.', text: 'Option A.' }));
+  await assert.rejects(resolve(first, 'b'));
+  await assert.rejects(resolve(first, 'a', 'native-other'));
+  assert.equal(f.room.queueFind('shared', first).status, 'waiting');
+  await resolve(first, 'a');
+  const closed = f.room.queueFind('shared', first);
+  assert.deepEqual([closed.status, closed.sentTo, closed.sentNative, closed.answer.text], ['done', 'a', 'native-a', 'Option A.']);
+  await assert.rejects(resolve(first, 'c'));
+  await resolve(second, 'c');
+  const other = f.room.queueFind('shared', second);
+  assert.deepEqual([other.status, other.sentTo, other.sentNative, other.answer.text], ['done', 'c', 'native-c', 'Option A.']);
+  // The successor cannot be answered just now: nothing closes for it, and the answer the earlier session got still does.
+  f.source.sessions.find(s => s.id === 'c').nativeContextPending = true;
+  await assert.rejects(resolve(third, 'c'));
+  assert.equal(f.room.queueFind('shared', third).status, 'waiting');
+  await resolve(third, 'a');
+  const late = f.room.queueFind('shared', third);
+  assert.deepEqual([late.status, late.sentTo, late.sentNative], ['done', 'a', 'native-a']);
+});
