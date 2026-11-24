@@ -615,6 +615,37 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   rt.syncScreenState(activeTerm.screen);
   assert.equal(rt.chatAvailable, true, 'empty-prompt Backspace recovers after quiet window');
 
+  // r7 #1: Typing while the viewport is in a transient 'unknown' frame (cursor outside composer) MUST enter 'unseen'
+  // so returning the cursor to an unchanged empty composer after settling still refuses dispatch!
+  await new Promise(resolve => activeTerm.screen.write('\x1b[1;1H', resolve));
+  activeTerm.emit('data', { data: '\x1b[1;1H' });
+  assert.equal(editorState(activeTerm.screen), 'unknown');
+  ws.input(sessionId, 'q', 'owner-1');
+  const writesAfterUnknownKey = activeTerm.writes.length;
+  await new Promise(resolve => activeTerm.screen.write('\x1b[3;3H', resolve));
+  activeTerm.emit('data', { data: '\x1b[3;3H' });
+  assert.equal(editorState(activeTerm.screen), 'empty');
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, false, 'typing during unknown frame stays unseen after cursor returns without echo');
+  await assert.rejects(rt.send('after unknown-frame key', 't-unknown-key', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesAfterUnknownKey);
+
+  // Confirm normal recovery after that unseen key via observed draft -> clear -> settle.
+  await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> q', rule, '']);
+  assert.equal(editorState(activeTerm.screen), 'draft');
+  ws.input(sessionId, '\x15', 'owner-1');
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, true);
+
   // r3 #1: Human types into TUI -> BEFORE any PTY repaint (screen still holds old empty frame), dispatch MUST refuse with 0 extra bytes written!
   ws.input(sessionId, 'h', 'owner-1');
   assert.equal(record.terminalInputPending, true);

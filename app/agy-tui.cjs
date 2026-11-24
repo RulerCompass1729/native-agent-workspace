@@ -241,12 +241,15 @@ class AgyTui extends EventEmitter {
     this.lastHumanInputAt = this.now();
     const screen = this.terminal?.screen;
     const state = screen ? editorState(screen) : 'unknown';
+    // Raw-PTY fail-closed boundary (accepted 2026-11-24): only an already-visible draft stays in 'editing';
+    // typing on 'empty' or 'unknown' enters 'unseen' until a draft or turn is observed (sub-chunk coalesced
+    // type+erase stays conservatively blocked rather than risking submission of an un-echoed draft).
     if (this.humanInputState === 'none' && screen && state === 'empty' && typeof data === 'string' && EMPTY_NOOP_INPUT.test(data)) {
       this.humanInputState = 'none';
-    } else if (this.humanInputState === 'unseen' || !screen || state === 'empty') {
-      this.humanInputState = 'unseen';
-    } else {
+    } else if (this.humanInputState !== 'unseen' && screen && state === 'draft') {
       this.humanInputState = 'editing';
+    } else {
+      this.humanInputState = 'unseen';
     }
     this.promptReady = false;
     this.clearHumanInputTimer();
