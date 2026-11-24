@@ -102,7 +102,7 @@ class AnswerNotices {
 // The message: which operations, what the person answered, what NAW recorded, and where to read the rest. In the
 // language of NAW's other automatic messages to agents (steward-wake.cjs wakeText).
 function noticeText(notices) {
-  const lines = notices.map(n => `- ${n.operationId}${n.method ? `（${n.method}）` : ''}：${{ cancelled: '人点了取消', expired: '人没在时限内答复，卡已过期，没执行' }[n.decision] || '人点了确认'}，回执状态 ${n.state || 'unknown'}`);
+  const lines = notices.map(n => `- ${n.operationId}${n.method ? `（${n.method}）` : ''}：${{ cancelled: '人点了取消', expired: '人没在时限内答复，卡已过期' }[n.decision] || '人点了确认'}，回执状态 ${n.state || 'unknown'}`);
   return `【NAW 确认结果】你在等人答复的操作有了结果：\n${lines.join('\n')}\n用 workspace_control 的 receipt 读回执再决定下一步。NAW 只通知，不替你重发或续做。`;
 }
 

@@ -369,10 +369,12 @@ class BackgroundControl {
     this.commit(data => { for (const row of data.records) if (keys.has(this.key(row.actor) + ':' + row.id)) {
       Object.assign(row, this.settlementFields(row, 'expired', 'deadline-elapsed'));
     } });
-    // Told once per request: an agent asking the same again while the person is away is not woken each time it runs out.
+    // A card the agent asked again is told by the later one. One asked again after the same request ran out is not, so an
+    // agent asking again while the person is away is not woken each time it runs out.
     for (const row of this.data.records) if (keys.has(this.key(row.actor) + ':' + row.id)) {
-      const earlier = this.sameRequests(row).filter(({ later }) => !later).map(({ r }) => r).sort((a, b) => b.at - a.at)[0];
-      if (earlier?.disposition !== 'expired') this.tellExpired(row, row.state);
+      const same = this.sameRequests(row), earlier = same.filter(({ later }) => !later).map(({ r }) => r).sort((a, b) => b.at - a.at)[0];
+      if (same.some(({ later }) => later) || earlier?.disposition === 'expired' && earlier.finishedAt <= row.at) continue;
+      this.tellExpired(row, row.state);
     }
   }
   // The agent that asked hears that its card ran out unanswered (queue W4), as it hears the person's answers.

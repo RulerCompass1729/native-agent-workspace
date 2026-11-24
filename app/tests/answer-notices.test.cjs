@@ -327,8 +327,10 @@ test('a card nobody answered in time: the agent is told once nothing was done; t
   assert.equal(f.controller.data.records.find(r => r.id === 'op-a').disposition, 'expired');
   await f.elapse(12000);
   assert.equal(f.told().length, 1, 'told that it ran out');
-  assert.match(f.told()[0][2], new RegExp(`- op-a（stop）：人没在时限内答复，卡已过期，没执行，回执状态 ${recorded(f, 'op-a')}\\n`, 'u'));
+  assert.match(f.told()[0][2], new RegExp(`- op-a（stop）：人没在时限内答复，卡已过期，回执状态 ${recorded(f, 'op-a')}\\n`, 'u'));
   assert.doesNotMatch(f.told()[0][2], /人已经答复/u, 'the heading does not say the person answered');
+  // Its handler had started: earlier steps may have run, so the line does not say nothing was done.
+  assert.equal(recorded(f, 'op-a'), 'unconfirmed'); assert.doesNotMatch(f.told()[0][2], /没执行/u);
   f.client.set({ state: 'idle' });
   await f.ask('op-b'); f.clock.now += 10 * 60 * 1000; f.controller.expirePending();
   assert.equal(f.controller.data.records.find(r => r.id === 'op-b').disposition, 'expired');
@@ -350,7 +352,20 @@ test('the person clicked after the card ran out: the agent is told nothing was d
   assert.equal(late.disposition, 'expired', 'clicked late: the rest is not carried out');
   await f.elapse(12000);
   assert.equal(f.told().length, 2, 'the person acted: the agent hears of it');
-  assert.match(f.told()[1][2], new RegExp(`- op-b（stop）：人没在时限内答复，卡已过期，没执行，回执状态 ${late.state}\\n`, 'u'));
+  assert.match(f.told()[1][2], new RegExp(`- op-b（stop）：人没在时限内答复，卡已过期，回执状态 ${late.state}\\n`, 'u'));
+});
+test('asked again while the first card still waits: the agent hears about the card that settles last, not the one it replaced', async t => {
+  const f = await fixture(t, 'claude');
+  await f.ask('op-a'); f.clock.now += 60000; await f.ask('op-b');
+  f.clock.now += 9 * 60000; f.controller.expirePending();
+  assert.equal(f.controller.data.records.find(r => r.id === 'op-a').disposition, 'expired');
+  assert.equal(recorded(f, 'op-b'), 'confirmation-required');
+  await f.elapse(12000);
+  assert.deepEqual(f.told(), [], 'the later card of the same request still waits: nothing about the earlier one');
+  f.clock.now += 60000; f.controller.expirePending();
+  await f.elapse(12000);
+  assert.equal(f.told().length, 1, 'the later card ran out: told, though the one it replaced ran out before it');
+  assert.match(f.told()[0][2], /- op-b（stop）：人没在时限内答复，卡已过期/u); assert.doesNotMatch(f.told()[0][2], /op-a/u);
 });
 // Queue W4, M105 (the person, 2026-11-23): a card whose asking session was archived waited where no view shows it, and
 // said a reconnect would let it be confirmed. It is settled as not carried out, saying why.
