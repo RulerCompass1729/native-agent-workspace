@@ -205,7 +205,8 @@ class Workspace extends EventEmitter {
         // Old Claude records could inherit the other provider's app-server PID.
         // Keep unknown legacy proof; discard that alias only with an own PID.
         const serverIdentity = record.provider === 'claude' && Number.isSafeInteger(record.processIdentity?.pid) && record.processIdentity.pid > 1 ? null : record.serverIdentity;
-        this.sessions.set(record.id, { ...record, ...(record.provider === 'dsh' ? { nativeId: null } : {}), serverIdentity, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker || record.provider === 'dsh' ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
+        const agyUnresumable = record.provider === 'agy' && !require('./agy-tui.cjs').validConversationId(record.nativeId);
+        this.sessions.set(record.id, { ...record, ...(record.provider === 'dsh' || agyUnresumable ? { nativeId: null } : {}), serverIdentity, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker || record.provider === 'dsh' || agyUnresumable ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
       }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
@@ -489,6 +490,7 @@ class Workspace extends EventEmitter {
       if (skipPermissions != null || settings != null) throw uiError("error.workspace.invalidSettings");
       view = 'terminal';
     }
+    if (provider === 'agy') view = 'terminal';
     const requestedSettings = createSettings(provider, settings);
     // The model vendor the session will run, until Codex reports the one it uses: a missing or
     // unreadable profile refuses the creation here, before any native process starts.
@@ -500,8 +502,8 @@ class Workspace extends EventEmitter {
     if (worktreePlan != null && (fork || newDirectory)) throw uiError("error.workspace.gitModeConflict");
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
-    if (!['claude', 'codex', 'dsh'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
-    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH' }[provider];
+    if (!['claude', 'codex', 'dsh', 'agy'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
+    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH', agy: 'Antigravity' }[provider];
     const sessionName = name ? cleanText(name, 60) : `${providerLabel} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`;
     if (worktreePlan != null) {
       if (this.closed || this.storageWarning) throw uiError("error.workspace.gitBackendUnavailable");
