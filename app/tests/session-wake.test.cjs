@@ -1056,6 +1056,27 @@ test('a withdrawn turn names what changed, in its text, its code and its withdra
   }
 });
 
+// Review N1: a change the turn's start proof does not carry (a space's queue changes only the peer revision) does not
+// name a later refusal; the takeover that withdrew it does.
+test('a peer-only change before a takeover does not name the takeover\'s refusal', async t => {
+  const wake = require('../session-wake.cjs'), f = await personSpeaks(t);
+  assert.equal((await f.send(f.b, 'Pending task.', 'before')).status, 'staged');
+  wake.cause(f.s, 'input', true);
+  f.source.claim(f.a, 'another-window');
+  const error = await f.send(f.b, 'Must not go.', 'after').then(() => null, e => e);
+  assert.deepEqual([error?.sourceIssue, error?.uiMessage?.key], ['takeover', 'error.wake.revokedByTakeover']);
+  await f.finish(); assert.equal(f.writes.length, 0);
+});
+// Review N2: a saved row the catalog cannot render still ends, and the pause still happens.
+test('withdrawing a saved row whose body the catalog refuses still ends it and still pauses', async t => {
+  const f = await fixture(t), s = f.source.get(f.a), body = 'x'.repeat(17000);
+  s.messages.push({ id: 'bad', role: 'system', kind: 'notice', text: '', status: 'complete', time: Date.now(), wake: { status: 'staged', body } });
+  const paused = []; const pause = f.source.pause.bind(f.source); f.source.pause = (...args) => { paused.push(args[0]); return pause(...args); };
+  f.source.pauseAll('stop');
+  const row = s.messages.find(m => m.id === 'bad');
+  assert.deepEqual([row.wake.status, row.wake.cancellation?.code, row.text.startsWith('自动消息的授权边界变了；自动消息未投递。\n'), row.uiMessage], ['cancelled', 'pause', true, undefined]);
+  assert.deepEqual(paused, ['stop']);
+});
 for (const [steward, end, permission] of [[true, 'complete', false], [false, 'complete', false], [true, 'failed', false], [false, 'failed', false], [true, 'complete', true], [false, 'complete', true]]) test(`observed native input and turn end preserve a completed input-only turn only (${steward}/${end}/${permission})`, async t => {
   const f = await personSpeaks(t, { steward });
   f.ra.terminal = { alive: true };

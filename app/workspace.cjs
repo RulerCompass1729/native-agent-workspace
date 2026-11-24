@@ -1579,7 +1579,7 @@ class Workspace extends EventEmitter {
       if (s.owner !== owner) throw uiError("error.workspace.takeControlFirst");
       s.peerRevision = (s.peerRevision || 0) + 1;
       if (!recovery && !backgroundOperation.current()) wake.messageInput(this, s, { peer: 1 });
-      else if (!recovery) wake.cause(s, 'background');
+      else if (!recovery) wake.cause(s, 'background', true);
       if (recovery) this.pauseParticipant(id, `${RECOVERY_REASONS[recovery.reason].pause}自动继续；原协作交接保持暂停`, true, uiActivity(`notice.run.automatic${RECOVERY_REASONS[recovery.reason].key}`)[1]);
       else { if (!backgroundOperation.current()) wake.human(this, id); if (forward) { this.pauseParticipant(id, '真人输入优先', false, uiActivity('notice.run.humanPriority')[1]); this.pauseRoom(forward.roomId || 'shared', '真人输入优先', uiActivity('notice.run.humanPriority')[1]); } else this.pause('真人输入优先', undefined, false, uiActivity('notice.run.humanPriority')[1]); }
     }
@@ -1691,7 +1691,7 @@ class Workspace extends EventEmitter {
       // Private input still ends the old public reply scope; the session's wake permission survives.
       if (!shared) s.controlRevision++;
       if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
-      else wake.cause(s, 'input');
+      else wake.cause(s, 'input', shared);
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;

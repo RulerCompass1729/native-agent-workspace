@@ -42,14 +42,17 @@ const REVOKED = Object.freeze({ input: 'Input', interrupt: 'Interrupt', takeover
 const BOUNDARY_CAUSES = new Set(['switch', 'pause', 'upgrade', 'input', 'background', 'boundary']);
 const revokedError = code => Object.assign(uiError('error.wake.revokedBy' + REVOKED[code]), { sourceIssue: code });
 const labelled = code => backgroundOperation.current() ? 'background' : code;
-// Runtime-only: the uncompensated control changes of each session, newest last.
+// Runtime-only: the uncompensated changes of each session, newest last. `peer`: only its peer revision changed, which
+// the turn's start proof does not carry, so it can name only a refusal where nothing else changed (review N1).
 const causes = new WeakMap();
 let causeSeq = 0;
-function cause(s, code) {
+function cause(s, code, peer = false) {
   if (!s || !Object.hasOwn(REVOKED, code)) return;
-  causes.set(s, [...(causes.get(s) || []), { seq: ++causeSeq, code: labelled(code) }].slice(-8));
+  causes.set(s, [...(causes.get(s) || []), { seq: ++causeSeq, code: labelled(code), peer }].slice(-8));
 }
-function controlCause(s, since, fallback = 'control') { return (causes.get(s) || []).find(e => e.seq > (since ?? 0))?.code || fallback; }
+function controlCause(s, since, fallback = 'control', peer = false) {
+  return (causes.get(s) || []).find(e => e.seq > (since ?? 0) && e.peer === peer)?.code || fallback;
+}
 // Which change replaced each shared boundary, so another backend's turn can name it. Advisory: unreadable means 'boundary'.
 const CAUSES_FILE = 'agent-wake-boundary-causes';
 function boundaryCauses(w) {
@@ -99,8 +102,9 @@ function revoke(w, code = 'boundary') {
   } finally { try { fs.unlinkSync(temp); } catch { /* Never block human controls on cleanup. */ } }
   for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) {
     w.edited?.(s); m.wake.status = 'cancelled'; m.wake.settledAt = Date.now(); m.wake.cancellation = { code, at: m.wake.settledAt };
-    const [text, uiMessage] = uiActivity('notice.wake.revokedBy' + REVOKED[code], { body: m.wake.body });
-    m.text = text; m.uiMessage = uiMessage || undefined;
+    // A saved row the catalog cannot render (review N2) still ends, in plain text.
+    try { const [text, uiMessage] = uiActivity('notice.wake.revokedBy' + REVOKED[code], { body: m.wake.body }); m.text = text; m.uiMessage = uiMessage || undefined; }
+    catch { m.text = `自动消息的授权边界变了；自动消息未投递。\n${m.wake.body}`; m.uiMessage = undefined; }
   }
   return saved;
 }
@@ -287,7 +291,7 @@ function stage(w, s, r, native, args) {
 // The refused turn's error names its change; with none, the same refusal as before.
 function issueCause(w, s, issue, intent, since) {
   if (issue.code === 'authorization-boundary-changed') return boundaryCause(w, intent.boundary);
-  if (issue.code === 'source-identity-changed') return controlCause(s, since);
+  if (issue.code === 'source-identity-changed') return controlCause(s, since, 'control', Boolean(issue.fields?.length) && issue.fields.every(field => field === 'peerRevision'));
   return Object.hasOwn(REVOKED, issue.code) ? issue.code : 'control';
 }
 function stageCall(w, s, r, native, args) {
