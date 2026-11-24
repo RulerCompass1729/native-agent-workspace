@@ -616,30 +616,22 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   await assert.rejects(rt.send('race before echo', 't-race', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero dispatch bytes written during un-echoed keystroke window');
 
-  // r4 #1: Even AFTER the quiet deadline expires, without a post-input PTY repaint from agy, cached screen stays unconfirmed and dispatch MUST still refuse!
+  // r4/r5 #1: Even AFTER the quiet deadline expires, neither no-repaint NOR unrelated ANSI output (like \x1b[0m color reset)
+  // that leaves the composer unchanged may re-enable readiness without observing the editor actually leave empty (or run a turn)!
   clock += 1000;
   rt.syncScreenState(activeTerm.screen);
-  assert.equal(rt.chatAvailable, false, 'stale cached frame never re-enables readiness after deadline without post-input repaint');
+  assert.equal(rt.chatAvailable, false, 'stale cached frame never re-enables readiness after deadline without editor transition');
   await assert.rejects(rt.send('still no repaint after 1s', 't-no-repaint', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey);
 
-  // Start another human keystroke and verify an unrelated repaint during the settle window still cannot re-enable dispatch before quietMs elapses.
-  ws.input(sessionId, 'e', 'owner-1');
-  const writesAfterSecondKey = activeTerm.writes.length;
-  clock += 100;
-  await paint(activeTerm, [
-    'Antigravity CLI 1.5.16',
-    rule,
-    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
-    rule,
-    '? for shortcuts                                      auto · Gemini 4 Neon · high',
-  ]);
-  assert.equal(rt.chatAvailable, false);
-  await assert.rejects(rt.send('race during settle', 't-settle', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesAfterSecondKey);
+  // Unrelated nonempty ANSI sequence (\x1b[0m) after the 500ms deadline leaves editor unchanged -> MUST stay blocked!
+  await new Promise(resolve => activeTerm.screen.write('\x1b[0m', resolve));
+  activeTerm.emit('data', { data: '\x1b[0m' });
+  assert.equal(rt.chatAvailable, false, 'unrelated ANSI output leaving editor unchanged never confirms human keystroke');
+  await assert.rejects(rt.send('after unrelated color reset', 't-ansi', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesRightAfterKey);
 
-  // Once agy echoes the draft and the quiet window elapses, editorState still blocks dispatch.
-  clock += 500;
+  // Once agy actually echoes the draft, editor transitions out of empty into editing state (still blocked while drafting).
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -650,7 +642,7 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'unknown');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('auto while drafting', 't2', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesAfterSecondKey, 'zero bytes written while human draft is present');
+  assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero bytes written while human draft is present');
 
   // Even if ? for shortcuts were visible alongside non-placeholder text, editorState still reports draft.
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> hello draft', rule, '? for shortcuts']);
@@ -661,9 +653,10 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> ', 'second line', rule, '? for shortcuts']);
   assert.equal(editorState(activeTerm.screen), 'draft');
 
-  // Human clears draft (Ctrl+U) -> empty skipPermissions prompt re-enables automated send() after quiet window even while terminalInputPending remains true!
+  // Human clears draft (Ctrl+U) while in editing state -> blocked during settle window, then empty skipPermissions prompt re-enables automated send()!
   ws.input(sessionId, '\x15', 'owner-1');
-  clock += 600;
+  const writesAfterClear = activeTerm.writes.length;
+  clock += 100;
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -671,6 +664,12 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
     rule,
     '? for shortcuts                                      auto · Gemini 4 Neon · high',
   ]);
+  assert.equal(rt.chatAvailable, false, 'still settling immediately after Ctrl+U');
+  await assert.rejects(rt.send('too soon after clear', 't-settle', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesAfterClear);
+
+  clock += 500;
+  rt.syncScreenState(activeTerm.screen);
   assert.equal(record.terminalInputPending, true, 'workspace sticky flag stays intact');
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true);

@@ -193,8 +193,7 @@ class AgyTui extends EventEmitter {
     this.addressedSendAvailable = false;
     this.liveTurn = null;
     this.pendingSend = null;
-    this.screenRevision = 0;
-    this.humanInputRevision = -1;
+    this.humanInputState = 'none';
     this.lastHumanInputAt = -Infinity;
     this.humanInputTimer = null;
     this.mcpCalls = new Map();
@@ -205,14 +204,17 @@ class AgyTui extends EventEmitter {
   clearHumanInputTimer() {
     if (this.humanInputTimer) { clearTimeout(this.humanInputTimer); this.humanInputTimer = null; }
   }
+  humanInputSettling() {
+    return this.lastHumanInputAt >= 0 && (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
+  }
   humanInputUnconfirmed() {
-    if (this.lastHumanInputAt < 0) return false;
-    if (this.terminal?.screen && this.screenRevision <= this.humanInputRevision) return true;
-    return (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
+    if (this.terminal?.screen && this.humanInputState === 'unseen') return true;
+    return this.humanInputSettling();
   }
   noteHumanTerminalInput() {
     this.lastHumanInputAt = this.now();
-    this.humanInputRevision = this.screenRevision;
+    const screen = this.terminal?.screen;
+    this.humanInputState = !screen || editorState(screen) === 'empty' ? 'unseen' : 'editing';
     this.promptReady = false;
     this.clearHumanInputTimer();
     this.syncCapabilities();
@@ -286,6 +288,8 @@ class AgyTui extends EventEmitter {
   }
   syncScreenState(screen) {
     const state = editorState(screen);
+    if (state !== 'empty' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
+    if (state === 'empty' && this.humanInputState === 'editing' && !this.humanInputSettling()) this.humanInputState = 'none';
     this.trustPromptActive = state === 'blocked';
     this.promptReady = state === 'empty' && !this.humanInputUnconfirmed();
     this.syncCapabilities();
@@ -311,7 +315,6 @@ class AgyTui extends EventEmitter {
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
-      if (typeof event?.data === 'string' && event.data.length > 0) this.screenRevision++;
       if (terminal.screen) this.syncScreenState(terminal.screen);
       else if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
       this.emit('terminal', event);
@@ -464,6 +467,7 @@ class AgyTui extends EventEmitter {
         if (!this.liveTurn && this.record.state !== 'working') this.emit('state', 'idle');
         break;
       case 'PreInvocation': {
+        if (this.humanInputState === 'unseen') this.humanInputState = 'editing';
         if (this.terminal?.screen) {
           this.syncScreenState(this.terminal.screen);
         } else {
@@ -547,6 +551,7 @@ class AgyTui extends EventEmitter {
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'interrupted' });
           this.emit('interrupted', { tag: turn?.tag || null });
           this.emit('state', 'idle');
+          if (this.terminal?.screen) this.syncScreenState(this.terminal.screen);
         } else if (reason === 'NO_TOOL_CALL' && event.fullyIdle === true) {
           // Never let Stop override a pinned turn transcript with a different path.
           const stopPath = resolveSessionTranscript(event.transcriptPath, nativeId, this.brainRoot);
@@ -558,6 +563,7 @@ class AgyTui extends EventEmitter {
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'completed' });
           this.emit('activity', '');
           this.emit('state', 'idle');
+          if (this.terminal?.screen) this.syncScreenState(this.terminal.screen);
         } else {
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'incomplete' });
           this.emit('failed', 'Antigravity 回合未确认完成。', turn?.tag ? { tag: turn.tag } : undefined);
