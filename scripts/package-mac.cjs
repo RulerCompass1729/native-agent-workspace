@@ -235,6 +235,7 @@ async function build() {
       'room-mention.js',
       'room-state.cjs',
       'room-threads.js',
+      'rotation-handoff.cjs',
       'runtime-locations.cjs',
       'scoped-outbox-runtime.cjs',
       'service-binding.cjs',

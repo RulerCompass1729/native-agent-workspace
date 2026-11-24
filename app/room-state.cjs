@@ -986,6 +986,7 @@ class RoomState {
         !orderId(rotationReason.sessionId) || typeof rotationReason.reason !== 'string' || !/^[A-Za-z0-9:._-]{1,160}$/.test(rotationReason.reason))) throw Error('Invalid rotation reason');
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
     const keys = { requested: 'notice.rotation.requested', waiting: 'notice.rotation.waiting', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', deferred: 'notice.rotation.deferred', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
+    let recorded = 0;
     for (const id of ids) {
       try {
         this.metadata(id);
@@ -993,15 +994,16 @@ class RoomState {
       } catch {
         continue;
       }
-      if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) continue;
+      if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) { recorded++; continue; }
       const params = phase === 'trustStateUnknown' ? {} : phase === 'deferred' ? { name: oldName } : { name: oldName, detail: detail || '' };
       const notice = uiNotice(keys[phase], params);
       const cause = detailMessage && displayMessage(detailMessage, 'notice.', params.detail);
       if (cause) notice.uiMessage = displayMessage({ ...notice.uiMessage, cause, causeParam: 'detail' }, 'notice.', notice.text) || notice.uiMessage;
       const event = { kind: 'rotation', ...(receiptId ? { rotationReceipt: receiptId } : {}),
         ...(rotationReason ? { rotationReason: { ...rotationReason } } : {}), ...notice };
-      this.update({}, event, id);
+      this.update({}, event, id); recorded++;
     }
+    return recorded;
   }
   // B6 E4. The backend marks a session stuck (workspace.cjs stuckFor): an interrupt that has
   // not taken effect, or a permission prompt nobody answered. Each mark is recorded once in
@@ -1296,6 +1298,7 @@ class RoomState {
           expected.connectionRevision !== undefined && expected.connectionRevision !== (before.connectionRevision || 0))) throw uiError("error.room.membershipChangedNoRevocation");
       const prior = roomIds(before), modern = (before.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1') && !(legacyDetach && prior.length > 1);
       const guarded = expected?.unusedSuccessor === true;
+      if (expected?.failedHandoff && (!guarded || !(before.serviceCapabilities || snapshot.capabilities || []).includes('failedSuccessorCleanupV1'))) throw uiError('error.movePlacementUnsupported');
       const idleArchive = expected?.archiveIdle === true;
       if (idleArchive && join) throw uiError('error.invalidMemberAction');
       // Older writers ignore unknown proof fields; never fall back to a detach
@@ -1315,7 +1318,7 @@ class RoomState {
       if (modern) {
         const proof = { operationId: expected?.operationId || randomUUID(), nativeId: before.nativeId,
           revision: placementRevision(before), connectionRevision: before.connectionRevision || 0,
-          ...(guarded ? { unusedSuccessor: true } : {}), ...(idleArchive ? { archiveIdle: true } : {}) };
+          ...(guarded ? { unusedSuccessor: true, ...(expected?.failedHandoff ? { failedHandoff: expected.failedHandoff } : {}) } : {}), ...(idleArchive ? { archiveIdle: true } : {}) };
         try { move = recovered ? { ...before.placementReceipt, changed: true } : await client.call('moveMembership', id, join ? room : null, proof); }
         catch (error) {
           // Lost replies are reconciled from the same writer's saved receipt, never retried.
