@@ -140,6 +140,13 @@ async function openSolo(){
  await until(async()=>(await viewState()).selected===ids[9],'Independent session selected');await settle();await delay(350);
 }
 const sidebarBox=()=>page.evaluate(()=>{const e=document.querySelector('.naw[data-native-surface="sidebar"]');return {collapsed:e.dataset.collapsed,width:e.getBoundingClientRect().width};});
+// The rail animates its width: read it only once two reads 100 ms apart agree.
+async function steadyBox(){let a=await sidebarBox();for(let i=0;i<40;i++){await delay(100);const b=await sidebarBox();if(b.collapsed===a.collapsed&&Math.abs(b.width-a.width)<0.5)return b;a=b;}throw Error('Sidebar width never settled');}
+// One member view hides the columns; the room route button (#room-overview, then 「← 返回<space>」) leads back.
+async function wholeSpace(){
+ if(!await page.locator('#collaboration-overview').isVisible())await page.locator('#room-overview').click();
+ await until(async()=>!(await viewState()).roomSession&&await page.locator('#collaboration-overview').isVisible(),'Whole space shown');await settle();
+}
 function readMembers(){
  const ctx=document.createElement('canvas').getContext('2d'),side=document.querySelector('.naw[data-native-surface="sidebar"]'),drawn=e=>Boolean(e&&e.getClientRects().length);
  const paint=c=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=c;ctx.fillRect(0,0,1,1);return 'rgb('+[...ctx.getImageData(0,0,1,1).data].slice(0,3).join(', ')+')';},ink=c=>[c.backgroundColor,c.backgroundImage,c.borderTopColor,c.boxShadow].join(' '),look=e=>[...e.classList].filter(c=>c!=='agent-cell').sort().join(' ');
@@ -159,11 +166,10 @@ async function spaceMembers(){
  for(const [width,height] of [[1280,820],[900,700]])for(const theme of ['light','dark'])for(const collapsed of [false,true]){
   const label=`${width} ${theme} ${collapsed?'collapsed':'expanded'}`;
   await size(width,height);await page.emulateMedia({colorScheme:theme});await page.waitForFunction(d=>document.body.hasAttribute('data-ds-dark-theme')===d,theme==='dark');
-  await openSolo();await rail(collapsed);const before=await sidebarBox();
+  await openSolo();await rail(collapsed);const before=await steadyBox();
   await check(label+' entering a space keeps the sidebar width and lists one row per member column',async()=>{
    await page.locator(G(rooms[0])).click();await until(async()=>(await viewState()).selected==='room','Space selected');await settle();
-   const focused=(await viewState()).roomSession;if(focused){await page.locator('.collaboration-member-status[data-member-id="'+focused+'"] .collaboration-member-name').click();await until(async()=>!(await viewState()).roomSession,'Whole space shown');}
-   await settle();await delay(350);const data=await page.evaluate(readMembers);fs.writeFileSync(path.join(out,`space-${label.replace(/ /g,'-')}.json`),JSON.stringify({before,data},null,2));
+   await wholeSpace();await delay(350);const data={...await page.evaluate(readMembers),...await steadyBox()};fs.writeFileSync(path.join(out,`space-${label.replace(/ /g,'-')}.json`),JSON.stringify({before,data},null,2));
    assert.equal(data.collapsed,before.collapsed,JSON.stringify({before,data}));assert.ok(Math.abs(data.width-before.width)<=1,JSON.stringify({before,width:data.width}));
    assert.deepEqual([...data.columns].sort(),ids.slice(1,5).sort(),JSON.stringify(data.columns));
    assert.deepEqual(data.rows.map(r=>r.id),data.columns,JSON.stringify(data.rows));
@@ -183,10 +189,10 @@ async function spaceMembers(){
    await page.locator('.collaboration-member-status[data-member-id="'+ids[1]+'"] .collaboration-member-name').click();await until(async()=>(await viewState()).roomSession===ids[1],'Member focused');await settle();
    await page.locator(S(ids[3])+' .session-link').click();await until(async()=>(await viewState()).roomSession===ids[3],'Member switched');await settle();
    assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('.naw[data-native-surface="sidebar"] .space-member-row.active')].map(e=>e.dataset.sessionRow)),[ids[3]]);
-   await page.locator('.collaboration-member-status[data-member-id="'+ids[3]+'"] .collaboration-member-name').click();await until(async()=>!(await viewState()).roomSession,'Whole space shown again');
+   await wholeSpace();
   });
   await check(label+' returning to an independent session keeps the sidebar as set',async()=>{
-   await openSolo();const after=await sidebarBox();assert.equal(after.collapsed,before.collapsed,JSON.stringify({before,after}));assert.ok(Math.abs(after.width-before.width)<=1,JSON.stringify({before,after}));
+   await openSolo();const after=await steadyBox();assert.equal(after.collapsed,before.collapsed,JSON.stringify({before,after}));assert.ok(Math.abs(after.width-before.width)<=1,JSON.stringify({before,after}));
   });
  }
 }
