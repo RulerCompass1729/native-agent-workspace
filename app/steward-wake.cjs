@@ -131,6 +131,8 @@ class StewardWake {
     if (visible) try { this.changed(); } catch { /* Visibility never grants a send. */ }
   }
   skip(reason) {
+    // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
+    if (this.blocked?.step) return;
     if (!this.due()) { this.clearBlocked(); return; }
     const now = this.now();
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
