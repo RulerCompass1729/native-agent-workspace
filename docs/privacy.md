@@ -118,7 +118,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local
-  records; note/background text reaches a provider only when explicitly sent.
+  records; note/background text reaches a provider only when explicitly sent,
+  with one exception: in a space where the person turned on "Attach these notes
+  to queued work" (off by default; only the person can turn it on or off, and
+  while it is on only the person can change the notes), the current notes are
+  attached to each member's first queued item and again with the next item
+  after the notes change. Turning it off stops further attachments; text
+  already sent stays in the members' native sessions.
   Clearing a current note does not delete its older timeline versions.
 - services.json records relative backend directories. After an update, retained
   backends keep their own workspace/connection files under this same private

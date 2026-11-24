@@ -84,6 +84,10 @@ function validateRoom(data) {
   if (data.files !== undefined && (!Array.isArray(data.files) || data.files.some(f => !f || typeof f.id !== 'string' || !roomId(f.id) || f.id === DEFAULT_ROOM_ID || typeof f.path !== 'string' || !path.isAbsolute(f.path) || /\u0000/.test(f.path) || typeof f.name !== 'string' || !f.name || /[\u0000-\u001f]/u.test(f.name)) || new Set(data.files.map(f => f.id)).size !== data.files.length)) throw Error('Invalid files');
   if (data.merge !== undefined) validateMerge(data.merge, data.id);
   const room = { ...initialRoom(data.name), ...data, memberOrder: memberOrder(data.memberOrder) };
+  // An unreadable switch is off: nothing is attached that the person did not turn on.
+  if (room.notesToQueue !== true || !Number.isSafeInteger(room.notesToQueueSince) || room.notesToQueueSince < 0) {
+    delete room.notesToQueue; delete room.notesToQueueSince;
+  }
   if (data.queue !== undefined) {
     room.queue = queueRules.validateQueue(data.queue);
   }
@@ -588,12 +592,26 @@ class RoomState {
     this.assertSpaceNameAvailable(validated, [id]);
     this.update({ name: validated }, { kind: 'rename', ...uiNotice('notice.room.renamed', { name: validated }) }, id);
   }
-  notes(text, revision, id = DEFAULT_ROOM_ID) {
+  // R121 (a): attach is the person's 「派活时附上这份笔记」 (queue-dispatch.cjs notesDue). While it is on only the
+  // person changes the notes, so what goes out with queued work is what the person sees in this dialog.
+  notes(text, revision, id = DEFAULT_ROOM_ID, { person = false, attach } = {}) {
     this.writable(id);
     if (typeof text !== 'string' || text.length > 8000 || /\u0000/.test(text)) throw uiError("error.room.notesLimit");
-    const value = this.metadata(id);
+    if (attach !== undefined && typeof attach !== 'boolean') throw uiError("error.invalidSpaceAction");
+    const value = this.metadata(id), on = value.notesToQueue === true;
+    const fields = {};
+    if (text !== value.notes) fields.notes = text;
+    if (attach !== undefined && attach !== on) {
+      // The revision that turned it on: turning it on again sends the notes once more.
+      Object.assign(fields, attach ? { notesToQueue: true, notesToQueueSince: value.revision + 1 } : { notesToQueue: undefined, notesToQueueSince: undefined });
+    }
+    if (!person && Object.hasOwn(fields, 'notesToQueue')) throw uiError("error.room.notesAttachPersonOnly");
+    if (!person && on && Object.hasOwn(fields, 'notes')) throw uiError("error.room.notesPersonOnly");
     if (revision !== value.revision) throw uiError("error.room.dataChangedElsewhere");
-    if (text !== value.notes) this.update({ notes: text }, { kind: 'notes', ...uiNotice(text ? 'notice.room.notesUpdated' : 'notice.room.notesCleared', text ? { text } : undefined) }, id);
+    const events = [];
+    if (Object.hasOwn(fields, 'notesToQueue')) events.push({ kind: 'notes', ...uiNotice(attach ? 'notice.room.notesAttachOn' : 'notice.room.notesAttachOff') });
+    if (Object.hasOwn(fields, 'notes')) events.push({ kind: 'notes', ...uiNotice(text ? 'notice.room.notesUpdated' : 'notice.room.notesCleared', text ? { text } : undefined) });
+    if (events.length) this.update(fields, events.pop(), id, events);
   }
   addFiles(files, id = DEFAULT_ROOM_ID) {
     this.writable(id);
@@ -782,7 +800,7 @@ class RoomState {
     const event = { kind: 'queue', ...uiNotice(by === 'steward' ? 'notice.queue.resolvedBySteward' : 'notice.queue.resolved', { text: queueRules.shortText(item.text) }) };
     this.queueReplace(id, itemId, next, event);
   }
-  queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false, nativeId = null) {
+  queueMarkSent(id, itemId, sessionId, name, now, afterDecision = false, nativeId = null, notesSent = null) {
     const item = this.queueFind(id, itemId);
     if (item.status !== 'queued') {
       throw uiError("error.queue.notQueued");
@@ -801,6 +819,12 @@ class RoomState {
       next.afterDecision = true;
     } else {
       delete next.afterDecision;
+    }
+    // Which version of the space's notes went with it (queue-dispatch.cjs notesDue).
+    if (notesSent) {
+      next.notesSent = notesSent;
+    } else {
+      delete next.notesSent;
     }
     const params = { text: queueRules.shortText(item.text), name };
     const event = { kind: 'queue', sessionId, ...uiNotice('notice.queue.dispatched', params) };
@@ -828,7 +852,7 @@ class RoomState {
     delete next.sentAt;
     delete next.tag;
     delete next.control;
-    delete next.afterDecision; delete next.claimed; delete next.claimEpoch;
+    delete next.afterDecision; delete next.claimed; delete next.claimEpoch; delete next.notesSent;
     this.queueReplace(id, itemId, next);
   }
   // reply is the member's own answer, kept so the queue row can show what came back.
@@ -1626,7 +1650,7 @@ class RoomState {
     const metadata = [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms];
     const rooms = metadata.map(value => {
       const backend = (snapshot.rooms || [snapshot.room]).find(r => r?.id === value.id || value.id === DEFAULT_ROOM_ID && r && !r.id);
-      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: displayEvents(value.events), archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue, this.queueWaits),
+      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, notesToQueue: value.notesToQueue === true, notesToQueueSince: value.notesToQueue === true ? value.notesToQueueSince : 0, metadataRevision: value.revision, events: displayEvents(value.events), archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })), queue: copyQueue(value.queue, this.queueWaits),
         ...(value.merge ? { merge: { operationId: value.merge.batch.operationId, binding: value.merge.batch.binding, stage: value.merge.stage,
           imported: value.merge.imported, failures: [...value.merge.failures], failuresUiMessage: value.merge.failuresUiMessage || null, undoKeptTarget: Boolean(value.merge.undoKeptTarget),
           sources: value.merge.sources.map(source => ({ id: source.id, name: value.merge.batch.sources.find(original => original.id === source.id)?.name, status: source.status, error: source.error || '', errorUiMessage: source.errorUiMessage || null })),

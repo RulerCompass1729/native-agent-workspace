@@ -99,7 +99,26 @@ test('an earlier accepted save cannot close the new notes editor or discard its 
   const f = fixture(); f.openNotes('First accepted edit'); const old = f.save(); f.$('notes-dialog').close(); f.openNotes('New unsaved edit');
   f.calls[0].resolve(); await old;
   assert.equal(f.$('notes-dialog').open, true); assert.equal(f.$('room-notes-text').value, 'New unsaved edit');
-  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].args)), ['shared', 'notes', ['First accepted edit', 7]]); assert.deepEqual(f.messages, ['此前提交的笔记已保存。']);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].args)), ['shared', 'notes', ['First accepted edit', 7, false]]); assert.deepEqual(f.messages, ['此前提交的笔记已保存。']);
+});
+test('R121 (a): the notes switch opens as saved, shows its consequence only while on, and is saved with the notes', async () => {
+  const f = fixture(); f.context.state.room.notesToQueue = true; f.openNotes();
+  const box = f.$('room-notes-attach'), slot = f.$('notes-attach-slot');
+  assert.equal(box.checked, true);
+  assert.deepEqual(slot.children.map(line => [line.id, line.textContent]), [['notes-attach-on', locale.format('zh', 'notes.attachOn')]]);
+  assert.equal(box.getAttribute('aria-describedby'), 'notes-attach-on');
+  box.checked = false; box.onchange();
+  assert.deepEqual([slot.children.length, box.getAttribute('aria-describedby')], [0, null], 'off: the consequence line is gone and nothing points at it');
+  const off = f.save();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].args)), ['shared', 'notes', ['Saved original', 7, false]]);
+  f.calls[0].resolve(); await off; assert.equal(f.$('notes-dialog').open, false);
+  f.context.state.room.notesToQueue = false; f.openNotes();
+  assert.deepEqual([box.checked, slot.children.length], [false, 0], 'off by default');
+  box.checked = true; box.onchange(); box.onchange();
+  assert.equal(slot.children.length, 1);
+  const on = f.save();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[1].args)), ['shared', 'notes', ['Saved original', 7, true]]);
+  f.calls[1].resolve(); await on; assert.equal(f.$('notes-dialog').open, false);
 });
 test('an earlier save failure does not write into a new notes editor', async () => {
   const f = fixture(); f.openNotes('First'); const old = f.save(); f.$('notes-dialog').close(); f.openNotes('Fresh');

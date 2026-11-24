@@ -2015,7 +2015,7 @@ async function boot() {
     finally { await broadcastRoom(); }
   });
   register('roomRename', async (_c, name) => { roomState.rename(name); await broadcastRoom(); });
-  register('roomNotes', async (_c, text, revision) => { roomState.notes(text, revision); await broadcastRoom(); });
+  register('roomNotes', async (c, text, revision) => { roomState.notes(text, revision, undefined, { person: isCurrentHumanContext(c) }); await broadcastRoom(); });
   register('roomMemberOrder', async (c, change) => {
     const snapshot = await c.client.call('initial');
     roomState.moveMember(change, snapshot.sessions); await broadcastRoom();
@@ -2058,7 +2058,7 @@ async function boot() {
     }
     if (action === 'acceptImages') return acceptSpaceImageDraft(c, roomId, args[0], args[1]);
     if (action === 'rename') roomState.rename(args[0], roomId);
-    else if (action === 'notes') roomState.notes(args[0], args[1], roomId);
+    else if (action === 'notes') roomState.notes(args[0], args[1], roomId, { person: isCurrentHumanContext(c), attach: args[2] });
     else if (action === 'memberOrder') roomState.moveMember(args[0], (await c.client.call('initial')).sessions, roomId);
     else if (action === 'archive' || action === 'restore') {
       try { return action === 'archive' ? await archiveRoomConfirmed(c, roomId) : await roomState.restoreRoom(c.client, sessionLabels.labels, roomId); }

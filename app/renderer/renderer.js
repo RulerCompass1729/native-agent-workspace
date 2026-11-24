@@ -4960,7 +4960,22 @@ function openNotes(id = spaceId) {
   const room = spaceRecord(id); if (!room) return;
   notesRevision = room.metadataRevision;
   $('room-notes-text').value = room.notes || ''; ui.display.text($('notes-heading'), 'notes.titleName', () => ({ name: spaceName(room) })); $('notes-error').hidden = true; $('save-notes').disabled = false;
+  $('room-notes-attach').checked = room.notesToQueue === true; drawNotesAttach();
   const ticket = openTransientDialog('notes-dialog'); ticket.roomId = id;
+}
+// R121 (a) review W3: the consequence is read with the checkbox, and is not in the page while the switch is off.
+function drawNotesAttach() {
+  const box = $('room-notes-attach'), slot = $('notes-attach-slot');
+  if (!box.checked) {
+    for (const line of [...slot.children]) ui.display.unbind(line);
+    slot.replaceChildren(); box.removeAttribute('aria-describedby');
+    return;
+  }
+  if (!slot.children.length) {
+    const line = node('p', undefined, 'quiet'); line.id = 'notes-attach-on';
+    ui.display.text(line, 'notes.attachOn'); slot.replaceChildren(line);
+  }
+  box.setAttribute('aria-describedby', 'notes-attach-on');
 }
 let contextSnapshot = null;
 function contextEdited() { return Boolean(contextSnapshot && $('context-text').value && $('context-text').value !== contextSnapshot.text); }
@@ -7620,22 +7635,23 @@ $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
 $('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString(ui.language.getSnapshot().active) : uiText('reading.unknownTime')} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = () => openNotes(); $('cancel-notes').onclick = () => $('notes-dialog').close();
+$('room-notes-attach').onchange = () => drawNotesAttach();
 $('notes-form').onsubmit = async event => {
   event.preventDefault(); const ticket = dialogTickets.get($('notes-dialog'));
   if (!currentDialogTicket(ticket) || $('save-notes').disabled) return;
-  const submitted = $('room-notes-text').value;
+  const submitted = $('room-notes-text').value, attach = $('room-notes-attach').checked;
   $('save-notes').disabled = true; $('notes-error').hidden = true;
   try {
-    await api.spaceAction(ticket.roomId, 'notes', [submitted, notesRevision]);
+    await api.spaceAction(ticket.roomId, 'notes', [submitted, notesRevision, attach]);
     if (!currentDialogTicket(ticket)) toastMessage("toast.notesSavedEarlier");
-    else if ($('room-notes-text').value === submitted) $('notes-dialog').close();
+    else if ($('room-notes-text').value === submitted && $('room-notes-attach').checked === attach) $('notes-dialog').close();
     else {
       // The editor stays editable during Save. Keep newer input, and only
       // rebase its next explicit save if our submitted notes are still current.
       const snapshot = await api.initial();
       if (!currentDialogTicket(ticket)) return;
       const latest = (snapshot?.rooms || (snapshot?.room ? [snapshot.room] : [])).find(room => room.id === ticket.roomId);
-      if (latest?.notes !== submitted || !Number.isSafeInteger(latest.metadataRevision) || latest.metadataRevision < 0) throw uiError('error.room.dataChangedElsewhere');
+      if (latest?.notes !== submitted || (latest.notesToQueue === true) !== attach || !Number.isSafeInteger(latest.metadataRevision) || latest.metadataRevision < 0) throw uiError('error.room.dataChangedElsewhere');
       notesRevision = latest.metadataRevision;
     }
   } catch (error) {
@@ -8008,6 +8024,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
       $('setup-status').replaceChildren(); $('version-info').textContent = '';
     } else if (dialog.id === 'notes-dialog') {
       $('room-notes-text').value = ''; ui.display.unbind($('notes-error')); $('notes-error').textContent = ''; $('notes-error').hidden = true;
+      $('room-notes-attach').checked = false; drawNotesAttach();
     } else if (dialog.id === 'context-dialog') {
       contextTarget = null; contextSnapshot = null;
       $('context-space-choices').replaceChildren(); $('context-spaces').disabled = false;
