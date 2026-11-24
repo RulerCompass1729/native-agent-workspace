@@ -37,10 +37,9 @@
     }
     return out;
   }
-  // The batch is drawn once, on its newest card still waiting; cards run oldest first, so that card holds it to the end.
+  // Started batches retain their first card after it settles, so the group stays in place.
   function holder(batch) {
-    const waiting = batch.cards.filter(card => card.state === 'confirmation-required');
-    return (waiting.length ? waiting : batch.cards).at(-1);
+    return batch.cards[0];
   }
   function find(batches, key) {
     const batch = batches.find(item => item.cards.some(card => card.key === key));

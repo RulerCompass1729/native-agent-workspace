@@ -74,7 +74,7 @@ test('merged cards retain the operation error', async () => {
     assert.equal((await b).state, 'unconfirmed'); assert.deepEqual(f.effects, ['A']);
     const cards = f.cards(), reason = cards.at(-1).message.backgroundOperation.error;
     assert.ok(reason);
-    assert.ok(render(cards, false).shown.includes(reason)); assert.ok(render(cards, true).shown.includes(reason));
+    assert.ok(render([cards.at(-1)], false).shown.includes(reason)); assert.ok(render(cards, true).shown.includes(reason));
   } finally {
     f.release(); await Promise.allSettled([a, b]); await f.cleanup();
   }
@@ -164,6 +164,34 @@ test('partial enqueue failure never unlocks the accepted card or resends it', as
     assert.equal(roleOf(scope).batch.started, false);
     assert.deepEqual(Array.from(roleOf(scope).batch.cards, c => c.operationId), ['B', 'C']);
     assert.deepEqual(calls, ['A', 'B', 'C']);
+  } finally { await f.cleanup(); }
+});
+
+for (const lostResponse of [false, true]) test('a rejected first decision stays anchored while another runs (lost response: ' + lostResponse + ')', async () => {
+  const f = await fixture();
+  try {
+    await f.ask('A'); await f.ask('B');
+    const scope = render(f.cards(), false).sandbox, running = f.cards(), calls = [];
+    running[1].message.backgroundOperation.answer = 'running';
+    running[1].actionable = false;
+    scope.api.backgroundDecision = async (_session, _native, id) => {
+      calls.push(id);
+      if (id === 'A') throw Error('Synthetic pre-enqueue refusal');
+      if (lostResponse) throw Error('Synthetic accepted decision lost its response');
+      return { state: 'running' };
+    };
+    scope.api.initial = async () => ({ backgroundConfirmationsAvailable: true, backgroundConfirmations: running });
+    await submit(scope);
+    scope.state.backgroundConfirmations = running;
+    assert.equal(roleOf(scope)?.anchor, true);
+    assert.deepEqual(Array.from(roleOf(scope).batch.cards, card => card.operationId), ['A', 'B']);
+
+    const ended = f.cards();
+    ended[1] = { ...ended[1], state: 'complete', actionable: false,
+      message: { backgroundOperation: { ...ended[1].message.backgroundOperation, state: 'complete' } } };
+    scope.state.backgroundConfirmations = ended;
+    assert.equal(roleOf(scope), null, 'The unanswered first card is now available to retry');
+    assert.deepEqual(calls, ['A', 'B'], 'Nothing resends the refused operation automatically');
   } finally { await f.cleanup(); }
 });
 
