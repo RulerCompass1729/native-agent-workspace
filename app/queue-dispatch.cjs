@@ -108,6 +108,8 @@ const CREATE_TIMEOUT_MS = 120000;
 const TICK_MS = 3000;
 // Without any state change, look again at least this often.
 const FULL_PASS_MS = 30000;
+// A session due for rotation this long and still not rotated is told to the butler's record (noteRotationStalls).
+const ROTATION_STALL_MS = 60 * 60 * 1000;
 // How long the designated integrator's session must be missing from every pass before it counts as gone.
 const INTEGRATOR_ABSENT_MS = 10 * 60 * 1000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
@@ -829,28 +831,45 @@ function restingSuccessor(record) {
   return Boolean(record) && record.phase === 'kept' && validId(record.successorOf || '') && !trustRecord(record);
 }
 
-// Why a member is due for rotation now: 'content', 'compact', 'memory' or null.
-function rotationReason(session, now, options, rotations) {
+// The rule that keeps a session from rotation however due it is, or null. Each also names the gate a stalled
+// rotation is held at (planDispatch rotationGates).
+function rotationHold(session, options, rotations) {
   const record = rotations[session.id];
-  if (!['claude', 'codex'].includes(session.provider) || (record && !restingSuccessor(record)) || options.blockedRotations?.has(session.id)) {
-    return null;
+  if (record && !restingSuccessor(record)) {
+    return `rotation-${record.phase}`;
+  }
+  if (options.blockedRotations?.has(session.id)) {
+    return 'trust-fault';
   }
   // A decision it asked is still open: the person answers it here. It keeps working and is rotated later.
   if (options.asking && options.asking.has(session.id)) {
-    return null;
+    return 'asking';
   }
   // The person used it while it was being rotated: it waits until it is quiet again (see personDeferred).
   if (options.deferredRotations && options.deferredRotations.has(session.id)) {
-    return null;
+    return 'person-active';
   }
   // A kept old session already has a successor carrying its work; the person ends it when done.
   if (options.handedOff && options.handedOff.has(session.id)) {
-    return null;
+    return 'handed-off';
   }
   // Its model is known nowhere yet (see transcriptModel); the next session in line goes first.
   if (options.waitingModel && options.waitingModel.has(session.id)) {
+    return 'waiting-model';
+  }
+  return null;
+}
+
+// Why a member is due for rotation now: 'content', 'compact', 'memory' or null.
+function rotationReason(session, now, options, rotations) {
+  if (!['claude', 'codex'].includes(session.provider) || rotationHold(session, options, rotations)) {
     return null;
   }
+  return dueReason(session, now, options, rotations[session.id]);
+}
+
+// The reason alone, whatever rotationHold says; `record` is the session's own resting record, if any.
+function dueReason(session, now, options, record) {
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
   if (!record && Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
@@ -1022,6 +1041,24 @@ function planDispatch(input) {
     busy.add(id);
     if (!why.has(id)) why.set(id, reason);
   }
+  // A session due for rotation that this pass leaves as it is, with the first gate that held it (input.rotationGates,
+  // filled when the caller passes a Map). Not one: a session being rotated, rotated by this pass, or handed off.
+  const gates = input.rotationGates instanceof Map ? input.rotationGates : null;
+  function stalled(id, gate) {
+    const session = byId.get(id);
+    if (!gates || gates.has(id) || !gate || gate === 'rotating' || !session || session.archived) {
+      return;
+    }
+    if (!['claude', 'codex'].includes(session.provider) || (input.handedOff && input.handedOff.has(id))) {
+      return;
+    }
+    // A failed attempt leaves the reason it was due for.
+    const record = rotations[id]?.phase === 'failed' ? undefined : rotations[id];
+    const reason = dueReason(session, now, rotationOptions, record);
+    if (reason) {
+      gates.set(id, { gate, reason });
+    }
+  }
   // Sessions the caller says are engaged in something else of NAW's own (B6: the session an open
   // integration handoff was sent to) start out busy: no queued item, no rotation.
   for (const id of Array.isArray(input.engaged) ? input.engaged : []) hold(id, 'integration');
@@ -1172,6 +1209,7 @@ function planDispatch(input) {
       }
       hold(target.id, 'took-item');
       const reason = rotationReason(target, now, rotationOptions, rotations);
+      stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
         actions.push(rotateAction(target.id, reason, rotationOptions));
@@ -1220,17 +1258,27 @@ function planDispatch(input) {
   for (const ids of quietGroups) {
     for (const id of ids) {
       if (busy.has(id)) {
+        stalled(id, why.get(id) || 'busy');
         continue;
       }
       const session = byId.get(id);
       // Ten or thirty quiet minutes already settle the member; the 8-second idle timer is not needed.
-      const ready = sessionReady(session, input.wakePolicy).ready && !humanRecent(id, humanAt, now, humanQuietMs);
+      const readiness = sessionReady(session, input.wakePolicy);
+      const ready = readiness.ready && !humanRecent(id, humanAt, now, humanQuietMs);
       const reason = ready ? rotationReason(session, now, rotationOptions, rotations) : null;
       if (!reason) {
+        if (!readiness.ready) {
+          stalled(id, readiness.reason);
+        } else if (!ready) {
+          stalled(id, 'human-recent');
+        } else {
+          stalled(id, rotationHold(session, rotationOptions, rotations));
+        }
         continue;
       }
       const lastActivity = lastActivityOf(session, now);
       if (lastActivity === null) {
+        stalled(id, 'activity-unknown');
         continue;
       }
       let quiet = quietMs;
@@ -1242,16 +1290,30 @@ function planDispatch(input) {
       if (now - lastActivity < quiet) {
         // Short only of its quiet: the steward wake holds rather than reset it (a butler at 52 compactions, 2026-11-23).
         if (input.quietPending) input.quietPending.set(id, reason);
+        stalled(id, 'quiet');
         continue;
       }
       busy.add(id);
       quietCandidates.push({ sessionId: id, reason, memory: memoryOf(id), start: sessionStart(session, now) });
     }
   }
+  // The butler named by a designation that no longer matches its native session: nothing rotates it as the butler.
+  for (const id of input.unmatched || []) {
+    stalled(id, 'designation-mismatch');
+  }
   // The largest session goes first, then the oldest.
   quietCandidates.sort((a, b) => b.memory - a.memory || a.start - b.start);
   for (const candidate of quietCandidates.slice(0, Math.max(rotationSlots, 0))) {
     actions.push(rotateAction(candidate.sessionId, candidate.reason, rotationOptions));
+  }
+  for (const candidate of quietCandidates.slice(Math.max(rotationSlots, 0))) {
+    if (gates) gates.delete(candidate.sessionId);
+    stalled(candidate.sessionId, 'no-slot');
+  }
+  if (gates) {
+    for (const action of actions) {
+      if (action.kind === 'rotate') gates.delete(action.sessionId);
+    }
   }
   return actions;
 }
@@ -2033,6 +2095,9 @@ class QueueDispatcher {
     this.quietCompactMs = options.quietCompactMs ?? QUIET_COMPACT_MS;
     // Counts each member's own compactions from the native records (compaction-count.cjs); the app turns it on.
     this.compactions = options.compactions || (options.countCompactions === true ? new CompactionCounter() : null);
+    // Told one line per stall and gate (noteRotationStalls); `stalls` holds since when, in memory only.
+    this.rotationStalled = typeof options.rotationStalled === 'function' ? options.rotationStalled : null;
+    this.stalls = new Map();
     this.tickMs = options.tickMs ?? TICK_MS;
     this.transcriptRoot = options.transcriptRoot || claudeProjects();
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
@@ -2820,16 +2885,19 @@ class QueueDispatcher {
     if (await this.finishDeferrals(current.snapshot, current.now)) current = this.view();
     const sample = await this.memory(current.snapshot.sessions, current.now);
     const steward = this.stewardOutside(current.snapshot.sessions);
+    const unmatched = steward ? null : this.stewardUnmatched(current.snapshot.sessions);
     const handedOff = this.handedOff();
-    const compactions = await this.compactionCounts(current.snapshot, steward, handedOff, current.now);
+    const compactions = await this.compactionCounts(current.snapshot, steward || (unmatched && { sessionId: unmatched }), handedOff, current.now);
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
-    const waits = new Map(), quietPending = new Map();
+    const waits = new Map(), quietPending = new Map(), rotationGates = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
       waits,
       quietPending,
+      rotationGates,
+      unmatched: unmatched ? [unmatched] : [],
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
@@ -2867,6 +2935,7 @@ class QueueDispatcher {
         await this.requestHandoff(action, sample.memory.get(action.sessionId), current.snapshot);
       }
     }
+    this.noteRotationStalls(rotationGates, current.snapshot.sessions, current.now);
     // In memory only: the person and the butler read why each queued item is still waiting (queue item 5614a65c).
     if (this.roomState.setQueueWaits(waits)) this.broadcast().catch(() => {});
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
@@ -3099,6 +3168,47 @@ class QueueDispatcher {
     let version = session.runtimeVersion;
     try { version = this.client?.route(session.id)?.state?.runtimeVersion ?? version; } catch { /* The session's own field. */ }
     return releaseBackendOutdated(version) ? 'update-backend' : 'release';
+  }
+
+  // The session the designation names, in no space, when the designation no longer matches its native session
+  // (stewardSession): nothing wakes or rotates it as the butler. Named only for noteRotationStalls.
+  stewardUnmatched(sessions) {
+    if (this.stewardSession(sessions)) return null;
+    let steward = null;
+    try {
+      steward = this.steward();
+    } catch {
+      return null;
+    }
+    const session = steward && validId(steward.sessionId) && sessions.find(s => s.id === steward.sessionId);
+    try {
+      return session && !session.archived && !roomIds(session).length ? session.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Sessions a pass found due for rotation and left as they were (planDispatch rotationGates), an hour or more since
+  // this run first found each so: one line to the butler's record per stall and gate, again only when the gate
+  // changes (the person, 2026-11-23: 「换会话停了要有人知道」). Only told: nothing here rotates or relaxes a gate.
+  noteRotationStalls(gates, sessions, now) {
+    for (const id of [...this.stalls.keys()]) {
+      if (!gates.has(id)) this.stalls.delete(id);
+    }
+    for (const [id, { gate, reason }] of gates) {
+      const nativeId = sessions.find(s => s.id === id)?.nativeId ?? null;
+      let stall = this.stalls.get(id);
+      if (!stall || stall.nativeId !== nativeId) {
+        stall = { since: now, nativeId, told: new Set() };
+        this.stalls.set(id, stall);
+      }
+      const key = `${reason}:${gate}`;
+      if (!this.rotationStalled || now - stall.since < ROTATION_STALL_MS || stall.told.has(key)) continue;
+      try {
+        this.rotationStalled({ memberId: id, nativeId, reason, gate, since: stall.since });
+        stall.told.add(key);
+      } catch { /* Tried again on the next pass; nothing else waits on it. */ }
+    }
   }
 
   // The designated butler when it is this very native session and in no space; anything else names nobody.

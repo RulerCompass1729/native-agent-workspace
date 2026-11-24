@@ -1160,6 +1160,8 @@ async function startQueueDispatcher() {
       quietWindows: quietWindows || undefined,
       // A member whose own conversation was compacted COMPACT_LIMIT times continues in a new session.
       countCompactions: true,
+      // Not yet built: it throws, and the dispatcher tries again on its next pass.
+      rotationStalled: stall => butlerIngress.rotationStalled(stall),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
