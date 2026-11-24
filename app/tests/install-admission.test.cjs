@@ -76,6 +76,7 @@ const stops = [
   ['an unreadable pressure level', { pressure: null }, 'unreadable'],
   ['unreadable compressor segments', { segments: null }, 'unreadable'],
   ['an unreadable segment limit', { segmentLimit: null }, 'unreadable'],
+  ['a segment limit of zero', { segmentLimit: 0 }, 'unreadable'],
   ['unreadable swap use', { swapUsed: null }, 'unreadable'],
   ['an unreadable swap size', { swapTotal: null }, 'unreadable'],
 ];

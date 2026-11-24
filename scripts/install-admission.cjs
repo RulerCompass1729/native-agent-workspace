@@ -46,7 +46,7 @@ function describe(reading) {
 function stopReasons(reading, estimate) {
   const reasons = [];
   const amounts = [reading.freeBytes, reading.swapUsed, reading.swapTotal, reading.segments, reading.segmentLimit];
-  if (!Number.isInteger(reading.pressure) || !amounts.every(Number.isFinite)) {
+  if (!Number.isInteger(reading.pressure) || !amounts.every(Number.isFinite) || !(reading.segmentLimit > 0)) {
     reasons.push({ code: 'unreadable', text: '读不全内存压力、swap、压缩段或磁盘余量，不冒险装' });
     return reasons;
   }
@@ -193,8 +193,9 @@ async function check(o, read = readMachine) {
   const settings = { version: o.version, commit: o.commit, consent: readJson(o.consent), estimate: readJson(o.estimate) };
   const waitMs = Number(o['wait-minutes'] || 0) * 60e3;
   const everyMs = Number(o['every-seconds'] || 30) * 1000;
-  const since = new Date().toISOString();
-  const deadline = Date.now() + waitMs;
+  const started = Date.now();
+  const since = new Date(started).toISOString();
+  const deadline = started + waitMs;
   let result = admit(read(directory), settings);
   let told = null;
   while (result.decision !== 'go' && Date.now() + everyMs <= deadline) {
