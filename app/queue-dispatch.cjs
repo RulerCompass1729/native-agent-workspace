@@ -110,6 +110,10 @@ const COMPACT_LIMIT = 3;
 const QUIET_COMPACT_MS = 2 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
+// The window client refuses a space pause or a member move while NAW replaces one backend (after an install,
+// one backend a minute). Nothing was changed, or the change is found again: the caller asks again later.
+const BACKEND_UPDATING_KEYS = new Set(['error.client.connectionUpdatingNoInput', 'error.client.connectionChangedNoReplay',
+  'error.client.spacePauseUnconfirmed']);
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
 // The old session waits at most this long for running collaborations before it is kept instead.
 const STOP_WAIT_MS = 30 * 60 * 1000;
@@ -4169,8 +4173,15 @@ class QueueDispatcher {
           latest.nativeStartupPrompt.source === 'native-terminal' && latest.nativeStartupPrompt.provider === record.provider) {
         await this.waitForDirectoryTrust(oldId, record, now, latest); return;
       }
-      for (const roomId of record.roomIds) {
-        if (!terminalFirst || !roomIds(latest || {}).includes(roomId)) await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
+      try {
+        for (const roomId of record.roomIds) {
+          if (!terminalFirst || !roomIds(latest || {}).includes(roomId)) await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
+        }
+      } catch (error) {
+        if (!BACKEND_UPDATING_KEYS.has(errorKey(error))) throw error;
+        // The successor and the waiting task stay as they are; a later pass joins (joining again changes nothing).
+        if (now - (record.createdNewAt || now) > NEW_SESSION_READY_MS) throw Error('join-timeout');
+        return;
       }
       if (terminalFirst && (!latest?.nativeId || latest.terminalState?.alive !== true || latest.nativeStartupPrompt || !sessionReady(latest, snapshot.wakePolicy).ready)) {
         // The original member and queued task stay put, even across an
