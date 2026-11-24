@@ -334,7 +334,6 @@ class AgyTui extends EventEmitter {
   }
   syncScreenState(screen) {
     const state = editorState(screen);
-    if (state !== 'blocked') this.trustConfirmSent = false;
     if (state === 'draft' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
     if (state === 'empty' && this.humanInputState === 'editing' && !this.humanInputSettling()) this.humanInputState = 'none';
     this.trustPromptActive = state === 'blocked';
@@ -359,6 +358,7 @@ class AgyTui extends EventEmitter {
     this.terminal = terminal;
     this.promptReady = false;
     this.trustPromptActive = false;
+    this.trustConfirmSent = false;
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;

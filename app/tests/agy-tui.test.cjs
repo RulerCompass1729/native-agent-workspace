@@ -621,9 +621,11 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true, 'accepting trust prompt with Enter + SessionStart restores dispatch after settle');
 
-  // r9 check: Enter followed by Up arrow while the cached trust frame is still shown MUST enter 'unseen' (never admit history recall).
+  // r9/r11 check: Enter followed by a partial redraw (unknown -> blocked) and Up arrow MUST still enter 'unseen' (trustConfirmSent is monotonic per process).
   await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
   ws.input(sessionId, '\r', 'owner-1');
+  await paint(activeTerm, ['']);
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
   ws.input(sessionId, '\x1b[A', 'owner-1');
   const writesAfterTrustUp = activeTerm.writes.length;
   await paint(activeTerm, [
