@@ -40,7 +40,8 @@ function fixture(t, { holdConnect = false, desktop, onHumanInput, pushOptions } 
       }
       assert.ok(['mobileSend', 'mobileAnswer'].includes(method));
       if (holdSend) await new Promise(resolve => { releaseSend = resolve; });
-      const value = { requestId: spec.requestId, sessionId: record.id, nativeId: record.nativeId, action,
+      // tag: the message row, as mobile-session.cjs receipt() returns it; it stays on the desktop side.
+      const value = { requestId: spec.requestId, tag: 'row-' + spec.requestId, sessionId: record.id, nativeId: record.nativeId, action,
         status: action === 'send' ? 'submitted' : 'reply-written', error: null, storageWarning: null };
       receipts.set(spec.requestId, { spec: structuredClone(spec), receipt: value });
       if (action === 'send') sent.push(structuredClone(spec)); else answered.push(structuredClone(spec));
@@ -739,8 +740,11 @@ async function waitingFixture(t) {
 test('phone waiting answer is recorded only after the same bound native input is received', async t => {
   const f = await waitingFixture(t), result = await f.send();
   assert.equal(result.status, 'submitted'); assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting');
+  assert.equal(Object.hasOwn(result, 'tag'), false, 'the row id does not cross to the phone');
   const done = await f.resolve(result.requestId); assert.equal(done.status, 'complete');
   const item = f.room.queueFind('shared', f.itemId); assert.equal(item.status, 'done'); assert.equal(item.answer.text, 'Synthetic explicit answer');
+  // R141② acceptance 5: the item keeps the row the answer was delivered as, for the reply that follows it.
+  assert.equal(item.answerTag, 'row-' + result.requestId);
   assert.equal(f.sent.length, 1);
 });
 test('an unrelated normal send receipt cannot be reused as a waiting answer', async t => {
@@ -759,6 +763,7 @@ test('a lost waiting-answer acknowledgement remains waiting until its original r
   let result = await f.resolve(requestId); assert.equal(result.status, 'not-sent'); assert.equal(f.room.queueFind('shared', f.itemId).status, 'waiting');
   f.loseAck(false); assert.equal((await f.broker.receipt(f.paired.auth, requestId)).status, 'submitted');
   result = await f.resolve(requestId); assert.equal(result.status, 'complete'); assert.equal(f.sent.length, 1);
+  assert.equal(f.room.queueFind('shared', f.itemId).answerTag, 'row-' + requestId, 'the row named by the receipt checked later');
 });
 test('independent handling before the late receipt never reopens or appends an answer', async t => {
   const f = await waitingFixture(t), result = await f.send(); f.room.queueResolve(f.itemId, 'shared');

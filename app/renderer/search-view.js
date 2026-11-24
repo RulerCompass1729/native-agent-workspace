@@ -670,8 +670,8 @@ function followQueueAnswer(entry) {
 async function queueAnswerResolve(entry) {
   entry.resolving = true;
   try {
-    // With the session that received it: the item may name a successor by now.
-    await api.spaceAction(entry.roomId, 'queueResolve', [entry.itemId, entry.follow.text, entry.follow.id]);
+    // With the session that received it (the item may name a successor by now) and the row it was delivered as.
+    await api.spaceAction(entry.roomId, 'queueResolve', [entry.itemId, entry.follow.text, entry.follow.id, entry.follow.tag || entry.follow.mark?.tag || undefined]);
     updateState(await api.initial());
     renderQueue();
   } catch (error) {

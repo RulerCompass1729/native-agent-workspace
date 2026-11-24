@@ -31,6 +31,9 @@ const receipt = (value, ticket, requestId, action) => {
   return { requestId: value.requestId, sessionId: value.sessionId, action: value.action,
     status: value.status, ...(value.status === 'awaiting-native' && value.queued === true ? { queued: true } : {}), error: value.error, storageWarning: value.storageWarning };
 };
+// The session row a send was delivered as (mobile-session.cjs receipt). Kept on this side for the queue answer's
+// proof; the phone's receipt above does not carry it.
+const rowTag = (value, before) => typeof value?.tag === 'string' && value.tag ? value.tag : before;
 
 class MobileBroker {
   #persistence;#endpoint=null;#staging=null;
@@ -660,7 +663,7 @@ class MobileBroker {
             !target || target.roomId !== value.roomId || target.itemId !== value.itemId || target.questionId !== value.questionId) throw Object.assign(denied(), { notSent: true });
         this.#after(auth, entry.ticket, client, epoch);
         return { requestId: value.answerRequestId, sessionId: entry.ticket.sessionId, nativeId: entry.ticket.nativeId,
-          serviceKey: entry.ticket.serviceKey, text: entry.spec.text };
+          serviceKey: entry.ticket.serviceKey, text: entry.spec.text, ...(entry.tag ? { tag: entry.tag } : {}) };
       };
       const result = await this.#desktop.action(client, grant, structuredClone(value), valid, answerProof);
       valid();
@@ -707,7 +710,8 @@ class MobileBroker {
     entry.pending = (async () => {
       try {
         const result = await client.call(action === 'send' ? 'mobileSend' : 'mobileAnswer', ticket, spec);
-        this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, value.requestId, action);
+        this.#after(auth, ticket, client, epoch); entry.result=receipt(result, ticket, value.requestId, action);
+        entry.tag = rowTag(result, entry.tag); return entry.result;
       } catch (error) {
         if (error.uiMessage?.key !== 'error.mobile.receiptLimit') throw error;
         this.#after(auth, ticket, client, epoch);
@@ -731,7 +735,8 @@ class MobileBroker {
     if (!entry) throw denied('MOBILE_RECEIPT_UNKNOWN');
     const { ticket } = this.#grant(auth, entry.ticket.sessionId, entry.action), client = this.#bound(), epoch = this.#epoch;
     const result = await client.call(entry.action === 'send' ? 'mobileSendReceipt' : 'mobileAnswerReceipt', ticket, entry.spec);
-    this.#after(auth, ticket, client, epoch); return entry.result=receipt(result, ticket, requestId, entry.action);
+    this.#after(auth, ticket, client, epoch); entry.result=receipt(result, ticket, requestId, entry.action);
+    entry.tag = rowTag(result, entry.tag); return entry.result;
   }
   logout(auth) {
     // Revocation needs the phone's authority and CSRF, never an online backend.

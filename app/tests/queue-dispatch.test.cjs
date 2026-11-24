@@ -274,6 +274,178 @@ test('an item sent while its member\'s decision is open keeps its own reply and 
   assert.throws(() => rules.validateQueue([item('x', { afterDecision: 'yes' })]), /Invalid/);
 });
 
+// R141② acceptance 5 (the person, 11-23: 「要」; 「否则会影响效率浪费 token」). What a session wrote after the person
+// answered its decision on the card was recorded on no item. The answered item stays handled and keeps the row the
+// answer was delivered as (answerTag) until that reply is read.
+const ANSWERED = [
+  { id: 't1', role: 'user', text: 'NAW task', origin: 'naw-dispatch' },
+  { id: 'r1', role: 'assistant', text: '需要你决定：要不要合并？' },
+  { id: 'h1', role: 'user', text: '合并吧', origin: 'human' },
+  { id: 'r3', role: 'assistant', text: '已合并\nREADY lane/y def5678' },
+];
+function answeredItem(extra = {}) {
+  return sentItem({ status: 'done', finishedAt: NOW - 20000, answer: { text: '合并吧', deliveredAt: NOW - 20000 }, answerTag: 'h1', ...extra });
+}
+
+test('what a session writes after the person answered its decision on the card is recorded on that decision', () => {
+  const rooms = queue => [{ id: 'shared', name: 'Team', queue }];
+  const clear = { kind: 'answered', roomId: 'shared', itemId: '1', sessionId: 'a', tag: 'h1' };
+  const record = { ...clear, reply: '已合并 READY lane/y def5678', ready: { branch: 'lane/y', commit: 'def5678' } };
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED })]), [record]);
+  // Still working on the answer, or nothing written yet: nothing is recorded and the item keeps its mark.
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED, state: 'working' })]), []);
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED.slice(0, 3) })]), []);
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED })], { idleSince: new Map() }), [], 'not before the turn-end report settled');
+  // A turn that failed left no reply of its own.
+  const failed = [...ANSWERED.slice(0, 3), { id: 'r3', role: 'assistant', text: 'partial', nativeId: 'native-a', turnId: 'turn-9' },
+    { id: 'turn-9', kind: 'turn', nativeId: 'native-a', turnId: 'turn-9', status: 'failed' }];
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: failed })]), []);
+  // The session's own machinery (a background task reporting back) is part of the same work.
+  const notified = [...ANSWERED.slice(0, 3), { id: 'n1', role: 'user', text: 'tests finished', origin: 'native', inputSource: 'task-notification' }, ANSWERED[3]];
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: notified })]), [record]);
+  // The next item NAW sent, or another agent's message, starts something else: only what came before it counts.
+  const nextItem = [...ANSWERED, { id: 't2', role: 'user', text: 'NAW task two', origin: 'naw-dispatch' }, { id: 'r4', role: 'assistant', text: '任务二完成\nREADY lane/x abc1234' }];
+  const second = item('2', { status: 'done', sentTo: 'a', sentAt: NOW - 10000, tag: 't2', finishedAt: NOW - 5000 });
+  assert.deepEqual(plan(rooms([answeredItem(), second]), [member('a', { messages: nextItem })]), [record]);
+  const peer = [...ANSWERED, { id: 'w1', role: 'user', text: 'a colleague asks', origin: 'agent-wake' }, { id: 'r5', role: 'assistant', text: '回同事\nREADY lane/z 1234567' }];
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: peer })]), [record]);
+  // Nothing of its own before that, the session gone, the row not the person's, or a day without a reply: the mark
+  // is dropped and the item stays as the person left it. A row this record does not hold yet is waited for.
+  const none = [...ANSWERED.slice(0, 3), nextItem[4], nextItem[5]];
+  assert.deepEqual(plan(rooms([answeredItem(), second]), [member('a', { messages: none })]), [clear]);
+  assert.deepEqual(plan(rooms([answeredItem()]), []), [clear]);
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED, archived: true })]), [clear]);
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: ANSWERED.slice(0, 2) })]), []);
+  // Read only while the session rests: a row queued for a later turn is not yet where it will be.
+  assert.deepEqual(plan(rooms([answeredItem(), second]), [member('a', { messages: nextItem, state: 'working' })]), []);
+  // Another agent's message read inside the turn that works on the answer is part of that turn.
+  const midturn = [...ANSWERED.slice(0, 3), { id: 'w2', role: 'user', text: 'a colleague asks', origin: 'agent-wake', deliveredInto: 'turn-3' }, ANSWERED[3]];
+  assert.deepEqual(plan(rooms([answeredItem()]), [member('a', { messages: midturn })]), [record]);
+  assert.deepEqual(plan(rooms([answeredItem({ answerTag: 't1' })]), [member('a', { messages: ANSWERED })]), [{ ...clear, tag: 't1' }]);
+  const stale = answeredItem({ answer: { text: '合并吧', deliveredAt: NOW - 25 * HOUR } });
+  assert.deepEqual(plan(rooms([stale]), [member('a', { messages: ANSWERED.slice(0, 3) })]), [clear]);
+  assert.deepEqual(plan(rooms([stale]), [member('a', { messages: ANSWERED.slice(0, 3), state: 'working' })]), [clear]);
+  assert.deepEqual(plan(rooms([stale]), [member('a', { messages: ANSWERED.slice(0, 2) })]), [clear]);
+});
+
+test('an answered decision and the item sent while it was open each keep their own reply and READY line', () => {
+  // The 11-13 case above, once the person answered on the card: item 2 keeps what it wrote before the answer, and
+  // the answer's reply, lost until now, goes on item 1.
+  const messages = [
+    ANSWERED[0], ANSWERED[1],
+    { id: 't2', role: 'user', text: 'NAW task two', origin: 'naw-dispatch' },
+    { id: 'r2', role: 'assistant', text: '任务二完成\nREADY lane/x abc1234' },
+    ANSWERED[2], ANSWERED[3],
+  ];
+  const second = item('2', { status: 'sent', sentTo: 'a', sentAt: NOW - 20000, tag: 't2', control: 0, afterDecision: true });
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [answeredItem(), second] }], [member('a', { messages })]), [
+    { kind: 'answered', roomId: 'shared', itemId: '1', sessionId: 'a', tag: 'h1', reply: '已合并 READY lane/y def5678', ready: { branch: 'lane/y', commit: 'def5678' } },
+    { kind: 'settle', roomId: 'shared', itemId: '2', status: 'waiting', reason: 'person-intervened', sessionId: 'a',
+      reply: '任务二完成 READY lane/x abc1234', ready: { branch: 'lane/x', commit: 'abc1234' } },
+  ]);
+});
+
+test('a decision that went to a successor is recorded from the successor; an unanswered one is settled by nobody', () => {
+  // The item names the successor (queueCarry), so the answer went there and its reply is read there.
+  const carried = answeredItem({ sentTo: 'b', sentNative: 'native-b', askedBy: { id: 'a', nativeId: 'native-a' } });
+  const successor = member('b', { messages: [{ id: 'handoff', role: 'user', text: '【NAW 换会话】…', origin: 'naw-dispatch' }, { id: 'ack', role: 'assistant', text: '接手了' }, ANSWERED[2], ANSWERED[3]] });
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [carried] }], [member('a', { messages: ANSWERED, archived: true }), successor]), [
+    { kind: 'answered', roomId: 'shared', itemId: '1', sessionId: 'b', tag: 'h1', reply: '已合并 READY lane/y def5678', ready: { branch: 'lane/y', commit: 'def5678' } },
+  ]);
+  // The person wrote in the session itself and never answered on the card: the decision stays open, as before.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'waiting' })] }], [member('a', { messages: ANSWERED })]), []);
+  // An item the person marked 已处理 without an answer carries no mark: nothing is read for it.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem({ status: 'done' })] }], [member('a', { messages: ANSWERED })]), []);
+});
+
+test('an answer from the card marks the item with its row; the reply read later is added once, with its delivery line', t => {
+  const { dir, room } = roomSetup(t);
+  const asked = (text = '需要你决定：合吗？', ready) => {
+    const id = room.queueAdd('任务', 'a');
+    room.queueMarkSent('shared', id, 'a', 'Agent a', NOW - 60000, false, 'native-a');
+    room.queueSetDelivery('shared', id, 't1', 0);
+    room.queueSettle('shared', id, 'waiting', '', 'Agent a', text, '合吗？', ready);
+    return id;
+  };
+  const deliveries = id => room.value.events.filter(e => e.monitor?.kind === 'ready' && e.monitor.itemId === id).map(e => [e.monitor.key, e.monitor.branch, e.monitor.commit, e.sessionId]);
+  const id = asked();
+  room.queueResolve(id, 'shared', null, '合并吧', 'a', 'h1');
+  let item = room.queueFind('shared', id);
+  assert.deepEqual([item.status, item.answer.text, item.answerTag, item.finishedAt === item.answer.deliveredAt], ['done', '合并吧', 'h1', true], 'handled at once, as before');
+  assert.equal(new RoomState(dir).queueFind('shared', id).answerTag, 'h1', 'kept across a restart');
+  assert.deepEqual(deliveries(id), []);
+  assert.equal(room.queueAnswered('shared', id, 'other-row', 'x'), false, 'another row is not this answer');
+  assert.equal(room.queueFind('shared', id).reply, '需要你决定：合吗？');
+  const ready = { branch: 'lane/y', commit: 'def5678' };
+  assert.equal(room.queueAnswered('shared', id, 'h1', '已合并 READY lane/y def5678', ready), true);
+  item = room.queueFind('shared', id);
+  assert.deepEqual([item.status, item.reply, item.ready, item.answerTag, item.answer.text], ['done', '已合并 READY lane/y def5678', ready, undefined, '合并吧']);
+  assert.deepEqual(deliveries(id), [[`ready:shared:${id}`, 'lane/y', 'def5678', 'a']], 'the delivery is recorded in the space, once');
+  assert.equal(room.queueAnswered('shared', id, 'h1', 'again', { branch: 'lane/q', commit: '7654321' }), false, 'read once');
+  assert.deepEqual([room.queueFind('shared', id).reply, deliveries(id).length], ['已合并 READY lane/y def5678', 1]);
+  // Nothing to read: only the mark goes.
+  const quiet = asked();
+  room.queueResolve(quiet, 'shared', null, '合并吧', 'a', 'h2');
+  assert.equal(room.queueAnswered('shared', quiet, 'h2'), true);
+  item = room.queueFind('shared', quiet);
+  assert.deepEqual([item.status, item.reply, item.ready, item.answerTag], ['done', '需要你决定：合吗？', undefined, undefined]);
+  // A question that carried a delivery line had it recorded when the person handled it: one delivery an item.
+  const first = { branch: 'lane/w', commit: 'aaa1111' };
+  const twice = asked('需要你决定：合吗？ READY lane/w aaa1111', first);
+  room.queueResolve(twice, 'shared', null, '合并吧', 'a', 'h3');
+  assert.equal(deliveries(twice).length, 1);
+  room.queueAnswered('shared', twice, 'h3', '已合并 READY lane/y def5678', ready);
+  item = room.queueFind('shared', twice);
+  assert.deepEqual([item.reply, item.ready, deliveries(twice).length], ['已合并 READY lane/y def5678', first, 1]);
+  // No row named (an older window, or the phone before it learns one): handled as before, with nothing to read.
+  const plain = asked();
+  room.queueResolve(plain, 'shared', null, '合并吧', 'a');
+  assert.equal(room.queueFind('shared', plain).answerTag, undefined);
+  // Received by the session before, after the decision moved: closed once there, and nothing more is read.
+  const moved = asked();
+  room.queueCarry('shared', 'a', 'b', 'native-b');
+  room.queueResolve(moved, 'shared', null, '合并吧', 'a', 'h4');
+  item = room.queueFind('shared', moved);
+  assert.deepEqual([item.status, item.sentTo, item.answerTag], ['done', 'a', undefined]);
+  // The person's 已处理 without an answer names no row either.
+  const handled = asked();
+  room.queueResolve(handled, 'shared', null);
+  assert.equal(room.queueFind('shared', handled).answerTag, undefined);
+  const bad = asked();
+  assert.throws(() => room.queueResolve(bad, 'shared', null, '合并吧', 'a', 'bad\u0001row'), error => error.uiMessage?.key === 'error.queue.invalid');
+  assert.equal(room.queueFind('shared', bad).status, 'waiting', 'a refused answer changes nothing');
+  assert.throws(() => rules.validateQueue([answeredItem({ answerTag: 7 })]), /Invalid/);
+  assert.throws(() => rules.validateQueue([answeredItem({ answerTag: '' })]), /Invalid/);
+});
+
+test('the dispatcher adds the answered session\'s reply and READY line to the decision; the item stays handled', async t => {
+  // The space stamps the answer with the real clock, so the dispatcher reads the same one here.
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a')], { now: () => Date.now() });
+  const id = room.queueAdd('first task', null);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '需要你决定：合吗？');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.equal(room.queueFind('shared', id).status, 'waiting');
+  // The person answers on the card: the text reaches the session as their own message, then the item is handled.
+  const session = client.state.sessions[0];
+  session.messages.push({ id: 'answer-row', role: 'user', text: '合并吧', origin: 'human', status: 'submitted' });
+  session.state = 'working';
+  room.queueResolve(id, 'shared', null, '合并吧', 'a', 'answer-row');
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  let item = room.queueFind('shared', id);
+  assert.deepEqual([item.status, item.reply, item.answerTag], ['done', '需要你决定：合吗？', 'answer-row'], 'handled; nothing to read while the session works');
+  client.reply('a', '已合并\nREADY lane/y def5678');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  item = room.queueFind('shared', id);
+  assert.deepEqual([item.status, item.reply, item.ready, item.answerTag], ['done', '已合并 READY lane/y def5678', { branch: 'lane/y', commit: 'def5678' }, undefined]);
+  assert.deepEqual(room.value.events.filter(e => e.monitor?.kind === 'ready').map(e => [e.monitor.itemId, e.monitor.branch, e.monitor.commit]), [[id, 'lane/y', 'def5678']]);
+  assert.equal(client.sends().length, 1, 'nothing was sent to anyone for it');
+});
+
 test('a decision on an item that was refused once before it went out is still a decision: what follows is marked, and it goes with the session', t => {
   // Since 11-13 the send drops the refusal (queueMarkSent); an item saved by an older build still carries it through
   // the decision's settle (independent review, 11-12). Both are decisions: since 11-23 neither keeps the session.

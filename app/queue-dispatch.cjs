@@ -363,6 +363,10 @@ function validateItem(item) {
       Object.keys(item.answer).length === 2 && validText(item.answer.text, ITEM_TEXT_LIMIT) && validTime(item.answer.deliveredAt))) {
     throw Error('Invalid queue answer');
   }
+  // The row that answer was delivered as, kept until what the session wrote after it is read (queueAnswered).
+  if (item.answerTag !== undefined && !validId(item.answerTag)) {
+    throw Error('Invalid queue answer');
+  }
   // A decision that went with its session to a successor (room-state.cjs queueCarry): who first asked it, and who
   // held it just before the session it points at now.
   for (const key of ['askedBy', 'carriedFrom']) {
@@ -576,6 +580,59 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
       (failedReplies.has(m.turnId) || !m.inputTag || m.inputTag === tag));
   return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
     ...(failedReplies.size && !recovered ? { failedTurnIds: [...failedReplies] } : {}) };
+}
+
+// How long a handled decision keeps the row its answer was delivered as, for what its session writes after it.
+// Then the mark is dropped and the item stays as the person left it.
+const ANSWER_REPLY_KEEP_MS = 24 * 60 * 60 * 1000;
+// Input that starts something of its own in a session: an item or a handoff from NAW, or another agent's message.
+// The session's own machinery (a background task reporting back, a scheduled wake) continues what it was doing, and
+// a message read inside a running turn (deliveredInto) is part of that turn.
+const OTHER_WORK_ORIGINS = ['naw-dispatch', 'agent-wake', 'agent-control', 'room'];
+function startsOtherWork(message) {
+  if (message.deliveredInto) {
+    return false;
+  }
+  if (OTHER_WORK_ORIGINS.includes(message.origin)) {
+    return true;
+  }
+  if (message.origin === 'native') {
+    return message.inputSource === 'naw-peer';
+  }
+  return message.origin === undefined && automaticInput(message);
+}
+
+// What a session wrote after the row the person's answer to its decision was delivered as (item.answerTag), up to
+// the next input that starts something else. found: the row is in this record; own: it is the person's message;
+// closed: other work began after it. Read only while the session rests: a row still waiting for its turn sits
+// where it was queued and moves when the turn starts (workspace.cjs).
+function answeredReply(session, tag) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const index = messages.findIndex(message => message && message.id === tag);
+  if (index < 0) {
+    return { found: false };
+  }
+  if (messages[index].role !== 'user' || automaticInput(messages[index])) {
+    return { found: true, own: false };
+  }
+  const failedTurns = new Set(messages.filter(m => m?.kind === 'turn' && m.nativeId === session.nativeId &&
+    m.status === 'failed' && typeof m.turnId === 'string').map(m => m.turnId));
+  let last = '';
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (!message) {
+      continue;
+    }
+    if (message.role === 'user' && startsOtherWork(message)) {
+      return { found: true, own: true, last, closed: true };
+    }
+    const written = message.role === 'assistant' && (!message.status || message.status === 'complete') &&
+      typeof message.text === 'string' && message.text.trim();
+    if (written && !(message.nativeId === session.nativeId && failedTurns.has(message.turnId))) {
+      last = message.text;
+    }
+  }
+  return { found: true, own: true, last, closed: false };
 }
 
 function memberIds(room, sessions) {
@@ -1103,6 +1160,25 @@ function planDispatch(input) {
         holders.add(holder.id);
         if (decisionsNote(holder.name || holder.id, openDecisions(rooms, holder, spacesOf(holder))).length > DECISIONS_LIMIT) {
           rotationOptions.decisionsStay.add(holder.id);
+        }
+      }
+      if (item.status === 'done' && item.answerTag && !room.archived) {
+        // R141② acceptance 5: the person answered this decision on its card. What its session wrote after the
+        // answer goes on the item, which stays handled; nothing is sent and the member is not held for it.
+        const action = { kind: 'answered', roomId: room.id, itemId: item.id, sessionId: item.sentTo, tag: item.answerTag };
+        const session = byId.get(item.sentTo);
+        const wrote = session && !session.archived ? answeredReply(session, item.answerTag) : null;
+        const rested = session && session.state === 'idle' && !session.pendingTag && settled(session.id, idleSince, now, settleMs);
+        if (!wrote || wrote.found && !wrote.own || now - (item.answer?.deliveredAt || 0) > ANSWER_REPLY_KEEP_MS) {
+          // The session is gone, the row is not the person's, or a day passed: only the mark goes.
+          actions.push(action);
+        } else if (wrote.found && rested) {
+          if (wrote.last.trim()) {
+            const ready = readyLine(wrote.last);
+            actions.push({ ...action, reply: replyLine(wrote.last), ...(ready ? { ready } : {}) });
+          } else if (wrote.closed) {
+            actions.push(action);
+          }
         }
       }
       if (item.status !== 'sent') {
@@ -2716,7 +2792,8 @@ class QueueDispatcher {
         continue;
       }
       for (const item of room.queue) {
-        if (OPEN_STATUSES.includes(item.status)) {
+        // A handled decision whose answer's reply is still to be read (answerTag) keeps the passes going.
+        if (OPEN_STATUSES.includes(item.status) || item.answerTag) {
           return true;
         }
       }
@@ -2947,6 +3024,8 @@ class QueueDispatcher {
       }
       if (action.kind === 'settle') {
         this.settle(action, current.snapshot);
+      } else if (action.kind === 'answered') {
+        this.answered(action);
       } else if (action.kind === 'dispatch') {
         await this.dispatch(action, waits);
       } else if (action.kind === 'rotate') {
@@ -3100,6 +3179,16 @@ class QueueDispatcher {
   // (room-state.cjs queueResolve), and then nothing NAW learns later changes it (11-12, item 2829a073).
   stillSent(roomId, itemId) {
     return this.roomState.queueFind(roomId, itemId).status === 'sent';
+  }
+
+  // What the session wrote after the person's answer from the card, added to that handled decision (room-state.cjs
+  // queueAnswered). A space that cannot be written just now keeps the mark for a later pass.
+  answered(action) {
+    try {
+      if (this.roomState.queueAnswered(action.roomId, action.itemId, action.tag, action.reply || '', action.ready)) {
+        this.broadcast().catch(() => {});
+      }
+    } catch { /* The mark stays. */ }
   }
 
   settle(action, snapshot) {
