@@ -1030,6 +1030,7 @@ function bindClient(context) {
     try { butlerIngress?.observeTerminalDialogs(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeNativeQuestions(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
+    try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [] }); }
     catch { /* Retried on the next state. */ }

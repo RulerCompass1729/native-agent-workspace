@@ -156,11 +156,13 @@ class ButlerIngress {
   constructor(directory, { roomState, ledger = new ButlerLedger(directory), now = Date.now } = {}) {
     if (!roomState || typeof roomState.butlerSources !== 'function') throw unavailable();
     this.roomState = roomState; this.ledger = ledger; this.errors = new Map(); this.terminalDialogs = new Map(); this.nativeQuestions = new Map(); this.recoveryFailures = new Set();
-    this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set(); this.undeliveredWakes = new Set();
+    this.now = now; this.humanSince = now(); this.humanInputs = new Set(); this.controlRefusals = new Set(); this.undeliveredWakes = new Set(); this.unbound = new Set();
     for (const event of ledger.snapshot().events) {
       this.sourceStatus(event);
       if (/^control-refused:[a-f0-9]{64}$/.test(event.eventId)) this.controlRefusals.add(event.eventId);
       if (/^wake-undelivered:[a-f0-9]{64}$/.test(event.eventId)) this.undeliveredWakes.add(event.eventId);
+      if (/^native-unbound:[a-f0-9]{64}$/.test(event.eventId) && event.kind === 'failure' && event.payload?.reason === 'native-unbound' &&
+          event.sourceRef === `native-unbound:${event.payload.memberId}`) this.unbound.add(event.eventId);
       if (event.eventId.startsWith('human-input:') && event.kind === 'blocked' &&
           ['human-message', 'human-message-content-unavailable'].includes(event.payload.reason)) this.humanInputs.add(event.eventId);
       const failure = /^(connection|recovery)-exhausted:([a-f0-9]{64})$/.exec(event.eventId);
@@ -336,6 +338,19 @@ class ButlerIngress {
       payload: { memberId, reason: 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
     this.undeliveredWakes.add(eventId);
     return true;
+  }
+  // A live Claude session got input but its plugin never bound NAW (adapters.cjs watchUnbound): its NAW tools are
+  // refused and its backend sees no turn. One failure event per occurrence, so NAW wakes the butler.
+  observeUnbound(sessions = []) {
+    for (const s of Array.isArray(sessions) ? sessions : []) {
+      const u = s?.nativeUnbound;
+      if (!u || s.archived || typeof s.id !== 'string' || !s.id || typeof s.nativeId !== 'string' || !s.nativeId ||
+          u.nativeId !== s.nativeId || !Number.isSafeInteger(u.at)) continue;
+      const eventId = `native-unbound:${hash([s.id, s.nativeId, u.at])}`;
+      if (this.unbound.has(eventId)) continue;
+      this.record({ eventId, sourceRef: `native-unbound:${s.id}`, kind: 'failure', payload: { memberId: s.id, reason: 'native-unbound' } });
+      this.unbound.add(eventId);
+    }
   }
   // The backend validates the live failed turn; intake never settles or replays its task.
   observeRecoveryFailures(sessions = []) {

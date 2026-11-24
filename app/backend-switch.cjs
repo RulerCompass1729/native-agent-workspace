@@ -9,6 +9,7 @@ const { execFileSync } = require('node:child_process');
 const { connectService } = require('./service-connection.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { parseLock, ownerMayBeAlive, lockIdentity } = require('./service-lock.cjs');
+const qualification = require('./claude-qualification.cjs');
 
 const RECORD = 'backend-switch.json', SETTINGS = 'backend-switch-settings.json';
 const STATE_LABELS = { working: 'error.planWorking', starting: 'error.planStarting', stopping: 'error.planStopping', approval: 'error.planApproval', disconnected: 'error.planDisconnected', error: 'error.planError' };
@@ -241,8 +242,18 @@ async function endedByThisStop(client, session, wait) {
   }
 }
 
+// A resumed Claude root takes its NAW binding from the launch qualification. A check the restarted service is
+// still running would launch it unbound for its whole life (2026-11-23 18:11Z), so its resume waits, bounded.
+async function claudeCheckSettled(file, since, waitMs, pollMs) {
+  const running = () => Object.values(qualification.load(file)).some(r => r?.status === 'checking' && Date.parse(r.at) >= since);
+  const until = Date.now() + waitMs;
+  while (running() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, pollMs));
+  return !running();
+}
+
 async function switchBackend({ dataDir, key, executablePath, expected, ensure, owner, applicationVersion = process.env.NAW_APP_VERSION,
-  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null, settleMs = 10000, pageOwners = () => new Set() }) {
+  sessionState, running = () => new Set(), requireAuto = false, commandLine = psCommand, now = Date.now, guard = null, settleMs = 10000, pageOwners = () => new Set(),
+  checkWaitMs = qualification.WORK_TIMEOUT_MS + qualification.CLEANUP_GRACE_MS, checkPollMs = 1000 }) {
   const directory = path.join(dataDir, key), stopped = [], confirmedByState = [];
   const effective = record => sessionState ? sessionState(record) : record.state;
   // Each session is reconnected as its own owner, so its window keeps control. Only an owner whose window
@@ -263,6 +274,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
     } finally { connection.close(); }
   };
   const keep = list => writeRecord(dataDir, key, { phase: 'stopped', failedAt: now(), sessions: list });
+  let restartedAt = Date.now();
   let client = await connectService(directory, 'backend-switch'), state, plan, pid, identity;
   try {
     state = await client.call('initial');
@@ -335,6 +347,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   }
   // From here on, any failure names every stopped session for the person to continue.
   try {
+    restartedAt = Date.now();
     writeRecord(dataDir, key, { phase: 'restarting', startedAt: now(), sessions: stopped });
     // The service reserves shutdown in the same synchronous dispatch that
     // validates all final identities/control. Never signal past a newer input.
@@ -356,6 +369,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
       })) throw uiError("error.backendSwitchIdentityMismatch");
     } finally { fresh.close(); }
   } catch (error) { client.close(); keep(stopped); throw error; }
+  if (stopped.some(s => s.provider === 'claude')) await claudeCheckSettled(path.join(directory, 'claude-qualification.json'), restartedAt, checkWaitMs, checkPollMs);
   writeRecord(dataDir, key, { phase: 'resuming', startedAt: now(), sessions: stopped });
   const resumed = [], left = [];
   for (const session of stopped) { try { await resumeAs(session, true); resumed.push(session.id); } catch { left.push(session); } }
