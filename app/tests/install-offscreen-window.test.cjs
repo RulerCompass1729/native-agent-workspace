@@ -12,26 +12,31 @@ function pair(before, after) {
   return { pre, post: { ...structuredClone(base), gui: { pid: 101, started: 'after' }, offscreenWindows: after }, expected };
 }
 const row = rows => rows.find(r => r[0].startsWith('offscreen windows outside Electron'));
-test('install keeps one system window outside Electron when the count is unchanged', () => {
-  for (const before of [unproven, proven]) {
-    const { pre, post, expected } = pair(before, proven);
-    assert.equal(row(gate.compare(pre, post, expected))[3], true);
-  }
-  const { pre, post, expected } = pair([], []);
-  assert.equal(row(gate.compare(pre, post, expected))[3], true);
-});
-test('a changed count, an old GUI after install, or no row at all refuses', () => {
-  for (const [name, before, after] of [['one appears after install', [], proven], ['old snapshot without the field', undefined, proven],
-    ['one disappears after install', unproven, []], ['post GUI without the Electron list', unproven, unproven]]) {
+test('after install, none or one window outside Electron with the v4 proof passes, whatever was there before', () => {
+  for (const [name, before, after] of [['none before, one after (the 288 case)', [], proven], ['one before, one after', unproven, proven],
+    ['proven before and after', proven, proven], ['none before or after', [], []], ['one disappears after install', unproven, []],
+    ['old snapshot without the field', undefined, proven]]) {
     const { pre, post, expected } = pair(before, after);
-    assert.equal(row(gate.compare(pre, post, expected))[3], false, name);
+    assert.equal(row(gate.compare(pre, post, expected))[3], true, name);
   }
+});
+test('after install, a window without the v4 proof refuses', () => {
+  for (const before of [[], unproven, proven, undefined]) {
+    const { pre, post, expected } = pair(before, unproven);
+    assert.equal(row(gate.compare(pre, post, expected))[3], false, JSON.stringify(before));
+  }
+});
+test('after install, two windows outside Electron refuse', async () => {
+  const { pre, post, expected } = pair([], [...proven, ...proven]); let calls = 0;
+  assert.throws(() => gate.compare(pre, post, expected), /frame 口径待核实/);
+  await assert.rejects(gate.post(pre, () => post, expected, async () => calls++, { minimumMs: 0, quietMs: 0 }), /frame 口径待核实/);
+  assert.equal(calls, 0);
 });
 test('post fails on the offscreen row before running the worker gate', async () => {
-  const { pre, post, expected } = pair([], proven); let calls = 0;
+  const { pre, post, expected } = pair([], unproven); let calls = 0;
   const result = await gate.post(pre, () => post, expected, async () => calls++, { minimumMs: 0, quietMs: 0 });
   assert.equal(result.ok, false); assert.equal(calls, 0);
-  post.offscreenWindows = []; assert.equal((await gate.post(pre, () => post, expected, async () => calls++, { minimumMs: 0, quietMs: 0 })).ok, true);
+  post.offscreenWindows = proven; assert.equal((await gate.post(pre, () => post, expected, async () => calls++, { minimumMs: 0, quietMs: 0 })).ok, true);
 });
 test('offscreen rows are strict: at most one, a known basis and a real rectangle', () => {
   assert.deepEqual(gate.offscreenInference(proven), proven);

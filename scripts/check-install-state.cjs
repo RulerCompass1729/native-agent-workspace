@@ -297,8 +297,10 @@ function compare(before, after, expected) {
     ['active backend closure', 'release-matching version / complete runtime hash', after.backend.version + ' / ' + (after.backend.runtimeHash || 'unconfirmed'), after.backend.version === expected.version && closureMatches && after.backend.evidence === 'active-key+live-lock+runtime-source'],
     ['DSH runtime', 'qualified inheritance or proved donor recovery', dshNotice, inherited || restored],
     ['inferred menu windows (geometry only, not provenance)', JSON.stringify(inferredBefore), JSON.stringify(inferredAfter), JSON.stringify(inferredBefore) === JSON.stringify(inferredAfter)],
-    ['offscreen windows outside Electron (count unchanged, max 1)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
-      offscreenAfter.length === offscreenBefore.length && offscreenAfter.every(w => w.basis === 'outside-electron')],
+    // Not compared with before: an outside window can change shape after start (287's 1071, 11-23).
+    // Windows NAW forgot to register are caught by the v4 Electron list instead.
+    ['offscreen windows outside Electron (max 1, v4 proof after install)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
+      offscreenAfter.length <= 1 && offscreenAfter.every(w => w.basis === 'outside-electron')],
   ];
 }
 async function post(before, collect, expected, gate, options) {
