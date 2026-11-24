@@ -488,6 +488,17 @@ function sessionReady(session, wakePolicy) {
   return { ready: true, reason: '' };
 }
 
+// While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
+// each of its own turns). busy stays not-idle: a delivery, approval or question in flight belongs to the turn.
+function heldReason(session, wakePolicy) {
+  const reason = sessionReady(session, wakePolicy).reason;
+  if (reason !== 'not-idle') {
+    return reason;
+  }
+  const after = sessionReady({ ...session, state: 'idle' }, wakePolicy).reason;
+  return after && after !== 'busy' ? after : reason;
+}
+
 function settled(sessionId, idleSince, now, settleMs) {
   const since = idleSince.get(sessionId);
   return Number.isFinite(since) && now - since >= settleMs;
@@ -3067,7 +3078,7 @@ class QueueDispatcher {
       const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
-      if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(sessionReady(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy).reason || 'not-settled');
+      if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(heldReason(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
       if (quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
