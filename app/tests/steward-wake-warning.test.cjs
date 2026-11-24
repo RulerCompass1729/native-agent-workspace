@@ -6,8 +6,9 @@ const locale = require('../ui-locale.js'), messages = require('../ui-messages.js
 
 test('the wake chip persists, follows state and language, and opens the existing log from its detail', () => {
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('  // A saved full-page records view', start);
-  const p = { textContent: '' }, button = { textContent: '' }, text = { textContent: '' }, step = { hidden: true }, summary = { setAttribute(k, v) { this[k] = v; } };
-  const parts = { p, summary, '.wake-chip-text': text, '.steward-wake-step': step, '.steward-wake-record': button }, box = { hidden: true, open: false, querySelector: tag => parts[tag] };
+  const p = { textContent: '' }, button = { textContent: '' }, step = { hidden: true }, summary = { setAttribute(k, v) { this[k] = v; } };
+  const text = { textContent: '', setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; } };
+  const parts = { p, summary, '.wake-chip-text': text, '.steward-wake-step': step, '.steward-wake-record': button }, box = { hidden: true, open: false, dataset: {}, querySelector: tag => parts[tag] };
   let opens = 0;
   const context = vm.createContext({ state: {}, rendering: false, disconnected: false, $: () => box, stewardSteps: { open: () => { opens++; } }, uiText: (k, v) => locale.format('zh', k, v) });
   vm.runInContext(source.slice(start, end) + '\n}', context);
@@ -19,6 +20,7 @@ test('the wake chip persists, follows state and language, and opens the existing
     const reason = locale.format(language, 'stewardWake.reason.source-unavailable');
     assert.equal(box.hidden, false);
     assert.equal(text.textContent, locale.format(language, 'stewardWake.chip', { minutes: 12 }));
+    assert.equal(text.role, 'status', 'an ordinary reason stays a live status');
     assert.ok(summary['aria-label'].includes(reason) && /12/u.test(summary['aria-label']));
     assert.ok(p.textContent.includes(reason));
     assert.equal(button.textContent, locale.format(language, 'stewardWake.openRecord'));
