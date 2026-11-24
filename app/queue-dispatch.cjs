@@ -1240,6 +1240,8 @@ function planDispatch(input) {
         quiet = quietCompactMs;
       }
       if (now - lastActivity < quiet) {
+        // Short only of its quiet: the steward wake holds rather than reset it (a butler at 52 compactions, 2026-11-23).
+        if (input.quietPending) input.quietPending.set(id, reason);
         continue;
       }
       busy.add(id);
@@ -2823,10 +2825,11 @@ class QueueDispatcher {
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
-    const waits = new Map();
+    const waits = new Map(), quietPending = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
       waits,
+      quietPending,
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
@@ -2872,7 +2875,7 @@ class QueueDispatcher {
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
       actions, engaged, handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
-    if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged);
+    if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged, quietPending);
     if ((this.answerNotices || this.versionNotices) && !this.closed) await this.notifyAnswers(current, engaged);
   }
 
@@ -2884,7 +2887,9 @@ class QueueDispatcher {
   // left the butler at work, which the fresh read below sees.
   // With no event waiting, a patrol (steward-wake.cjs patrol) goes through the same checks once the butler has been
   // idle for its interval while work is unfinished; an event goes first.
-  async wakeSteward(current, holding) {
+  // `quietPending`: what the plan found short only of its quiet. A wake then would restart the butler's 2 quiet minutes
+  // before its compaction rotation, so it waits for the rotation, which the successor's wake follows.
+  async wakeSteward(current, holding, quietPending) {
     try {
       // The butler's own handoff holds every wake, the patrol's included, until the person's step.
       const own = this.ownHandoffStep(current.snapshot.sessions);
@@ -2899,6 +2904,7 @@ class QueueDispatcher {
       if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(sessionReady(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy).reason || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
+      if (quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
       const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why);
       if (!fresh) return skip(why.reason || 'state-unavailable');
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
