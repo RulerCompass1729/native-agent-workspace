@@ -85,6 +85,19 @@ test('local page evidence contains only stable native IDs, unique across all cat
   page.isDestroyed = () => true;
   assert.throws(() => windowFrames([main], [page]));
 });
+test('v4 lists every live Electron window and requires each registered window to be one of them', () => {
+  const { windowFrames } = require('../window-frames.cjs');
+  const main = context(), page = context('unused', 3).win, stray = context('unused', 1071).win, closed = { isDestroyed: () => true };
+  const proof = windowFrames([main], [page], [main.win, page, stray, closed]);
+  assert.deepEqual(proof, { ...windowFrames([main], [page]), electronWindowIds: [1, 3, 1071] });
+  assert.equal(windowFrames([main], [page]).electronWindowIds, undefined);
+  for (const list of [[page], [main.win], [main.win, page, main.win]]) assert.throws(() => windowFrames([main], [page], list));
+  let calls = 0;
+  const changing = context('unused', 9).win; changing.getMediaSourceId = () => `window:${++calls + 8}:0`;
+  assert.throws(() => windowFrames([main], [page], [main.win, page, changing]));
+  const bad = context('unused', 9).win; bad.getMediaSourceId = () => 'screen:9:0';
+  assert.throws(() => windowFrames([main], [page], [main.win, page, bad]));
+});
 async function request(file, change = {}) {
   const d = JSON.parse(fs.readFileSync(file));
   return new Promise((resolve, reject) => {
@@ -131,6 +144,34 @@ test('existing authenticated GUI socket provides fresh frame metadata without co
   assert.equal(refused.failureReason, 'operation-unconfirmed');
   assert.equal(refused.localPageWindowIds, undefined);
 });
+test('broker answers v4 with the Electron window list; v1 and v3 replies stay unchanged', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'install-frame-owner-')); fs.chmodSync(root, 0o700);
+  const calls = [], no = () => { throw Error('No action or AX may run'); };
+  let unavailable = false;
+  const broker = await createOutboxBroker({ descriptorFile: path.join(root, 'owner.json'), bind: no, createView: no,
+    control: no, acquireAccessibility: no, windowFrames: (includeLocalPages, includeElectron) => {
+      calls.push([includeLocalPages, includeElectron]);
+      if (unavailable) throw Error('fixture capture failed');
+      return { windows: [{ id: 1, owner: 'synthetic-owner', frame }], hiddenBackgroundWindows: [], localPageWindowIds: [3],
+        ...(includeElectron ? { electronWindowIds: [1, 3] } : {}) };
+    } });
+  t.after(async () => { await broker.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const v1 = await request(broker.descriptorFile), v3 = await request(broker.descriptorFile, { kind: 'window-frames-v3' });
+  const v4 = await request(broker.descriptorFile, { kind: 'window-frames-v4' });
+  assert.deepEqual([v1.version, v3.version, v4.version], [1, 3, 4]);
+  assert.deepEqual({ ...v4, capturedAt: v3.capturedAt }, { ...v3, version: 4, electronWindowIds: [1, 3] });
+  assert.equal(v3.electronWindowIds, undefined); assert.equal(v1.electronWindowIds, undefined);
+  assert.deepEqual(calls, [[false, false], [true, false], [true, true]]);
+  for (const bad of [{ capability: '0'.repeat(64) }, { nonce: 'bad' }, { extra: true }])
+    assert.equal((await request(broker.descriptorFile, { ...bad, kind: 'window-frames-v4' })).basis, undefined);
+  for (const kind of ['__proto__', 'constructor', 'toString', 'hasOwnProperty'])
+    assert.equal((await request(broker.descriptorFile, { kind })).basis, undefined, kind);
+  assert.equal(calls.length, 3, 'invalid v4 requests and inherited kind names cannot read the window getter');
+  unavailable = true;
+  const refused = await request(broker.descriptorFile, { kind: 'window-frames-v4' });
+  assert.equal(refused.failureReason, 'operation-unconfirmed', 'a current GUI that cannot capture must not look like an old one');
+  assert.equal(refused.electronWindowIds, undefined);
+});
 function rows() { return [{ pid: 424242, id: 1, owner: 'synthetic-owner', onScreen: true,
   bounds: { x: 297, y: 168, width: 1867, height: 1022 }, frame: { ...frame }, frameBasis: 'electron-getbounds-v1' }]; }
 test('G oracle: CG is false, matching Electron frame true, real 2px displacement false', () => {
@@ -151,7 +192,7 @@ test('public GUI frame bridge refuses stale, foreign, malformed and changing ide
 });
 test('Main wires only its managed contexts and packages the public getter module', () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
-  assert.match(source, /windowFrames: includeLocalPages => require\('\.\/window-frames\.cjs'\)\.windowFrames\(\s*windows\.values\(\), includeLocalPages \? localPages\?\.windows\(\) \?\? \[\] : undefined\)/);
+  assert.match(source, /windowFrames: \(includeLocalPages, includeElectron\) => require\('\.\/window-frames\.cjs'\)\.windowFrames\(\s*windows\.values\(\), includeLocalPages \? localPages\?\.windows\(\) \?\? \[\] : undefined,\s*includeElectron \? BrowserWindow\.getAllWindows\(\) : undefined\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '../../scripts/package-mac.cjs'), 'utf8'), /'window-frames\.cjs'/);
 });
 test('real kernel peer PID mismatch receives no capability bytes', async t => {

@@ -5694,12 +5694,11 @@ function renderStewardWakeWarning(wakeBlock) {
   if (!wakeBlock) { chip.open = false; return; }
   const reason = uiText(`stewardWake.reason.${wakeBlock.reason}`);
   // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
-  const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId), name = butler?.name || butler?.id;
-  const action = name ? uiText('queue.releaseRotation', { name }) : '';
+  const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId);
   const own = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release';
   const item = !own ? null : wakeBlock.step === 'release' ? rotationReleaseAction(butler)[0] : backendUpdateAction(butler)[0];
-  const text = item ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
-    : own ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
+  // Names no menu item: the step's button shows only when its menu has it (289 #4, the two can disagree).
+  const text = own ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
     : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason });
   const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
   const full = undelivered ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;

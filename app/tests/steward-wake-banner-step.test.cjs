@@ -92,7 +92,9 @@ test('no step without its menu item, none while disconnected, and none for a rec
       const b = banner(language);
       b.show(record, block);
       assert.equal(b.step.hidden, true, name);
-      assert.ok(b.p.textContent.startsWith(say(`stewardWake.ownHandoff.${block.step}`, { minutes: 7, action: record ? say('queue.releaseRotation', { name: 'Synthetic butler' }) : say('stewardWake.ownHandoff.action'), update: say('menu.updateThisBackend') })), `${name}: ${b.p.textContent}`);
+      // 289 #4: no menu item to point at, so the text names none (it said 「…」 for an item the menu does not show).
+      assert.ok(b.p.textContent.startsWith(say(`stewardWake.ownHandoffButton.${block.step}`, { minutes: 7 })), `${name}: ${b.p.textContent}`);
+      for (const label of [say('queue.releaseRotation', { name: 'Synthetic butler' }), say('menu.updateThisBackend')]) assert.ok(!b.p.textContent.includes(label), `${name}: ${b.p.textContent}`);
       await b.click();
       assert.deepEqual(b.calls, [], name);
     }

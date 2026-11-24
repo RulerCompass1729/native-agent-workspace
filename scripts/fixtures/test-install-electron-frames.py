@@ -109,16 +109,24 @@ class Frames(unittest.TestCase):
                 m.validate(dict(value(), version=3, localPageWindowIds=ids), PID, STARTED, NONCE, 1001, PROFILE, 3)
 
     def test_legacy_fallback_uses_new_nonce_and_requires_exact_old_refusal(self):
-        def exchange(_desc, pid, kind, nonce):
-            if kind == 'window-frames-v3':
-                return dict(m.LEGACY_UNSUPPORTED)
-            return dict(value(), nonce=nonce)
-        with patch.object(m, 'descriptor', return_value=({}, PROFILE)), patch.object(m.time, 'time', return_value=1.001), \
-                patch.object(m, 'exchange', side_effect=exchange) as calls:
-            self.assertEqual(m.request('/synthetic', PID, STARTED)['windows'][1]['owner'], 'synthetic-owner')
-            a, b = (call.args for call in calls.call_args_list)
-            self.assertEqual([a[2], b[2]], ['window-frames-v3', 'window-frames'])
-            self.assertNotEqual(a[3], b[3])
+        for answers, kinds in [(4, ['window-frames-v4']), (3, ['window-frames-v4', 'window-frames-v3']),
+                               (1, ['window-frames-v4', 'window-frames-v3', 'window-frames'])]:
+            def exchange(_desc, pid, kind, nonce, answers=answers):
+                version = {'window-frames-v4': 4, 'window-frames-v3': 3, 'window-frames': 1}[kind]
+                if version > answers:
+                    return dict(m.LEGACY_UNSUPPORTED)
+                extra = dict(localPageWindowIds=[]) if version >= 3 else {}
+                if version == 4:
+                    extra['electronWindowIds'] = [1]
+                return dict(value(), version=version, nonce=nonce, **extra)
+            with self.subTest(answers=answers), patch.object(m, 'descriptor', return_value=({}, PROFILE)), \
+                    patch.object(m.time, 'time', return_value=1.001), patch.object(m, 'exchange', side_effect=exchange) as calls:
+                proof = m.request('/synthetic', PID, STARTED)
+                self.assertEqual(proof['windows'][1]['owner'], 'synthetic-owner')
+                self.assertEqual('electronWindowIds' in proof, answers == 4)
+                sent = [call.args for call in calls.call_args_list]
+                self.assertEqual([a[2] for a in sent], kinds)
+                self.assertEqual(len({a[3] for a in sent}), len(sent))
         for response in [dict(m.LEGACY_UNSUPPORTED, failureReason='operation-unconfirmed'), dict(m.LEGACY_UNSUPPORTED, retry=0), value()]:
             with patch.object(m, 'descriptor', return_value=({}, PROFILE)), patch.object(m, 'exchange', return_value=response) as call:
                 with self.assertRaises(ValueError):
@@ -169,6 +177,91 @@ class Frames(unittest.TestCase):
             def fileno(self):return 17
         with patch.object(m.C, 'CDLL', return_value=Library()), self.assertRaises(ValueError):
             m.peer(Socket(), PID)
+
+
+# CG rows recorded when 287's strict post refused window 1071 (18:14:55Z; layer-0 rows only, as install-windows.js returns them).
+DISPLAY = dict(id=1, bounds=dict(x=0, y=0, width=2560, height=1440), menuBarHeight=30)
+MAIN, BACKGROUND, SYSTEM = 1068, (1115, 1120), 1071
+SYSTEM_BOX = dict(x=0, y=940, width=500, height=500)
+
+
+def cg_287(extra=(), system=True):
+    rows = [dict(pid=PID, id=MAIN, onScreen=True, bounds=dict(x=263, y=173, width=1904, height=1042), layer=0)]
+    rows += [dict(pid=PID, id=n, onScreen=False, bounds=dict(x=660, y=295, width=1240, height=850), layer=0) for n in BACKGROUND]
+    rows += [dict(pid=PID, id=n, onScreen=False, bounds=dict(x=0, y=0, width=2560, height=30), layer=0) for n in range(1064, 1068)]
+    if system:
+        rows.append(dict(pid=PID, id=SYSTEM, onScreen=False, bounds=dict(SYSTEM_BOX), layer=0))
+    return dict(windows=rows + [dict(r) for r in extra], displays=[dict(DISPLAY)])
+
+
+def proof_287(version=4, electron=(MAIN,) + BACKGROUND):
+    data = dict(value(), version=version, windows=[dict(id=MAIN, owner='synthetic-owner', frame=dict(FRAME))],
+                hiddenBackgroundWindows=[dict(id=n, owner='background-' + str(n), frame=dict(FRAME)) for n in BACKGROUND])
+    if version >= 3:
+        data['localPageWindowIds'] = []
+    if version == 4:
+        data['electronWindowIds'] = list(electron)
+    return m.validate(data, PID, STARTED, NONCE, 1001, PROFILE, version)
+
+
+def collect(samples, proof):
+    samples = iter(samples)
+    return m.collect(PID, '/synthetic', STARTED, sample=lambda _: next(samples), frames=lambda *_: proof)
+
+
+class FramesV4(unittest.TestCase):
+    def test_system_window_1071_outside_electron_is_recorded_not_refused(self):
+        result = collect([cg_287(), cg_287()], proof_287())
+        self.assertEqual([w['id'] for w in result['windows']], [MAIN])
+        self.assertEqual(result['offscreenWindows'], [dict(bounds=SYSTEM_BOX, basis='outside-electron')])
+        self.assertEqual([g['count'] for g in result['inferredMenuWindows']], [4])
+        self.assertEqual(collect([cg_287(system=False)] * 2, proof_287())['offscreenWindows'], [])
+
+    def test_unregistered_or_unstable_windows_are_still_refused(self):
+        same_size = dict(pid=PID, id=1072, onScreen=False, bounds=dict(SYSTEM_BOX), layer=0)
+        visible = cg_287(); visible['windows'][-1]['onScreen'] = True
+        moved = cg_287(); moved['windows'][-1]['bounds'] = dict(SYSTEM_BOX, x=1)
+        cases = {
+            'same size, hidden, but Electron lists it': ([cg_287()] * 2, proof_287(electron=(MAIN,) + BACKGROUND + (SYSTEM,))),
+            'Electron menu-bar-shaped window NAW did not register': ([cg_287()] * 2, proof_287(electron=(MAIN,) + BACKGROUND + (1064,))),
+            'unknown window on screen': ([visible] * 2, proof_287()),
+            'appears between samples': ([cg_287(system=False), cg_287()], proof_287()),
+            'disappears between samples': ([cg_287(), cg_287(system=False)], proof_287()),
+            'moves between samples': ([cg_287(), moved], proof_287()),
+            'a second window outside Electron': ([cg_287([same_size])] * 2, proof_287()),
+        }
+        for name, (samples, proof) in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                collect(samples, proof)
+
+    def test_electron_list_is_strict_and_covers_every_registered_window(self):
+        for electron in [(MAIN,), (MAIN, BACKGROUND[0]), (MAIN,) + BACKGROUND + (MAIN,), (MAIN, True) + BACKGROUND, None, (0,)]:
+            with self.subTest(electron=electron), self.assertRaises(ValueError):
+                data = dict(value(), version=4, localPageWindowIds=[], electronWindowIds=electron if electron is None else list(electron),
+                            windows=[dict(id=MAIN, owner='synthetic-owner', frame=dict(FRAME))],
+                            hiddenBackgroundWindows=[dict(id=n, owner='background-' + str(n), frame=dict(FRAME)) for n in BACKGROUND])
+                m.validate(data, PID, STARTED, NONCE, 1001, PROFILE, 4)
+        with self.assertRaises(ValueError):
+            m.validate(dict(value(), version=4, localPageWindowIds=[7], electronWindowIds=[1]), PID, STARTED, NONCE, 1001, PROFILE, 4)
+        self.assertEqual(m.validate(dict(value(), version=4, localPageWindowIds=[7], electronWindowIds=[7, 1]), PID, STARTED, NONCE, 1001, PROFILE, 4)['electronWindowIds'], [7, 1])
+
+    def test_menu_band_and_missing_display_metadata_give_no_offscreen_exemption(self):
+        near_menu = cg_287(system=False)
+        near_menu['windows'][3]['bounds'] = dict(x=0, y=0, width=2559, height=30)
+        no_height = cg_287()
+        no_height['windows'] = [r for r in no_height['windows'] if r['id'] not in range(1064, 1068)]
+        no_height['displays'][0]['menuBarHeight'] = None
+        for name, sample in [('one pixel narrower than the menu bar', near_menu), ('menu height unavailable', no_height)]:
+            with self.subTest(name), self.assertRaises(ValueError):
+                collect([sample] * 2, proof_287())
+
+    def test_old_gui_without_electron_list_records_the_window_as_unproven(self):
+        for version in [1, 3]:
+            with self.subTest(version=version):
+                result = collect([cg_287()] * 2, proof_287(version))
+                self.assertEqual(result['offscreenWindows'], [dict(bounds=SYSTEM_BOX, basis='unproven')])
+                with self.assertRaises(ValueError):
+                    collect([cg_287([dict(pid=PID, id=1072, onScreen=False, bounds=dict(SYSTEM_BOX), layer=0)])] * 2, proof_287(version))
 
 
 if __name__ == '__main__':
