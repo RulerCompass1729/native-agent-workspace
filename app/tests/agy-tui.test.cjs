@@ -7,13 +7,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 
-const { AgyTui, launchSpec, prepareBridge, readFinalReply, validConversationId } = require('../agy-tui.cjs');
+const { AgyTui, launchSpec, prepareBridge, resolveSessionTranscript, readFinalReply, validConversationId } = require('../agy-tui.cjs');
 const { NativeHost } = require('../adapters.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { nativeEnvironment, pythonExecutable } = require('../platform.cjs');
 const operation = require('../background-operation.cjs');
+
+const sha256 = v => createHash('sha256').update(String(v), 'utf8').digest('hex');
 
 class SyntheticTerminal extends EventEmitter {
   constructor(argv, cwd, env) {
@@ -62,13 +64,13 @@ test('launchSpec keeps default model and effort, honors bridgeDir, skipPermissio
   assert.throws(() => launchSpec({ record: {}, binary: 'agy' }), e => e.uiMessage?.key === 'error.nativeRuntimeMissing');
 });
 
-test('prepareBridge writes per-session plugin files and readFinalReply respects minStep', t => {
+test('prepareBridge writes separate MCP token + PreToolUse/PostToolUse matchers; transcript checks bind realpath to session', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-bridge-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bridgeDir = prepareBridge({
     privateDir: dir,
     sessionId: 'sess-1',
-    token: 'tok-abc',
+    mcpToken: 'mcp-tok-abc',
     hookSocket: '/tmp/hooks.sock',
     pythonBinary: '/usr/bin/python3',
     execPath: '/usr/local/bin/node',
@@ -77,37 +79,63 @@ test('prepareBridge writes per-session plugin files and readFinalReply respects 
   const pluginDir = path.join(bridgeDir, '.agents', 'plugins', 'naw');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8')), { name: 'naw' });
   const hooks = JSON.parse(fs.readFileSync(path.join(pluginDir, 'hooks.json'), 'utf8'));
-  assert.deepEqual(Object.keys(hooks['naw-lifecycle']), ['SessionStart', 'PreInvocation', 'PostInvocation', 'Stop']);
+  assert.deepEqual(Object.keys(hooks['naw-lifecycle']), ['SessionStart', 'PreInvocation', 'PostInvocation', 'PreToolUse', 'PostToolUse', 'Stop']);
+  assert.equal(hooks['naw-lifecycle'].PreToolUse[0].matcher, '^.*workspace_message$');
+  assert.equal(hooks['naw-lifecycle'].PostToolUse[0].matcher, '^.*workspace_message$');
   const mcp = JSON.parse(fs.readFileSync(path.join(pluginDir, 'mcp_config.json'), 'utf8'));
-  assert.equal(mcp.mcpServers.workspace.env.NAW_MESSAGE_TOKEN, 'tok-abc');
+  assert.equal(mcp.mcpServers.workspace.env.NAW_MESSAGE_TOKEN, 'mcp-tok-abc');
   assert.ok(mcp.mcpServers.workspace.args.includes('--agy'));
 
-  const transcript = path.join(dir, 'transcript.jsonl');
-  fs.writeFileSync(transcript, [
+  // Transcript must resolve inside brainRoot/<nativeId>/ and end with transcript.jsonl; symlinks to other sessions fail.
+  const brainRoot = path.join(dir, 'brain');
+  const ownId = randomUUID(), otherId = randomUUID();
+  const ownLogs = path.join(brainRoot, ownId, '.system_generated', 'logs');
+  const otherLogs = path.join(brainRoot, otherId, '.system_generated', 'logs');
+  fs.mkdirSync(ownLogs, { recursive: true });
+  fs.mkdirSync(otherLogs, { recursive: true });
+  const ownTranscript = path.join(ownLogs, 'transcript.jsonl');
+  const otherTranscript = path.join(otherLogs, 'transcript.jsonl');
+  fs.writeFileSync(ownTranscript, [
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 3, content: 'old turn reply' }),
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 10, content: 'calling tool', tool_calls: [{ name: 'read_file' }] }),
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 12, content: 'done\nREADY lane/test 1234567' }),
   ].join('\n') + '\n');
-  assert.equal(readFinalReply(transcript, 10), 'done\nREADY lane/test 1234567');
-  assert.equal(readFinalReply(transcript, 13), '', 'never returns an earlier turn reply');
+  fs.writeFileSync(otherTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 12, content: 'OTHER SESSION SECRET' }) + '\n');
+
+  // Symlinked parent directory escaping to another conversation must be rejected.
+  const evilParent = path.join(brainRoot, ownId, 'evil-link');
+  fs.symlinkSync(otherLogs, evilParent);
+  const escapedPath = path.join(evilParent, 'transcript.jsonl');
+
+  assert.ok(resolveSessionTranscript(ownTranscript, ownId, brainRoot));
+  assert.equal(resolveSessionTranscript(otherTranscript, ownId, brainRoot), null);
+  assert.equal(resolveSessionTranscript(escapedPath, ownId, brainRoot), null);
+  assert.equal(readFinalReply(ownTranscript, 10, ownId, brainRoot), 'done\nREADY lane/test 1234567');
+  assert.equal(readFinalReply(ownTranscript, 13, ownId, brainRoot), '', 'never returns an earlier turn reply');
+  assert.equal(readFinalReply(otherTranscript, 0, ownId, brainRoot), '', 'never reads another session transcript');
+  assert.equal(readFinalReply(escapedPath, 0, ownId, brainRoot), '', 'never follows symlinked parent to another session');
 });
 
-test('Workspace creates agy as terminal-only, delivers send() via PTY+hooks, records READY reply and resumes', async t => {
+test('Workspace creates agy as terminal-only, enforces claim=terminal, delivers atomic send() after readiness, guards Stop/transcripts, and resumes', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-tui-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const privateDir = path.join(dir, 'private');
+  const brainRoot = path.join(dir, 'brain');
   fs.mkdirSync(privateDir, { mode: 0o700 });
+  fs.mkdirSync(brainRoot, { mode: 0o700 });
   const launched = [];
   const hookTargets = new Map();
+  const agyMcpTargets = new Map();
   const host = {
     privateDir,
     binaries: { agy: '/synthetic/bin/agy', python: '/synthetic/bin/python3' },
     hookSocket: path.join(privateDir, 'hooks.sock'),
     hookTargets,
+    agyMcpTargets,
     create(record) {
-      return new AgyTui(record, host, {
-        enterDelayMs: 0,
+      const rt = new AgyTui(record, host, {
         sendTimeoutMs: 500,
+        brainRoot,
         Terminal: class extends SyntheticTerminal {
           constructor(argv, cwd, env) {
             super(argv, cwd, env);
@@ -115,18 +143,14 @@ test('Workspace creates agy as terminal-only, delivers send() via PTY+hooks, rec
           }
         },
       });
+      const prevStart = rt.start.bind(rt);
+      rt.start = async () => {
+        await prevStart();
+        launched[launched.length - 1].runtime = rt;
+      };
+      return rt;
     },
     close() {},
-  };
-  const origCreate = host.create;
-  host.create = record => {
-    const rt = origCreate(record);
-    const prevStart = rt.start.bind(rt);
-    rt.start = async () => {
-      await prevStart();
-      launched[launched.length - 1].runtime = rt;
-    };
-    return rt;
   };
   const ws = new Workspace(host, dir);
   t.after(async () => { await ws.close(); });
@@ -137,68 +161,122 @@ test('Workspace creates agy as terminal-only, delivers send() via PTY+hooks, rec
   assert.equal(record.view, 'terminal');
   assert.equal(record.name, 'Antigravity 1');
   assert.equal(record.skipPermissions, true);
-  assert.equal(launched.length, 1);
+
+  // Finding 6: claim() enforces terminal-only after creation too.
+  ws.claim(sessionId, 'owner-1', 'chat');
+  assert.equal(record.view, 'terminal');
 
   const first = launched[0];
-  assert.ok(first.runtime.bridgeDir && fs.existsSync(first.runtime.bridgeDir));
-  assert.ok(first.terminal.argv.includes('--add-dir'));
-  assert.ok(first.terminal.argv.includes('--dangerously-skip-permissions'));
+  assert.notEqual(first.runtime.token, first.runtime.mcpToken, 'hook and MCP tokens are separate');
+  assert.equal(first.terminal.env.NAW_HOOK_TOKEN, first.runtime.token);
+  assert.equal(first.terminal.env.NAW_MESSAGE_TOKEN, undefined, 'MCP token is never placed in child env');
   assert.equal(hookTargets.get(first.runtime.token), first.runtime);
+  assert.equal(agyMcpTargets.get(first.runtime.mcpToken), first.runtime);
 
+  // Finding 4: before prompt readiness, chatAvailable is false and send() refuses without writing.
   first.terminal.emit('started', 42420);
   assert.equal(record.state, 'idle');
+  assert.equal(first.runtime.chatAvailable, false);
+  await assert.rejects(first.runtime.send('too early', 'tag-early', () => true), e => e.notSent === true);
+  assert.equal(first.terminal.writes.length, 0);
+
+  // Trust prompt keeps chatAvailable false; ? for shortcuts marks prompt ready.
+  first.terminal.emit('data', { data: 'Do you trust the contents of this project?' });
+  assert.equal(first.runtime.chatAvailable, false);
+  first.terminal.emit('data', { data: '? for shortcuts' });
   assert.equal(first.runtime.chatAvailable, true);
   assert.equal(first.runtime.addressedSendAvailable, true);
-  assert.match(record.nativeId, /^naw-agy:/);
+
+  // Finding 4: human native terminal typing sets terminalInputPending and blocks automated send() before writing any byte.
+  ws.input(sessionId, 'human draft', 'owner-1');
+  assert.equal(record.terminalInputPending, true);
+  const writesBeforeBlocked = first.terminal.writes.length;
+  await assert.rejects(first.runtime.send('auto task', 'tag-blocked', () => true), e => e.notSent === true);
+  assert.equal(first.terminal.writes.length, writesBeforeBlocked, 'zero bytes written when human draft is pending');
+  record.terminalInputPending = false;
 
   const realId = randomUUID();
+  const otherId = randomUUID();
+  const ownTranscript = path.join(brainRoot, realId, 'transcript.jsonl');
+  const otherTranscript = path.join(brainRoot, otherId, 'transcript.jsonl');
+  fs.mkdirSync(path.dirname(ownTranscript), { recursive: true });
+  fs.mkdirSync(path.dirname(otherTranscript), { recursive: true });
+  fs.writeFileSync(ownTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, content: 'stale' }) + '\n');
+  fs.writeFileSync(otherTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 8, content: 'OTHER CONVO' }) + '\n');
+
   first.runtime.hook({ hookEventName: 'SessionStart', conversationId: realId, modelName: 'Gemini 4 Neon (High)' });
   assert.equal(record.nativeId, realId);
   assert.equal(record.model, 'Gemini 4 Neon (High)');
 
-  const transcript = path.join(dir, 'transcript.jsonl');
-  fs.writeFileSync(transcript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, content: 'stale' }) + '\n');
-
+  // Atomic bracketed-paste + Enter single write.
   const sendPromise = ws.send(sessionId, 'Run task now', 'owner-1');
-  assert.equal(first.terminal.writes[0], '\x1b[200~Run task now\x1b[201~');
-  assert.equal(first.terminal.writes[1], '\r');
+  assert.equal(first.terminal.writes.at(-1), '\x1b[200~Run task now\x1b[201~\r');
 
-  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 5, transcriptPath: transcript });
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 5, transcriptPath: ownTranscript });
   await sendPromise;
   assert.equal(record.state, 'working');
   const turnId = first.runtime.turnId;
   assert.ok(turnId);
 
-  // Second model invocation inside the same turn preserves the exact same turnId.
-  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 2, initialNumSteps: 7, transcriptPath: transcript });
+  // Second model invocation inside same turn keeps the same turnId.
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 2, initialNumSteps: 7, transcriptPath: ownTranscript });
   assert.equal(first.runtime.turnId, turnId);
 
-  // Background task still running keeps session working.
-  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'NO_TOOL_CALL', fullyIdle: false, transcriptPath: transcript });
+  // NO_TOOL_CALL with fullyIdle: false keeps session working.
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'NO_TOOL_CALL', fullyIdle: false, transcriptPath: ownTranscript });
   assert.equal(record.state, 'working');
   assert.equal(first.runtime.turnId, turnId);
 
-  fs.appendFileSync(transcript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 8, content: 'All checks pass.\nREADY lane/agy-demo 89abcdef' }) + '\n');
-  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: transcript });
+  // Finding 3: Stop attempting to override transcriptPath with another conversation's transcript imports nothing.
+  fs.appendFileSync(ownTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 8, content: 'All checks pass.\nREADY lane/agy-demo 89abcdef' }) + '\n');
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: otherTranscript });
   assert.equal(record.state, 'idle');
-  assert.equal(first.runtime.turnId, null);
+  assert.equal(record.messages.some(m => m.role === 'assistant' && m.text.includes('OTHER CONVO')), false);
+
+  // Normal matching transcript succeeds and records READY reply.
+  const send2 = ws.send(sessionId, 'Second task', 'owner-1');
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 8, transcriptPath: ownTranscript });
+  await send2;
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: ownTranscript });
+  assert.equal(record.state, 'idle');
   const assistant = record.messages.find(m => m.role === 'assistant');
   assert.ok(assistant);
   assert.match(assistant.text, /READY lane\/agy-demo 89abcdef/);
-  assert.equal(assistant.nativeId, realId);
-  assert.equal(assistant.turnId, turnId);
+
+  // Finding 5: USER_CANCELED with fullyIdle: false still closes the turn and never blocks future sends.
+  const endStatuses = [];
+  first.runtime.on('nativeTurnEnd', info => endStatuses.push(info.status));
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 9 });
+  assert.ok(first.runtime.turnId);
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'USER_CANCELED', fullyIdle: false });
+  assert.equal(first.runtime.turnId, null);
+  assert.equal(record.state, 'idle');
+  assert.equal(endStatuses.at(-1), 'interrupted');
+
+  // Finding 5: missing or unknown terminationReason never completes as success (emits incomplete, never releases staged wakes).
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 10 });
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'MAX_INVOCATIONS', fullyIdle: true });
+  assert.equal(first.runtime.turnId, null);
+  assert.equal(endStatuses.at(-1), 'incomplete');
+
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 11 });
+  first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, fullyIdle: true });
+  assert.equal(first.runtime.turnId, null);
+  assert.equal(endStatuses.at(-1), 'incomplete');
 
   // Error stop transitions to error.
-  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 9 });
+  first.runtime.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 12 });
   first.runtime.hook({ hookEventName: 'Stop', conversationId: realId, terminationReason: 'ERROR', fullyIdle: true });
   assert.equal(record.state, 'error');
+  assert.equal(endStatuses.at(-1), 'failed');
 
   const bridgeBeforeStop = first.runtime.bridgeDir;
   await first.terminal.stop();
   assert.equal(record.state, 'ended');
-  assert.equal(record.nativeId, realId, 'real Antigravity conversationId survives exit for resume');
+  assert.equal(record.nativeId, realId);
   assert.equal(hookTargets.has(first.runtime.token), false);
-  assert.equal(fs.existsSync(bridgeBeforeStop), false, 'per-session bridge directory is cleaned up on exit');
+  assert.equal(agyMcpTargets.has(first.runtime.mcpToken), false);
+  assert.equal(fs.existsSync(bridgeBeforeStop), false);
 
   ws.persist();
   const reloaded = new Workspace(host, dir);
@@ -209,24 +287,24 @@ test('Workspace creates agy as terminal-only, delivers send() via PTY+hooks, rec
   assert.equal(launched.length, 2);
   assert.ok(launched[1].terminal.argv.includes('--conversation'));
   assert.ok(launched[1].terminal.argv.includes(realId));
-  assert.ok(launched[1].terminal.argv.includes('--dangerously-skip-permissions'));
 });
 
-test('send() rejects cleanly when PreInvocation never confirms or guard expires', async t => {
+test('send() rejects cleanly on expired guard, timeout and strips ESC atomically', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-timeout-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const term = new SyntheticTerminal(['/bin/agy'], dir, {});
-  const rt = new AgyTui({ id: 's1', provider: 'agy', cwd: dir }, { hookSocket: '/tmp/h.sock', hookTargets: new Map() }, { sendTimeoutMs: 40, enterDelayMs: 0 });
+  const rt = new AgyTui({ id: 's1', provider: 'agy', cwd: dir }, { hookSocket: '/tmp/h.sock', hookTargets: new Map(), agyMcpTargets: new Map() }, { sendTimeoutMs: 40 });
   rt.attach(term);
   term.emit('started', 12345);
+  term.emit('data', { data: '? for shortcuts' });
   await assert.rejects(rt.send('hello', 'tag-1', () => false), e => e.uiMessage?.key === 'error.workspace.handoffExpired');
   assert.equal(term.writes.length, 0);
   await assert.rejects(rt.send('esc \x1b[31mtest', 'tag-2', () => true), e => e.uiMessage?.key === 'error.nativeSendUnavailable');
-  assert.equal(term.writes[0], '\x1b[200~esc [31mtest\x1b[201~', 'ESC is stripped before bracketed paste');
-  assert.equal(term.writes[1], '\r');
+  assert.equal(term.writes.length, 1, 'atomic single paste+Enter write');
+  assert.equal(term.writes[0], '\x1b[200~esc [31mtest\x1b[201~\r');
 });
 
-test('real NativeHost + claude-message-tool.cjs --agy authenticates per-session token and stages workspace_message', async t => {
+test('Finding 2: real NativeHost + claude-message-tool.cjs --agy enforces separate mcpToken and PreToolUse call-origin proof', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-mcp-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const privateDir = path.join(dir, 'priv');
@@ -241,12 +319,14 @@ test('real NativeHost + claude-message-tool.cjs --agy authenticates per-session 
   const rt = new AgyTui(record, host, { Terminal: SyntheticTerminal });
   rt.bridgeDir = privateDir;
   host.hookTargets.set(rt.token, rt);
+  host.agyMcpTargets.set(rt.mcpToken, rt);
   rt.attach(term);
   term.emit('started', 33333);
+  term.emit('data', { data: '? for shortcuts' });
 
   const calls = [];
   rt.addressedCall = async (identity, args) => {
-    calls.push({ nativeId: identity.nativeId, turnId: identity.turnId, valid: identity.valid(), args });
+    calls.push({ nativeId: identity.nativeId, turnId: identity.turnId, callId: identity.callId, valid: identity.valid(), args });
     return { status: 'staged', id: 'wake-1', message: 'staged' };
   };
 
@@ -256,18 +336,16 @@ test('real NativeHost + claude-message-tool.cjs --agy authenticates per-session 
       env: { ...process.env, NAW_MESSAGE_SOCKET: host.hookSocket, NAW_MESSAGE_TOKEN: token },
     });
     try {
-      const responses = [];
       let buf = '';
       child.stdout.setEncoding('utf8');
       const waitResp = id => new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(Error('MCP timeout')), 5000);
+        const timer = setTimeout(() => reject(Error('MCP timeout')), 6000);
         const onData = chunk => {
           buf += chunk;
           for (let at; (at = buf.indexOf('\n')) >= 0;) {
             const line = buf.slice(0, at); buf = buf.slice(at + 1);
             if (!line.trim()) continue;
             const msg = JSON.parse(line);
-            responses.push(msg);
             if (msg.id === id) { clearTimeout(timer); child.stdout.off('data', onData); resolve(msg); return; }
           }
         };
@@ -282,28 +360,50 @@ test('real NativeHost + claude-message-tool.cjs --agy authenticates per-session 
     }
   };
 
-  const listed = await rpcCall(rt.token, 'tools/list', {});
+  const listed = await rpcCall(rt.mcpToken, 'tools/list', {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name), ['workspace_message']);
 
-  // Idle session (no live turn) must be refused.
-  const idleRefusal = await rpcCall(rt.token, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hi' } });
-  assert.equal(idleRefusal.result.isError, true);
-  assert.equal(calls.length, 0);
-
-  // Start a turn, then wrong token must still be refused.
+  // Start a live turn.
   rt.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 1 });
-  const badToken = await rpcCall('wrong-token', 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hi' } });
-  assert.equal(badToken.result.isError, true);
+
+  // Shell hook token must NOT be accepted for MCP staging.
+  const hookTokenRefusal = await rpcCall(rt.token, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hello peer' } });
+  assert.equal(hookTokenRefusal.result.isError, true);
   assert.equal(calls.length, 0);
 
-  // Valid per-session token during live turn stages with authoritative runtime identity.
-  const ok = await rpcCall(rt.token, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hello peer' } });
+  // Even with mcpToken, calling without a matching PreToolUse proof fails.
+  const noProofRefusal = await rpcCall(rt.mcpToken, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'unproven' } });
+  assert.equal(noProofRefusal.result.isError, true);
+  assert.equal(calls.length, 0);
+
+  // Register real native PreToolUse proof, then MCP call succeeds with that exact native callId.
+  rt.hook({
+    hookEventName: 'PreToolUse',
+    conversationId: realId,
+    toolCallId: 'toolu_agy_01',
+    toolName: 'naw_workspace__workspace_message',
+    recipientId: 'peer-1',
+    messageHash: sha256('hello peer'),
+  });
+  const ok = await rpcCall(rt.mcpToken, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hello peer' } });
   assert.equal(ok.result.isError, false);
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].callId, 'toolu_agy_01');
   assert.equal(calls[0].nativeId, realId);
   assert.equal(calls[0].turnId, rt.turnId);
   assert.equal(calls[0].valid, true);
-  assert.deepEqual(calls[0].args, { recipient_id: 'peer-1', message: 'hello peer' });
+
+  // Replay of the same call without a new PreToolUse proof must be refused.
+  const replay = await rpcCall(rt.mcpToken, 'tools/call', { name: 'workspace_message', arguments: { recipient_id: 'peer-1', message: 'hello peer' } });
+  assert.equal(replay.result.isError, true);
+  assert.equal(calls.length, 1);
+});
+
+test('Finding 1: renderer resets auto-checked skipPermissions when switching away from Antigravity to Claude/Codex', () => {
+  const text = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  assert.match(text, /let agyAutoSkip = false;/);
+  assert.match(text, /else if \(input\.checked && agyAutoSkip\)/);
+  assert.match(text, /const agyTerminalOnly = s\?\.provider === 'agy';/);
 });
 
 test('unhooked agy session clears temporary identity on exit and reload', async t => {
@@ -313,6 +413,7 @@ test('unhooked agy session clears temporary identity on exit and reload', async 
   const host = {
     binaries: { agy: '/synthetic/bin/agy', python: '/synthetic/bin/python3' },
     hookTargets: new Map(),
+    agyMcpTargets: new Map(),
     create(record) {
       return new AgyTui(record, host, {
         Terminal: class extends SyntheticTerminal {
@@ -376,7 +477,7 @@ test('background-operation summarizes agy create as terminal-only', () => {
   assert.equal(summary.createKey, sameView.createKey);
 });
 
-test('agy_hook.py is a no-op outside NAW and forwards only metadata inside NAW', async t => {
+test('agy_hook.py is a no-op outside NAW and forwards metadata + hashed PreToolUse proof inside NAW', async t => {
   const python = pythonExecutable();
   assert.ok(python, 'python3 required');
   const script = path.join(__dirname, '../agy_hook.py');
@@ -400,40 +501,46 @@ test('agy_hook.py is a no-op outside NAW and forwards only metadata inside NAW',
   t.after(() => server.close());
 
   const convId = randomUUID();
-  const payload = JSON.stringify({
-    hookEventName: 'Stop',
-    conversationId: convId,
-    modelName: 'Gemini 4 Neon (High)',
-    terminationReason: 'ERROR',
-    fullyIdle: true,
-    stepIdx: 7,
-    invocationNum: 2,
-    initialNumSteps: 5,
-    transcriptPath: '/tmp/synthetic-transcript.jsonl',
-    error: 'private error body',
-    lastUserInput: 'SECRET_PROMPT_BODY',
-    toolCall: { name: 'run_command', args: { CommandLine: 'SECRET_CMD' } },
-  });
-  const out = execFileSync(python, [script], {
-    input: payload,
+  const preOut = execFileSync(python, [script], {
+    input: JSON.stringify({
+      hookEventName: 'PreToolUse',
+      conversationId: convId,
+      toolCall: { id: 'toolu_77', name: 'naw_workspace__workspace_message', args: { recipient_id: 'peer-9', message: 'SECRET_MSG' } },
+      lastUserInput: 'SECRET_PROMPT_BODY',
+    }),
     encoding: 'utf8',
     env: { ...envClean, NAW_HOOK_TOKEN: 'hook-secret', NAW_HOOK_SOCKET: sock },
   });
-  assert.deepEqual(JSON.parse(out), {});
+  assert.deepEqual(JSON.parse(preOut), { decision: 'allow' });
+
+  const stopOut = execFileSync(python, [script], {
+    input: JSON.stringify({
+      hookEventName: 'Stop',
+      conversationId: convId,
+      modelName: 'Gemini 4 Neon (High)',
+      terminationReason: 'ERROR',
+      fullyIdle: true,
+      stepIdx: 7,
+      invocationNum: 2,
+      initialNumSteps: 5,
+      transcriptPath: '/tmp/synthetic-transcript.jsonl',
+      error: 'private error body',
+      lastUserInput: 'SECRET_PROMPT_BODY',
+    }),
+    encoding: 'utf8',
+    env: { ...envClean, NAW_HOOK_TOKEN: 'hook-secret', NAW_HOOK_SOCKET: sock },
+  });
+  assert.deepEqual(JSON.parse(stopOut), {});
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(received.length, 1);
+  assert.equal(received.length, 2);
   assert.deepEqual(received[0], {
-    hookEventName: 'Stop',
+    hookEventName: 'PreToolUse',
     conversationId: convId,
-    modelName: 'Gemini 4 Neon (High)',
-    terminationReason: 'ERROR',
-    fullyIdle: true,
-    stepIdx: 7,
-    invocationNum: 2,
-    initialNumSteps: 5,
-    transcriptPath: '/tmp/synthetic-transcript.jsonl',
-    hasError: true,
+    toolCallId: 'toolu_77',
+    toolName: 'naw_workspace__workspace_message',
+    recipientId: 'peer-9',
+    messageHash: sha256('SECRET_MSG'),
     token: 'hook-secret',
   });
-  assert.doesNotMatch(JSON.stringify(received[0]), /SECRET_PROMPT_BODY|SECRET_CMD|private error body/);
+  assert.doesNotMatch(JSON.stringify(received), /SECRET_PROMPT_BODY|SECRET_MSG|private error body/);
 });

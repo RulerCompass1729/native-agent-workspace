@@ -1396,6 +1396,7 @@ class Workspace extends EventEmitter {
   claim(id, owner, view = 'chat', roomId, free = false) {
     const s = this.get(id);
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
+    if (s.provider === 'agy') view = 'terminal';
     // Taking a session no open window holds is not a takeover: nothing is paused and no queued input is revoked.
     const heldOpen = s.owner !== owner && s.owner !== null && !this.pagelessOwners.has(s.owner);
     if (free && heldOpen) return false;

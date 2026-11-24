@@ -1,10 +1,11 @@
 'use strict';
 // Antigravity CLI (`agy`) TUI session run in NAW's PTY.
-// Starts in terminal view; wires per-session hooks and native_workspace MCP via --add-dir
-// so NAW queue dispatch, @ mentions and workspace_message work without touching global config.
+// Terminal-only in UI; wires per-session hooks + native_workspace MCP via --add-dir
+// with separate hook/MCP tokens, PreToolUse call-origin proof and session-bound transcripts.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { randomBytes, randomUUID } = require('node:crypto');
+const { createHash, randomBytes, randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { uiError, uiActivity } = require('./ui-errors.cjs');
 
@@ -13,29 +14,42 @@ const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]() -]{0,119}$/;
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
-const DEFAULT_ENTER_DELAY_MS = 50;
+const MCP_PROOF_WAIT_MS = 2500;
+const DEFAULT_BRAIN_ROOT = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+const WORKSPACE_MESSAGE_MATCHER = '^.*workspace_message$';
 
 function validConversationId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function sha256Hex(value) {
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
-function prepareBridge({ privateDir, sessionId, token, hookSocket, pythonBinary, execPath = process.execPath, appDir = __dirname }) {
-  if (!privateDir || !sessionId || !token || !hookSocket || !pythonBinary) return null;
+function stripAnsi(raw) {
+  return String(raw || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ' ');
+}
+
+function prepareBridge({ privateDir, sessionId, mcpToken, hookSocket, pythonBinary, execPath = process.execPath, appDir = __dirname }) {
+  if (!privateDir || !sessionId || !mcpToken || !hookSocket || !pythonBinary) return null;
   const bridgeDir = path.join(privateDir, `agy-bridge-${sessionId}`);
   const pluginDir = path.join(bridgeDir, '.agents', 'plugins', 'naw');
   fs.mkdirSync(pluginDir, { recursive: true, mode: 0o700 });
   const hookCommand = `${shellQuote(pythonBinary)} ${shellQuote(path.join(appDir, 'agy_hook.py'))}`;
   const flatHook = [{ type: 'command', command: hookCommand, timeout: 5 }];
+  const toolHook = [{ matcher: WORKSPACE_MESSAGE_MATCHER, hooks: flatHook }];
   fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({ name: 'naw' }) + '\n', { mode: 0o600 });
   fs.writeFileSync(path.join(pluginDir, 'hooks.json'), JSON.stringify({
     'naw-lifecycle': {
       SessionStart: flatHook,
       PreInvocation: flatHook,
       PostInvocation: flatHook,
+      PreToolUse: toolHook,
+      PostToolUse: toolHook,
       Stop: flatHook,
     },
   }) + '\n', { mode: 0o600 });
@@ -47,7 +61,7 @@ function prepareBridge({ privateDir, sessionId, token, hookSocket, pythonBinary,
         env: {
           ELECTRON_RUN_AS_NODE: '1',
           NAW_MESSAGE_SOCKET: hookSocket,
-          NAW_MESSAGE_TOKEN: token,
+          NAW_MESSAGE_TOKEN: mcpToken,
         },
       },
     },
@@ -55,12 +69,27 @@ function prepareBridge({ privateDir, sessionId, token, hookSocket, pythonBinary,
   return bridgeDir;
 }
 
-function readFinalReply(transcriptPath, minStep = 0) {
-  if (typeof transcriptPath !== 'string' || !path.isAbsolute(transcriptPath)) return '';
+function resolveSessionTranscript(transcriptPath, nativeId, brainRoot = DEFAULT_BRAIN_ROOT) {
+  if (!validConversationId(nativeId) || typeof transcriptPath !== 'string' || !path.isAbsolute(transcriptPath)) return null;
   try {
-    const stat = fs.lstatSync(transcriptPath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSCRIPT_BYTES) return '';
-    const lines = fs.readFileSync(transcriptPath, 'utf8').split('\n');
+    const realRoot = fs.realpathSync(brainRoot);
+    const sessionRoot = path.join(realRoot, nativeId);
+    const realFile = fs.realpathSync(transcriptPath);
+    if (!realFile.startsWith(sessionRoot + path.sep) || path.basename(realFile) !== 'transcript.jsonl') return null;
+    const stat = fs.lstatSync(realFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSCRIPT_BYTES) return null;
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) return null;
+    return realFile;
+  } catch {
+    return null;
+  }
+}
+
+function readFinalReply(transcriptPath, minStep = 0, nativeId = null, brainRoot = DEFAULT_BRAIN_ROOT) {
+  const safePath = resolveSessionTranscript(transcriptPath, nativeId, brainRoot);
+  if (!safePath) return '';
+  try {
+    const lines = fs.readFileSync(safePath, 'utf8').split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -105,21 +134,26 @@ function launchSpec({ record, binary, bridgeDir = null, hookToken = null, hookSo
 
 class AgyTui extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
-  constructor(record, host, { Terminal, sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS, enterDelayMs = DEFAULT_ENTER_DELAY_MS } = {}) {
+  constructor(record, host, { Terminal, sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS, brainRoot = DEFAULT_BRAIN_ROOT } = {}) {
     super();
     this.record = record;
     this.host = host;
     this.Terminal = Terminal;
     this.sendTimeoutMs = sendTimeoutMs;
-    this.enterDelayMs = enterDelayMs;
+    this.brainRoot = brainRoot;
     this.terminal = null;
     this.bridgeDir = null;
     this.stopped = false;
+    this.promptReady = false;
+    this.trustPromptActive = false;
     this.chatAvailable = false;
     this.addressedSendAvailable = false;
     this.liveTurn = null;
     this.pendingSend = null;
+    this.mcpCalls = new Map();
+    // Separate per-session secrets: hookToken is in the child env; mcpToken is written only to mcp_config.json.
     this.token = randomBytes(32).toString('hex');
+    this.mcpToken = randomBytes(32).toString('hex');
   }
   cleanupBridge() {
     const dir = this.bridgeDir;
@@ -128,13 +162,29 @@ class AgyTui extends EventEmitter {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort. */ }
     }
   }
+  clearTokens() {
+    this.host.hookTargets?.delete(this.token);
+    this.host.agyMcpTargets?.delete(this.mcpToken);
+  }
+  syncCapabilities() {
+    const canSend = Boolean(!this.stopped && this.terminal?.alive && this.host.hookSocket && this.promptReady && !this.trustPromptActive);
+    const canAddress = Boolean(!this.stopped && this.terminal?.alive && this.bridgeDir);
+    if (canSend !== this.chatAvailable || canAddress !== this.addressedSendAvailable) {
+      this.chatAvailable = canSend;
+      this.addressedSendAvailable = canAddress;
+      this.emit('capability');
+    }
+  }
   rejectPendingSend(error) {
     const pending = this.pendingSend;
     if (!pending) return;
     this.pendingSend = null;
     clearTimeout(pending.timer);
-    clearTimeout(pending.enterTimer);
     pending.reject(error);
+  }
+  closeTurnMcpCalls() {
+    for (const entry of this.mcpCalls.values()) entry.active = false;
+    this.mcpCalls.clear();
   }
   async start() {
     const binary = this.host.binaries?.agy;
@@ -143,7 +193,7 @@ class AgyTui extends EventEmitter {
       this.bridgeDir = prepareBridge({
         privateDir: this.host.privateDir,
         sessionId: this.record.id,
-        token: this.token,
+        mcpToken: this.mcpToken,
         hookSocket: this.host.hookSocket,
         pythonBinary: this.host.binaries.python,
       });
@@ -156,37 +206,59 @@ class AgyTui extends EventEmitter {
       hookSocket: this.host.hookSocket || null,
     });
     this.host.hookTargets?.set(this.token, this);
+    if (this.bridgeDir) this.host.agyMcpTargets?.set(this.mcpToken, this);
     try {
       this.attach(new this.Terminal(spec.argv, this.record.cwd, spec.env));
     } catch (error) {
-      this.host.hookTargets?.delete(this.token);
+      this.clearTokens();
       this.cleanupBridge();
       throw error;
     }
   }
+  observeTerminalText(text) {
+    if (!text) return;
+    if (text.includes('Do you trust the contents of this project?')) {
+      this.trustPromptActive = true;
+      this.promptReady = false;
+      this.syncCapabilities();
+      return;
+    }
+    if (text.includes('? for shortcuts')) {
+      this.trustPromptActive = false;
+      this.promptReady = true;
+      this.syncCapabilities();
+    }
+  }
   attach(terminal) {
     this.terminal = terminal;
+    this.promptReady = false;
+    this.trustPromptActive = false;
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
-    terminal.on('data', event => this.emit('terminal', event));
+    terminal.on('data', event => {
+      if (this.terminal !== terminal) return;
+      if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
+      this.emit('terminal', event);
+    });
     terminal.on('started', pid => {
       if (this.terminal !== terminal) return;
       if (!validConversationId(this.record.nativeId)) {
         const epoch = terminal.journal?.epoch;
         this.record.nativeId = Number.isSafeInteger(pid) && pid > 1 && validConversationId(epoch) ? `naw-agy:${epoch}` : null;
       }
-      this.chatAvailable = Boolean(this.host.hookSocket);
-      this.addressedSendAvailable = Boolean(this.bridgeDir);
+      this.syncCapabilities();
       this.emit('pid', pid);
-      this.emit('capability');
       this.emit('state', 'idle');
     });
     terminal.on('closed', result => {
       if (this.terminal !== terminal) return;
-      this.host.hookTargets?.delete(this.token);
+      this.clearTokens();
       this.cleanupBridge();
+      this.promptReady = false;
+      this.trustPromptActive = false;
       this.chatAvailable = false;
       this.addressedSendAvailable = false;
       this.rejectPendingSend(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: false }));
+      this.closeTurnMcpCalls();
       if (this.liveTurn) {
         const turn = this.liveTurn;
         this.liveTurn = null;
@@ -203,40 +275,84 @@ class AgyTui extends EventEmitter {
     });
   }
   send(text, tag, guard = () => true) {
-    if (this.stopped || !this.terminal?.alive || !this.chatAvailable || this.pendingSend || this.liveTurn) {
+    if (this.stopped || !this.terminal?.alive || !this.chatAvailable || !this.promptReady || this.trustPromptActive ||
+      this.record.terminalInputPending === true || this.pendingSend || this.liveTurn) {
       return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
     }
     if (!guard()) return Promise.reject(Object.assign(uiError('error.workspace.handoffExpired'), { notSent: true }));
     const safe = String(text ?? '').replace(/\x1b/g, '');
     if (!safe.trim()) return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
     return new Promise((resolve, reject) => {
-      const pending = { tag, guard, resolve, reject, timer: null, enterTimer: null };
+      const pending = { tag, guard, resolve, reject, timer: null };
       pending.timer = setTimeout(() => {
         if (this.pendingSend !== pending) return;
         this.pendingSend = null;
-        clearTimeout(pending.enterTimer);
         reject(uiError('error.nativeSendUnavailable'));
       }, this.sendTimeoutMs);
       pending.timer.unref?.();
       this.pendingSend = pending;
+      // Atomic single write right after the final guard check prevents orphaned pasted text if authorization changes.
+      if (!guard()) {
+        this.rejectPendingSend(Object.assign(uiError('error.workspace.handoffExpired'), { notSent: true }));
+        return;
+      }
       try {
-        this.terminal.input(`\x1b[200~${safe}\x1b[201~`);
-        const submit = () => {
-          if (this.pendingSend !== pending) return;
-          if (!this.terminal?.alive || !guard()) {
-            this.rejectPendingSend(uiError('error.workspace.handoffExpired'));
-            return;
-          }
-          try { this.terminal.input('\r'); }
-          catch (error) { this.rejectPendingSend(error); }
-        };
-        if (this.enterDelayMs > 0) {
-          pending.enterTimer = setTimeout(submit, this.enterDelayMs);
-          pending.enterTimer.unref?.();
-        } else submit();
+        this.terminal.input(`\x1b[200~${safe}\x1b[201~\r`);
       } catch (error) {
         this.rejectPendingSend(error);
       }
+    });
+  }
+  claimWorkspaceMcpProof(args, socket) {
+    const turnId = this.turnId, nativeId = this.record.nativeId;
+    if (!this.addressedSendAvailable || this.stopped || !this.terminal?.alive || !turnId || !nativeId) {
+      return Promise.reject(uiError('error.nativeToolOriginUnconfirmed'));
+    }
+    const recipientId = args?.recipient_id;
+    const messageHash = typeof args?.message === 'string' ? sha256Hex(args.message) : null;
+    if (typeof recipientId !== 'string' || !recipientId || !messageHash) {
+      return Promise.reject(uiError('error.nativeToolOriginUnconfirmed'));
+    }
+    const findMatch = () => {
+      for (const entry of this.mcpCalls.values()) {
+        if (entry.active && !entry.used && entry.nativeId === nativeId && entry.turnId === turnId &&
+          entry.recipientId === recipientId && entry.messageHash === messageHash) {
+          return entry;
+        }
+      }
+      return null;
+    };
+    const claim = entry => {
+      entry.used = true;
+      return {
+        callId: entry.callId,
+        nativeId,
+        turnId,
+        valid: () => !this.stopped && Boolean(this.terminal?.alive) && this.turnId === turnId &&
+          this.record.nativeId === nativeId && entry.active === true && !socket.destroyed,
+      };
+    };
+    const immediate = findMatch();
+    if (immediate) return Promise.resolve(claim(immediate));
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off('agyMcpProof', onProof);
+        this.off('nativeTurnEnd', onTurnEnd);
+        socket.off('close', onClose);
+      };
+      const fail = err => { cleanup(); reject(err); };
+      const onProof = () => {
+        const match = findMatch();
+        if (match) { cleanup(); resolve(claim(match)); }
+      };
+      const onTurnEnd = info => { if (info?.turnId === turnId) fail(uiError('error.nativeTurnEndedNoAutoMessage')); };
+      const onClose = () => fail(uiError('error.nativeToolOriginUnconfirmed'));
+      const timer = setTimeout(() => fail(uiError('error.nativeToolOriginUnconfirmed')), MCP_PROOF_WAIT_MS);
+      timer.unref?.();
+      this.on('agyMcpProof', onProof);
+      this.on('nativeTurnEnd', onTurnEnd);
+      socket.once('close', onClose);
     });
   }
   hook(event) {
@@ -253,12 +369,18 @@ class AgyTui extends EventEmitter {
     }
     switch (event.hookEventName) {
       case 'SessionStart':
+        this.trustPromptActive = false;
+        this.promptReady = true;
+        this.syncCapabilities();
         if (!this.liveTurn && this.record.state !== 'working') this.emit('state', 'idle');
         break;
       case 'PreInvocation': {
+        this.trustPromptActive = false;
+        this.promptReady = true;
+        this.syncCapabilities();
         if (this.liveTurn) {
-          if (typeof event.transcriptPath === 'string' && !this.liveTurn.transcriptPath) {
-            this.liveTurn.transcriptPath = event.transcriptPath;
+          if (!this.liveTurn.transcriptPath && typeof event.transcriptPath === 'string') {
+            this.liveTurn.transcriptPath = resolveSessionTranscript(event.transcriptPath, this.liveTurn.nativeId, this.brainRoot);
           }
           this.emit('state', 'working');
           break;
@@ -267,16 +389,16 @@ class AgyTui extends EventEmitter {
         if (pending) {
           this.pendingSend = null;
           clearTimeout(pending.timer);
-          clearTimeout(pending.enterTimer);
         }
         const turnId = randomUUID();
         const nativeId = this.record.nativeId;
+        this.closeTurnMcpCalls();
         this.liveTurn = {
           id: turnId,
           tag: pending?.tag || null,
           nativeId,
           minStep: Number.isInteger(event.initialNumSteps) ? event.initialNumSteps : 0,
-          transcriptPath: typeof event.transcriptPath === 'string' ? event.transcriptPath : null,
+          transcriptPath: resolveSessionTranscript(event.transcriptPath, nativeId, this.brainRoot),
         };
         if (pending) this.emit('accepted', pending.tag);
         if (nativeId) this.emit('nativeTurnStart', { nativeId, turnId });
@@ -285,33 +407,68 @@ class AgyTui extends EventEmitter {
         if (pending) pending.resolve();
         break;
       }
+      case 'PreToolUse': {
+        if (!this.liveTurn) break;
+        const callId = event.toolCallId;
+        if (typeof callId !== 'string' || !callId || callId.length > 160) break;
+        if (typeof event.recipientId !== 'string' || !event.recipientId || typeof event.messageHash !== 'string' || !/^[0-9a-f]{64}$/.test(event.messageHash)) break;
+        if (event.conversationId && event.conversationId !== this.liveTurn.nativeId) break;
+        if (!this.mcpCalls.has(callId)) {
+          this.mcpCalls.set(callId, {
+            callId,
+            nativeId: this.liveTurn.nativeId,
+            turnId: this.liveTurn.id,
+            recipientId: event.recipientId,
+            messageHash: event.messageHash,
+            active: true,
+            used: false,
+          });
+          this.emit('agyMcpProof');
+        }
+        break;
+      }
+      case 'PostToolUse': {
+        const entry = typeof event.toolCallId === 'string' ? this.mcpCalls.get(event.toolCallId) : null;
+        if (entry) entry.active = false;
+        break;
+      }
       case 'PostInvocation':
         this.emit('state', 'working');
         break;
       case 'Stop': {
-        if (event.fullyIdle === false && event.terminationReason !== 'ERROR') {
+        const reason = event.terminationReason;
+        if (reason === 'NO_TOOL_CALL' && event.fullyIdle === false) {
           this.emit('state', 'working');
           break;
         }
         const turn = this.liveTurn;
         this.liveTurn = null;
+        this.closeTurnMcpCalls();
         const nativeId = turn?.nativeId || this.record.nativeId;
         const turnId = turn?.id || null;
-        const transcript = typeof event.transcriptPath === 'string' ? event.transcriptPath : turn?.transcriptPath;
-        if (event.terminationReason === 'ERROR') {
+        if (reason === 'ERROR') {
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'failed' });
           this.emit('failed', 'Antigravity 回合出错。', turn?.tag ? { tag: turn.tag } : undefined);
           this.emit('state', 'error');
-        } else if (event.terminationReason === 'USER_CANCELED') {
+        } else if (reason === 'USER_CANCELED') {
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'interrupted' });
           this.emit('interrupted', { tag: turn?.tag || null });
           this.emit('state', 'idle');
-        } else {
-          const text = readFinalReply(transcript, turn?.minStep ?? 0);
+        } else if (reason === 'NO_TOOL_CALL' && event.fullyIdle === true) {
+          // Never let Stop override a pinned turn transcript with a different path.
+          const stopPath = resolveSessionTranscript(event.transcriptPath, nativeId, this.brainRoot);
+          const transcript = turn?.transcriptPath
+            ? (!event.transcriptPath || stopPath === turn.transcriptPath ? turn.transcriptPath : null)
+            : stopPath;
+          const text = transcript ? readFinalReply(transcript, turn?.minStep ?? 0, nativeId, this.brainRoot) : '';
           this.emit('complete', { tag: turn?.tag || null, nativeId, turnId, text });
           if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'completed' });
           this.emit('activity', '');
           this.emit('state', 'idle');
+        } else {
+          if (nativeId && turnId) this.emit('nativeTurnEnd', { nativeId, turnId, status: 'incomplete' });
+          this.emit('failed', 'Antigravity 回合未确认完成。', turn?.tag ? { tag: turn.tag } : undefined);
+          this.emit('state', event.hasError ? 'error' : 'idle');
         }
         break;
       }
@@ -328,9 +485,12 @@ class AgyTui extends EventEmitter {
   }
   async stop() {
     this.stopped = true;
+    this.promptReady = false;
+    this.trustPromptActive = false;
     this.chatAvailable = false;
     this.addressedSendAvailable = false;
-    this.host.hookTargets?.delete(this.token);
+    this.clearTokens();
+    this.closeTurnMcpCalls();
     this.rejectPendingSend(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: false }));
     try {
       if (this.terminal?.alive) await this.terminal.stop();
@@ -344,6 +504,7 @@ class AgyTui extends EventEmitter {
 module.exports = {
   validConversationId,
   prepareBridge,
+  resolveSessionTranscript,
   readFinalReply,
   launchSpec,
   AgyTui,

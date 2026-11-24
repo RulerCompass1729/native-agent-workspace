@@ -2402,10 +2402,12 @@ $('privacy-dialog').addEventListener('close', event => {
   for (const detail of dialog.querySelectorAll('details')) detail.open = false;
 });
 
+let agyAutoSkip = false;
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = provider === 'agy'; $('create-profile').replaceChildren();
+  agyAutoSkip = provider === 'agy';
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyAutoSkip; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
@@ -5824,15 +5826,16 @@ function render() {
     $('room-session').hidden = !s;
     $('room-record-view').hidden = false;
     $('room-scope').hidden = !inRoom || !s;
-    const terminalVisible = Boolean(s && terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'));
+    const agyTerminalOnly = s?.provider === 'agy';
+    const terminalVisible = Boolean(s && (agyTerminalOnly || (terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'))));
     if ($('terminal-display-dialog').open && (!terminalVisible || terminalDisplayKey !== headerMenuKey())) $('terminal-display-dialog').close();
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('has-terminal', (!inRoom || memberFocus) && terminalVisible);
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
-    $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
-    $('conversation-pane').hidden = inRoom && !memberFocus;
+    $('session-layout').classList.toggle('native-only', agyTerminalOnly || (inRoom && !memberFocus));
+    $('conversation-pane').hidden = agyTerminalOnly || (inRoom && !memberFocus);
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
@@ -6002,7 +6005,9 @@ function render() {
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
   const s = current(); if (!s) return;
-  if (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized') terminalLayout = 'split';
+  const terminalOnly = s.provider === 'agy';
+  if (terminalOnly) next = 'terminal';
+  if (!terminalOnly && (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized')) terminalLayout = 'split';
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
   if (entry?.composing) entry.term.blur();
@@ -6018,13 +6023,13 @@ async function switchMode(next, takeControl = false) {
   }
   // Save the surface already shown to the person before waiting for native
   // control. Closing now must reopen this view; input remains separately gated.
-  if (mode === next) { preference = next; attempt(persistView); }
+  if (mode === next) { if (!terminalOnly) preference = next; attempt(persistView); }
   try {
     if (ending) await ending.done;
     if (!stillSelected()) return;
     if ((takeControl || !heldElsewhere(s)) && !await claimView(s.id, next, revision, takeControl)) return;
     if (!stillSelected()) return;
-    mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
+    mode = next; if (!terminalOnly) preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
     if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
     else if (inputFocusAllowed()) chatInput().focus();
@@ -6710,6 +6715,7 @@ $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = te
 $('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });
 $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
+  if (current()?.provider === 'agy') return;
   terminalLayout = 'hidden'; await switchMode('chat');
 });
 for (const input of [$('shared-input')]) input.addEventListener('focus', () => {
@@ -8043,7 +8049,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
       for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
-      $('skip-permissions').checked = false; folder = ''; newDirectory = false;
+      $('skip-permissions').checked = false; agyAutoSkip = false; folder = ''; newDirectory = false;
       $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
@@ -8091,7 +8097,14 @@ disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSe
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
 renderInterfaceLanguage();
 
-for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = () => { if (input.value === 'agy' && input.checked) $('skip-permissions').checked = true; createReadiness(); };
+for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = () => {
+  if (input.value === 'agy' && input.checked) {
+    if (!$('skip-permissions').checked) { $('skip-permissions').checked = true; agyAutoSkip = true; }
+  } else if (input.checked && agyAutoSkip) {
+    $('skip-permissions').checked = false; agyAutoSkip = false;
+  }
+  createReadiness();
+};
 $('claude-history-id').oninput = createReadiness;
 $('create-profile').onchange = createReadiness;
 $('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
@@ -8100,7 +8113,7 @@ $('create-space-name').oninput = () => { $('create-space-name').dataset.edited =
 $('claude-history-id').onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
 };
-$('skip-permissions').onchange = createReadiness;
+$('skip-permissions').onchange = () => { agyAutoSkip = false; createReadiness(); };
 attempt(async () => {
   state = await api.initial();
   languageWarning = ['unavailable', 'migrationNotSaved'].includes(state.localeWarning) ? state.localeWarning : null; renderInterfaceLanguage();

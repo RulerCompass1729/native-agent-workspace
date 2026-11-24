@@ -3186,6 +3186,7 @@ class NativeHost {
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
     this.dshTargets = new Set();
     this.agyTargets = new Set();
+    this.agyMcpTargets = new Map();
     // Automatic Codex version decisions (B3) are kept in the persistent data directory.
     this.codexQualificationFile = path.join(dataDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
     this.claudeModChecks = new Map();
@@ -3221,15 +3222,13 @@ class NativeHost {
           socket.setTimeout(0); const deadline = setTimeout(() => socket.destroy(), 10000);
           socket.once('close', () => clearTimeout(deadline));
           Promise.resolve().then(async () => {
-            const runtime = this.hookTargets.get(event.token);
+            const runtime = this.agyMcpTargets.get(event.token);
             if (!runtime || runtime.record?.provider !== 'agy' || !runtime.addressedSendAvailable || !runtime.addressedCall || runtime.stopped || !runtime.terminal?.alive) {
               throw uiError('error.nativeToolOriginUnconfirmed');
             }
-            const turnId = runtime.turnId, nativeId = runtime.record.nativeId;
-            if (!turnId || !nativeId) throw uiError('error.nativeToolOriginUnconfirmed');
-            const valid = () => !runtime.stopped && Boolean(runtime.terminal?.alive) && runtime.turnId === turnId && runtime.record.nativeId === nativeId && !socket.destroyed;
-            if (!valid()) throw uiError('error.nativeToolOriginUnconfirmed');
-            return runtime.addressedCall({ nativeId, turnId, callId: crypto.randomUUID(), valid }, event.arguments);
+            const proof = await runtime.claimWorkspaceMcpProof(event.arguments, socket);
+            if (!proof.valid()) throw uiError('error.nativeToolOriginUnconfirmed');
+            return runtime.addressedCall({ nativeId: proof.nativeId, turnId: proof.turnId, callId: proof.callId, valid: proof.valid }, event.arguments);
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
           return;
         }
