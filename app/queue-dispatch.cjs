@@ -2496,8 +2496,9 @@ class QueueDispatcher {
   }
 
   // A rotation the person interrupted waits for the quiet that member's rotation already needs (30 minutes; 10 for
-  // memory; 2 for the butler's compaction), counted from the later of the interruption and the session's last activity,
-  // so a queued item does not ask again while the person is still at it (the 11-14 drill, finding 1).
+  // memory; 2 for the butler's compaction), counted from the later of the interruption and the person's own last use
+  // (noteHuman), so a queued item does not ask again while the person is still at it (the 11-14 drill, finding 1). Not
+  // the session's last activity: NAW's own items kept a busy member fresh and it was never rotated (the NAW dev PM, 11-23).
   personDeferred(sessions, butler, now) {
     const ids = new Set();
     for (const [id, entry] of this.deferredAt) {
@@ -2508,7 +2509,7 @@ class QueueDispatcher {
       } else if (entry.due === 'compact' && id === butler) {
         quiet = this.quietCompactMs;
       }
-      const last = session ? Math.max(entry.at, lastActivityOf(session, now) ?? entry.at) : entry.at;
+      const last = Math.max(entry.at, this.humanAt.get(id) ?? entry.at);
       if (session && now - last < quiet) {
         ids.add(id);
       } else {
