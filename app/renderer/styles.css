@@ -1327,7 +1327,9 @@ dialog p.records-note { color: var(--ink); }
 .steward-wake-warning { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--approval-ink); border-radius: 8px; background: var(--raised); color: var(--ink); font-size: 13px; }
 .steward-wake-warning[hidden] { display: none; }
 .steward-wake-warning p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.steward-wake-actions { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .steward-wake-warning button { flex-shrink: 0; font-size: 13px; }
+.steward-wake-warning button[hidden] { display: none; }
 .steward-record-wake-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13px; }
 dialog .steward-record-wake label { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 500; }
 dialog .steward-record-wake input[type=checkbox] { width: auto; margin: 0; }

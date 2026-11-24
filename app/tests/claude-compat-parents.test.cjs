@@ -47,6 +47,8 @@ for (const parent of [
   { commit: '907f10a06a2880c15d4e4ef1f1e5a348548ad832', digest: 'c41614cb3c81aa10d7a7b7efe2068ce73aa1546edb1a72fac5ce03d352b1b0ca', label: 'automatic qualification integration: main with workspace_open view' },
   { commit: 'c08b56a3bb49b1f59ca21acee6ea28909df29490', digest: 'eaaa169a4620cd888fbba1d0663b9aa094ff92bbf19b3b78cc56d5451df98991', label: 'automatic qualification integration: installed alpha.261 output' },
   { commit: 'bbbd56fe2f4f2e3ceedd815d60d4d8eb0d6835ea', digest: '7233253cb5c7adcfafef8d9d7ea3ae6ff48afc26840e3a800f18d828a9ef93b6', label: 'compacted turn continuation: main before it' },
+  { commit: '6a4b015c027a096a1fa193e5a87e545e5baba9cb', digest: '697dd950a622376d572e7f5dfea291162598cab3b277c3da0f3a5a14db1e75d5', label: 'refused root call report: alpha.286 lane before it' },
+  { commit: '3405e65e605e48dbcda513f62b864fe059f29362', digest: 'f96af19e64b8b7efe02dd813b9d584c0367b75e2afa27bb7b64fcad89950be1e', label: 'refused workspace_message report: lane before it' },
 ]) for (const existingOnly of [false, true])
 test(`${parent.label} upgrades with existingOnly=${existingOnly}; one byte edits stay`, t => {
   const { cwd, file } = fixture(t);

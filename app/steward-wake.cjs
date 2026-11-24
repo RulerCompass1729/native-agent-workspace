@@ -23,12 +23,14 @@ const FILE = 'steward-wake.json', RECORD_MAX = 4096, GAP_MS = 60 * 1000;
 const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // The person, 2026-11-23: 「如果我不理你的话感觉就卡在这里了」. A refused butler call is recorded as an event
 // (butler-ingress.cjs controlRefused) so the butler is woken; wakes that only announce refusals stop after this many
-// in a row, until one of its calls succeeds, so a call refused every time cannot keep waking it.
-const REFUSAL_WAKES = 3, REFUSED = 'control-refused';
+// in a row, until one of its calls or a release goes through, so a call refused every time cannot keep waking it.
+// The record is read a page at a time up to REFUSAL_PAGES pages; refusals beyond them still count as refusals only.
+const REFUSAL_WAKES = 3, REFUSED = 'control-refused', REFUSAL_PAGES = 20;
+const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
-  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','person-recent','trust-unknown','trust-hold',
+  'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','quiet-window','person-recent','trust-unknown','trust-hold',
   'control-refused-limit']);
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
@@ -106,8 +108,23 @@ class StewardWake {
   view({ held = false } = {}) {
     const on = this.active(), blocked = on && this.blocked?.reason && (this.blocked.visible || held) ? {
       since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
+      ...(this.blocked.step ? { step: this.blocked.step, ...this.undelivered() } : {}),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };
+  }
+  // While the person's step holds it: the messages to the butler NAW recorded as not delivered since its last wake
+  // (butler-ingress.cjs observeWakeUndelivered). Their text was never kept, so they are not waiting to be read.
+  undelivered() {
+    try {
+      let position = from(this.latest(), this.state.woken), count = 0;
+      for (let page = 0; page < 20; page++) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100);
+        count += events.filter(e => e.kind === 'blocked' && e.payload?.reason === 'wake-undelivered').length;
+        if (!more) return count ? { undelivered: count } : {};
+        position = through;
+      }
+      return count ? { undelivered: count, undeliveredMore: true } : {};
+    } catch { return {}; }
   }
   clearBlocked() {
     const visible = this.blocked?.visible; this.blocked = null;
@@ -130,6 +147,26 @@ class StewardWake {
     blocked.visible = true; blocked.minute = minute;
     if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
   }
+  // The butler's own handoff left unresolved (queue-dispatch.cjs ownHandoffStep): no wake reaches it until the person
+  // takes `step`. Said at once and kept whether or not anything is due (R117, the person, 2026-11-23: 「我点了卡,但是你这边
+  // 完全没反应」); one record line per hold. Sends nothing.
+  hold(reason, step) {
+    if (!this.active()) { this.clearBlocked(); return; }
+    const now = this.now(), before = this.blocked && now >= this.blocked.since ? this.blocked : null;
+    const previous = before && `${before.reason}/${before.step}`;
+    if (!before) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
+    const blocked = this.blocked;
+    blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable'; blocked.step = HOLD_STEPS.includes(step) ? step : 'release';
+    if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
+      blocked.recordedReason = blocked.reason; blocked.records++;
+      try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); } catch { /* The step is still said. */ }
+    }
+    const minute = Math.floor((now - blocked.since) / 60000), changed = !blocked.visible || previous !== `${blocked.reason}/${blocked.step}` || minute !== blocked.minute;
+    blocked.visible = true; blocked.minute = minute;
+    if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
+  }
+  // The hold no longer applies (released, or no longer the butler's own): the ordinary checks take over.
+  endHold() { if (this.blocked?.step) this.clearBlocked(); }
   latest() {
     const ledger = this.ledger();
     if (!ledger) throw fault('The event record is unavailable', 'STEWARD_WAKE_UNAVAILABLE');
@@ -178,11 +215,18 @@ class StewardWake {
   // Whether everything recorded after the position last named is a refused butler call. Unreadable counts as not.
   refusalsOnly(latest) {
     try {
-      const { events, more } = this.ledger().eventsAfter(from(latest, this.state.woken), 100);
-      return !more && events.length > 0 && events.every(e => e.kind === 'blocked' && e.payload?.reason === REFUSED);
+      let position = from(latest, this.state.woken), any = false;
+      for (let page = 0; page < REFUSAL_PAGES; page++) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100);
+        if (!events.every(e => e.kind === 'blocked' && e.payload?.reason === REFUSED)) return false;
+        any = any || events.length > 0;
+        if (!more) return any;
+        position = through;
+      }
+      return true;
     } catch { return false; }
   }
-  // One of the butler's calls went through: refusals may wake it again.
+  // One of the butler's calls, or a release of a rotation, went through: refusals may wake it again.
   controlSucceeded() {
     this.refusalWakes = 0;
     if (this.blocked?.reason === 'control-refused-limit') this.clearBlocked();
@@ -225,4 +269,4 @@ class StewardWake {
   }
 }
 
-module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });
+module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, HOLD_STEPS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });

@@ -54,7 +54,7 @@ function revoke(w) {
       try { const stat = fs.lstatSync(file); if (stat.isFile() && stat.uid === process.getuid()) fs.unlinkSync(file); } catch { /* The local automatic path stays disabled. */ }
     }
   } finally { try { fs.unlinkSync(temp); } catch { /* Never block human controls on cleanup. */ } }
-  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { w.edited?.(s); m.wake.status = 'cancelled'; m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (['staged', 'held'].includes(m.wake?.status)) { w.edited?.(s); m.wake.status = 'cancelled'; m.wake.settledAt = Date.now(); m.text = `真人操作或交接边界已变化；自动消息未投递。\n${m.wake.body}`; m.uiMessage = displayMessage({ version: 1, key: 'notice.wake.humanBoundary', params: { body: m.wake.body } }, 'notice.', m.text) || undefined; }
   return saved;
 }
 function initialize(w) {
@@ -182,11 +182,48 @@ function holdable(w, intent, result) {
 function stillButler(w, intent) {
   try { const steward = stewardNow(w); return Boolean(steward) && steward.sessionId === intent.recipientId && steward.nativeId === intent.targetProof?.nativeId; } catch { return false; }
 }
+// settledAt: when it finally did not go out; the butler is told of it by then, not by when it was staged (R119).
 function refusedNotice(row, result) {
-  row.wake.status = 'not-sent';
+  row.wake.status = 'not-sent'; row.wake.settledAt = Date.now();
   row.text = `自动消息没有发出；不会自动重发。\n${result.reason}\n${row.wake.body}`;
   const cause = { message: result.reason, uiMessage: result.reasonUiMessage };
   row.uiMessage = displayMessage(uiError('error.wake.notSent', { reason: result.reason, body: row.wake.body }, { cause, param: 'reason' }).uiMessage, 'error.', row.text) || undefined;
+}
+// A migration's quiet window (quiet-windows.cjs) on the recipient's backend: its automatic messages are held here
+// until the window closes, then tried as any held one (the recipient's side checks everything again). At most
+// QUIET_HELD_MAX held at a time on this backend; the next one is not sent. A refusal that the window itself ends
+// (the recipient at work, waiting or within its minute) is held too; every other refusal stays as it was.
+const QUIET_HELD_MAX = 32, QUIET_CHECK_MS = 60000;
+const QUIET_PASSING = Object.freeze(['error.wake.recipientBusy', 'error.wake.recipientInputPending', 'error.wake.recipientAwaiting', 'error.wake.recipientCooldown']);
+function quietWindow(w, key) {
+  try { return require('./quiet-windows.cjs').openWindow(root(w), key, Date.now()); } catch { return null; }
+}
+function quietRows(w) {
+  let count = 0;
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (m.wake?.quietWindow && ['staged', 'held'].includes(m.wake.status)) count++;
+  return count;
+}
+const quietFull = () => notSent(uiError('error.wake.quietWindowFull', { limit: QUIET_HELD_MAX }));
+// A sender on the backend being moved: the move ends this backend's store and every row held in it, so it is
+// refused now, not held (the reviewer's B1, 11-23). Its key as peer-handoffs.cjs computes it.
+const ownKey = w => path.relative(root(w), w.dataDir) || '.';
+const quietSame = () => notSent(uiError('error.wake.quietWindowSameBackend'));
+const shortKey = key => key === '.' ? 'root' : String(key).split('/').pop().slice(0, 7);
+// Looked at again each minute (and at its deadline), so a window that closes early lets it go then.
+function holdQuiet(w, row, window) {
+  const intent = row.wake, now = Date.now();
+  intent.status = 'held'; intent.heldAt ??= now;
+  intent.retryAt = Math.max(now + 1000, Math.min(window.deadline, now + QUIET_CHECK_MS));
+  row.text = `收件方的后台在迁移前的安静窗口里；这条先存着，窗口结束后再试一次。\n${intent.body}`;
+  row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.quietHeld', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+}
+// After a move the recipient lives on another backend: the same native session there, with its identity there.
+async function relocate(w, intent) {
+  const found = await w.peerRunner.lookupWake(intent.recipientId);
+  if (found.key === intent.targetKey) return;
+  if (!found.session || found.session.nativeId !== intent.targetProof?.nativeId) throw uiError('error.wake.recipientIdentityChanged');
+  intent.targetKey = found.key; intent.targetProof = identity(found.session);
+  durable(w);
 }
 function validateArgs(args) {
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
@@ -212,7 +249,26 @@ function stewardLimit(taken, recipient) {
   if (taken.includes(recipient)) throw uiError("error.wake.turnRecipientRepeated");
   if (new Set(taken).size >= STEWARD_RECIPIENTS) throw uiError("error.wake.turnRecipientLimit", { limit: STEWARD_RECIPIENTS });
 }
+// R119 (the person, 11-23: 「不能错过项目经理的内容」): a message refused before it had a row of its own keeps only
+// its code, recipient and time here; main tells the butler about those addressed to it (butler-ingress.cjs
+// observeWakeUndelivered). Runtime-only, the last few.
+const UNDELIVERED_KEPT = 20;
+function undelivered(w, s, r, args, error) {
+  const recipientId = args?.recipient_id;
+  if (!r || typeof recipientId !== 'string' || !recipientId || recipientId.length > 100 || recipientId === s?.id) return false;
+  const entry = { id: randomUUID(), at: Date.now(), recipientId, key: error?.uiMessage?.key || null };
+  if (error?.sourceIssue) entry.sourceIssue = error.sourceIssue;
+  r.wakeUndelivered = [...(r.wakeUndelivered || []), entry].slice(-UNDELIVERED_KEPT);
+  try { w.changed?.(s?.id); } catch { /* Shown with the next state. */ }
+  return true;
+}
+// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4).
+function unbound(w, s, r, recipientId) { return undelivered(w, s, r, { recipient_id: recipientId }, { sourceIssue: 'root-turn-unbound' }); }
 function stage(w, s, r, native, args) {
+  try { return stageCall(w, s, r, native, args); }
+  catch (error) { undelivered(w, s, r, args, error); throw error; }
+}
+function stageCall(w, s, r, native, args) {
   if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError(awaitingRead(w, r, s, native) ? "error.wake.turnAwaitingHumanRead" : "error.wake.turnRevokedByHuman");
   // Item 3: the calls the turn made before it read the person's words do not count against what it sends after.
   const epoch = r.wakeTurn.epoch || 0;
@@ -230,7 +286,7 @@ function stage(w, s, r, native, args) {
   }
   const promise = stageOnce(w, s, r, native, args);
   const call = { callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise, failed: false };
-  promise.catch(() => { call.failed = true; });
+  promise.catch(error => { call.failed = true; undelivered(w, s, r, args, error); });
   if (turn) turn.calls.push(call);
   else r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, epoch, calls: [call] };
   return promise;
@@ -258,24 +314,40 @@ async function stageOnce(w, s, r, native, args) {
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
     sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
-  if (!sourceValid(w, s, r, intent)) throw uiError("error.wake.turnRevokedByHumanOrSetting");
+  // The code says which (closed, storage, runtime changed…); the person reads one sentence for all of them.
+  const issue = sourceIssue(w, s, r, intent);
+  if (issue) throw Object.assign(uiError("error.wake.turnRevokedByHumanOrSetting"), { sourceIssue: issue.code });
   if (!w.peerRunner) throw uiError("error.wake.backendUnsupported");
   const target = await w.peerRunner.lookupWake(args.recipient_id, {
     id: intent.id, boundary: intent.boundary, senderId: s.id, senderNativeId: s.nativeId });
-  if (native.valid?.() === false || !sourceValid(w, s, r, intent) || r.turnId !== native.turnId) throw uiError("error.wake.authorizationInvalidated");
+  const after = sourceIssue(w, s, r, intent);
+  if (native.valid?.() === false || after || r.turnId !== native.turnId) throw Object.assign(uiError("error.wake.authorizationInvalidated"), after ? { sourceIssue: after.code } : {});
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
+  const quiet = quietWindow(w, target.key), refused = target.readiness?.status === 'not-sent';
+  let full = false, same = false;
+  if (quiet && (!refused || QUIET_PASSING.includes(target.readiness.reasonUiMessage?.key))) {
+    if (target.key === ownKey(w)) same = true;
+    else if (quietRows(w) >= QUIET_HELD_MAX) full = true;
+    else intent.quietWindow = { id: quiet.id, deadline: quiet.deadline };
+  }
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.registered', params: { name: target.session.name, body: args.message } }, 'notice.', row.text) || undefined;
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
   // The butler's limit can open before this turn ends: the message stays staged, and is held then if it has not.
-  const waits = target.readiness?.status === 'not-sent' && holdable(w, intent, target.readiness);
-  if (target.readiness?.status === 'not-sent' && !waits) refusedNotice(row, target.readiness);
+  const waits = !intent.quietWindow && !full && !same && refused && holdable(w, intent, target.readiness);
+  if (same) refusedNotice(row, quietSame());
+  else if (full) refusedNotice(row, quietFull());
+  else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
+  if (intent.quietWindow) {
+    const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方的后台在安静窗口（迁移 ${shortKey(target.key)}）中，窗口最长还有约 ${minutes} 分钟，结束后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。` };
+  }
   if (waits) {
     // About when: the ones held here for the same recipient go first, a minute apart from the earliest, and none
     // before its limit opens.
@@ -320,15 +392,33 @@ function complete(w, s, r, info) {
       const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, reason) ? reason : 'other'];
       intent.status = 'cancelled'; row.text = `${why}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key, params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
-    transfer(w, row);
+    deliver(w, row);
   }
+}
+// A window open now on the recipient's backend: the row is held for it, or refused as at registration. true: nothing
+// goes now. Also for a row held for the butler's minute before the window opened (the reviewer, 11-23).
+function keepQuiet(w, row) {
+  const intent = row.wake, quiet = quietWindow(w, intent.targetKey);
+  if (!quiet) return false;
+  if (intent.targetKey === ownKey(w)) refusedNotice(row, quietSame());
+  else if (!intent.quietWindow && quietRows(w) >= QUIET_HELD_MAX) refusedNotice(row, quietFull());
+  else { intent.quietWindow = { id: quiet.id, deadline: quiet.deadline }; holdQuiet(w, row, quiet); }
+  return true;
+}
+// At the turn's end: held while the recipient's backend is in a quiet window (one staged before it opened too),
+// otherwise one attempt.
+function deliver(w, row) {
+  if (!keepQuiet(w, row)) return transfer(w, row, Boolean(row.wake.quietWindow));
+  try { durable(w); } finally { arm(w); }
 }
 // One delivery attempt. Persist before it: reopening never replays sending/staged/held rows. Only an explicit refusal
 // before anything was reserved or written (not-sent) can be held and offered again; an uncertain outcome never is.
-function transfer(w, row) {
+function transfer(w, row, readdress = false) {
   const intent = row.wake;
   intent.status = 'sending'; durable(w);
-  return w.peerRunner.transferWake(intent).then(result => {
+  // A recipient that cannot be found again was never offered it: not sent.
+  const located = readdress ? relocate(w, intent).then(() => null, error => notSent(error)) : Promise.resolve(null);
+  return located.then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
     if (holdable(w, intent, result)) hold(w, row, result.retryAt);
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
@@ -340,7 +430,7 @@ function transfer(w, row) {
       }
     }
     durable(w);
-  }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
+  }).catch(error => { intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
     .finally(() => arm(w));
 }
 function heldRows(w) {
@@ -392,11 +482,14 @@ function retryHeld(w) {
       const r = w.runtimes.get(s.id);
       let issue;
       // The sender as complete() checks it at the turn's end, and the butler role; the recipient's side checks everything again.
-      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
+      // A message held for a quiet window was never only the butler's to keep.
+      const quietly = Boolean(row.wake.quietWindow);
+      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (quietly || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
       catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
       if (issue) { dropHeld(w, row, issue); continue; }
+      if (keepQuiet(w, row)) { try { durable(w); } catch { /* Shown now; a later attempt checks storage first. */ } continue; }
       // A save that fails before the attempt sends nothing.
-      try { transfer(w, row); pending = true; } catch (error) { dropHeld(w, row, { code: 'storage-unavailable', reason: error.message }); }
+      try { transfer(w, row, quietly); pending = true; } catch (error) { dropHeld(w, row, { code: 'storage-unavailable', reason: error.message }); }
     }
   } finally { if (!pending) arm(w); }
 }
@@ -404,7 +497,7 @@ function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
   for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
-    w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
+    w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.wake.settledAt = Date.now(); row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);
     if (cause && why) row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason: rawReason, body: row.wake.body }, cause, causeParam: 'reason' }, 'notice.', row.text) || row.uiMessage;
@@ -585,4 +678,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

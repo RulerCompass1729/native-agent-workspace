@@ -155,6 +155,11 @@ function createSubmissionServer(filename, targets, { restrictedOutboxCall, backg
         if (!target.validRootBinding?.(message) || !['root-call-unconfirmed', 'root-changed'].includes(message.reason) || typeof target.controlRefused !== 'function') { res.writeHead(409); res.end('{}'); return; }
         return res.end(JSON.stringify({ status: target.controlRefused(message.reason) ? 'recorded' : 'ignored' }));
       }
+      if (req.url === '/addressed-refused') {
+        if (!target.validRootBinding?.(message) || typeof message.recipientId !== 'string' || !message.recipientId || message.recipientId.length > 100 ||
+            typeof target.addressedRefused !== 'function') { res.writeHead(409); res.end('{}'); return; }
+        return res.end(JSON.stringify({ status: target.addressedRefused(message.recipientId) ? 'recorded' : 'ignored' }));
+      }
       if (req.url === '/background-control') {
         const abort = new AbortController(), closed = () => abort.abort();
         res.once('close', closed);

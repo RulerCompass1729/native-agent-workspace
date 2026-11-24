@@ -448,6 +448,10 @@ function sessionReady(session, wakePolicy) {
   if (children.running) {
     return { ready: false, reason: 'team-running' };
   }
+  // Its backend waits to be moved (quiet-windows.cjs): no new work there until the window closes.
+  if (session.quietWindow) {
+    return { ready: false, reason: 'quiet-window' };
+  }
   return { ready: true, reason: '' };
 }
 
@@ -1309,7 +1313,7 @@ function rotationCauseKey(code) {
 
 const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-needed', 'automatic-messages-off', 'paused',
   'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
-  'team-running', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
+  'team-running', 'quiet-window', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
   'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
 const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
   'handoff-request-timeout', 'handoff-unconfirmed', 'old-session-missing', 'new-session-missing',
@@ -1764,34 +1768,84 @@ function migrationReady(session, humanAt, now, quietMs = MIGRATE_QUIET_MS, unpro
   return false;
 }
 
-function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
-  for (const option of options) {
-    const plan = option.switch;
-    if (!plan || !plan.ready || failed.has(option.backendKey)) {
-      continue;
-    }
-    if (plan.auto && settings.auto) {
-      return option;
-    }
-    if (!settings.migrate) {
-      continue;
-    }
-    let allowed = true;
-    for (const stop of plan.stops || []) {
-      const session = sessions.find(s => s.id === stop.id);
-      if (!session) {
-        allowed = false;
+// Why NAW does not move this old backend by itself now, or null when it may: one rule for the move NAW chooses
+// (nextBackendMove) and for what version-events.cjs tells the butler and the secretary each backend waits for.
+// `waiting`: how many of the sessions it would stop are not quiet long enough yet.
+function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
+  const plan = option.switch;
+  const backendSwitch = require('./backend-switch.cjs');
+  if (failed.has(option.backendKey)) {
+    return { code: 'failed' };
+  }
+  if (plan && plan.blocked) {
+    // At work (a turn, a question, a running child or background work) passes by itself; anything else needs the person.
+    let busy = 0, stuck = false;
+    for (const listed of option.sessions || []) {
+      const session = sessions.find(s => s.id === listed.id);
+      // Ended and background sessions are carried or block for a reason of their own.
+      if (!session || ['ended', 'recoverable', 'background'].includes(session.state)) {
         continue;
       }
-      if (plan.auto) {
-        if (!quietFor(session, humanAt, now, quietMs)) {
-          allowed = false;
-        }
-      } else if (!migrationReady(session, humanAt, now, quietMs, unprovenQuietMs)) {
-        allowed = false;
+      // These block this backend for good (backend-switch.cjs sessionPlan): not to be told as passing by itself.
+      if (['disconnected', 'error'].includes(session.state) || !['claude', 'codex'].includes(session.provider)) {
+        stuck = true;
+      } else if (!backendSwitch.migrationAcceptable(session)) {
+        busy++;
+      } else if (!session.nativeId) {
+        stuck = true;
       }
     }
-    if (allowed) {
+    if (busy && !stuck) {
+      return { code: settings.migrate ? 'busy' : 'busy-auto', waiting: busy };
+    }
+    return { code: 'blocked' };
+  }
+  if (!plan || !plan.ready) {
+    return { code: 'not-movable' };
+  }
+  if (plan.auto && settings.auto) {
+    return null;
+  }
+  if (!settings.migrate) {
+    return { code: 'needs-person' };
+  }
+  let missing = false, unacceptable = false, longer = false, waiting = 0;
+  for (const stop of plan.stops || []) {
+    const session = sessions.find(s => s.id === stop.id);
+    if (!session) {
+      missing = true;
+      continue;
+    }
+    if (plan.auto) {
+      if (!quietFor(session, humanAt, now, quietMs)) {
+        waiting++;
+      }
+    } else if (!migrationReady(session, humanAt, now, quietMs, unprovenQuietMs)) {
+      waiting++;
+      if (!backendSwitch.migrationSafe(session)) {
+        if (backendSwitch.migrationAcceptable(session)) {
+          longer = true;
+        } else {
+          unacceptable = true;
+        }
+      }
+    }
+  }
+  if (missing) {
+    return { code: 'session-missing' };
+  }
+  if (unacceptable) {
+    return { code: 'blocked' };
+  }
+  if (waiting) {
+    return { code: longer ? 'quiet-30m' : 'quiet-10m', waiting };
+  }
+  return null;
+}
+
+function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
+  for (const option of options) {
+    if (moveWait(option, settings, sessions, humanAt, now, failed, quietMs, unprovenQuietMs) === null) {
       return option;
     }
   }
@@ -2032,8 +2086,14 @@ class QueueDispatcher {
     // What the person answered on an agent's confirmation cards, owed to that agent (answer-notices.cjs), or null; a
     // pass here finds the agent ready and sends (notifyAnswers).
     this.answerNotices = options.answerNotices || null;
+    // What a restart brought, owed to the queue secretary (version-events.cjs), or null; sent as answers are.
+    this.versionNotices = options.versionNotices || null;
+    // Migration quiet windows (quiet-windows.cjs), or null: their sessions get no new item or NAW message.
+    this.quietWindows = options.quietWindows || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
     this.log = this.loadLog();
+    // finishDeferrals: one try per episode and backend version a run.
+    this.deferralsTried = new Set();
     this.chainsCache = null;
     this.restoreTrustIsolation();
     // B6: the engine is built last, for a dispatcher that is complete. One that cannot be built
@@ -2285,6 +2345,16 @@ class QueueDispatcher {
       }
     }
     return ids;
+  }
+
+  // The sessions `id` continued from through done rotations, nearest first. A kept session goes on as itself.
+  continuedFrom(id) {
+    const ids = [], seen = new Set([id]);
+    for (let at = id; ;) {
+      const entry = this.log.findLast(e => e.event === 'done' && e.new?.id === at && typeof e.old?.id === 'string');
+      if (!entry || seen.has(entry.old.id)) return ids;
+      seen.add(entry.old.id); ids.push(entry.old.id); at = entry.old.id;
+    }
   }
 
   rotationChains() {
@@ -2541,6 +2611,9 @@ class QueueDispatcher {
     if (this.answerNotices && this.answerNotices.waiting()) {
       return true;
     }
+    if (this.versionNotices && this.versionNotices.waiting()) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -2603,6 +2676,9 @@ class QueueDispatcher {
     const snapshot = this.roomState.apply(this.client.snapshot());
     if (this.observePersonActions) this.observePersonActions(snapshot);
     const now = this.now();
+    // Copies (room-state.cjs apply): marking them changes nothing a backend holds.
+    const quiet = this.quietWindows ? this.quietWindows.sessionIds(now) : null;
+    if (quiet && quiet.size) for (const session of snapshot.sessions) if (quiet.has(session.id)) session.quietWindow = quiet.get(session.id);
     for (const session of snapshot.sessions) {
       // A live control needs an idle clock; this does not grant delivery readiness.
       const ownRequest = this.rotations[session.id];
@@ -2739,6 +2815,7 @@ class QueueDispatcher {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
+    if (await this.finishDeferrals(current.snapshot, current.now)) current = this.view();
     const sample = await this.memory(current.snapshot.sessions, current.now);
     const steward = this.stewardOutside(current.snapshot.sessions);
     const handedOff = this.handedOff();
@@ -2796,7 +2873,7 @@ class QueueDispatcher {
       actions, engaged, handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged);
-    if (this.answerNotices && !this.closed) await this.notifyAnswers(current, engaged);
+    if ((this.answerNotices || this.versionNotices) && !this.closed) await this.notifyAnswers(current, engaged);
   }
 
   // The designated butler, woken when NAW has recorded something new (steward-wake.cjs keeps the switch, the position,
@@ -2807,6 +2884,9 @@ class QueueDispatcher {
   // left the butler at work, which the fresh read below sees.
   async wakeSteward(current, holding) {
     try {
+      const own = this.ownHandoffStep(current.snapshot.sessions);
+      if (own) return this.stewardWake.hold('rotation-control-unresolved', own);
+      this.stewardWake.endHold();
       if (!this.stewardWake.due()) { this.stewardWake.clearBlocked(); return; }
       const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
@@ -2833,7 +2913,13 @@ class QueueDispatcher {
   // holding no handoff; then the same send as a queue item, a NAW message under the person's automatic-message switch.
   // An agent at work hears it after its turn: it is not ready until then.
   async notifyAnswers(current, holding) {
-    const notices = this.answerNotices;
+    if (this.answerNotices) await this.notifyOwed(this.answerNotices, told => noticeText(told), 'answer-notice', Math.min(this.humanQuietMs, ANSWER_QUIET_MS), current, holding);
+    // The version a restart brought and the backends still on an old one, owed to the queue secretary
+    // (version-events.cjs): the same send, after the two minutes queue work waits for the person.
+    if (this.versionNotices && !this.closed) await this.notifyOwed(this.versionNotices, told => this.versionNotices.text(told), 'version-notice', this.humanQuietMs, current, holding);
+  }
+
+  async notifyOwed(notices, text, kind, quietMs, current, holding) {
     try { notices.prune(current.snapshot.sessions, current.now); } catch { return; }
     const due = notices.due(current.now);
     if (!due.length) return;
@@ -2850,13 +2936,13 @@ class QueueDispatcher {
         const session = current.snapshot.sessions.find(s => s.id === target.sessionId);
         if (!session || session.nativeId !== target.nativeId || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
         if (engaged.has(session.id) || Array.isArray(holding) && holding.includes(session.id)) continue;
-        const fresh = await this.freshReady(session.id, Math.min(this.humanQuietMs, ANSWER_QUIET_MS));
+        const fresh = await this.freshReady(session.id, quietMs);
         if (!fresh || fresh.session.nativeId !== target.nativeId) continue;
         // Read after the wait: a receipt the agent read meanwhile is not told.
         const told = notices.take(target);
         if (!told.length) continue;
         try {
-          await this.send(fresh.session, noticeText(told), `answer-notice:${randomUUID()}`);
+          await this.send(fresh.session, text(told), `${kind}:${randomUUID()}`);
           notices.sent(target, told);
         } catch { notices.failed(target); }
       } catch {
@@ -2970,6 +3056,17 @@ class QueueDispatcher {
       return null;
     }
     return { steward, session };
+  }
+
+  // The step the person can take when the designated butler, in no space, is held by its own rotation episode left
+  // invalid: the backend refuses every dispatch send to it (workspace.cjs send) until the person discards that handoff
+  // (renderer.js rotationReleaseAction), on a backend before alpha.284 after updating it (releaseRotation). Null otherwise.
+  ownHandoffStep(sessions) {
+    const steward = this.stewardOutside(sessions), session = steward && sessions.find(s => s.id === steward.sessionId);
+    if (!session || session.archived || rotationEpoch(session) === null || session.rotationEpisode.state !== 'invalid') return null;
+    let version = session.runtimeVersion;
+    try { version = this.client?.route(session.id)?.state?.runtimeVersion ?? version; } catch { /* The session's own field. */ }
+    return releaseBackendOutdated(version) ? 'update-backend' : 'release';
   }
 
   // The designated butler when it is this very native session and in no space; anything else names nobody.
@@ -3426,6 +3523,8 @@ class QueueDispatcher {
       }
     }
     if (result?.epoch !== epoch || result.tag !== tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
+    // A step the person or the butler took went through, as one of the butler's calls does (steward-wake.cjs).
+    this.stewardWake?.controlSucceeded();
     const record = this.rotations[id];
     if (record?.oldNativeId === nativeId && record.episodeEpoch === epoch && record.tag === tag) { delete this.rotations[id]; this.save(); }
     this.schedule();
@@ -3546,6 +3645,45 @@ class QueueDispatcher {
     this.appendLog('waiting', record, { reason: 'person-active' });
     this.roomState.rotationEvent(record.roomIds, 'deferred', this.label(oldId, record.name));
     await this.broadcast();
+  }
+
+  // Before alpha.284 (a73629ca) a deferral for the person dropped its record and left the backend episode invalid,
+  // which then held the session for good: the butler from 11-19 21:13 PT, through every restart (R129). Its own log
+  // still says what NAW did: the request, then the deferral, nothing after. Ended here as deferRotation ends one now,
+  // on a backend that can; any other invalid episode stays the person's to release.
+  async finishDeferrals(snapshot, now) {
+    let changed = false;
+    for (const s of snapshot?.sessions || []) {
+      const episode = s?.rotationEpisode;
+      if (episode?.state !== 'invalid' || episode.nativeId !== s.nativeId || s.archived || Object.hasOwn(this.rotations, s.id) ||
+          Object.hasOwn(this.rejectedRotations, s.id) || this.faultedRotations.has(s.id)) continue;
+      const input = (s.messages || []).find(m => m?.id === episode.tag), purpose = input?.dispatchPurpose;
+      if (!input || input.dispatchItem !== `rotation:${s.id}` || purpose?.kind !== 'rotation-request' || purpose.epoch !== episode.epoch ||
+          purpose.nativeId !== s.nativeId || !Number.isSafeInteger(input.time)) continue;
+      const after = this.log.filter(e => e.old?.id === s.id && e.old.nativeId === s.nativeId && e.time >= input.time);
+      if (after[0]?.event !== 'requested' || after[1]?.event !== 'waiting' || after[1].reason !== 'person-active' ||
+          after.slice(1).some(e => e.event !== 'waiting')) continue;
+      let entry;
+      try { entry = this.client.route(s.id); } catch { continue; }
+      const version = entry?.state?.runtimeVersion ?? s.runtimeVersion;
+      // An older backend has no such step: the person updates it first (the banner's button).
+      if (releaseBackendOutdated(version)) continue;
+      const key = JSON.stringify([s.id, episode.epoch, episode.tag, version ?? null]);
+      if (this.deferralsTried.has(key)) continue;
+      this.deferralsTried.add(key);
+      try {
+        const result = await withTimeout(entry.client.call('invalidateRotation', s.id, s.nativeId, episode.epoch,
+          { tag: episode.tag, reason: 'person-active' }), CALL_TIMEOUT_MS, 'invalidate-timeout');
+        if (result?.epoch === episode.epoch && result.tag === episode.tag && result.state === 'released') {
+          // It rests as deferRotation's would, before it is asked again.
+          this.deferredAt.set(s.id, { at: now, due: after[0].reason });
+          this.appendLog('waiting', { oldId: s.id, oldNativeId: s.nativeId, name: this.name(s), roomIds: roomIds(s) }, { reason: 'person-active', finished: true });
+          changed = true;
+        }
+      } catch { /* Left as it is: the person's step still ends it. */ }
+    }
+    if (changed) await this.broadcast();
+    return changed;
   }
 
   // A bounded record per changed wait. It never rests, stops or replaces the
@@ -4042,6 +4180,7 @@ module.exports = {
   memoryPressure,
   saveTerminalScreen,
   nextBackendMove,
+  moveWait,
   quietFor,
   MIGRATE_QUIET_MS,
   MIGRATE_UNPROVEN_QUIET_MS,
