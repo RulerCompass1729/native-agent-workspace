@@ -50,6 +50,16 @@ function creationCovered(options, peers, now = Date.now()) {
       : options.provider === 'claude' && mode && mode === p.nativePermissionMode && options.newDirectory !== true &&
         typeof options.cwd === 'string' && typeof p.cwd === 'string' && path.resolve(options.cwd) === path.resolve(p.cwd)));
 }
+// Everything the permission requires of one action, given the permission state s. Not exported: only authorized()
+// passes the state as read, and fallback() only the designation the person has now.
+function covered(policy, s, actor, command, state, roomId) {
+  const current = policy.role.current();
+  if (!s.on || !same(s.designation, policy.role.selected) || !same(current, { sessionId: actor.id, nativeId: actor.nativeId }) || !localAction(command)) return null;
+  const owner = state.sessions.find(x => x.id === actor.id && x.nativeId === actor.nativeId && !x.archived && !x.nativeContextPending);
+  if (!owner || roomIds(owner).length) return null;
+  if (command.method === 'create' && !creationCovered(command.arguments[0], state.sessions.filter(x => roomIds(x).includes(roomId)), policy.now())) return null;
+  return s;
+}
 class StewardStanding {
   constructor(directory, { role, person, now = Date.now }) {
     this.file = path.join(directory, 'steward-standing.json'); Object.assign(this, { role, person, now });
@@ -75,9 +85,26 @@ class StewardStanding {
       try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
     } finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temp); } catch {} }
   }
+  // On for an earlier designation reads off, with why: the person designated another butler since (R118).
   view() {
-    try { const s = this.read(); return { on: s.on && same(s.designation, this.role.selected), limit: LIMIT, unavailable: false }; }
-    catch { return { on: false, limit: LIMIT, unavailable: true }; }
+    try {
+      const s = this.read(), on = s.on && same(s.designation, this.role.selected);
+      // With nobody designated there is no one to turn it on for again.
+      const other = s.on && !on && Boolean(this.role.selected);
+      return { on, limit: LIMIT, unavailable: false, ...(other ? { reason: 'other-designation' } : {}) };
+    } catch { return { on: false, limit: LIMIT, unavailable: true }; }
+  }
+  // Why the current butler's action asks instead: it would be covered, within the hourly limit, had the permission
+  // been turned on for the current designation, so turning it on again fixes it. A code only.
+  fallback(actor, command, state, roomId) {
+    try {
+      const s = this.read();
+      if (!s.on || !this.role.selected || same(s.designation, this.role.selected)) return null;
+      if (!covered(this, { ...s, designation: this.role.selected }, actor, command, state, roomId)) return null;
+      const now = this.now();
+      if (s.used.filter(x => x.at > now - HOUR).length >= LIMIT) return null;
+      return 'standing-other-designation';
+    } catch { return null; }
   }
   set(context, on) {
     if (!this.person(context) || typeof on !== 'boolean') throw Error('Only the current person window can change standing permission');
@@ -88,12 +115,7 @@ class StewardStanding {
     return this.view();
   }
   authorized(actor, command, state, roomId) {
-    const s = this.read(), current = this.role.current();
-    if (!s.on || !same(s.designation, this.role.selected) || !same(current, { sessionId: actor.id, nativeId: actor.nativeId }) || !localAction(command)) return null;
-    const owner = state.sessions.find(x => x.id === actor.id && x.nativeId === actor.nativeId && !x.archived && !x.nativeContextPending);
-    if (!owner || roomIds(owner).length) return null;
-    if (command.method === 'create' && !creationCovered(command.arguments[0], state.sessions.filter(x => roomIds(x).includes(roomId)), this.now())) return null;
-    return s;
+    return covered(this, this.read(), actor, command, state, roomId);
   }
   take(actor, command, state, roomId) {
     let s; try { s = this.authorized(actor, command, state, roomId); } catch { return null; }

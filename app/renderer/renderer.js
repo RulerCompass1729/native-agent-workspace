@@ -3175,6 +3175,10 @@ function renderBackgroundControls(entry, message) {
   const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
   if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
   if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
+  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
+  if (card && !op.replacedBy && !op.disposition && op.standingFallback === 'standing-other-designation') {
+    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
+  }
   const raw = backgroundDetailText(op);
   if (raw) box.append(backgroundDetails(uiNode('summary', 'background.card.details'), raw));
   const mergedAway = batchRole && !batchRole.open;

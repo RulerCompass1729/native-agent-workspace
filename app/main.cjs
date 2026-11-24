@@ -1920,6 +1920,8 @@ async function boot() {
     standingValid: (actor, command, context, grant) => stewardStanding.valid(actor, command,
       sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared', grant),
     inputDelivery: (id, owner, seen) => require('./workspace-client.cjs').consentedInputBlocked(dataDir, id, owner, seen),
+    standingFallback: (actor, command, context) => stewardStanding.fallback(actor, command,
+      sessionLabels.apply(roomState.apply(context.client.snapshot())), context.view.spaceId || 'shared'),
     context: async (actor, saved, kept) => {
       const view = saved || { owner: randomUUID(), selected: actor.id, mode: 'chat', preference: 'chat', active: false };
       backups(view);
