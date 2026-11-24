@@ -700,7 +700,7 @@ class Claude extends EventEmitter {
     this.terminal.on('closed', result => this.terminalClosed(result));
   }
   terminalClosed(result) {
-    this.cancelQueueRefresh();
+    this.cancelQueueRefresh(); this.clearUnbound();
     this.cancelNativeAbort(); this.ready = false; this.submission.close();
     if (!result.confirmed) { this.emit('activity', ...uiActivity("notice.activity.terminalDisconnectedExitUnconfirmed")); this.emit('state', 'error'); return; }
     // Native /background ends this root like /exit, then its daemon starts the
@@ -761,6 +761,7 @@ class Claude extends EventEmitter {
     // The bridge proves a compacted turn's own continuation (control:turn-continue).
     this.nativeTurnContinue = this.nativeBlocks && message.nativeTurnContinue === true && !this.retainedReader;
     this.displayProofs = new Map(); this.displayGap = false; this.gapFloor = 0;
+    this.clearUnbound();
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords, nativeQueuedPromptLinks: this.nativeQueuedPromptLinks, nativeMidturnAppend: this.nativeMidturnAppend, nativeNarration: this.nativeNarration, nativeTurnContinue: this.nativeTurnContinue };
   }
   validRootBinding(message) {
@@ -1717,8 +1718,26 @@ class Claude extends EventEmitter {
     try { return await this.deliver(pending, true); }
     finally { if (this.queued === pending) this.queued = null; }
   }
+  // Input reached a root whose plugin never bound NAW (2026-11-23: an unqualified launch takes the plugin's
+  // listen-only path and refuses every NAW tool). The plugin cannot report that; the workspace tells the butler.
+  watchUnbound() {
+    if (this.rootLease || this.retainedReader || this.unboundTimer || this.nativeUnbound) return;
+    this.unboundTimer = setTimeout(() => {
+      this.unboundTimer = null;
+      if (this.rootLease || this.disposed || this.rootEnding || !this.terminal?.alive) return;
+      this.nativeUnbound = { at: Date.now(), nativeId: this.record.nativeId };
+      this.emit('capability');
+    }, this.unboundGraceMs ?? 30000);
+    this.unboundTimer.unref?.();
+  }
+  clearUnbound() {
+    clearTimeout(this.unboundTimer); this.unboundTimer = null;
+    if (!this.nativeUnbound) return;
+    this.nativeUnbound = null; this.emit('capability');
+  }
   async deliver(pending, queued = false) {
     const { text, tag, guard } = pending;
+    this.watchUnbound();
     try {
       const midturn = queued && this.nativeMidturnAppend === true;
       const receipt = await this.submission.request(text, tag, guard, queued, midturn, midturn ? pending.midturnText : undefined);

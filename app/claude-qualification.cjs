@@ -39,9 +39,35 @@ function save(file, record) {
   try { fs.writeFileSync(temp, JSON.stringify({ format: 1, checks: retained }), { mode: 0o600 }); fs.renameSync(temp, file); }
   finally { fs.rmSync(temp, { force: true }); }
 }
+// Other backends of this data root: <root>/backends/<20-hex key>/claude-qualification.json.
+function siblingFiles(file) {
+  const own = path.dirname(path.resolve(file)), parent = path.dirname(own);
+  if (!/^[a-f0-9]{20}$/.test(path.basename(own)) || path.basename(parent) !== 'backends') return [];
+  let names = [];
+  try { names = fs.readdirSync(parent); } catch { return []; }
+  const files = [];
+  for (const name of names.filter(n => /^[a-f0-9]{20}$/.test(n) && n !== path.basename(own)).sort().slice(0, 32)) {
+    const candidate = path.join(parent, name, 'claude-qualification.json');
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (stat.isFile() && stat.uid === process.getuid() && stat.size <= 1 << 20) files.push(candidate);
+    } catch { /* No record there. */ }
+  }
+  return files;
+}
 function approvedVersions(file, dir) {
-  const fingerprint = basis();
-  return Object.entries(load(file)).filter(([version, record]) => exact(version) && record?.version === version && passed(record) && current(record, path.join(dir, version), fingerprint)).map(([version]) => version);
+  const fingerprint = basis(), own = load(file);
+  const valid = ([version, record]) => exact(version) && record?.version === version && passed(record) && current(record, path.join(dir, version), fingerprint);
+  const versions = new Set(Object.entries(own).filter(valid).map(([version]) => version));
+  // A restarted backend re-checks while its sessions resume (2026-11-23 18:11Z). A sibling's pass of the
+  // same code basis and binary identity is the same result; this backend's own current failure still wins.
+  for (const sibling of siblingFiles(file)) {
+    for (const entry of Object.entries(load(sibling)).filter(valid)) {
+      const mine = own[entry[0]];
+      if (!(mine?.version === entry[0] && mine.status === 'failed' && current(mine, path.join(dir, entry[0]), fingerprint))) versions.add(entry[0]);
+    }
+  }
+  return [...versions];
 }
 function launch({ launcher, file }) {
   const current = require('./claude-pin.cjs').installed(launcher);

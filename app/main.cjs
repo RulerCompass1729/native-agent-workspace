@@ -982,6 +982,7 @@ function bindClient(context) {
     try { butlerIngress?.observeTerminalDialogs(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeNativeQuestions(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
+    try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }
