@@ -48,7 +48,7 @@ const causes = new WeakMap();
 let causeSeq = 0;
 function cause(s, code, peer = false) {
   if (!s || !Object.hasOwn(REVOKED, code)) return;
-  causes.set(s, [...(causes.get(s) || []), { seq: ++causeSeq, code: labelled(code), peer }].slice(-8));
+  causes.set(s, [...(causes.get(s) || []), { seq: ++causeSeq, code: labelled(code), peer: Boolean(peer) }].slice(-8));
 }
 function controlCause(s, since, fallback = 'control', peer = false) {
   return (causes.get(s) || []).find(e => e.seq > (since ?? 0) && e.peer === peer)?.code || fallback;
