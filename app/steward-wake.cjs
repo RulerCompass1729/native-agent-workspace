@@ -15,6 +15,9 @@
 // designation it was turned on for: designating or revoking the butler, the same session again included, turns it off
 // (main.cjs steward), and it is not on for a session other than the one designated. Nothing here calls a model: a wake is one NAW
 // message into the butler's own conversation, under the person's automatic-message switch, like a queue item.
+// Patrol while idle (R120, PM brief 2026-11-23): with the switch on and an interval set, a butler idle that long while
+// work is unfinished gets one 【NAW 巡查】 with counts only, through the same checks and record as a wake. With nothing
+// changed since the last patrol the interval doubles, up to PATROL_MAX; off with the switch.
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -27,6 +30,7 @@ const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // The record is read a page at a time up to REFUSAL_PAGES pages; refusals beyond them still count as refusals only.
 const REFUSAL_WAKES = 3, REFUSED = 'control-refused', REFUSAL_PAGES = 20;
 const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
+const PATROL_CHOICES = Object.freeze([null, 15, 30, 60]), PATROL_MAX = 240;
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
   'source-unavailable','record-unavailable','send-not-sent','send-unconfirmed','state-unavailable','missing','archived','backend-update-needed',
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
@@ -60,10 +64,16 @@ function from(latest, woken) {
 function wakeText(position) {
   return `【NAW 事件】有新事件。用 workspace_control 调 stewardEvents，参数 [${JSON.stringify(position)}]；more 为 true 时从 through 接着读。`;
 }
+// Counts only: no session, space or item is named.
+function patrolText(minutes, sessions, items) {
+  return `【NAW 巡查】大管家已空闲至少 ${minutes} 分钟，还有 ${sessions + items} 件没结的活（${sessions} 个会话在跑或等批准，${items} 件在队列里）。用 workspace_control snapshot 看。`;
+}
+const count = n => Number.isSafeInteger(n) && n >= 0;
 function valid(data) {
-  return Boolean(data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).sort().join(',') === 'at,designation,on,version,woken' &&
+  return Boolean(data && typeof data === 'object' && !Array.isArray(data) && Object.keys(data).sort().join(',') === 'at,designation,on,patrol,version,woken' &&
     data.version === 1 && typeof data.on === 'boolean' && (data.designation === null || identity(data.designation)) &&
-    (data.woken === null || parse(data.woken) !== null) && (data.at === null || Number.isSafeInteger(data.at) && data.at >= 0));
+    (data.woken === null || parse(data.woken) !== null) && (data.at === null || Number.isSafeInteger(data.at) && data.at >= 0) &&
+    PATROL_CHOICES.includes(data.patrol) && (data.on || data.patrol === null));
 }
 function readPrivate(file) {
   // Open first, then judge what was opened: a link is refused and nothing can be swapped in between.
@@ -86,11 +96,15 @@ class StewardWake {
     this.blocked = null;
     // In memory only: a restart allows the butler REFUSAL_WAKES more.
     this.refusalWakes = 0;
-    this.state = { version: 1, on: false, designation: null, woken: null, at: null };
+    // In memory: the open work's hash and the interval of the last patrol sent, and whether one is wanted this pass.
+    this.patrolLast = null; this.patrolWanted = false;
+    this.state = { version: 1, on: false, designation: null, woken: null, at: null, patrol: null };
     // A saved state that cannot be read is off, and says so, until the person or the butler sets it again.
     this.failed = false;
     try {
-      const data = JSON.parse(readPrivate(this.file));
+      let data = JSON.parse(readPrivate(this.file));
+      // Saved before patrol existed: patrol off.
+      if (data && typeof data === 'object' && !Array.isArray(data) && !Object.hasOwn(data, 'patrol')) data = { ...data, patrol: null };
       if (!valid(data)) throw Error('Invalid steward wake state');
       this.state = data;
     } catch (error) { if (error.code !== 'ENOENT') this.failed = true; }
@@ -110,7 +124,7 @@ class StewardWake {
       since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
       ...(this.blocked.step ? { step: this.blocked.step, ...this.undelivered() } : {}),
     } : null;
-    return { on, at: on ? this.state.at : null, failed: this.failed, ...(blocked ? { blocked } : {}) };
+    return { on, at: on ? this.state.at : null, failed: this.failed, ...(on && this.state.patrol ? { patrol: this.state.patrol } : {}), ...(blocked ? { blocked } : {}) };
   }
   // While the person's step holds it: the messages to the butler NAW recorded as not delivered since its last wake
   // (butler-ingress.cjs observeWakeUndelivered). Their text was never kept, so they are not waiting to be read.
@@ -130,8 +144,10 @@ class StewardWake {
     const visible = this.blocked?.visible; this.blocked = null;
     if (visible) try { this.changed(); } catch { /* Visibility never grants a send. */ }
   }
+  // An event or a patrol is waiting to go out.
+  pending() { return this.due() || this.patrolWanted && this.active(); }
   skip(reason) {
-    if (!this.due()) { this.clearBlocked(); return; }
+    if (!this.pending()) { this.clearBlocked(); return; }
     const now = this.now();
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked, previous = blocked.reason;
@@ -183,11 +199,39 @@ class StewardWake {
     if (on) {
       let designated = null; try { designated = this.selected(); } catch { throw fault('The designation cannot be read', 'STEWARD_WAKE_UNAVAILABLE'); }
       if (!identity(designated)) throw fault('No butler is designated', 'STEWARD_WAKE_NO_BUTLER');
-      next = { version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId }, woken: this.latest(), at: this.failed ? null : this.state.at };
-    } else next = { version: 1, on: false, designation: null, woken: null, at: this.failed ? null : this.state.at };
+      next = { version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId }, woken: this.latest(), at: this.failed ? null : this.state.at, patrol: null };
+    } else next = { version: 1, on: false, designation: null, woken: null, at: this.failed ? null : this.state.at, patrol: null };
     this.write(next);
+    this.patrolLast = null; this.patrolWanted = false;
     if (!on) this.clearBlocked();
     return this.view();
+  }
+  // The patrol interval in minutes, or null for off. Only while the switch is on; off needs nothing.
+  setPatrol(minutes) {
+    if (!PATROL_CHOICES.includes(minutes)) throw fault('Invalid patrol interval', 'STEWARD_PATROL_INVALID');
+    if (!this.active()) {
+      if (minutes === null) return this.view();
+      throw fault('The event wake is off', 'STEWARD_PATROL_WAKE_OFF');
+    }
+    if (this.state.patrol !== minutes) {
+      this.write({ ...this.state, patrol: minutes });
+      this.patrolLast = null; this.patrolWanted = false;
+    }
+    return this.view();
+  }
+  // Whether a patrol is due this pass: on, with an interval, `work` ({ sessions, items, hash }) unfinished, and the
+  // butler idle `idleMs` for the interval, doubled for each patrol since which the work's hash is unchanged.
+  // Gives the interval in minutes, or null.
+  patrolDue(idleMs, work) {
+    let minutes = null;
+    const base = this.active() ? this.state.patrol : null;
+    if (base && work && count(work.sessions) && count(work.items) && work.sessions + work.items > 0) {
+      const last = this.patrolLast;
+      minutes = last && last.hash === work.hash ? Math.min(last.minutes * 2, PATROL_MAX) : base;
+      if (!(Number.isFinite(idleMs) && idleMs >= minutes * 60000)) minutes = null;
+    }
+    this.patrolWanted = minutes !== null;
+    return minutes;
   }
   write(next) {
     if (!valid(next)) throw fault('Invalid steward wake state', 'STEWARD_WAKE_INVALID');
@@ -195,7 +239,10 @@ class StewardWake {
     let fd;
     try {
       fd = fs.openSync(temp, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify(next));
+      // With patrol off the file keeps the earlier keys, so a version from before patrol still reads it.
+      const saved = { ...next };
+      if (saved.patrol === null) delete saved.patrol;
+      fs.writeFileSync(fd, JSON.stringify(saved));
       fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
       fs.renameSync(temp, this.file);
       const directory = fs.openSync(path.dirname(this.file), 'r');
@@ -267,6 +314,34 @@ class StewardWake {
     else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
     return { state: outcome.state, position, through: latest };
   }
+  // One patrol of `session`, checked by the dispatcher as for a wake, after patrolDue gave `minutes` for `work`.
+  // The same minute between messages, model exclusion and record-before-send as a wake; the event position is kept.
+  async patrol(session, model, send, work, minutes) {
+    const now = this.now();
+    if (!this.patrolWanted || !this.active()) { this.patrolWanted = false; this.clearBlocked(); return null; }
+    if (!this.rested(now)) { this.skip('cooldown'); return null; }
+    if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
+    if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
+    const id = randomUUID();
+    try { this.record({ kind: 'patrol', id, session: { id: session.id, nativeId: session.nativeId }, minutes, sessions: work.sessions, items: work.items }); }
+    catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
+    let tag = null, outcome;
+    try {
+      tag = await send(patrolText(minutes, work.sessions, work.items), `steward-patrol:${id}`);
+      outcome = { state: 'sent', error: null };
+    } catch (error) {
+      outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
+    }
+    try { this.write({ ...this.state, at: now }); } catch { /* Failed: no further message until it is set again. */ }
+    try {
+      this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
+        operationId: typeof tag === 'string' && validId(tag) ? tag : null });
+    } catch { /* Seen as a patrol without an outcome. */ }
+    if (outcome.state === 'sent') { this.patrolLast = { hash: work.hash, minutes }; this.patrolWanted = false; this.clearBlocked(); }
+    else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
+    return { state: outcome.state, minutes };
+  }
 }
 
-module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, HOLD_STEPS, REFUSAL_WAKES, REFUSED, wakeText, newer, from });
+module.exports = Object.freeze({ StewardWake, FILE, GAP_MS, STALL_MS, MAX_BLOCK_RECORDS, BLOCK_REASONS, HOLD_STEPS, REFUSAL_WAKES, REFUSED, PATROL_CHOICES, PATROL_MAX,
+  wakeText, patrolText, newer, from });

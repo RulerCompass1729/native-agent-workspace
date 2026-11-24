@@ -594,5 +594,7 @@ test('only the butler\'s own read through NAW asks for the held wake at once', (
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
   const handler = source.slice(source.indexOf("register('stewardWake'"), source.indexOf("register('stewardWake'") + 1600);
   assert.match(handler, /stewardWake\.view\(\{ held: c\.background === true \}\)/u);
-  assert.equal((source.match(/view\(\{ held:/gu) || []).length, 1, 'banners and the phone keep the ten minutes');
+  const patrol = source.slice(source.indexOf("register('stewardPatrol'"), source.indexOf("register('stewardEvents'"));
+  assert.match(patrol, /stewardWake\.view\(\{ held: c\.background === true \}\)/u);
+  assert.equal((source.match(/view\(\{ held:/gu) || []).length, 2, 'banners and the phone keep the ten minutes');
 });

@@ -1483,7 +1483,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'backgroundWithdraw']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -2462,6 +2462,15 @@ async function boot() {
     await broadcastRoom(); return value;
   });
   applicationHandlers.delete('stewardStanding');
+  // Patrol while idle (steward-wake.cjs patrol): the same two callers as the wake switch
+  // (stewardWake below), which it needs on. null, 15, 30 or 60 minutes; no argument only says how it stands.
+  register('stewardPatrol', async (c, ...args) => {
+    if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw uiError('error.steward.wakeOnly');
+    if (args.length > 1 || args.length === 1 && ![null, 15, 30, 60].includes(args[0])) throw uiError('error.steward.patrolInvalid');
+    if (!stewardWake) throw uiError('error.steward.wakeUnavailable');
+    try { return args.length === 0 ? stewardWake.view({ held: c.background === true }) : stewardWake.setPatrol(args[0]); }
+    catch (error) { throw uiError(error?.code === 'STEWARD_PATROL_WAKE_OFF' ? 'error.steward.patrolWakeOff' : error?.code === 'STEWARD_PATROL_INVALID' ? 'error.steward.patrolInvalid' : 'error.steward.wakeUnavailable'); }
+  });
   // What the butler reads to report to the person only what is new (the person, 2026-11-09: 「我希望 NAW 自己可以监控
   // 自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」): the business events NAW already records without a
   // model (deliveries, decisions, failures, blocked steps, a space whose queue ran empty), after the position its last

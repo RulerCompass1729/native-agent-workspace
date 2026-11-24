@@ -310,7 +310,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Both calls are answered by this desktop, with or without a backend that supports background control.
   assert.match(source, /name === 'handoff' \|\| name === 'steward' \|\| /); assert.match(source, /'chooseFolder', 'copy', 'landing', /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'stewardStanding', 'stewardWake', 'landing'\]\) \{/);
+  assert.match(preload, /'runtimeLocation', 'retrySave', 'steward', 'stewardRecord', 'stewardStanding', 'stewardWake', 'stewardPatrol', 'landing'\]\) \{/);
   assert.equal(source.match(/stewardRole\.set\(/g).length, 2, 'Only the entry writes the designation');
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
@@ -349,6 +349,8 @@ test('every sentence exists in both languages, and the words say what the design
     'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable',
     // Waking the butler on events; its refusals are checked in steward-wake.test.cjs.
     'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable',
+    // Patrol while idle (R120); checked in steward-wake.test.cjs.
+    'error.steward.patrolInvalid', 'error.steward.patrolWakeOff', 'reading.stewardPatrol',
     // The sender of a wake in the butler's conversation; checked in steward-wake.test.cjs.
     'reading.stewardWake', 'stewardWake.openRecord', 'stewardWake.stalled',
     // The butler's own handoff holding its wakes (R117); checked in steward-own-handoff.test.cjs.

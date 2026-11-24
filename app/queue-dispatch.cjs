@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
@@ -2882,12 +2882,17 @@ class QueueDispatcher {
   // person; then the same send as a queue item, a NAW message under the person's automatic-message switch. `holding` is
   // what the pass asked the integration engine before anything was sent (asked once a pass); a handoff given since then
   // left the butler at work, which the fresh read below sees.
+  // With no event waiting, a patrol (steward-wake.cjs patrol) goes through the same checks once the butler has been
+  // idle for its interval while work is unfinished; an event goes first.
   async wakeSteward(current, holding) {
     try {
+      // The butler's own handoff holds every wake, the patrol's included, until the person's step.
       const own = this.ownHandoffStep(current.snapshot.sessions);
       if (own) return this.stewardWake.hold('rotation-control-unresolved', own);
       this.stewardWake.endHold();
-      if (!this.stewardWake.due()) { this.stewardWake.clearBlocked(); return; }
+      const event = this.stewardWake.due(), work = event ? null : this.openWork(current);
+      const minutes = work ? this.stewardWake.patrolDue(work.idleMs, work) : null;
+      if (!event && minutes === null) { this.stewardWake.clearBlocked(); return; }
       const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
@@ -2899,11 +2904,32 @@ class QueueDispatcher {
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
-      await this.stewardWake.wake(fresh.session, model, (text, itemId) => this.send(fresh.session, text, itemId));
+      const send = (text, itemId) => this.send(fresh.session, text, itemId);
+      if (event) await this.stewardWake.wake(fresh.session, model, send);
+      else await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
     } catch (error) {
       // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
       this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable');
     }
+  }
+
+  // The work a patrol counts: sessions not archived that are running or awaiting approval, and items queued or sent in
+  // any space not archived (waiting on the person does not count); a hash over their ids and states only; and how long
+  // the butler has been idle. Counts and the hash leave this function, no name or text.
+  openWork(current) {
+    const butler = this.stewardSession(current.snapshot.sessions)?.session?.id ?? null, parts = [];
+    let sessions = 0, items = 0;
+    for (const s of current.snapshot.sessions || []) {
+      if (!s || s.archived || s.id === butler) continue;
+      if (['working', 'approval', 'background'].includes(s.state) || s.approval || s.nativeApproval) { sessions++; parts.push(`s\t${s.id}\t${s.state}\t${s.approval || s.nativeApproval ? 1 : 0}`); }
+    }
+    for (const room of [this.roomState.value, ...this.roomState.spaces.rooms]) {
+      if (!room || room.archived || !Array.isArray(room.queue)) continue;
+      for (const item of room.queue) if (['queued', 'sent'].includes(item.status)) { items++; parts.push(`i\t${item.id}\t${item.status}`); }
+    }
+    const since = butler === null ? undefined : this.idleSince.get(butler);
+    return { sessions, items, hash: createHash('sha256').update(parts.sort().join('\n')).digest('hex'),
+      idleMs: Number.isFinite(since) ? current.now - since : NaN };
   }
 
   // The person's answers on an agent's confirmation cards, told to that agent (answer-notices.cjs). One message for
