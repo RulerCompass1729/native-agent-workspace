@@ -343,10 +343,14 @@ local branch or main; not installed, pushed or published):
   follows the person's use: after an update is installed in the daily app,
   operate each change of that version the person can see as they described it,
   by GUI script where possible and otherwise by asking the person through the
-  board's secretary; the row moves to done only once that passes. Fixed
-  per-version overhead (packaging, signed launch, install, records, push scan)
-  stays under about a quarter of the version's cycle; otherwise batch, except
-  urgent items. The rules correct themselves: daily, or every five versions, the
+  board's secretary; the row moves to done only once that passes. Versions
+  follow urgency (the person, 2026-11-23). Tier 1, daily use broken or stuck or
+  anything hurting NAW development (butler not woken, sessions cut off, messages
+  lost or blocked, slow or blocked installs, invisible waits, data loss,
+  privacy): each fix with READY and a non-author PASS ships alone, installed and
+  pushed within about two hours. Tier 2, other fixes: a new version once the
+  last is installed, no batching. Tier 3, improvements: the next version. All
+  gates stay. The rules correct themselves: daily, or every five versions, the
   secretary reports three numbers from the records to the person (at which step
   each problem the person found in daily use should have been caught, whether
   each kind of check has recently caught a real problem, and the time from
@@ -410,19 +414,15 @@ local branch or main; not installed, pushed or published):
   not just the author's summary. Reuse the reviewer after fixes. Keep private
   evidence outside this public repo, and do not add model tests simply to make
   a review appear more thorough.
-- The review record is one file per day: append a new record at the end of
-  `docs/review/YYYY-MM-DD.md` for the day you write it (`date +%F` on this
-  machine), creating the file if needed. `docs/review.md` holds the records
-  written before it was frozen on 2026-11-13 (that day continues in
-  `docs/review/2026-11-13.md`): the push guard refuses any file over 2 MiB, and
-  every edit put another whole copy of it into history. Do not add to it or
-  edit it; a correction or status change to an entry there is a new record in
-  today's file, naming the entry. When merging, keep every record both sides
-  add to a day file. When a branch changed `docs/review.md`, restore main's
-  frozen copy and put each added record, and each change restated as a record
-  naming its entry, at the end of the day file of the day you move it.
-  `app/tests/docs-size.test.cjs` fails when `docs/review.md` differs from its
-  frozen copy or another file under `docs/` passes 1.5 MiB.
+- The review record is one file per lane and day,
+  `docs/review/YYYY-MM-DD/<lane>.md` (`date +%F`; `<lane>` is the branch without
+  `lane/`), so merging lanes does not conflict there. Older day files stay
+  unmoved, and `docs/review.md` stays frozen since 2026-11-13 (2 MiB push
+  limit): a correction to an entry in either is a new record naming it. When
+  merging, keep every record both sides add; when a branch changed
+  `docs/review.md`, restore main's frozen copy and move its additions into your
+  lane file. `app/tests/docs-size.test.cjs` fails when `docs/review.md` differs
+  from its frozen copy or another file under `docs/` passes 1.5 MiB.
 
 - Read actual implementation files before making source-level claims.
 - Label requirements, design proposals, source findings, and runtime proof separately.

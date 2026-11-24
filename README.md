@@ -231,7 +231,7 @@ not a prerequisite for building this DMG. No public binary is published yet.
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
 | [Publication safeguards](docs/publication.md) | Local commit/push checks and contributor setup |
 | [Privacy requirements](docs/privacy.md) | Data boundaries and conditions before an application release |
-| [Review and issue record](docs/review/) | User feedback, independent findings, fixes and remaining evidence gaps, one file per day; [records written before the freeze on 2026-11-13](docs/review.md) |
+| [Review and issue record](docs/review/) | User feedback, independent findings, fixes and remaining evidence gaps, one file per lane and day; [records written before the freeze on 2026-11-13](docs/review.md) |
 | [Security reporting](SECURITY.md) | Report a vulnerability without posting sensitive data publicly |
 
 ## Product commitments

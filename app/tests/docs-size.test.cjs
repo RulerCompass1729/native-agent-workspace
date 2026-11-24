@@ -1,6 +1,7 @@
 // The push guard (scripts/privacy_guard.py, MAX_BLOB) refuses any file over 2 MiB. This fails at 1.5 MiB, while a
 // file under docs/ can still be split before a push is refused. docs/review.md passed that size and is frozen
-// (2026-11-13): new review records go in docs/review/YYYY-MM-DD.md, one file per day (CLAUDE.md, "The review record").
+// (2026-11-13). New review records go in docs/review/YYYY-MM-DD/<lane>.md, one file per lane and day; the
+// recursive walk below covers them (CLAUDE.md, "The review record").
 const test = require('node:test'), assert = require('node:assert/strict');
 const crypto = require('node:crypto'), fs = require('node:fs'), path = require('node:path');
 
@@ -18,7 +19,7 @@ test('docs/review.md stays as it was frozen', () => {
   const sha = fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : 'missing';
   assert.equal(sha, FROZEN_REVIEW_SHA256, 'docs/review.md is frozen. Restore the frozen copy (main has it once the '
     + 'freeze is merged; before that, the branch that froze it) and put the new record, or the correction naming the '
-    + 'entry, at the end of docs/review/YYYY-MM-DD.md for today.');
+    + 'entry, in docs/review/YYYY-MM-DD/<lane>.md for today.');
 });
 
 test('no other file under docs/ passes 1.5 MiB', () => {
