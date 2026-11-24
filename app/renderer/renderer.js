@@ -5732,7 +5732,12 @@ function renderStewardWakeWarning(wakeBlock) {
   const chip = $('steward-wake-chip');
   if (!chip) return;
   chip.hidden = !wakeBlock;
-  if (!wakeBlock) { chip.open = false; return; }
+  const announce = $('steward-wake-announce');
+  if (!wakeBlock) {
+    chip.open = false;
+    if (chip.dataset.ownStep || chip.dataset.ownStepRead) { chip.dataset.ownStep = chip.dataset.ownStepRead = ''; if (announce) announce.textContent = ''; }
+    return;
+  }
   const reason = uiText(`stewardWake.reason.${wakeBlock.reason}`);
   // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
   const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId);
@@ -5743,7 +5748,10 @@ function renderStewardWakeWarning(wakeBlock) {
     : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason });
   const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
   const full = undelivered ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;
-  chip.querySelector('.wake-chip-text').textContent = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
+  const live = chip.querySelector('.wake-chip-text');
+  // The person's step is read once below; its minute count would be read again every minute.
+  if (item) live.removeAttribute('role'); else live.setAttribute('role', 'status');
+  live.textContent = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
   chip.querySelector('summary').setAttribute('aria-label', full);
   // An ordinary reason: the chip's own advice. The person's step: what only they can do.
   chip.querySelector('p').textContent = own ? full : uiText('stewardWake.chipDetail', { reason });
@@ -5759,6 +5767,16 @@ function renderStewardWakeWarning(wakeBlock) {
   const log = chip.querySelector('.steward-wake-record');
   log.textContent = uiText('stewardWake.openRecord');
   log.onclick = () => { chip.open = false; stewardSteps?.open(); };
+  // Once per step and hold: the person's step opens the chip without moving focus, and folds it back once taken.
+  // Closed by the person, it stays closed for that step, also when its item comes back after a gap.
+  const key = item ? `${wakeBlock.since}/${wakeBlock.step}` : '';
+  if ((chip.dataset.ownStep || '') !== key) {
+    const first = Boolean(key) && chip.dataset.ownStepRead !== key;
+    chip.dataset.ownStep = key;
+    if (first) { chip.dataset.ownStepRead = key; chip.open = true; }
+    else if (!key) chip.open = false;
+    if (announce) announce.textContent = first ? full : '';
+  }
 }
 function render() {
   if (!state || rendering) return;

@@ -135,7 +135,8 @@ test('the banner says only the reason and the person\'s step; without a menu ite
   const root = path.resolve(__dirname, '..', '..'), source = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf8');
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('function render() {', start);
   const p = { textContent: '' }, summary = { setAttribute(k, v) { this[k] = v; } };
-  const parts = { p, summary, '.wake-chip-text': {}, '.steward-wake-step': {}, '.steward-wake-record': {} }, box = { hidden: true, querySelector: selector => parts[selector] };
+  const text = { setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; } };
+  const parts = { p, summary, '.wake-chip-text': text, '.steward-wake-step': {}, '.steward-wake-record': {} }, box = { hidden: true, dataset: {}, querySelector: selector => parts[selector] };
   // No menu item for this record (steward-wake-banner-step.test.cjs has the ones with): 289 #4, the text points at nothing.
   const context = vm.createContext({ state: null, disconnected: false, rotationReleaseAction: () => [], backendUpdateAction: () => [], $: () => box, stewardSteps: { open() {} }, uiText: null });
   vm.runInContext(source.slice(start, end), context);
