@@ -162,6 +162,16 @@ function maintenanceTargets(command, actor, snapshot, client) {
 // plus the risks to mark. Display only: the confirmation the person's answer is bound to (message, detail,
 // buttons) is not changed, and the full command stays in that detail. Every string is made visible as the
 // detail's are; a session or space name is looked up in `names` ({ sessions, rooms }) and left out when unknown.
+function creationMessage(options) {
+  if (!options || !Object.hasOwn(options, 'initialMessage')) return null;
+  const { initialMessage: text, provider, view, fork } = options;
+  if (provider !== 'codex' || (view !== undefined && view !== 'chat') || fork != null) {
+    throw require('./ui-errors.cjs').uiError('error.background.firstMessageMode');
+  }
+  const trimmed = require('./workspace.cjs').cleanText(text);
+  if (/^\/[a-z-]+(?:\s|$)/i.test(trimmed)) throw require('./ui-errors.cjs').uiError('error.nativeCommandUseTerminal');
+  return text;
+}
 const askedByHandler = ['approve', 'operatorAction', 'wakePolicy', 'backendSwitchSettings', 'quitService', 'input'];
 function operationSummary(command, actor, names = {}) {
   const method = command?.method, args = Array.isArray(command?.arguments) ? command.arguments : [];
@@ -173,7 +183,8 @@ function operationSummary(command, actor, names = {}) {
   // Display classification only; the maintenance/consent policy above is unchanged.
   const clearsHistory = method === 'clearSharedHistory' || method === 'spaceAction' && args[1] === 'clearSharedHistory';
   const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
-  const summary = { action, method: visibleText(method), risks: [] };
+  const withMessage = method === 'create' && typeof args[0]?.initialMessage === 'string';
+  const summary = { action: withMessage ? 'createWithFirstMessage' : action, method: visibleText(method), risks: [] };
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
   if (method === 'create' || method === 'importHistory') {
     const options = (method === 'create' ? args[0] : args[1]) || {};
@@ -191,7 +202,7 @@ function operationSummary(command, actor, names = {}) {
       put('model', shown(settings.model)); put('effort', shown(settings.effort)); put('profile', shown(settings.profile));
       put('permissionMode', ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'].includes(settings.permissionMode) ? settings.permissionMode : undefined);
       // A prepared worktree gives every card its own target, so those cards are never one batch.
-      if (options.gitWorktree == null) put('createKey', require('node:crypto').createHash('sha256').update(JSON.stringify([options.provider, directory,
+      if (options.gitWorktree == null && !withMessage) put('createKey', require('node:crypto').createHash('sha256').update(JSON.stringify([options.provider, directory,
         view, settings.model ?? null, settings.effort ?? null, settings.permissionMode ?? null, settings.profile ?? null,
         options.skipPermissions === true, options.fork ?? null, options.newDirectory === true])).digest('hex').slice(0, 16));
     }
@@ -289,4 +300,4 @@ function inputGuard(workspace, ids, origin = current()) {
   return valid;
 }
 function controlFingerprint(command, state) { return require('./background-fingerprint.cjs').fingerprint(command, state); }
-module.exports = { controlFingerprint, actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, detached, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };
+module.exports = { creationMessage, controlFingerprint, actor, current, request, retainRefusalRows, conversationTarget, conversationSnapshot, visibleText, confirmationDetail, maintenanceAction, maintenanceTargets, operationSummary, run, detached, message, activity, deliveryTargets, assertDeliveryPolicy, terminalInputProof, checkTerminalInput, inputGuard, CAPABILITY: 'backgroundControlV1' };

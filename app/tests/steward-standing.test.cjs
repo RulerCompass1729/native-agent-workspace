@@ -58,6 +58,7 @@ test('standing policy: person-only switch, role/native identity, exact allowlist
     assert.equal(p.take(f.actor, cmd(method), state, 'shared'), null, method);
   assert.equal(p.take(f.actor, cmd('spaceAction', ['shared', 'clearSharedHistory', []]), state, 'shared'), null);
   assert.equal(p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'other-room'), null);
+  assert.equal(p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true, initialMessage: 'First task' }]), state, 'shared'), null);
   const grant = p.take(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'shared'); assert.ok(grant);
   state.sessions[1].skipPermissions = false; state.sessions[1].nativePermissionMode = 'plan';
   assert.equal(p.valid(f.actor, cmd('create', [{ provider: 'claude', skipPermissions: true }]), state, 'shared', grant), false);

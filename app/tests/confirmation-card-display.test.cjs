@@ -45,6 +45,21 @@ test('a creation card reads as one sentence in both languages, its risk from the
   assert.equal(page('zh').backgroundSummaryText(operation.operationSummary({ method: 'mysteryMethod', arguments: [] }, {})), '调用 mysteryMethod');
   assert.equal(page('en').backgroundSummaryText({ action: 'notInThisBuild', method: 'later', risks: [] }), 'Call later');
 });
+test('the combined creation card names the first message and preserves its exact text and permission risk', () => {
+  const text = '  First task\n  second line  ';
+  const options = { ...create.arguments[0], provider: 'codex', name: 'New agent', initialMessage: text };
+  const command = { ...create, arguments: [options] };
+  const summary = operation.operationSummary(command, {});
+  assert.equal(operation.creationMessage(options), text);
+  assert.deepEqual(summary.risks, ['skipPermissions']);
+  assert.equal(summary.createKey, undefined, 'each first message needs its own confirmation');
+  assert.match(page('zh').backgroundSummaryText(summary), /^新建会话并发送首条消息/);
+  assert.match(page('en').backgroundSummaryText(summary), /^Create session and send first message/);
+  assert.equal(JSON.parse(operation.confirmationDetail(command, {})).arguments[0].initialMessage, text);
+  for (const invalid of [{ ...options, provider: 'claude' }, { ...options, view: 'terminal' }, { ...options, initialMessage: ' /quit ' }]) {
+    assert.throws(() => operation.creationMessage(invalid));
+  }
+});
 test('both shared-history commands name the actual space and warn that deletion keeps native history', () => {
   const names = { rooms: [{ id: 'shared', name: 'Project' }, { id: 'other', name: 'Other' }] };
   for (const [command, room] of [[{ method: 'clearSharedHistory', arguments: [] }, 'Project'],
