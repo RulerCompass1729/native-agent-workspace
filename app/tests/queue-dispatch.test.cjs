@@ -345,6 +345,30 @@ test('an answered decision and the item sent while it was open each keep their o
   ]);
 });
 
+test('an answer read inside a turn that was already running is recorded on no item', () => {
+  // The member was on item 2 when the person answered on the card, and read the answer inside that turn
+  // (deliveredInto). What the turn ends with may be item 2's delivery: it must not become the decision's.
+  const read = { ...ANSWERED[2], deliveredInto: 'turn-2' };
+  const clear = { kind: 'answered', roomId: 'shared', itemId: '1', sessionId: 'a', tag: 'h1' };
+  const messages = [
+    ANSWERED[0], ANSWERED[1],
+    { id: 't2', role: 'user', text: 'NAW task two', origin: 'naw-dispatch' },
+    read,
+    { id: 'r2', role: 'assistant', text: '任务二完成\nREADY lane/x abc1234' },
+  ];
+  const second = item('2', { status: 'sent', sentTo: 'a', sentAt: NOW - 20000, tag: 't2', control: 0, afterDecision: true });
+  const cut = { kind: 'settle', roomId: 'shared', itemId: '2', status: 'waiting', reason: 'person-intervened', sessionId: 'a' };
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [answeredItem(), second] }], [member('a', { messages })]), [clear, cut]);
+  // Item 2 is settled as it was before answers were marked.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [answeredItem({ answerTag: undefined }), second] }], [member('a', { messages })]), [cut]);
+  // The same inside a turn another agent's message started.
+  const peer = [ANSWERED[0], ANSWERED[1], { id: 'w1', role: 'user', text: 'a colleague asks', origin: 'agent-wake' }, read,
+    { id: 'r5', role: 'assistant', text: '回同事\nREADY lane/z 1234567' }];
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [answeredItem()] }], [member('a', { messages: peer })]), [clear]);
+  // The row says so as soon as it is read: the mark goes without waiting for the turn to end.
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [answeredItem()] }], [member('a', { messages: peer, state: 'working' })]), [clear]);
+});
+
 test('a decision that went to a successor is recorded from the successor; an unanswered one is settled by nobody', () => {
   // The item names the successor (queueCarry), so the answer went there and its reply is read there.
   const carried = answeredItem({ sentTo: 'b', sentNative: 'native-b', askedBy: { id: 'a', nativeId: 'native-a' } });

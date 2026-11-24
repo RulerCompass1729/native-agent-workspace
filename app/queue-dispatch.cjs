@@ -603,16 +603,19 @@ function startsOtherWork(message) {
 }
 
 // What a session wrote after the row the person's answer to its decision was delivered as (item.answerTag), up to
-// the next input that starts something else. found: the row is in this record; own: it is the person's message;
-// closed: other work began after it. Read only while the session rests: a row still waiting for its turn sits
-// where it was queued and moves when the turn starts (workspace.cjs).
+// the next input that starts something else. found: the row is in this record; own: it is the person's message
+// and started a turn of its own; closed: other work began after it. An answer read inside a turn that was already
+// running (deliveredInto) is not own: what that turn ends with may belong to the work that started it. Read only
+// while the session rests: a row still waiting for its turn sits where it was queued and moves when the turn
+// starts (workspace.cjs).
 function answeredReply(session, tag) {
   const messages = Array.isArray(session.messages) ? session.messages : [];
   const index = messages.findIndex(message => message && message.id === tag);
   if (index < 0) {
     return { found: false };
   }
-  if (messages[index].role !== 'user' || automaticInput(messages[index])) {
+  const answer = messages[index];
+  if (answer.role !== 'user' || automaticInput(answer) || answer.deliveredInto) {
     return { found: true, own: false };
   }
   const failedTurns = new Set(messages.filter(m => m?.kind === 'turn' && m.nativeId === session.nativeId &&
