@@ -1280,18 +1280,49 @@ test('the person using the old member during the handoff pauses the rotation: no
   assert.equal(dispatcher.rotationEntries().filter(entry => entry.event === 'requested').length, 2);
 });
 
-test('the pause counts from the session\'s own last activity, and the butler\'s compaction waits only its two minutes', t => {
+// 11-23: the NAW dev PM, paused at 25 compactions, was still not rotated two hours and two compactions later. The person
+// had typed into it twice; NAW's own items and messages kept its last activity fresh.
+test('a paused rotation waits for the person, not for NAW: a member NAW keeps busy is rotated once the person has been away thirty minutes', async t => {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], { window: true });
+  fakeMembership(room, client);
+  room.queueAdd('task 0', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a.phase, 'requested');
+  advance(1000);
+  dispatcher.noteHuman('a');
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  assert.equal(dispatcher.rotations.a, undefined, 'paused for the person');
+  const busy = client.state.sessions[0];
+  const asked = [];
+  for (let minute = 10; minute <= 60; minute += 10) {
+    advance(10 * 60 * 1000);
+    client.reply('a', `done at ${minute}`);
+    busy.lastActivityAt = dispatcher.now();
+    room.queueAdd(`task ${minute}`, 'a');
+    await dispatcher.schedule();
+    await dispatcher.schedule();
+    if (dispatcher.rotations.a?.phase === 'requested') asked.push(minute);
+  }
+  assert.equal(asked[0], 30, `asked again at ${asked.join(',') || 'never'} minutes`);
+});
+
+test('the pause counts from the person\'s own last use, not the session\'s activity, and the butler\'s compaction waits only its two minutes', t => {
   const { dispatcher } = dispatcherSetup(t, []);
   dispatcher.deferredAt.set('a', { at: NOW, due: 'compact' });
   dispatcher.deferredAt.set('b', { at: NOW, due: 'compact' });
   dispatcher.deferredAt.set('c', { at: NOW, due: 'memory' });
+  dispatcher.deferredAt.set('d', { at: NOW, due: 'compact' });
   dispatcher.deferredAt.set('gone', { at: NOW, due: 'compact' });
-  const sessions = [member('a', { lastActivityAt: NOW + 25 * 60 * 1000 }), member('b'), member('c')];
+  dispatcher.humanAt.set('a', NOW + 25 * 60 * 1000);
+  const sessions = [member('a'), member('b'), member('c'), member('d', { lastActivityAt: NOW + 25 * 60 * 1000 })];
   const at = minutes => [...dispatcher.personDeferred(sessions, 'b', NOW + minutes * 60 * 1000)].sort();
-  assert.deepEqual(at(1), ['a', 'b', 'c']);
-  assert.deepEqual(at(3), ['a', 'c'], 'the butler\'s compaction waits two minutes');
-  assert.deepEqual(at(11), ['a'], 'memory waits ten');
-  assert.deepEqual(at(54), ['a'], 'thirty minutes from its last activity, not from the pause');
+  assert.deepEqual(at(1), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(at(3), ['a', 'c', 'd'], 'the butler\'s compaction waits two minutes');
+  assert.deepEqual(at(11), ['a', 'd'], 'memory waits ten');
+  assert.deepEqual(at(31), ['a'], 'its own activity (NAW\'s items, its replies) does not extend the pause');
+  assert.deepEqual(at(54), ['a'], 'thirty minutes from the person\'s last use, not from the pause');
   assert.deepEqual(at(56), []);
   assert.equal(dispatcher.deferredAt.size, 0, 'entries go once their quiet has passed or the session is gone');
 });
