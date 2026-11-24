@@ -611,6 +611,7 @@ class WorkspaceClient extends EventEmitter {
       if (replyTo && !this.snapshot(roomId).room.messages.some(m => m.id === replyTo)) throw uiError("error.client.originalDiscussionRemoved");
     };
     replyGuard();
+    const firstMessage = method === 'send' && args[3] !== undefined;
     let contextGuard = replyGuard, runIdentities;
     const displayedIdentities = method === 'run' ? args[7] : undefined;
     let sharedInputProofs;
@@ -647,7 +648,8 @@ class WorkspaceClient extends EventEmitter {
       contextGuard();
       // Optional local metadata must not lengthen a retained protocol's wire
       // frame when no thread was chosen (JSON encodes trailing undefined as null).
-      args.length = method === 'run' ? Math.min(args.length, 6) : Math.min(args.length, 3);
+      if (firstMessage && !expected[0]?.entry.state.capabilities?.includes('firstMessageGuardV1')) throw uiError('error.background.firstMessageBackend');
+      args.length = method === 'run' ? Math.min(args.length, 6) : Math.min(args.length, firstMessage ? 4 : 3);
       if (expected.length === ids.length && expected.every(e => e.entry.state.capabilities?.includes('nativeContextTransitions'))) {
         args[index] = method === 'run' ? Object.fromEntries(expected.map(e => [e.id, e.nativeId])) : expected[0].nativeId;
       } else args.splice(index); // Retained protocols accept at most five run arguments.
@@ -1000,7 +1002,13 @@ class WorkspaceClient extends EventEmitter {
     const ownView = ['claim', 'terminal'].includes(method) && this.controlPauseScope(method, args, target) === 'target';
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && this.controlPauseScope(method, args, target) === 'all')) return this.intervene(async () => {
-      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId);
+      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]);
+      if (firstMessage) {
+        const request = require('./background-operation.cjs').request();
+        if (!request?.valid) throw uiError('error.background.firstMessageNeedsConfirmation');
+        await request.valid();
+      }
+      guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId);
       return this.invoke(method === 'input' ? this.inputSender(target, args) : target, roomId, method, args, false, sharedInputProofs);
     }, args[0], false, false, scoped && method === 'forward' ? roomId : undefined);
     return (method === 'input' ? this.inputSender(target, args) : target).client.call(method, ...args);

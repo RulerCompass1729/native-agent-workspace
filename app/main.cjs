@@ -1906,11 +1906,12 @@ async function boot() {
         if (access.secretary || !access.roomIds.includes(command.arguments[0])) throw new background.PreconditionRefused(uiError('error.background.spaceFileMembership'), 'space-file-membership-required');
       }
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
+      const firstMessage = command.method === 'create' && backgroundOperation.creationMessage(command.arguments[0]);
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
       if (action === 'readConversation' && !target) throw new background.PreconditionRefused(uiError('error.background.conversationChanged'), 'conversation-target-unavailable');
       return { type: 'warning',
       message: action === 'readConversation' ? displayText('background.readConversationTitle', { name: backgroundOperation.visibleText(actor.name), target: backgroundOperation.visibleText(target.name) })
-        : displayText('background.maintenanceTitle', { name: backgroundOperation.visibleText(actor.name), command: displayText('background.action.' + action) }),
+        : displayText('background.maintenanceTitle', { name: backgroundOperation.visibleText(actor.name), command: displayText('background.action.' + (firstMessage ? 'createWithFirstMessage' : action)) }),
       detail: [backgroundOperation.confirmationDetail(command, state, context), ...(action === 'archiveRoom' ? [roomArchiveDetail(state, command.method === 'spaceAction' ? command.arguments[0] : 'shared')] : [])].join('\n\n'),
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 }; },
     audit: auditBackgroundOperation,
@@ -2214,15 +2215,38 @@ async function boot() {
     c.worktreePlan = plan; return plan;
   });
   register('create', async (c, ...args) => {
-    assertNativeCreation(await c.client.call('initial'));
+    const state = await c.client.call('initial');
+    assertNativeCreation(state);
     let defaults = args[0];
+    const firstMessage = backgroundOperation.creationMessage(defaults);
+    const request = backgroundOperation.request();
+    if (firstMessage !== null) {
+      if (!c.background || !request?.approved || request.args.method !== 'create' || !request.maintenanceApproved) {
+        throw uiError('error.background.firstMessageNeedsConfirmation');
+      }
+      if (!state.capabilities?.includes('firstMessageGuardV1')) throw uiError('error.background.firstMessageBackend');
+      if (state.wakePolicy?.enabled !== true) throw uiError('error.backgroundMessagesDisabled');
+    }
     if (args[0]?.gitWorktree != null) {
       const requested = args[0].gitWorktree, plan = c.worktreePlan;
       if (!plan || Object.keys(requested).length !== Object.keys(plan).length || Object.keys(plan).some(key => requested[key] !== plan[key])) throw uiError("error.main.worktreePreviewExpired");
       c.worktreePlan = null;
       defaults = { ...args[0], gitWorktree: plan };
     }
-    const id = await c.client.call('create', ...args);
+    const options = firstMessage === null ? defaults : { ...defaults, view: 'chat' };
+    if (firstMessage !== null) delete options.initialMessage;
+    const id = await c.client.call('create', options, ...args.slice(1));
+    if (firstMessage !== null) {
+      try {
+        await request.valid();
+        const target = roomState.apply(c.client.snapshot()).sessions.find(s => s.id === id);
+        if (!target?.nativeId) throw uiError('error.background.firstMessageChanged');
+        const receipt = await c.client.call('send', id, firstMessage, target.nativeId, { firstMessageUntil: request.approved.expiresAt });
+        if (typeof receipt !== 'string' || !receipt) throw uiError('error.background.firstMessageChanged');
+      } catch (error) {
+        throw uiError('error.background.firstMessageUnconfirmed', { id, reason: error.message }, { cause: error, param: 'reason' });
+      }
+    }
     if (!c.background) { try { creationDefaults.remember(defaults); } catch { /* Creating a session succeeded even if optional defaults cannot be saved. */ } }
     return id;
   });

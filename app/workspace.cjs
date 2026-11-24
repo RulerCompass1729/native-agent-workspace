@@ -1450,6 +1450,15 @@ class Workspace extends EventEmitter {
     this.capacityCancelled(s, this.capacityRecoveries.get(id), 'draft'); this.cancelCapacity(id);
     this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed();
   }
+  assertFirstMessage(id, owner, expiresAt) {
+    const session = this.get(id), runtime = this.runtime(id);
+    if (!backgroundOperation.current() || !Number.isSafeInteger(expiresAt) || Date.now() >= expiresAt ||
+        session.provider !== 'codex' || session.view !== 'chat' || session.owner !== owner ||
+        session.controlRevision !== 0 || session.state !== 'idle' || session.terminalInputPending || runtime.hasHistory ||
+        session.messages.some(message => message.role === 'user') || this.drafts.get(id)) {
+      throw uiError('error.background.firstMessageChanged');
+    }
+  }
   assertNativeContext(id, expected) {
     const s = this.get(id);
     if (s.nativeContextPending || (expected === undefined ? this.runtimes.get(id)?.rootLease : expected !== s.nativeId)) {

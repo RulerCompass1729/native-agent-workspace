@@ -947,3 +947,24 @@ test('a space pause is refused with nothing sent while one backend is being upda
   assert.equal(old.calls.some(call => call[0] === 'pause') && next.calls.some(call => call[0] === 'pause'), true);
   c.close();
 });
+test('a confirmed first message rechecks the requesting native session after the backend pause', async t => {
+  const { old, next, c } = fixture();
+  t.after(() => c.close());
+  next.real.capabilities.push('nativeContextTransitions', 'firstMessageGuardV1');
+  Object.assign(next.real.sessions[0], { provider: 'codex', nativeId: 'recipient-native' });
+  await c.refresh();
+
+  const actor = { id: 'old', nativeId: 'same-native', name: 'Synthetic requester', provider: 'codex', turnId: 'turn', callId: 'call', operationId: 'create-first' };
+  const valid = async () => {
+    if (actor.nativeId !== old.real.sessions[0].nativeId) throw Error('The originating native session changed');
+  };
+  c.pauseExcept = async () => { old.real.sessions[0].nativeId = 'replacement'; };
+  const send = () => c.call('send', 'new', 'Exact first message', 'recipient-native', { firstMessageUntil: Date.now() + 10000 });
+  await assert.rejects(require('../background-operation.cjs').run(actor, send, { valid }), /originating native session changed/);
+  assert.equal(next.calls.some(([method]) => method === 'send'), false);
+
+  c.pauseExcept = async () => {};
+  old.real.sessions[0].nativeId = actor.nativeId;
+  await require('../background-operation.cjs').run(actor, send, { valid });
+  assert.equal(next.calls.filter(([method]) => method === 'send').length, 1);
+});
