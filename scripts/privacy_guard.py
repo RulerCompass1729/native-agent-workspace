@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -74,6 +75,92 @@ def root_dir():
     return Path(os.fsdecode(git("rev-parse", "--show-toplevel")).strip()).resolve()
 
 
+def batch_objects(oids):
+    if not oids:
+        return {}
+    if any(not re.fullmatch(b"[a-f0-9]{40}|[a-f0-9]{64}", oid) for oid in oids):
+        raise Blocked("invalid object ID")
+    query = b"\n".join(oids) + b"\n"
+    headers = run(["git", "cat-file", "--batch-check"], data=query).splitlines()
+    sizes = {}
+    if len(headers) != len(oids):
+        raise Blocked("incomplete object size response")
+    for oid, header in zip(oids, headers):
+        fields = header.split()
+        if len(fields) != 3 or fields[:2] != [oid, b"blob"] or not fields[2].isdigit():
+            raise Blocked("unexpected object size response")
+        size = int(fields[2])
+        if size > MAX_BLOB:
+            raise Blocked("blob exceeds scan limit; no pass issued")
+        sizes[oid] = size
+    payload = run(["git", "cat-file", "--batch"], data=query)
+    result, offset = {}, 0
+    for oid in oids:
+        end = payload.find(b"\n", offset)
+        expected = oid + b" blob " + str(sizes[oid]).encode()
+        if end < 0 or payload[offset:end] != expected:
+            raise Blocked("unexpected object content response")
+        start, stop = end + 1, end + 1 + sizes[oid]
+        if payload[stop:stop + 1] != b"\n":
+            raise Blocked("incomplete object content response")
+        result[oid] = payload[start:stop]
+        offset = stop + 1
+    if offset != len(payload):
+        raise Blocked("extra object content response")
+    return result
+
+
+def remote_snapshot(remote, updates):
+    if not remote:
+        return None
+    env = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0",
+           "GIT_ASKPASS": "/usr/bin/false", "SSH_ASKPASS": "/usr/bin/false",
+           "SSH_ASKPASS_REQUIRE": "never"}
+    process = None
+    try:
+        # The hook URL is already push-resolved; a second rewrite could query another repository.
+        if git("ls-remote", "--get-url", "--", remote).rstrip(b"\n") != os.fsencode(remote):
+            return None
+        # Kill only the owned probe group when transport or credentials time out.
+        process = subprocess.Popen(["git", "-c", "credential.interactive=never", "ls-remote", "--refs", "--", remote],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=True)
+        try:
+            output, _ = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            return None
+        if process.returncode or len(output) > MAX_BLOB:
+            return None
+        refs = {}
+        for line in output.splitlines():
+            oid, name = line.split(b"\t")
+            if not re.fullmatch(b"[a-f0-9]{40}|[a-f0-9]{64}", oid) or not name.startswith(b"refs/") or name in refs:
+                return None
+            refs[name] = oid
+        for _, _, name, old in updates:
+            if refs.get(name, b"0" * len(old)) != old:
+                return None
+        if refs:
+            # Resolve every advertised ref locally, including annotated tags; never fetch.
+            query = b"\n".join(oid + b"^{commit}" for oid in refs.values()) + b"\n"
+            headers = run(["git", "cat-file", "--batch-check"], data=query).splitlines()
+            if len(headers) != len(refs):
+                return None
+            for header in headers:
+                fields = header.split()
+                if len(fields) != 3 or fields[1] != b"commit" or not re.fullmatch(b"[a-f0-9]{40}|[a-f0-9]{64}", fields[0]):
+                    return None
+        return refs
+    except (OSError, ValueError, Blocked):
+        return None
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
+
 def load_patterns(path, root, what="private rules"):
     path = Path(path).expanduser().resolve()
     if path == root or root in path.parents:
@@ -115,6 +202,7 @@ class Scanner:
         self.batches = []    # (parts, bytes of those parts) for each batch gitleaks passed
         self.blobs = set()
         self.commits = 0
+        self.scanned_commits = set()
 
     def add(self, data, label):
         if len(data) > MAX_BLOB or self.size + len(data) > MAX_SCAN:
@@ -163,6 +251,7 @@ class Scanner:
             raise Blocked("restricted data/credential/artifact path (name withheld)")
 
     def entries(self, data, staged=False):
+        rows = []
         for entry in data.split(b"\0"):
             if not entry:
                 continue
@@ -172,30 +261,38 @@ class Scanner:
             oid = fields[1] if staged else fields[2]
             if staged and fields[2] != b"0":
                 raise Blocked("unmerged index cannot be scanned for publication")
-            self.path(path)
             if mode not in (b"100644", b"100755", b"120000"):
                 raise Blocked("submodule or unsupported entry requires separate review")
-            if oid in self.blobs and mode != b"120000":
-                continue
-            if int(git("cat-file", "-s", oid.decode())) > MAX_BLOB:
-                raise Blocked("blob exceeds scan limit; no pass issued")
-            content = git("cat-file", "blob", oid.decode())
-            self.add(content, "file content")
-            if mode == b"120000":
-                target = PurePosixPath(content.decode())
-                if target.is_absolute() or ".." in target.parts:
-                    raise Blocked("external/parent symlink is not publishable")
-                self.path(content)
-            self.blobs.add(oid)
+            rows.append((mode, oid, path))
+        for at in range(0, len(rows), 16):
+            chunk = rows[at:at + 16]
+            oids = list(dict.fromkeys(oid for mode, oid, _ in chunk
+                                     if oid not in self.blobs or mode == b"120000"))
+            contents = batch_objects(oids)
+            for mode, oid, path in chunk:
+                self.path(path)
+                if oid in self.blobs and mode != b"120000":
+                    continue
+                content = contents[oid]
+                self.add(content, "file content")
+                if mode == b"120000":
+                    target = PurePosixPath(content.decode())
+                    if target.is_absolute() or ".." in target.parts:
+                        raise Blocked("external/parent symlink is not publishable")
+                    self.path(content)
+                self.blobs.add(oid)
 
     def staged(self):
         self.entries(git("ls-files", "--stage", "-z"), staged=True)
         self.add(git("diff", "--cached", "--text", "--no-ext-diff", "--no-textconv"),
                  "staged patch")
 
-    def history(self, tips):
+    def history(self, tips, excludes=()):
         if git("rev-parse", "--is-shallow-repository").strip() != b"false":
             raise Blocked("shallow history is incomplete; fetch complete history first")
+        for oid in excludes:
+            if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", oid):
+                raise Blocked("invalid exclusion object ID")
         for tip in tips:
             if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", tip):
                 raise Blocked("invalid object ID")
@@ -206,14 +303,46 @@ class Scanner:
                 current = tag.splitlines()[0].split()[1].decode("ascii")
             if git("cat-file", "-t", current).strip() != b"commit":
                 raise Blocked("non-commit ref requires separate review")
-        commits = git("rev-list", *tips).decode().splitlines() if tips else []
+        if tips and excludes:
+            revisions = tips + ["^" + oid for oid in sorted(set(excludes))]
+            commits = run(["git", "rev-list", "--stdin"],
+                          data=("\n".join(revisions) + "\n").encode()).decode().splitlines()
+        else:
+            commits = git("rev-list", *tips).decode().splitlines() if tips else []
         for oid in commits:
+            if oid in self.scanned_commits:
+                continue
             self.commits += 1
             self.add(git("show", "-s", "--format=%B", oid), "commit message")
             self.identity(git("show", "-s", "--format=%an <%ae>%n%cn <%ce>", oid), "commit identity")
             self.entries(git("ls-tree", "-r", "-z", oid))
             self.add(git("show", "--format=", "--root", "-m", "-p", "--text",
                          "--no-ext-diff", "--no-textconv", oid), "historical patch")
+            self.scanned_commits.add(oid)
+
+    def push(self, updates, remote=None):
+        self.add(updates, "push ref names")
+        parsed, tips = [], []
+        for line in updates.splitlines():
+            fields = line.split()
+            if len(fields) != 4 or any(not re.fullmatch(b"[a-f0-9]{40}|[a-f0-9]{64}", fields[i]) for i in (1, 3)):
+                raise Blocked("invalid pre-push input")
+            parsed.append(fields)
+            if not re.fullmatch(b"0{40}|0{64}", fields[1]):
+                tips.append(fields[1].decode("ascii"))
+        proof = remote_snapshot(remote, parsed) if tips else None
+        if proof is None:
+            print("Push scope: full history (remote proof unavailable)", file=sys.stderr)
+            self.history(tips)
+        else:
+            self.history(tips, [oid.decode("ascii") for oid in proof.values()])
+            if self.parts:
+                self.flush(last=True)
+            if remote_snapshot(remote, parsed) != proof:
+                print("Push scope: full history (remote proof changed)", file=sys.stderr)
+                self.history(tips)
+            else:
+                print("Push scope: verified outgoing commits", file=sys.stderr)
 
     def flush(self, last=False):
         """Run gitleaks on the current batch. Only exit 0 with an empty report passes."""
@@ -319,6 +448,7 @@ def main():
     parser.add_argument("mode", choices=["install", "staged", "message", "push", "history"])
     parser.add_argument("argument", nargs="?")
     parser.add_argument("identities", nargs="?")
+    parser.add_argument("--remote")
     args = parser.parse_args()
     try:
         if args.mode == "install":
@@ -328,6 +458,8 @@ def main():
             return 0
         if args.identities:
             raise Blocked("unexpected argument")
+        if args.remote is not None and args.mode != "push":
+            raise Blocked("remote applies only to push")
         scan = Scanner()
         if args.mode == "staged":
             scan.staged()
@@ -342,17 +474,7 @@ def main():
             scan.add(refs, "ref names")
             scan.history([line.split()[-1].decode() for line in refs.splitlines()])
         else:
-            updates = sys.stdin.buffer.read()
-            scan.add(updates, "push ref names")
-            tips = []
-            for line in updates.splitlines():
-                fields = line.split()
-                if len(fields) != 4:
-                    raise Blocked("invalid pre-push input")
-                oid = fields[1].decode("ascii")
-                if not re.fullmatch(r"0{40}|0{64}", oid):
-                    tips.append(oid)
-            scan.history(tips)
+            scan.push(sys.stdin.buffer.read(), args.remote)
         scan.finish()
         return 0
     except (Blocked, OSError, UnicodeError, ValueError) as exc:

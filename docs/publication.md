@@ -49,19 +49,31 @@ Read the result before committing. `pre-commit` rescans the actual index, includ
 partially staged files. `commit-msg` checks the actual message and author/committer
 identity. A commit scan is not sufficient evidence for a later push.
 
-Before pushing, run and review:
+Before pushing, run and review the actual target and the exact four-field
+pre-push input that Git supplies (local ref/OID and remote ref/old OID):
 
 ```sh
-python3 scripts/privacy_guard.py history
+python3 scripts/privacy_guard.py push --remote "$ACTUAL_PUSH_URL" < /path/outside-repo/pre-push-input
 ```
 
-`pre-push` then uses the actual ref updates supplied by Git. For each non-deletion
-update it checks its complete reachable history, including every commit's tree,
-patch, separate message and identity, annotated-tag text and tagger, and ref names.
-This deliberately covers more than the final diff: added-then-deleted material and
-merge resolutions must not disappear from the check. No cached remote tracking
-ref or last-N-commits shortcut decides what is safe. Incomplete shallow history
-is blocked. Git replacement objects do not hide the original history from scans.
+For an exhaustive audit, or when the intended update is not known, use
+`python3 scripts/privacy_guard.py history`; this continues to scan all local refs.
+
+The repository's `pre-push` source forwards Git's actual target URL. Push mode
+queries every advertised ref directly, checks the pushed refs against Git's old
+OIDs, and requires every advertised object to resolve locally. It scans every
+commit reachable from the pushed tips that no remote ref owns: full trees,
+patches, messages and identities, plus pushed ref names and annotated-tag data.
+After gitleaks completes, it checks the remote snapshot again. Missing target,
+unavailable/mismatched/changed refs, a second URL rewrite or a missing local remote object falls back
+to complete reachable history. No remote-tracking cache is trusted and no fetch
+or configuration mutation is performed.
+
+The scan still covers added-then-deleted material and merge resolutions. An old
+key already removed in remote history does not block a new clean commit; a key
+still present in a new commit's tree remains blocked. Blob headers and payloads
+are read in bounded batches with the same size and content checks. Incomplete
+shallow history is blocked; Git replacement objects cannot hide original history.
 
 The checks combine private rules, generic identity/financial patterns, and
 gitleaks' standard rules. Missing tools, invalid rules, command failures, timeouts,
