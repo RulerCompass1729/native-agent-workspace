@@ -345,28 +345,28 @@ local branch or main; not installed, pushed or published):
   by GUI script where possible and otherwise by asking the person through the
   board's secretary; the row moves to done only once that passes. Versions
   follow urgency (the person, 2026-11-23). Tier 1, daily use broken or stuck or
-  anything hurting NAW development (butler not woken, sessions cut off, messages
-  lost or blocked, slow or blocked installs, invisible waits, data loss,
-  privacy): each fix with READY and a non-author PASS ships alone, installed and
-  pushed within about two hours. Tier 2, other fixes: a new version once the
-  last is installed, no batching. Tier 3, improvements: the next version. All
-  gates stay. The rules correct themselves: daily, or every five versions, the
-  secretary reports three numbers from the records to the person (at which step
-  each problem the person found in daily use should have been caught, whether
-  each kind of check has recently caught a real problem, and the time from
-  feedback to the daily app); a step that misses often is strengthened, and a
-  check with no findings for a long time whose risk is covered elsewhere is
-  downgraded. Rule changes are shown to the person first. Not traded for speed:
-  the pre-push privacy and secret scan, no self-review, asking before
-  irreversible or outward actions, and requirements the person stated. In
-  practice: use the shared risk-based review gates once per delivery checkpoint,
-  quoting the person's words and checking side effects on other views when a
-  review is required; integration review covers only the batch interactions and
-  edits made while integrating, reusing unchanged approved patches. The daily
-  update operator is compared by program with the last
-  operator that ran, allowing only version numbers and hashes to differ, and
-  goes to review only when that template changes; install records are checked by
-  script against commit ids and counts instead of review.
+  anything hurting NAW development or function (butler not woken, sessions cut
+  off, messages lost or blocked, slow or blocked installs, invisible waits, data
+  loss, privacy): each fix with READY and a non-author PASS is installed alone
+  within about 2 hours. Tier 2, other fixes: a new version once the last is
+  installed, no batching. Tier 3, improvements: the next version. Push main
+  after each install; all gates stay. The rules correct themselves: daily, or
+  every five versions, the secretary reports three numbers from the records to
+  the person (at which step each problem the person found in daily use should
+  have been caught, whether each kind of check has recently caught a real
+  problem, and the time from feedback to the daily app); a step that misses
+  often is strengthened, and a check with no findings for a long time whose risk
+  is covered elsewhere is downgraded. Rule changes are shown to the person
+  first. Not traded for speed: the pre-push privacy and secret scan, no
+  self-review, asking before irreversible or outward actions, and requirements
+  the person stated. In practice: use the shared risk-based review gates once
+  per delivery checkpoint, quoting the person's words and checking side effects
+  on other views when a review is required; integration review covers only the
+  batch interactions and edits made while integrating, reusing unchanged
+  approved patches. The daily update operator is compared by program with the
+  last operator that ran, allowing only version numbers and hashes to differ,
+  and goes to review only when that template changes; install records are
+  checked by script against commit ids and counts instead of review.
 
 ## Architectural invariants
 
@@ -416,13 +416,13 @@ local branch or main; not installed, pushed or published):
   a review appear more thorough.
 - The review record is one file per lane and day,
   `docs/review/YYYY-MM-DD/<lane>.md` (`date +%F`; `<lane>` is the branch without
-  `lane/`), so merging lanes does not conflict there. Older day files stay
-  unmoved, and `docs/review.md` stays frozen since 2026-11-13 (2 MiB push
-  limit): a correction to an entry in either is a new record naming it. When
-  merging, keep every record both sides add; when a branch changed
-  `docs/review.md`, restore main's frozen copy and move its additions into your
-  lane file. `app/tests/docs-size.test.cjs` fails when `docs/review.md` differs
-  from its frozen copy or another file under `docs/` passes 1.5 MiB.
+  `lane/`), so merges do not conflict there. Older day files stay put, and
+  `docs/review.md` stays frozen since 2026-11-13 (2 MiB push limit): a
+  correction to an entry in either is a new record naming it. Merges keep both
+  sides' records; when a branch changed `docs/review.md`, restore main's frozen
+  copy and move its additions into your lane file.
+  `app/tests/docs-size.test.cjs` fails when `docs/review.md` differs from its
+  frozen copy or another file under `docs/` passes 1.5 MiB.
 
 - Read actual implementation files before making source-level claims.
 - Label requirements, design proposals, source findings, and runtime proof separately.
