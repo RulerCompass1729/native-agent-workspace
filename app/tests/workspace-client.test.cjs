@@ -936,3 +936,14 @@ test('taking a free session goes straight to the service: no pause, no queue hol
   assert.equal(old.calls.some(([m]) => m === 'claim'), false);
   c.close();
 });
+
+test('a space pause is refused with nothing sent while one backend is being updated, and goes through afterwards', async () => {
+  const { old, next, c } = fixture();
+  const finish = c.maintainService('old');
+  await assert.rejects(c.callSpace('shared', 'pause', []), error => error.uiMessage?.key === 'error.client.connectionUpdatingNoInput');
+  assert.equal([...old.calls, ...next.calls].some(call => call[0] === 'pause'), false, 'no backend was asked to pause');
+  finish();
+  await c.callSpace('shared', 'pause', []);
+  assert.equal(old.calls.some(call => call[0] === 'pause') && next.calls.some(call => call[0] === 'pause'), true);
+  c.close();
+});

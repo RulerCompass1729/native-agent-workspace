@@ -3887,6 +3887,71 @@ async function rotateOnce(t, extra = {}) {
 const rotationLog = dir => fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
 const eventKeys = room => room.value.events.map(event => event.uiMessage?.key);
 
+// As the window client refuses a space pause or a member move while NAW replaces one backend (workspace-client.cjs
+// operationGuard and the scoped pause): the automatic move of backends after an install lasts a few minutes.
+const BACKEND_UPDATING = ['error.client.connectionUpdatingNoInput', 'error.client.connectionChangedNoReplay', 'error.client.spacePauseUnconfirmed'];
+async function rotateIntoRefusedJoin(t, refusal) {
+  const f = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+  const joins = fakeMembership(f.room, f.client), join = f.room.membership.bind(f.room);
+  f.refused = 0; f.refusing = true;
+  f.room.membership = async (...args) => {
+    if (f.refusing && args[2] === true) {
+      f.refused += 1;
+      throw refusal();
+    }
+    return join(...args);
+  };
+  f.room.queueAdd('next task', 'a');
+  await f.dispatcher.start();
+  await f.dispatcher.schedule();
+  f.client.reply('a', '交接：分支 abc。');
+  await f.dispatcher.schedule(); // the successor is created and its join is refused
+  f.pass = async () => { f.dispatcher.dirty = true; await f.dispatcher.schedule(); };
+  return Object.assign(f, { joins, successor: () => f.client.state.sessions[1], creates: () => f.client.calls.filter(call => call[0] === 'create').length });
+}
+
+for (const key of BACKEND_UPDATING) {
+  test(`a successor's join refused while a backend is being updated is tried again, not failed (${key.split('.').at(-1)})`, async t => {
+    const f = await rotateIntoRefusedJoin(t, () => Object.assign(Error('PRIVATE_UPDATING_TEXT'), { uiMessage: { key } }));
+    const waiting = () => {
+      assert.equal(f.dispatcher.rotations.a?.phase, 'joining', 'the rotation waits for the join');
+      assert.equal(f.successor().state, 'idle', 'NAW does not stop the session it just created');
+      assert.equal(f.client.calls.some(call => call[0] === 'stop' || call[0] === 'stopUnusedSuccessor'), false);
+      assert.equal(rotationLog(f.dir).some(entry => entry.event === 'failed'), false);
+      assert.equal(f.room.value.queue[0].assignee, 'a', 'the waiting task stays with the old member until the join');
+      assert.equal(f.creates(), 1, 'one successor, however many passes');
+    };
+    assert.equal(f.refused, 1); waiting();
+    await f.pass(); await f.pass();
+    assert.equal(f.refused, 3, 'each pass asks again'); waiting();
+    f.refusing = false;
+    await f.pass();
+    assert.deepEqual(f.joins, [[f.successor().id, true, 'shared']]);
+    assert.equal(f.room.value.queue[0].assignee, f.successor().id);
+    await f.pass(); await f.pass();
+    assert.deepEqual(rotationLog(f.dir).filter(entry => ['failed', 'done'].includes(entry.event)).map(entry => [entry.event, entry.old.id, entry.new.id]),
+      [['done', 'a', f.successor().id]], 'the rotation finishes as an ordinary one');
+    assert.equal(JSON.stringify(f.room.value.events).includes('PRIVATE_UPDATING_TEXT'), false);
+  });
+}
+
+test('a join still refused ten minutes after the successor started fails as a join timeout', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => Object.assign(Error('PRIVATE_UPDATING_TEXT'), { uiMessage: { key: BACKEND_UPDATING[0] } }));
+  f.advance(10 * 60 * 1000); await f.pass();
+  assert.equal(f.dispatcher.rotations.a.phase, 'joining', 'still within the limit');
+  f.advance(1); await f.pass();
+  assert.equal(f.dispatcher.rotations.a.phase, 'failed'); assert.equal(f.dispatcher.rotations.a.reason, 'join-timeout');
+  assert.equal(f.room.value.queue[0].assignee, 'a'); assert.equal(f.creates(), 1);
+  assert.equal(f.successor().state, 'ended', 'only now is the unused successor stopped');
+  assert.equal(JSON.stringify(f.room.value.events).includes('PRIVATE_UPDATING_TEXT'), false);
+});
+
+test('a join refused for any other reason still fails the rotation at once', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => Object.assign(Error('PRIVATE_OTHER_TEXT'), { uiMessage: { key: 'error.sessionMissing' } }));
+  assert.equal(f.dispatcher.rotations.a.phase, 'failed'); assert.equal(f.refused, 1);
+  assert.equal(f.room.value.queue[0].assignee, 'a'); assert.equal(f.successor().state, 'ended');
+});
+
 test('a done rotation archives the old session it stopped, logs it and says so in the space', async t => {
   const { room, client, dir, newId, savedAtArchive } = await rotateOnce(t);
   assert.deepEqual(savedAtArchive, [[newId]], 'only the successor rests in the saved rotations when the archive starts');
