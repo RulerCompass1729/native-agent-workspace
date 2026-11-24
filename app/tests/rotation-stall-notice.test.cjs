@@ -37,7 +37,7 @@ function dispatcher(t, f) {
   });
   // A window is open: with no queued work, the minute's rotation check reads through it.
   const d = new rules.QueueDispatcher({ roomState: f.roomState, dataDir: f.dir, connect: async () => client, clients: () => client, steward: () => f.steward,
-    now: () => f.clock.now, settleMs: 8000, tickMs: 3600000, transcriptRoot: path.join(f.dir, 'none'),
+    now: () => f.clock.now, settleMs: 8000, tickMs: 3600000, transcriptRoot: path.join(f.dir, 'none'), sampleProcesses: async () => '', samplePressure: async () => '',
     compactions: { async sample(subjects) { return new Map(subjects.filter(s => Object.hasOwn(f.compactions, s.id)).map(s => [s.id, f.compactions[s.id]])); } },
     rotationStalled: stall => f.ingress.rotationStalled(stall) });
   t.after(() => d.close());
@@ -79,8 +79,9 @@ test('the butler held four days by the rotation an interruption left unresolved:
 
 test('a member held by the planner\'s own waiting kind: told with the gate that holds it', async t => {
   const episode = { nativeId: 'native-m1', epoch: 3, state: 'invalid', tag: 'rotation-tag' };
-  const member = session('m1', 'native-m1', { roomIds: ['space-1'], roomId: 'space-1', rotationEpisode: episode });
-  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, rooms: [{ id: 'space-1', name: 'Space' }], steward: null });
+  // The default space, which RoomState always holds.
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared', rotationEpisode: episode });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
   await run(f, 90 * MINUTE);
   assert.deepEqual(stalls(f).map(s => [s.memberId, s.outcome]), [['m1', 'compact:rotation-control-unresolved']]);
 });

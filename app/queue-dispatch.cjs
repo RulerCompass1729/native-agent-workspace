@@ -3367,7 +3367,7 @@ class QueueDispatcher {
 
   // Sessions a pass found due for rotation and left as they were (planDispatch rotationGates), an hour or more since
   // this run first found each so: one line to the butler's record per stall and gate, again only when the gate
-  // changes (the person, 2026-11-23: 「换会话停了要有人知道」). Only told: nothing here rotates or relaxes a gate.
+  // changes (the person, 2026-11-23: 「而且以后咋办」). Only told: nothing here rotates or relaxes a gate.
   noteRotationStalls(gates, sessions, now) {
     for (const id of [...this.stalls.keys()]) {
       if (!gates.has(id)) this.stalls.delete(id);
