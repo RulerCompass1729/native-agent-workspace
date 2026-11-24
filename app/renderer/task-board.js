@@ -107,9 +107,10 @@
   // The tool a session is running now (11-24): its own running tool row in the current native turn.
   // Claude reports a command's output only when it ends, so only Codex rows have a last line.
   const firstLine = value => typeof value === 'string' ? (value.split(/\r?\n/).map(v => v.trim()).find(Boolean) || '').slice(0, 200) : '';
-  const lastLine = value => typeof value === 'string' ? (value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r\n|\n|\r/).map(v => v.trim()).filter(Boolean).at(-1) || '').slice(0, 200) : '';
-  function stepDetail(m) {
-    if (m.toolKind === 'commandExecution') return firstLine(m.title);
+  // A Codex command's text grows with its output; only its tail can hold the last line.
+  const lastLine = value => typeof value === 'string' ? (value.slice(-4096).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r\n|\n|\r/).map(v => v.trim()).filter(Boolean).at(-1) || '').slice(0, 200) : '';
+  function stepDetail(m, preview) {
+    if (m.toolKind === 'commandExecution') return firstLine(preview ? preview(m) : m.title);
     let input = null;
     if (typeof m.input === 'string' && m.input.length <= 262144) try { input = JSON.parse(m.input); } catch {}
     if (!input || typeof input !== 'object') return '';
@@ -119,19 +120,21 @@
     }
     return '';
   }
-  function runningStep(s) {
-    if (!s || s.state !== 'working' || s.transportDisconnected || s.backendUnavailable || !Array.isArray(s.messages)) return null;
+  // preview: the renderer's own short form of a Codex command (nativeCommandPreview); a session waiting for the person runs nothing.
+  function runningStep(s, preview) {
+    if (!s || s.state !== 'working' || s.transportDisconnected || s.backendUnavailable || !Array.isArray(s.messages) || needsHuman(s)) return null;
     if (typeof s.nativeId !== 'string' || !s.nativeId || typeof s.activeTurnId !== 'string' || !s.activeTurnId) return null;
-    for (let i = s.messages.length - 1; i >= 0; i--) {
+    for (let i = s.messages.length - 1; i >= Math.max(0, s.messages.length - 200); i--) {
       const m = s.messages[i];
       if (m?.role !== 'tool' || m.kind !== 'tool' || m.status !== 'running' || m.nativeId !== s.nativeId || m.turnId !== s.activeTurnId) continue;
       if (!Number.isFinite(m.time)) continue;
       const command = m.toolKind === 'commandExecution' || m.title === 'Bash';
-      return { tool: command ? 'Bash' : typeof m.title === 'string' ? m.title.slice(0, 120) : '', detail: stepDetail(m), startedAt: m.time,
+      return { tool: command ? 'Bash' : typeof m.title === 'string' ? m.title.slice(0, 120) : '', detail: stepDetail(m, preview), startedAt: m.time,
         lastLine: m.toolKind === 'commandExecution' ? lastLine(m.text) : '' };
     }
     return null;
   }
+  const stepClock = (value, lang) => new Intl.DateTimeFormat(lang || undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(value);
   // The renderer hands the board a step with its words already chosen (action) and the raw facts.
   const validStep = v => Boolean(v && typeof v.action === 'string' && v.action && typeof v.detail === 'string' && typeof v.lastLine === 'string' &&
     Number.isFinite(v.startedAt) && v.startedAt >= 0 && v.startedAt <= 8640000000000000);
@@ -195,8 +198,7 @@
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
     const set = (e, value) => { if (e.textContent !== value) e.textContent = value; };
     const attr = (e, name, value) => { if (e.getAttribute(name) !== value) e.setAttribute(name, value); };
-    const clock = value => new Intl.DateTimeFormat(doc.documentElement?.lang || undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(value);
-    const stepWords = step => text(step.detail ? 'activity.step' : 'activity.stepBare', { action: step.action, detail: step.detail, time: clock(step.startedAt) });
+    const stepWords = step => text(step.detail ? 'activity.step' : 'activity.stepBare', { action: step.action, detail: step.detail, time: stepClock(step.startedAt, doc.documentElement?.lang) });
     const outputWords = step => step.lastLine ? text('activity.lastOutput', { line: step.lastLine }) : '';
     const control = (handler, cls) => { const e = make('button', cls); e.type = 'button'; e.onclick = handler; return e; };
     const move = (parent, nodes) => {
@@ -514,5 +516,5 @@
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); } };
   }
-  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, runningStep, bind };
+  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, runningStep, stepClock, bind };
 });

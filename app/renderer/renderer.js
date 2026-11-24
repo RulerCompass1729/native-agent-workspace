@@ -271,7 +271,7 @@ function updateTaskBoard() {
 }
 // The tool a session is running now, in words, for the board and the session header (11-24).
 function runningStepView(s) {
-  const step = window.nativeWorkspaceTaskBoard.runningStep(s);
+  const step = window.nativeWorkspaceTaskBoard.runningStep(s, m => nativeCommandPreview(m));
   if (!step) return null;
   const action = step.tool ? window.nativeWorkspaceAgentDistribution.plainActivity(step.tool, uiText) : '';
   return { action: action || uiText('activity.tool.other'), detail: step.detail, startedAt: step.startedAt, lastLine: step.lastLine };
@@ -5697,6 +5697,7 @@ function renderNativeActivity(s) {
   if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
     el.hidden = false;
     ui.display.computed($('native-phase'), 'text', () => `${s.name} · ${uiText(recovery.reason === 'routing' ? 'native.routingTimeout' : recovery.reason === 'forbidden' ? 'native.forbidden' : recovery.reason === 'connection' ? 'native.connectionFailed' : 'native.capacity')}${recovery.status === 'exhausted' ? uiText('native.capacityLimit') : ''}`);
+    ui.display.computed($('native-step'), 'text', () => '');
     ui.display.computed($('native-elapsed'), 'text', () => recovery.status === 'scheduled' ? uiText('native.recovery', { time: new Date(recovery.due).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit' }), attempt: recovery.attempt + 1 }) : '');
     return;
   }
@@ -5711,12 +5712,14 @@ function renderNativeActivity(s) {
   const label = () => s.claudeQuestion ? uiText('state.question') : status && !nativeStatusFresh(status) ? uiText('native.stale') : matched && status.label ? (Object.hasOwn(nativeActivityLabels, status.label) ? uiText(nativeActivityLabels[status.label]) : status.label) : uiText(waiting ? question ? 'state.question' : 'native.approval' : 'native.processing');
   const notice = matched && !waiting && !s.approvalOverflow && s.state === 'working' && status.waitNotice;
   const slow = notice?.kind === 'tool-wait' && notice.nativeId === s.nativeId && notice.turnId === s.activeTurnId && notice.marker === status.toolWait?.marker && notice.progressAt === status.toolWait?.progressAt;
-  // A running tool names itself and counts from its own start, unless a question, a permission or a stale status comes first.
+  // A running tool names itself, unless a question, a permission or a stale status comes first. Its detail and
+  // start sit outside the live status, so a reader hears each new kind of action, not every path or command.
   const step = !waiting && (!status || nativeStatusFresh(status)) ? runningStepView(s) : null;
-  const stepLabel = () => step.detail ? uiText('activity.stepHeader', { action: step.action, detail: step.detail }) : step.action;
-  const used = step && step.startedAt <= Date.now() ? Math.floor((Date.now() - step.startedAt) / 1000) : seconds;
-  ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + (step ? stepLabel() : label()) + (slow ? uiText('native.slowTool') : ''));
-  ui.display.computed($('native-elapsed'), 'text', () => used === null ? '' : uiText('native.used', { elapsed: elapsedText(used) }));
+  const since = () => uiText(step.detail ? 'activity.stepSince' : 'activity.stepSinceBare', { detail: step.detail,
+    time: window.nativeWorkspaceTaskBoard.stepClock(step.startedAt, ui.language.getSnapshot().active) });
+  ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + (step ? step.action : label()) + (slow ? uiText('native.slowTool') : ''));
+  ui.display.computed($('native-step'), 'text', () => step ? since() : '');
+  ui.display.computed($('native-elapsed'), 'text', () => seconds === null ? '' : uiText('native.used', { elapsed: elapsedText(seconds) }));
 }
 // A reported status turns stale 5 s after its last observation, and the window shows that once: render
 // reads nativeStatusFresh. It stays stale until a newer snapshot, which renders anyway. Redrawing the
