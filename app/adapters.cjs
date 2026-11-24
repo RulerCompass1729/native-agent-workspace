@@ -3216,6 +3216,23 @@ class NativeHost {
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
           return;
         }
+        if (event.agyWorkspaceMessage === true) {
+          socket.removeAllListeners('data');
+          socket.setTimeout(0); const deadline = setTimeout(() => socket.destroy(), 10000);
+          socket.once('close', () => clearTimeout(deadline));
+          Promise.resolve().then(async () => {
+            const runtime = this.hookTargets.get(event.token);
+            if (!runtime || runtime.record?.provider !== 'agy' || !runtime.addressedSendAvailable || !runtime.addressedCall || runtime.stopped || !runtime.terminal?.alive) {
+              throw uiError('error.nativeToolOriginUnconfirmed');
+            }
+            const turnId = runtime.turnId, nativeId = runtime.record.nativeId;
+            if (!turnId || !nativeId) throw uiError('error.nativeToolOriginUnconfirmed');
+            const valid = () => !runtime.stopped && Boolean(runtime.terminal?.alive) && runtime.turnId === turnId && runtime.record.nativeId === nativeId && !socket.destroyed;
+            if (!valid()) throw uiError('error.nativeToolOriginUnconfirmed');
+            return runtime.addressedCall({ nativeId, turnId, callId: crypto.randomUUID(), valid }, event.arguments);
+          }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
+          return;
+        }
         const target = this.hookTargets.get(event.token);
         if (event.ask && target?.ask) {
           // Hold only this connection until the person answers or hands it back.

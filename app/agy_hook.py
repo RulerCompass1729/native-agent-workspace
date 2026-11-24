@@ -22,6 +22,9 @@ def main():
         "terminationReason",
         "fullyIdle",
         "stepIdx",
+        "invocationNum",
+        "initialNumSteps",
+        "transcriptPath",
     )
     event = {key: message[key] for key in fields if key in message}
     if message.get("error"):

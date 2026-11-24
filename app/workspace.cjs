@@ -1122,7 +1122,7 @@ class Workspace extends EventEmitter {
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; setActivity(s, ''); if (!this.approvalRoutes.has(s.id)) s.approval = null; }
-      if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete', time: Date.now() });
+      if ((s.provider === 'claude' || s.provider === 'agy') && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete', time: Date.now(), ...(s.provider === 'agy' && info.tag ? { inputTag: info.tag } : {}), ...(s.provider === 'agy' && info.nativeId ? { nativeId: info.nativeId } : {}), ...(s.provider === 'agy' && info.turnId ? { turnId: info.turnId } : {}) });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && spaces.isMember(s, forward.roomId || 'shared') && forward.member === spaces.membershipRevision(s, forward.roomId || 'shared') && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
       const displayedPlan = forward && forwardTag === info.tag && !info.text && this.sharedReplies.hasCompletedPlan(s, forwardTag);
