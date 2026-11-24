@@ -9,7 +9,8 @@ const { execFileSync, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { createHash, randomUUID } = require('node:crypto');
 
-const { AgyTui, launchSpec, prepareBridge, resolveSessionTranscript, readFinalReply, validConversationId } = require('../agy-tui.cjs');
+const { AgyTui, editorState, launchSpec, prepareBridge, resolveSessionTranscript, readFinalReply, validConversationId } = require('../agy-tui.cjs');
+const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { NativeHost } = require('../adapters.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { nativeEnvironment, pythonExecutable } = require('../platform.cjs');
@@ -399,11 +400,208 @@ test('Finding 2: real NativeHost + claude-message-tool.cjs --agy enforces separa
   assert.equal(calls.length, 1);
 });
 
-test('Finding 1: renderer resets auto-checked skipPermissions when switching away from Antigravity to Claude/Codex', () => {
+test('Finding 1 (R2 #1): renderAgyProvider fallback to Claude clears auto-checked skipPermissions while preserving manual check', () => {
+  const vm = require('node:vm');
   const text = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
-  assert.match(text, /let agyAutoSkip = false;/);
-  assert.match(text, /else if \(input\.checked && agyAutoSkip\)/);
   assert.match(text, /const agyTerminalOnly = s\?\.provider === 'agy';/);
+
+  const mkEl = () => {
+    const attrs = new Map();
+    return {
+      hidden: false,
+      checked: false,
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      removeAttribute(k) { attrs.delete(k); },
+    };
+  };
+  const els = { 'agy-provider': mkEl(), 'skip-permissions': mkEl() };
+  const radios = {
+    claude: Object.assign(mkEl(), { value: 'claude', checked: false }),
+    agy: Object.assign(mkEl(), { value: 'agy', checked: true }),
+  };
+  const ctx = vm.createContext({
+    state: { available: { agy: false } },
+    $: id => els[id],
+    document: {
+      querySelector(sel) {
+        if (sel === 'input[name="provider"]:checked') return Object.values(radios).find(r => r.checked) || null;
+        if (sel === 'input[name="provider"][value="claude"]') return radios.claude;
+        return null;
+      },
+    },
+  });
+  const fnStart = text.indexOf('function renderAgyProvider()');
+  const fnEnd = text.indexOf('function chosenProvider()', fnStart);
+  vm.runInContext(text.slice(fnStart, fnEnd), ctx);
+
+  // Auto-checked skipPermissions for agy must be cleared when agy disappears and falls back to Claude.
+  els['skip-permissions'].checked = true;
+  els['skip-permissions'].setAttribute('data-agy-auto-skip', 'true');
+  ctx.renderAgyProvider();
+  assert.equal(radios.claude.checked, true);
+  assert.equal(els['agy-provider'].hidden, true);
+  assert.equal(els['skip-permissions'].checked, false);
+  assert.equal(els['skip-permissions'].getAttribute('data-agy-auto-skip'), null);
+
+  // Manually checked skipPermissions (without data-agy-auto-skip) is preserved on fallback.
+  radios.claude.checked = false;
+  radios.agy.checked = true;
+  els['skip-permissions'].checked = true;
+  ctx.renderAgyProvider();
+  assert.equal(radios.claude.checked, true);
+  assert.equal(els['skip-permissions'].checked, true);
+});
+
+test('R2 #3: bound nativeId is immutable and rejects hooks from another conversationId', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-lock-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const brainRoot = path.join(dir, 'brain');
+  const ownId = randomUUID(), otherId = randomUUID();
+  const ownTranscript = path.join(brainRoot, ownId, 'transcript.jsonl');
+  const otherTranscript = path.join(brainRoot, otherId, 'transcript.jsonl');
+  fs.mkdirSync(path.dirname(ownTranscript), { recursive: true });
+  fs.mkdirSync(path.dirname(otherTranscript), { recursive: true });
+  fs.writeFileSync(ownTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, content: 'own reply' }) + '\n');
+  fs.writeFileSync(otherTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 2, content: 'HIJACKED REPLY' }) + '\n');
+
+  const term = new SyntheticTerminal(['/bin/agy'], dir, {});
+  const record = { id: 's-lock', provider: 'agy', cwd: dir, nativeId: null, state: 'idle' };
+  const rt = new AgyTui(record, { hookSocket: '/tmp/h.sock', hookTargets: new Map(), agyMcpTargets: new Map() }, { brainRoot });
+  const completes = [];
+  rt.on('complete', c => completes.push(c));
+  rt.attach(term);
+  term.emit('started', 22222);
+
+  // Initial SessionStart binds nativeId once.
+  rt.hook({ hookEventName: 'SessionStart', conversationId: ownId });
+  assert.equal(record.nativeId, ownId);
+
+  // Subsequent hook claiming another conversationId (or malformed ID) is dropped before mutating nativeId or starting a turn.
+  rt.hook({ hookEventName: 'PreInvocation', conversationId: otherId, initialNumSteps: 0, transcriptPath: otherTranscript });
+  assert.equal(record.nativeId, ownId);
+  assert.equal(rt.turnId, null);
+
+  rt.hook({ hookEventName: 'PreInvocation', conversationId: 'not-a-uuid', initialNumSteps: 0, transcriptPath: otherTranscript });
+  assert.equal(record.nativeId, ownId);
+  assert.equal(rt.turnId, null);
+
+  rt.hook({ hookEventName: 'Stop', conversationId: otherId, terminationReason: 'NO_TOOL_CALL', fullyIdle: true, transcriptPath: otherTranscript });
+  assert.equal(completes.length, 0);
+
+  // Pre-bound resumed session also rejects retargeting on the very first hook.
+  const resumedRecord = { id: 's-resumed', provider: 'agy', cwd: dir, nativeId: ownId, recovering: true, state: 'idle' };
+  const resumedRt = new AgyTui(resumedRecord, { hookSocket: '/tmp/h.sock', hookTargets: new Map(), agyMcpTargets: new Map() }, { brainRoot });
+  const resumedTerm = new SyntheticTerminal(['/bin/agy'], dir, {});
+  resumedRt.attach(resumedTerm);
+  resumedTerm.emit('started', 22223);
+  resumedRt.hook({ hookEventName: 'SessionStart', conversationId: otherId });
+  assert.equal(resumedRecord.nativeId, ownId);
+});
+
+test('R2 #4: xterm screen editorState allows send after TUI use while blocking live drafts, overlays and trust prompts', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-screen-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rule = '─'.repeat(80);
+  const paint = async (term, lines) => {
+    const payload = '\x1b[2J\x1b[H' + lines.join('\r\n');
+    await new Promise(resolve => term.screen.write(payload, resolve));
+    term.emit('data', { data: payload });
+  };
+
+  class XtermTerminal extends SyntheticTerminal {
+    constructor(argv, cwd, env) {
+      super(argv, cwd, env);
+      this.screen = new HeadlessTerminal({ cols: 100, rows: 30, allowProposedApi: true });
+    }
+  }
+
+  let activeTerm;
+  const host = {
+    privateDir: dir,
+    binaries: { agy: '/synthetic/bin/agy', python: '/synthetic/bin/python3' },
+    hookSocket: path.join(dir, 'hooks.sock'),
+    hookTargets: new Map(),
+    agyMcpTargets: new Map(),
+    create(record) {
+      return new AgyTui(record, host, {
+        sendTimeoutMs: 500,
+        Terminal: class extends XtermTerminal {
+          constructor(argv, cwd, env) { super(argv, cwd, env); activeTerm = this; }
+        },
+      });
+    },
+    close() {},
+  };
+  const ws = new Workspace(host, dir);
+  t.after(async () => { await ws.close(); });
+
+  const sessionId = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const record = ws.get(sessionId);
+  const rt = ws.runtimes.get(sessionId);
+  activeTerm.emit('started', 61616);
+
+  // Trust prompt blocks dispatch.
+  await paint(activeTerm, ['Accessing workspace:', dir, 'Do you trust the contents of this project?', '> Yes, I trust this folder']);
+  assert.equal(editorState(activeTerm.screen), 'blocked');
+  assert.equal(rt.chatAvailable, false);
+  await assert.rejects(rt.send('blocked on trust', 't1', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, 0);
+
+  // Default Auto mode idle placeholder is empty and dispatchable.
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  assert.equal(editorState(activeTerm.screen), 'empty');
+  assert.equal(rt.chatAvailable, true);
+
+  // Human uses the TUI (setting sticky record.terminalInputPending = true) and types a draft.
+  ws.input(sessionId, 'hello draft', 'owner-1');
+  assert.equal(record.terminalInputPending, true);
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> hello draft',
+    rule,
+    '                                                     auto · Gemini 4 Neon · high',
+  ]);
+  assert.equal(editorState(activeTerm.screen), 'unknown');
+  assert.equal(rt.chatAvailable, false);
+  const writesWithDraft = activeTerm.writes.length;
+  await assert.rejects(rt.send('auto while drafting', 't2', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesWithDraft, 'zero bytes written while human draft is present');
+
+  // Even if ? for shortcuts were visible alongside non-placeholder text, editorState still reports draft.
+  await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> hello draft', rule, '? for shortcuts']);
+  assert.equal(editorState(activeTerm.screen), 'draft');
+  assert.equal(rt.chatAvailable, false);
+
+  // Multi-line draft is also blocked.
+  await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> ', 'second line', rule, '? for shortcuts']);
+  assert.equal(editorState(activeTerm.screen), 'draft');
+
+  // Human clears draft (Ctrl+U) or finishes turn -> empty skipPermissions prompt re-enables automated send() even while terminalInputPending remains true!
+  await paint(activeTerm, [
+    'Antigravity CLI 1.5.16',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts                                      auto · Gemini 4 Neon · high',
+  ]);
+  assert.equal(record.terminalInputPending, true, 'workspace sticky flag stays intact');
+  assert.equal(editorState(activeTerm.screen), 'empty');
+  assert.equal(rt.chatAvailable, true);
+
+  const convId = randomUUID();
+  const sendOk = ws.send(sessionId, 'Dispatched after TUI use', 'owner-1');
+  assert.equal(activeTerm.writes.at(-1), '\x1b[200~Dispatched after TUI use\x1b[201~\r');
+  rt.hook({ hookEventName: 'PreInvocation', conversationId: convId, invocationNum: 1, initialNumSteps: 1 });
+  await sendOk;
+  assert.equal(record.state, 'working');
 });
 
 test('unhooked agy session clears temporary identity on exit and reload', async t => {

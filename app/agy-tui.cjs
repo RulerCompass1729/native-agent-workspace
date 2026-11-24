@@ -1,7 +1,8 @@
 'use strict';
-// Antigravity CLI (`agy`) TUI session run in NAW's PTY.
-// Terminal-only in UI; wires per-session hooks + native_workspace MCP via --add-dir
-// with separate hook/MCP tokens, PreToolUse call-origin proof and session-bound transcripts.
+// Antigravity CLI (`agy`) TUI session run in NAW's PTY (terminal-only in UI).
+// Known TUI trust boundary (accepted 2026-11-24): agy TUI has no in-process rootLease or external
+// app-server socket, so same-OS-account commands share the hook/MCP boundary (not equivalent to Claude
+// rootLease or Codex app-server); NAW standing wake switches, cooldown, streak and recipient gates still apply.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -17,6 +18,8 @@ const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const MCP_PROOF_WAIT_MS = 2500;
 const DEFAULT_BRAIN_ROOT = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
 const WORKSPACE_MESSAGE_MATCHER = '^.*workspace_message$';
+const RULE_LINE = /^[─━═]{10,}$/;
+const EMPTY_PROMPT_LINE = /^[>❯](?:\s*|\s+(?:Auto mode|Plan mode|Accept edits|Ask before edits|Default mode|Bypass permissions)\b.*\(shift\+tab to cycle\))$/;
 
 function validConversationId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
@@ -32,6 +35,39 @@ function shellQuote(value) {
 
 function stripAnsi(raw) {
   return String(raw || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ' ');
+}
+
+function editorState(screen) {
+  const buf = screen?.buffer?.active;
+  const rows = Number.isInteger(screen?.rows) ? screen.rows : 0;
+  if (!buf || rows <= 0 || typeof buf.getLine !== 'function') return 'unknown';
+  const baseY = Number.isInteger(buf.baseY) ? buf.baseY : 0;
+  const lines = [];
+  for (let y = baseY; y < baseY + rows; y++) {
+    const line = buf.getLine(y)?.translateToString(true) ?? '';
+    if (line.includes('Do you trust the contents of this project?')) return 'blocked';
+    lines.push(line);
+  }
+  let statusIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].includes('? for shortcuts')) { statusIdx = i; break; }
+  }
+  if (statusIdx < 3) return 'unknown';
+  let bottomRule = -1;
+  for (let i = statusIdx - 1; i >= 0; i--) {
+    if (RULE_LINE.test(lines[i].trim())) { bottomRule = i; break; }
+    if (lines[i].trim()) return 'unknown';
+  }
+  if (bottomRule < 2) return 'unknown';
+  let topRule = -1;
+  for (let i = bottomRule - 1; i >= 0; i--) {
+    if (RULE_LINE.test(lines[i].trim())) { topRule = i; break; }
+  }
+  if (topRule < 0 || bottomRule - topRule <= 1) return 'unknown';
+  const box = lines.slice(topRule + 1, bottomRule).map(l => l.trim()).filter(Boolean);
+  if (!box.length || !/^[>❯]/.test(box[0])) return 'unknown';
+  if (box.length > 1) return 'draft';
+  return EMPTY_PROMPT_LINE.test(box[0]) ? 'empty' : 'draft';
 }
 
 function prepareBridge({ privateDir, sessionId, mcpToken, hookSocket, pythonBinary, execPath = process.execPath, appDir = __dirname }) {
@@ -215,6 +251,12 @@ class AgyTui extends EventEmitter {
       throw error;
     }
   }
+  syncScreenState(screen) {
+    const state = editorState(screen);
+    this.trustPromptActive = state === 'blocked';
+    this.promptReady = state === 'empty';
+    this.syncCapabilities();
+  }
   observeTerminalText(text) {
     if (!text) return;
     if (text.includes('Do you trust the contents of this project?')) {
@@ -236,7 +278,8 @@ class AgyTui extends EventEmitter {
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
-      if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
+      if (terminal.screen) this.syncScreenState(terminal.screen);
+      else if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
       this.emit('terminal', event);
     });
     terminal.on('started', pid => {
@@ -275,8 +318,10 @@ class AgyTui extends EventEmitter {
     });
   }
   send(text, tag, guard = () => true) {
+    const screen = this.terminal?.screen;
+    const promptBlocked = screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true;
     if (this.stopped || !this.terminal?.alive || !this.chatAvailable || !this.promptReady || this.trustPromptActive ||
-      this.record.terminalInputPending === true || this.pendingSend || this.liveTurn) {
+      promptBlocked || this.pendingSend || this.liveTurn) {
       return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
     }
     if (!guard()) return Promise.reject(Object.assign(uiError('error.workspace.handoffExpired'), { notSent: true }));
@@ -357,8 +402,12 @@ class AgyTui extends EventEmitter {
   }
   hook(event) {
     if (!event || typeof event !== 'object' || this.stopped || !this.terminal?.alive) return;
-    if (validConversationId(event.conversationId) && this.record.nativeId !== event.conversationId) {
-      this.record.nativeId = event.conversationId;
+    if (typeof event.conversationId === 'string' && event.conversationId && !validConversationId(event.conversationId)) return;
+    const incomingId = validConversationId(event.conversationId) ? event.conversationId : null;
+    if (validConversationId(this.record.nativeId)) {
+      if (incomingId && incomingId !== this.record.nativeId) return;
+    } else if (incomingId) {
+      this.record.nativeId = incomingId;
       this.emit('capability');
     }
     if (typeof event.modelName === 'string') {
@@ -369,15 +418,23 @@ class AgyTui extends EventEmitter {
     }
     switch (event.hookEventName) {
       case 'SessionStart':
-        this.trustPromptActive = false;
-        this.promptReady = true;
-        this.syncCapabilities();
+        if (this.terminal?.screen) {
+          this.syncScreenState(this.terminal.screen);
+        } else {
+          this.trustPromptActive = false;
+          this.promptReady = true;
+          this.syncCapabilities();
+        }
         if (!this.liveTurn && this.record.state !== 'working') this.emit('state', 'idle');
         break;
       case 'PreInvocation': {
-        this.trustPromptActive = false;
-        this.promptReady = true;
-        this.syncCapabilities();
+        if (this.terminal?.screen) {
+          this.syncScreenState(this.terminal.screen);
+        } else {
+          this.trustPromptActive = false;
+          this.promptReady = true;
+          this.syncCapabilities();
+        }
         if (this.liveTurn) {
           if (!this.liveTurn.transcriptPath && typeof event.transcriptPath === 'string') {
             this.liveTurn.transcriptPath = resolveSessionTranscript(event.transcriptPath, this.liveTurn.nativeId, this.brainRoot);
@@ -412,7 +469,7 @@ class AgyTui extends EventEmitter {
         const callId = event.toolCallId;
         if (typeof callId !== 'string' || !callId || callId.length > 160) break;
         if (typeof event.recipientId !== 'string' || !event.recipientId || typeof event.messageHash !== 'string' || !/^[0-9a-f]{64}$/.test(event.messageHash)) break;
-        if (event.conversationId && event.conversationId !== this.liveTurn.nativeId) break;
+        if (validConversationId(this.liveTurn.nativeId) && incomingId !== this.liveTurn.nativeId) break;
         if (!this.mcpCalls.has(callId)) {
           this.mcpCalls.set(callId, {
             callId,
@@ -503,6 +560,7 @@ class AgyTui extends EventEmitter {
 
 module.exports = {
   validConversationId,
+  editorState,
   prepareBridge,
   resolveSessionTranscript,
   readFinalReply,

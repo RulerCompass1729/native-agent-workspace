@@ -3218,6 +3218,7 @@ class NativeHost {
           return;
         }
         if (event.agyWorkspaceMessage === true) {
+          // Same-OS-account TUI boundary (accepted 2026-11-24): defense-in-depth MCP token + PreToolUse proof; not equivalent to Claude rootLease / Codex app-server.
           socket.removeAllListeners('data');
           socket.setTimeout(0); const deadline = setTimeout(() => socket.destroy(), 10000);
           socket.once('close', () => clearTimeout(deadline));

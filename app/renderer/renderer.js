@@ -2402,12 +2402,12 @@ $('privacy-dialog').addEventListener('close', event => {
   for (const detail of dialog.querySelectorAll('details')) detail.open = false;
 });
 
-let agyAutoSkip = false;
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  agyAutoSkip = provider === 'agy';
-  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyAutoSkip; $('create-profile').replaceChildren();
+  const agyDefault = provider === 'agy';
+  if (agyDefault) $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); else $('skip-permissions').removeAttribute('data-agy-auto-skip');
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyDefault; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
@@ -4417,8 +4417,9 @@ function createReadiness() {
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   // DSH keeps its own approvals; the service refuses bypass for it.
+  if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true' && historyProvider !== 'agy') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
-  if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
+  if ($('skip-permissions-option').hidden) { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
   ui.display.computed($('create-permission-note'), 'text', () => uiText('create.permissionNote', { directory: uiText(directoryKey), permission: uiText(permissionKey) }));
@@ -4455,8 +4456,11 @@ function renderDshProvider() {
 function renderAgyProvider() {
   const offered = state.available?.agy === true;
   $('agy-provider').hidden = !offered;
-  const chosen = document.querySelector('input[name="provider"]:checked').value === 'agy';
-  if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+  const chosen = document.querySelector('input[name="provider"]:checked')?.value === 'agy';
+  if (!offered && chosen) {
+    document.querySelector('input[name="provider"][value="claude"]').checked = true;
+    if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
+  }
 }
 function chosenProvider() { return deepseekChosen() ? 'codex' : document.querySelector('input[name="provider"]:checked').value; }
 function renderCreateProfiles() {
@@ -8049,7 +8053,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
       for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
-      $('skip-permissions').checked = false; agyAutoSkip = false; folder = ''; newDirectory = false;
+      $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); folder = ''; newDirectory = false;
       $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
@@ -8099,9 +8103,9 @@ renderInterfaceLanguage();
 
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = () => {
   if (input.value === 'agy' && input.checked) {
-    if (!$('skip-permissions').checked) { $('skip-permissions').checked = true; agyAutoSkip = true; }
-  } else if (input.checked && agyAutoSkip) {
-    $('skip-permissions').checked = false; agyAutoSkip = false;
+    if (!$('skip-permissions').checked) { $('skip-permissions').checked = true; $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); }
+  } else if (input.checked && $('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') {
+    $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip');
   }
   createReadiness();
 };
@@ -8113,7 +8117,7 @@ $('create-space-name').oninput = () => { $('create-space-name').dataset.edited =
 $('claude-history-id').onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
 };
-$('skip-permissions').onchange = () => { agyAutoSkip = false; createReadiness(); };
+$('skip-permissions').onchange = () => { $('skip-permissions').removeAttribute('data-agy-auto-skip'); createReadiness(); };
 attempt(async () => {
   state = await api.initial();
   languageWarning = ['unavailable', 'migrationNotSaved'].includes(state.localeWarning) ? state.localeWarning : null; renderInterfaceLanguage();
