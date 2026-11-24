@@ -22,10 +22,10 @@ class AnswerNotices {
     Object.assign(this, { now, holdMs, retryMs, maxAgeMs });
     this.owed = new Map();
   }
-  // The person answered card `receipt.id` of `actor` with `decision` ('confirmed' or 'cancelled'); `receipt` is the
-  // record as decide() returned it. A later outcome of the same operation replaces the earlier one.
+  // The person answered card `receipt.id` of `actor` with `decision` ('confirmed' or 'cancelled'; 'expired': not in
+  // time); `receipt` is the record as decide() returned it. A later outcome of the same operation replaces the earlier one.
   add(actor, receipt, decision) {
-    if (!token(actor?.id) || !token(actor?.nativeId) || !token(receipt?.id) || !['confirmed', 'cancelled'].includes(decision)) return false;
+    if (!token(actor?.id) || !token(actor?.nativeId) || !token(receipt?.id) || !['confirmed', 'cancelled', 'expired'].includes(decision)) return false;
     // A follow-up card: the person is asked again on the same operation, and only their last answer is told.
     if (receipt.state === 'confirmation-required') return false;
     const k = key(actor.id, actor.nativeId), entry = this.owed.get(k) || { sessionId: actor.id, nativeId: actor.nativeId, notices: new Map(), retryAt: 0 };
@@ -102,8 +102,8 @@ class AnswerNotices {
 // The message: which operations, what the person answered, what NAW recorded, and where to read the rest. In the
 // language of NAW's other automatic messages to agents (steward-wake.cjs wakeText).
 function noticeText(notices) {
-  const lines = notices.map(n => `- ${n.operationId}${n.method ? `（${n.method}）` : ''}：${n.decision === 'cancelled' ? '人点了取消' : '人点了确认'}，回执状态 ${n.state || 'unknown'}`);
-  return `【NAW 确认结果】你在等人答复的操作，人已经答复：\n${lines.join('\n')}\n用 workspace_control 的 receipt 读回执再决定下一步。NAW 只通知，不替你重发或续做。`;
+  const lines = notices.map(n => `- ${n.operationId}${n.method ? `（${n.method}）` : ''}：${{ cancelled: '人点了取消', expired: '人没在时限内答复，卡已过期' }[n.decision] || '人点了确认'}，回执状态 ${n.state || 'unknown'}`);
+  return `【NAW 确认结果】你在等人答复的操作有了结果：\n${lines.join('\n')}\n用 workspace_control 的 receipt 读回执再决定下一步。NAW 只通知，不替你重发或续做。`;
 }
 
 module.exports = Object.freeze({ AnswerNotices, noticeText, HOLD_MS, RETRY_MS, MAX_AGE_MS, MAX_NOTICES });

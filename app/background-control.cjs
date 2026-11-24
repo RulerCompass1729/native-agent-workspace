@@ -377,6 +377,30 @@ class BackgroundControl {
     this.commit(data => { for (const row of data.records) if (keys.has(this.key(row.actor) + ':' + row.id)) {
       Object.assign(row, this.settlementFields(row, 'expired', 'deadline-elapsed'));
     } });
+    // A card the agent asked again is told by the later one. One asked again after the same request ran out is not, so an
+    // agent asking again while the person is away is not woken each time it runs out.
+    for (const row of this.data.records) if (keys.has(this.key(row.actor) + ':' + row.id)) {
+      const same = this.sameRequests(row), earlier = same.filter(({ later }) => !later).map(({ r }) => r).sort((a, b) => b.at - a.at)[0];
+      if (same.some(({ later }) => later) || earlier?.disposition === 'expired' && earlier.finishedAt <= row.at) continue;
+      this.tellExpired(row, row.state);
+    }
+  }
+  // The agent that asked hears that its card ran out unanswered (queue W4), as it hears the person's answers.
+  tellExpired(row, state) {
+    try { this.decided(clone(row.actor), { id: row.id, state, command: { method: row.command.method } }, 'expired'); } catch { /* The receipt stays readable. */ }
+  }
+  // A card whose asking session was archived cannot be confirmed any more (confirmationState); it is settled saying so
+  // rather than left waiting where no view shows it (queue W4). Only that session under its own native id, in a list
+  // that could be read: a session missing from it may be away for a moment.
+  settleArchivedOrigins(snapshot) {
+    if (this.closed || this.failed || !snapshot || snapshot.unavailable || !Array.isArray(snapshot.sessions)) return;
+    const archived = new Set(snapshot.sessions.filter(s => s?.archived === true).map(s => s.id + '\n' + s.nativeId));
+    const due = this.data.records.filter(r => r.state === 'confirmation-required' && !this.inflight.has(this.key(r.actor)) && archived.has(r.actor.id + '\n' + r.actor.nativeId));
+    if (!due.length) return;
+    const keys = new Set(due.map(r => this.key(r.actor) + ':' + r.id));
+    this.commit(data => { for (const row of data.records) if (keys.has(this.key(row.actor) + ':' + row.id) && row.state === 'confirmation-required') {
+      Object.assign(row, this.settlementFields(row, 'invalidated', 'originator-archived'));
+    } });
   }
   scheduleExpiry() {
     clearTimeout(this.expiryTimer); this.expiryTimer = null;
@@ -1101,7 +1125,8 @@ class BackgroundControl {
       // Whatever came of it (carried out, cancelled, or not carried out because the asking session changed), the agent
       // that asked is told once it is recorded; an answer refused as no longer current changed nothing and tells nothing.
       // Only the id, the method and the state recorded go out: never a value read for the agent.
-      if (result?.id === id) try { this.decided(clone(row.actor), { id, state: result.state, command: { method: row.command.method } }, decision); } catch { /* The receipt stays readable. */ }
+      // Clicked after the deadline: settled as expired and told so, whatever ran out before.
+      if (result?.id === id) try { this.decided(clone(row.actor), { id, state: result.state, command: { method: row.command.method } }, result.disposition === 'expired' ? 'expired' : decision); } catch { /* The receipt stays readable. */ }
       return result;
     }).finally(() => this.touch(row.actor));
   }
@@ -1203,11 +1228,11 @@ class BackgroundControl {
   // No context is opened and no command is invoked while inspecting it.
   confirmations(names = {}, snapshot = names) {
     let unavailable = this.failed;
+    const observed = { ...snapshot, ...(Array.isArray(names.sessions) ? { sessions: names.sessions } : {}) };
     // Expiry may persist a receipt. A failed write cannot take the person's
     // conversation down or make a pending card look executable.
-    try { this.expirePending(); } catch { unavailable = true; }
+    try { this.expirePending(); this.settleArchivedOrigins(observed); } catch { unavailable = true; }
     const all = () => [...this.archivedBySession.values()].flat().concat(this.data.records);
-    const observed = { ...snapshot, ...(Array.isArray(names.sessions) ? { sessions: names.sessions } : {}) };
     const source = all(), messages = new Map();
     return source.filter(r => r.confirmation?.kind === 'message' || Number.isSafeInteger(r.confirmationRequestedAt) || Number.isSafeInteger(r.humanDecision))
       .map(row => {

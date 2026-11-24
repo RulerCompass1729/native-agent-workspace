@@ -314,3 +314,76 @@ test('a different task receipt cannot complete the item before an answer notice'
   assert.ok(!f.rooms.metadata('shared').events.some(event => event.monitor?.kind === 'ready'));
   assert.deepEqual(f.client.dispatches(), [], 'No input was replayed');
 });
+
+// Queue W4 (the person, 2026-11-20 and 11-23): a card that ran out before the person answered left the agent waiting until
+// the person came to ask. It is told once; the same request running out again is not, so an agent asking again while
+// the person is away is not woken in a loop. Read from the record, not the receipt: an agent that reads it is not told.
+const recorded = (f, id) => f.controller.data.records.find(r => r.id === id).state;
+test('a card nobody answered in time: the agent is told once nothing was done; the same request running out again is not told again', async t => {
+  const f = await fixture(t, 'claude');
+  assert.equal((await f.ask('op-a')).state, 'confirmation-required');
+  f.clock.now += 10 * 60 * 1000; f.controller.expirePending();
+  // The handler asks from inside its run, so the record says the rest was not carried out ('unconfirmed').
+  assert.equal(f.controller.data.records.find(r => r.id === 'op-a').disposition, 'expired');
+  await f.elapse(12000);
+  assert.equal(f.told().length, 1, 'told that it ran out');
+  assert.match(f.told()[0][2], new RegExp(`- op-a（stop）：人没在时限内答复，卡已过期，回执状态 ${recorded(f, 'op-a')}\\n`, 'u'));
+  assert.doesNotMatch(f.told()[0][2], /人已经答复/u, 'the heading does not say the person answered');
+  // Its handler had started: earlier steps may have run, so the line does not say nothing was done.
+  assert.equal(recorded(f, 'op-a'), 'unconfirmed'); assert.doesNotMatch(f.told()[0][2], /没执行/u);
+  f.client.set({ state: 'idle' });
+  await f.ask('op-b'); f.clock.now += 10 * 60 * 1000; f.controller.expirePending();
+  assert.equal(f.controller.data.records.find(r => r.id === 'op-b').disposition, 'expired');
+  await f.elapse(60000);
+  assert.equal(f.told().length, 1, 'the same request running out again is not told again');
+  f.client.set({ state: 'idle' });
+  await f.ask('op-c'); assert.equal((await f.answer('op-c', 1)).state, 'complete');
+  await f.elapse(12000);
+  assert.equal(f.told().length, 2); assert.match(f.told()[1][2], /- op-c（stop）：人点了确认/u);
+});
+test('the person clicked after the card ran out: the agent is told nothing was done, even after the same request ran out unanswered', async t => {
+  const f = await fixture(t, 'claude');
+  await f.ask('op-a'); f.clock.now += 10 * 60 * 1000; f.controller.expirePending();
+  await f.elapse(12000);
+  assert.equal(f.told().length, 1);
+  f.client.set({ state: 'idle' });
+  await f.ask('op-b'); f.clock.now += 10 * 60 * 1000;
+  const late = await f.answer('op-b', 1);
+  assert.equal(late.disposition, 'expired', 'clicked late: the rest is not carried out');
+  await f.elapse(12000);
+  assert.equal(f.told().length, 2, 'the person acted: the agent hears of it');
+  assert.match(f.told()[1][2], new RegExp(`- op-b（stop）：人没在时限内答复，卡已过期，回执状态 ${late.state}\\n`, 'u'));
+});
+test('asked again while the first card still waits: the agent hears about the card that settles last, not the one it replaced', async t => {
+  const f = await fixture(t, 'claude');
+  await f.ask('op-a'); f.clock.now += 60000; await f.ask('op-b');
+  f.clock.now += 9 * 60000; f.controller.expirePending();
+  assert.equal(f.controller.data.records.find(r => r.id === 'op-a').disposition, 'expired');
+  assert.equal(recorded(f, 'op-b'), 'confirmation-required');
+  await f.elapse(12000);
+  assert.deepEqual(f.told(), [], 'the later card of the same request still waits: nothing about the earlier one');
+  f.clock.now += 60000; f.controller.expirePending();
+  await f.elapse(12000);
+  assert.equal(f.told().length, 1, 'the later card ran out: told, though the one it replaced ran out before it');
+  assert.match(f.told()[0][2], /- op-b（stop）：人没在时限内答复，卡已过期/u); assert.doesNotMatch(f.told()[0][2], /op-a/u);
+});
+// Queue W4, M105 (the person, 2026-11-23): a card whose asking session was archived waited where no view shows it, and
+// said a reconnect would let it be confirmed. It is settled as not carried out, saying why.
+test('a card whose asking session was archived is settled as such; a missing or unreadable session leaves it waiting', async t => {
+  const messages = require('../ui-messages.js');
+  const f = await fixture(t, 'claude');
+  await f.ask('op-a');
+  const live = f.client.snapshot(), session = live.sessions[0];
+  const card = snapshot => f.controller.confirmations(snapshot).find(c => c.operationId === 'op-a');
+  for (const [name, snapshot] of [['live', live], ['missing from the list', { ...live, sessions: [] }], ['list unavailable', { ...live, unavailable: true, sessions: [{ ...session, archived: true }] }],
+    ['another native conversation archived under the id', { ...live, sessions: [{ ...session, nativeId: 'native-other', archived: true }] }]]) {
+    assert.notEqual(card(snapshot).reason, 'originator-archived', name);
+    assert.equal(recorded(f, 'op-a'), 'confirmation-required', `${name}: still waiting`);
+  }
+  const settled = card({ ...live, sessions: [{ ...session, archived: true }] });
+  assert.deepEqual([settled.disposition, settled.reason, settled.actionable], ['invalidated', 'originator-archived', false]);
+  assert.notEqual(recorded(f, 'op-a'), 'confirmation-required', 'settled in the record, so the agent\'s receipt says so too');
+  assert.equal(card(live).reason, 'originator-archived', 'restoring the session does not bring the card back');
+  for (const lang of ['zh', 'en']) assert.ok(messages[lang]['background.card.reason.originator-archived'], `${lang} reason text`);
+  assert.equal(messages.zh['background.card.reason.originator-archived'], '发起这张卡的会话已归档，未执行。');
+});
