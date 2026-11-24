@@ -263,10 +263,18 @@ function updateTaskBoard() {
         approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
         claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),
         nativeApproval: s.nativeApproval ? { requests: s.nativeApproval.requests?.map(a => ({ pending: a.pending })) } : null, nativeInputRequired: s.nativeInputRequired,
-        background: s.background, backgroundStale: s.backgroundStale, runningChildren: fleet.running, unknownChildren: fleet.unknown, workUnconfirmed: fleet.work.unconfirmed };
+        background: s.background, backgroundStale: s.backgroundStale, runningChildren: fleet.running, unknownChildren: fleet.unknown, workUnconfirmed: fleet.work.unconfirmed,
+        step: disconnected ? null : runningStepView(s) };
     }), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
       state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition })),
     confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId });
+}
+// The tool a session is running now, in words, for the board and the session header (11-24).
+function runningStepView(s) {
+  const step = window.nativeWorkspaceTaskBoard.runningStep(s);
+  if (!step) return null;
+  const action = step.tool ? window.nativeWorkspaceAgentDistribution.plainActivity(step.tool, uiText) : '';
+  return { action: action || uiText('activity.tool.other'), detail: step.detail, startedAt: step.startedAt, lastLine: step.lastLine };
 }
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
 const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
@@ -5703,8 +5711,12 @@ function renderNativeActivity(s) {
   const label = () => s.claudeQuestion ? uiText('state.question') : status && !nativeStatusFresh(status) ? uiText('native.stale') : matched && status.label ? (Object.hasOwn(nativeActivityLabels, status.label) ? uiText(nativeActivityLabels[status.label]) : status.label) : uiText(waiting ? question ? 'state.question' : 'native.approval' : 'native.processing');
   const notice = matched && !waiting && !s.approvalOverflow && s.state === 'working' && status.waitNotice;
   const slow = notice?.kind === 'tool-wait' && notice.nativeId === s.nativeId && notice.turnId === s.activeTurnId && notice.marker === status.toolWait?.marker && notice.progressAt === status.toolWait?.progressAt;
-  ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + label() + (slow ? uiText('native.slowTool') : ''));
-  ui.display.computed($('native-elapsed'), 'text', () => seconds === null ? '' : uiText('native.used', { elapsed: elapsedText(seconds) }));
+  // A running tool names itself and counts from its own start, unless a question, a permission or a stale status comes first.
+  const step = !waiting && (!status || nativeStatusFresh(status)) ? runningStepView(s) : null;
+  const stepLabel = () => step.detail ? uiText('activity.stepHeader', { action: step.action, detail: step.detail }) : step.action;
+  const used = step && step.startedAt <= Date.now() ? Math.floor((Date.now() - step.startedAt) / 1000) : seconds;
+  ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + (step ? stepLabel() : label()) + (slow ? uiText('native.slowTool') : ''));
+  ui.display.computed($('native-elapsed'), 'text', () => used === null ? '' : uiText('native.used', { elapsed: elapsedText(used) }));
 }
 // A reported status turns stale 5 s after its last observation, and the window shows that once: render
 // reads nativeStatusFresh. It stays stale until a newer snapshot, which renders anyway. Redrawing the

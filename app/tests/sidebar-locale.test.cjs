@@ -290,6 +290,7 @@ test('subtitle native fields remain raw while the last own membership label repa
 
 test('known native activity enums repaint but original permission titles and turn identity stay raw', () => {
   const f = fixture(); f.context.nativeStatusFresh = status => status?.stale !== true; f.load('// Only known activity enums', 'const nativeActivityClock =');
+  f.context.window.nativeWorkspaceTaskBoard = require('../renderer/task-board.js'); f.load('// The tool a session is running now', 'const spaceCall');
   const s = f.people[0]; s.activeTurnId = 'original-turn'; s.nativeActivity = { nativeId: s.nativeId, turnId: s.activeTurnId, label: 'thinking', startedAt: Date.now() - 5000 };
   f.run('renderNativeActivity(state.sessions[0])'); f.refresh('en'); assert.match(f.$('native-phase').textContent, /RAW NAME 中文 · Thinking/); assert.match(f.$('native-elapsed').textContent, /Elapsed/);
   s.nativeActivity.label = 'ORIGINAL 权限请求'; f.run('renderNativeActivity(state.sessions[0])'); f.refresh('zh');

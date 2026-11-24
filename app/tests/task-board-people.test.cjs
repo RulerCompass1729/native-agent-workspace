@@ -156,7 +156,7 @@ test('the renderer hands the board each session\'s header square, group and shor
   const context = vm.createContext({ state: { sessions: [{ id: 'x', name: 'X', state: 'working' }, { id: 'y', name: 'Y', state: 'approval' }] }, disconnected: false, spaceId: 'dev',
     allSpaces: () => [], spaceName: r => r.name, taskBoard: { update: value => { captured = value; } },
     sidebarPresentation: s => s.state === 'working' ? { tone: 'working', workTone: '', compact: 'Working now', waiting: false } : { tone: 'approval', workTone: '', compact: 'Needs approval', waiting: true },
-    window: { nativeWorkspaceAgentDistribution: distribution, nativeWorkspaceSpaces: { roomIds: () => [] }, nativeWorkspaceFleet: { currentFleet: () => ({ running: 0, unknown: 0, work: { unconfirmed: false } }) } } });
+    window: { nativeWorkspaceAgentDistribution: distribution, nativeWorkspaceTaskBoard: board, nativeWorkspaceSpaces: { roomIds: () => [] }, nativeWorkspaceFleet: { currentFleet: () => ({ running: 0, unknown: 0, work: { unconfirmed: false } }) } } });
   vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
   assert.deepEqual(captured.sessions.map(s => [s.look, s.agentStatus, s.statusText]), [['state-dot working', 'working', 'Working now'], ['state-dot approval', 'waiting', 'Needs approval']]);
 });

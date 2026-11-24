@@ -8,7 +8,7 @@ function intake(queue) {
   const start = source.indexOf('function updateTaskBoard() {'), end = source.indexOf('\nconst spaceCall', start);
   assert.ok(start >= 0 && end > start);
   let input;
-  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js') }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }),
+  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js'), nativeWorkspaceTaskBoard: board }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }),
     state: { sessions: [{ id: 'actor', name: 'Synthetic actor', nativeId: 'native', roomIds: ['space'], state: 'working' }], backgroundConfirmations: [], backgroundConfirmationsAvailable: true },
     disconnected: false, spaceId: 'space', allSpaces: () => [{ id: 'space', name: 'Synthetic space', queue }], spaceName: r => r.name,
     taskBoard: { update(value) { input = value; } } });
