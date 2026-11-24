@@ -139,11 +139,13 @@ test('an identical mid-turn prompt keeps the original human-control proof (T-141
   assert.equal(f.r.wakeTurn.human, originalProof, 'The same native turn cannot adopt the later human-control revision');
 });
 test('the first human hook can arrive after the native turn-start without losing wake authority (T-141)', t => {
-  const f = fixture(t), first = randomUUID();
+  const f = fixture(t), first = randomUUID(), wake = require('../session-wake.cjs');
   f.start('first-turn', first);f.typed(first, 'Late first human prompt.');
   const s=f.w.get('session');
   assert.equal(s.controlRevision,1);
-  assert.equal(f.r.wakeTurn.human,JSON.stringify([s.owner,s.controlRevision,s.connectionRevision]));
+  // The late prompt is ordinary input: it is counted out of the proof, which still equals what staging compares.
+  assert.equal(wake.sourceIdentity(f.w, s).controlRevision,0);
+  assert.equal(f.r.wakeTurn.human,JSON.stringify([s.owner,0,s.connectionRevision]));
 });
 
 test('a cold adapter cannot recapture its retained turn on an identical repeated prompt (T-141)', t => {

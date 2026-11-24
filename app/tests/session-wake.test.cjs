@@ -172,15 +172,16 @@ test('a person typing to an unrelated session neither cancels a staged wake nor 
   assert.equal(delivered.length, 1, 'The staged wake is delivered once');
   assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted');
 });
-test('a person acting on the sender or the receiver still cancels that wake', async t => {
+test('a person acting on the receiver still cancels that wake; the person\'s input into the sender does not', async t => {
   for (const act of ['sender-input', 'receiver-send', 'receiver-native-input']) {
     const f = await fixture(t); await f.call();
     if (act === 'sender-input') f.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
     else if (act === 'receiver-send') await f.target.send(f.b, 'The person talks to the receiver.', 'target-owner');
     else f.rb.emit('nativeInput', 'The person types into the receiver', { id: 'receiver-native-input' });
     await f.finish();
-    assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 0, act);
-    assert.notEqual(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted', act);
+    const delivered = act === 'sender-input';
+    assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, delivered ? 1 : 0, act);
+    assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status === 'submitted', delivered, act);
   }
 });
 test('a sender boundary that cancels a staged wake names its reason in the record', async t => {
@@ -506,14 +507,15 @@ test('a non-file guard marker cannot block human controls or permit an automatic
   assert.equal(f.writes.length, 1); assert.equal(require('../session-wake.cjs').snapshot(f.target).enabled, false);
   await f.finish(); assert.equal(f.writes.length, 1);
 });
-test('a person acting on the sender mid-turn withdraws that turn\'s later wake', async t => {
+test('a takeover of the sender mid-turn withdraws that turn\'s later wake; one unsent key does not', async t => {
   // Review F1: the sender's owner/control/connection at turn start bound its wake authority.
   for (const act of ['claim', 'terminal-input']) {
     const f = await fixture(t);
     if (act === 'claim') f.source.claim(f.a, 'another-window');
     else { f.source.get(f.a).view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); }
-    await assert.rejects(async () => f.call(), /真人|授权|回合/, act);
-    await f.finish(); assert.equal(f.writes.length, 0, act);
+    if (act === 'claim') await assert.rejects(async () => f.call(), /真人|授权|回合/, act);
+    else assert.equal((await f.call()).status, 'staged', act);
+    await f.finish(); assert.equal(f.writes.length, act === 'claim' ? 0 : 1, act);
   }
 });
 test('a native control boundary without a person still lets the turn stage its wake', async t => {
@@ -553,7 +555,16 @@ for (const side of ['source', 'target']) test(`terminal-generated mode reports p
   assert.equal(w.get(id).terminalInputPending, false);
 });
 
-for (const data of ['x', '\x1b[?2026;2$yx', '\x1b[?2026;9$y', '\x1b[<0;10;5M']) test(`human input still withdraws the staged wake: ${JSON.stringify(data)}`, async t => {
+for (const data of ['x', '\x1b[?2026;2$yx', '\x1b[?2026;9$y', '\x1b[<0;10;5M']) test(`human input into the sender's terminal keeps the staged wake: ${JSON.stringify(data)}`, async t => {
+  const f = await fixture(t); f.source.get(f.a).view = 'terminal';
+  f.ra.terminal = { alive: true, input() {} }; await f.call();
+  const control = f.source.get(f.a).controlRevision;
+  f.source.input(f.a, data, 'source-owner'); await f.finish();
+  assert.equal(f.source.get(f.a).controlRevision, control + 1, 'still a human operation for every other scope');
+  const row = f.source.get(f.a).messages.find(m => m.wake);
+  assert.equal(row.wake.status, 'submitted'); assert.equal(f.writes.length, 1);
+});
+for (const [name, data] of [['Esc', '\x1b'], ['Ctrl-C', '\x03'], ['Ctrl-C inside typed text', 'x\x03']]) test(`${name} in the sender's terminal still withdraws the staged wake`, async t => {
   const f = await fixture(t); f.source.get(f.a).view = 'terminal';
   f.ra.terminal = { alive: true, input() {} }; await f.call();
   f.source.input(f.a, data, 'source-owner'); await f.finish();
@@ -579,14 +590,14 @@ test('the real Codex adapter completes the staged turn before a queued next turn
   assert.equal(f.source.get(f.a).state, 'working');
 });
 
-test('next-turn native input still revokes a transfer waiting to consume its credential', async t => {
+test('next-turn native input does not revoke a transfer waiting to consume its credential', async t => {
   const f = await fixture(t, 'codex', true, true), nativeId = f.source.get(f.a).nativeId;
   await f.call(); const row = f.source.get(f.a).messages.find(m => m.wake);
   f.ra.event({ method: 'turn/completed', params: { threadId: nativeId, turn: { id: 'turn-one', status: 'completed' } } });
   f.start('queued-turn');
   f.ra.event({ method: 'item/completed', params: { threadId: nativeId, turnId: 'queued-turn', item: { id: 'new-input', type: 'userMessage', content: [{ type: 'text', text: 'A new instruction' }] } } });
   for (let i = 0; i < 8; i++) await tick();
-  assert.equal(f.writes.length, 0); assert.equal(row.wake.status, 'unconfirmed');
+  assert.equal(f.writes.length, 1); assert.equal(row.wake.status, 'submitted');
   assert.equal(f.ra.turnId, 'queued-turn');
 });
 
@@ -686,17 +697,19 @@ test('the combined view of both backends shows the wake once (T-137)', async t =
   assert.equal(new Set(rows.map(m => m.id)).size, 1, 'one wake, one row');
   assert.equal(rows[0].wakeStatus, 'submitted');
 });
-test('a cross-session message is not the person, yet its input boundary still voids a staged wake (T-137)', async t => {
+test('a cross-session message is not the person, and its input boundary does not void a staged wake (T-137)', async t => {
   const f = await fixture(t, 'claude'); assert.equal((await f.call()).status, 'staged');
   const before = [f.source.get(f.a).controlRevision, f.source.get(f.a).wakeHumanRevision || 0];
   f.ra.emit('nativeInput', '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="X">\nhi\n</cross-session-message>', { id: 'peer-input', source: 'naw-peer' });
   assert.deepEqual([f.source.get(f.a).controlRevision, f.source.get(f.a).wakeHumanRevision || 0], before, 'not a person acting on the sender');
   assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'staged');
   // The mod sends control:input for every foreign submission, a peer one included.
+  const peer = f.source.get(f.a).peerRevision || 0;
   f.ra.emit('nativeControlBoundary', 'control:input');
+  assert.equal(f.source.get(f.a).peerRevision, peer + 1, 'still a boundary for every other scope');
   await f.finish();
-  assert.notEqual(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted', 'the boundary voids it');
-  assert.equal(f.writes.length, 0);
+  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted');
+  assert.equal(f.writes.length, 1);
 });
 test('a turn end reported as a boundary withdraws its staged wake and says why (T-141)', async t => {
   const f = await fixture(t, 'claude'); assert.equal((await f.call()).status, 'staged');
@@ -707,15 +720,17 @@ test('a turn end reported as a boundary withdraws its staged wake and says why (
   assert.ok(require('../ui-locale.js').displayText('en', row.text, row.uiMessage).startsWith("New input or a permission request arrived during the sender's turn; the automatic message was not delivered.\n"));
   assert.equal(f.writes.length, 0);
 });
-test('an identical repeated Claude prompt cannot reauthorize a wake; a fresh turn can (T-141)', async t => {
+test('an identical repeated Claude prompt neither withdraws nor reauthorizes a wake; a fresh turn can (T-141)', async t => {
     const f = await fixture(t, 'claude');
     const typed = () => f.ra.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.source.get(f.a).nativeId, prompt_id: f.ra.liveTurn.promptId, prompt: 'Continue one bounded task.' });
     typed(); // The first hook may arrive after native turn-start.
     typed(); // Native316/317 may reuse that same id/text for a mid-turn queued prompt.
-    await assert.rejects(async () => f.call(), error => error.uiMessage?.key === 'error.wake.turnRevokedByHuman');
-    assert.equal(f.source.get(f.a).messages.some(message => message.wake), false, 'No misleading registered wake after the boundary');
-    assert.equal(f.writes.length, 0);
+    assert.equal((await f.call()).status, 'staged', 'a mid-turn prompt is ordinary input');
+    f.source.claim(f.a, 'another-window');
+    typed();
+    await assert.rejects(async () => f.call('After the takeover.', 'second-call'), error => error.uiMessage?.key === 'error.wake.turnRevokedByHuman');
     await f.finish('boundary');
+    assert.equal(f.writes.length, 0);
     f.start('fresh-turn');
     typed();
     assert.equal((await f.call('Continue the new authorized turn.', 'fresh-call')).status, 'staged');
@@ -868,9 +883,11 @@ test('when the person ends the butler role before the turn ends, only the turn\'
   assert.equal(second.text, '这一轮结束时没能确认发送方还是大管家，只发第一条；自动消息未投递。\nSecond.');
 });
 
-// The wake proposal, item 3 (board 11-12 16:44: 「③只做读到真人的话后重新授权、不在真人的话后附行」; 23:44:19: 「真人插话之后、
-// 他的话还没读到之前，这一回合仍然发不出」). A Claude sender in a turn; the person queues words into it through NAW, the real
-// adapter takes native's append receipt, and native's read of them comes as the submission channel's read event.
+// The person's words queued into a sender's running turn. The wake proposal's item 3 (2026-11-12) withdrew the turn's
+// authority at those words and gave it back once the turn read them. Since 2026-11-23 every session has the butler's
+// input policy: the words neither withdraw nor renew what the turn may send. A Claude sender in a turn; the person
+// queues words into it through NAW, the real adapter takes native's append receipt, and native's read of them comes as
+// the submission channel's read event.
 async function personSpeaks(t, { steward = false } = {}) {
   const f = await fixture(t, 'claude'), s = f.source.get(f.a), requests = [];
   s.state = 'working';
@@ -894,94 +911,77 @@ async function personSpeaks(t, { steward = false } = {}) {
   return { ...f, s, requests, say, read, send, sent, ownTurn: () => { mode = 'own-turn'; }, fail: kind => { mode = kind; }, release: () => release?.() };
 }
 const refusedAs = key => error => error.uiMessage?.key === key;
-test('the person speaking into a sender\'s turn: before the turn reads it, it cannot send; once read, it sends again, once (wake proposal, item 3)', async t => {
+test('the person speaking into a sender\'s turn withdraws nothing it registered, and reading the words adds no second message', async t => {
   const f = await personSpeaks(t);
   assert.equal((await f.send(f.b, 'Before the person spoke.', 'before')).status, 'staged');
-  const words = await f.say('Send Receiver the new plan instead.');
+  const words = await f.say('Tell Receiver about the new plan too.');
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0].midturn, true);
   const row = f.s.messages.find(m => m.id === words.tag);
   assert.equal(row.deliveredInto, f.ra.turnId, 'native stored the words in the running turn');
-  let refusal; await assert.rejects(f.send(f.b, 'Decided before reading the person.', 'unread'), error => { refusal = error; return refusedAs('error.wake.turnAwaitingHumanRead')(error); });
-  assert.equal(refusal.message, '真人刚在这一回合插了话，这一回合还没读到；读到之后可以再发。');
-  assert.equal(require('../ui-locale.js').displayText('en', refusal.message, refusal.uiMessage), 'The person just spoke into this turn, and the turn has not read it yet; once it has, it can send again.');
-  assert.equal(f.sent().length, 1, 'a refusal before the read registers nothing');
+  await assert.rejects(f.send(f.b, 'Before the read.', 'unread'), /这一轮已经登记过|已经请求过/);
   f.read(words);
   assert.equal(row.nativeRead, true);
-  assert.equal((await f.send(f.b, 'The new plan.', 'after')).status, 'staged');
-  await assert.rejects(f.send(f.b, 'And one more.', 'more'), /这一轮已经登记过|已经请求过/, 'still one message a turn for a session that is not the butler');
+  await assert.rejects(f.send(f.b, 'After the read.', 'after'), /这一轮已经登记过|已经请求过/, 'still one message a turn for a session that is not the butler');
   await f.finish();
   assert.equal(f.writes.length, 1);
-  assert.match(f.writes[0].text, /\nThe new plan\.$/);
-  const [before, after] = f.sent();
-  assert.equal(before.wake.status, 'cancelled', 'what the turn registered before the person spoke stays withdrawn');
-  assert.equal(before.wake.cancellation.code, 'source-identity-changed');
-  assert.equal(after.wake.status, 'submitted'); assert.equal(after.wake.epoch, 1);
+  assert.match(f.writes[0].text, /\nBefore the person spoke\.$/);
+  assert.deepEqual(f.sent().map(m => m.wake.status), ['submitted']);
 });
-test('words this turn will not read leave it revoked, not told to wait: not sent, unconfirmed, or no mid-turn delivery (wake proposal, item 3)', async t => {
+test('the person\'s words, read or not yet, do not hold back the turn\'s message', async t => {
+  const f = await personSpeaks(t);
+  const first = await f.say('One thing.'); await f.say('And another.');
+  f.read(first);
+  assert.equal((await f.send(f.b, 'Between the two reads.', 'early')).status, 'staged', 'no waiting for a native read');
+  await f.finish();
+  assert.equal(f.writes.length, 1);
+});
+test('words this turn will not read leave its message as it was: not sent, unconfirmed, or run as their own later turn', async t => {
   for (const [name, kind, status] of [['not sent', 'not-sent', 'not-sent'], ['unconfirmed', 'unconfirmed', 'unconfirmed']]) {
     const f = await personSpeaks(t);
     f.fail(kind);
     await assert.rejects(f.source.queue(f.a, 'Use the other plan.', 'source-owner'));
     assert.equal(f.s.messages.find(m => m.origin === 'human' && m.text === 'Use the other plan.').status, status, name);
-    await assert.rejects(f.send(f.b, 'After the words.', 'failed'), refusedAs('error.wake.turnRevokedByHuman'), name);
-    assert.equal(f.sent().length, 0, name);
+    assert.equal((await f.send(f.b, 'After the words.', 'failed')).status, 'staged', name);
+    await f.finish();
+    assert.equal(f.writes.length, 1, name);
   }
   // A Claude version without mid-turn delivery: the words wait for the turn to end and run as their own turn.
   const f = await personSpeaks(t); f.ra.nativeMidturnAppend = false; f.fail('held');
   const queued = f.source.queue(f.a, 'Next, please.', 'source-owner');
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0].midturn, false, 'not offered into the running turn');
-  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), refusedAs('error.wake.turnRevokedByHuman'));
-  f.read({ tag: f.requests[0].tag, uuid: '00000000-0000-4000-8000-000000000001' });
-  await assert.rejects(f.send(f.b, 'Still this turn, again.', 'again'), refusedAs('error.wake.turnRevokedByHuman'));
+  assert.equal((await f.send(f.b, 'Still this turn.', 'same')).status, 'staged');
   f.release(); await queued;
   await f.finish();
-  assert.equal(f.writes.length, 0);
-});
-test('the read authorizes nothing when the person acted again, everything was paused, or it is not the turn\'s read of those words (wake proposal, item 3)', async t => {
-  const cases = {
-    'a takeover before the read': async f => { f.source.claim(f.a, 'another-window'); },
-    'the person typing in the terminal before the read': async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); },
-    'pausing all handoffs before the read': async f => { f.source.pauseAll('stop'); },
-    // Only the person's words reopen the turn: here another agent's, queued through NAW's background control.
-    'another agent\'s words': async (f, words) => {
-      f.read(words); await f.send(f.b, 'After the person.', 'first');
-      const actor = { id: 'other-session', name: 'Other agent', nativeId: 'other-native', provider: 'claude', callId: 'call-1', turnId: 'turn-1', operationId: 'operation-1' };
-      return require('../background-operation.cjs').run(actor, () => f.say('From another agent.'));
-    },
-    'a read reported for another turn': async (f, words) => { f.read(words, 'another-turn'); },
-    'a read of other words': async f => { f.read({ tag: '11111111-1111-4111-8111-111111111111', uuid: '00000000-0000-4000-8000-000000000009' }); },
-  };
-  for (const [name, act] of Object.entries(cases)) {
-    const f = await personSpeaks(t), words = await f.say('Hold on.');
-    const other = await act(f, words);
-    if (other) f.read(other); else if (!name.startsWith('a read')) f.read(words);
-    // The other words are still unread, so that turn is told to wait; every other case is over for the turn.
-    const expected = name === 'a read of other words' ? 'error.wake.turnAwaitingHumanRead' : 'error.wake.turnRevokedByHuman';
-    await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs(expected), name);
-    await f.finish();
-    assert.equal(f.writes.length, 0, name);
-  }
-});
-test('the person\'s second words before the first are read: only reading the latest lets the turn send (wake proposal, item 3)', async t => {
-  const f = await personSpeaks(t);
-  const first = await f.say('One thing.'), second = await f.say('And another.');
-  f.read(first);
-  await assert.rejects(f.send(f.b, 'Too early.', 'early'), refusedAs('error.wake.turnAwaitingHumanRead'));
-  f.read(second);
-  assert.equal((await f.send(f.b, 'After both.', 'late')).status, 'staged');
-  await f.finish();
   assert.equal(f.writes.length, 1);
+  // Native answers that the words run as their own turn.
+  const g = await personSpeaks(t); g.ownTurn();
+  const words = await g.say('Next, please.');
+  assert.equal(g.s.messages.find(m => m.id === words.tag).deliveredInto, undefined);
+  assert.equal((await g.send(g.b, 'Before the turn ends.', 'before-end')).status, 'staged');
+  await g.finish();
+  assert.equal(g.writes.length, 1);
 });
-test('words that run as their own later turn do not reopen the turn they waited behind (wake proposal, item 3)', async t => {
-  const f = await personSpeaks(t); f.ownTurn();
-  const words = await f.say('Next, please.');
-  assert.equal(f.s.messages.find(m => m.id === words.tag).deliveredInto, undefined);
-  await assert.rejects(f.send(f.b, 'Before the turn ends.', 'before-end'), refusedAs('error.wake.turnRevokedByHuman'), 'native will not read them in this turn');
-  f.read(words);
-  await assert.rejects(f.send(f.b, 'Still this turn.', 'same'), refusedAs('error.wake.turnRevokedByHuman'));
-  await f.finish();
-  assert.equal(f.writes.length, 0);
+test('after the person speaks into a turn, a takeover, pausing everything or another agent\'s background queue still ends its messages; typing does not', async t => {
+  const cases = {
+    'a takeover': [async f => { f.source.claim(f.a, 'another-window'); }, false],
+    'pausing all handoffs': [async f => { f.source.pauseAll('stop'); }, false],
+    // An agent using the person's own queue command through NAW's background control is not message input.
+    'another agent queueing through background control': [async f => {
+      const actor = { id: 'other-session', name: 'Other agent', nativeId: 'other-native', provider: 'claude', callId: 'call-1', turnId: 'turn-1', operationId: 'operation-1' };
+      await require('../background-operation.cjs').run(actor, () => f.say('From another agent.'));
+    }, false],
+    'the person typing in the terminal': [async f => { f.s.view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); }, true],
+  };
+  for (const [name, [act, keeps]] of Object.entries(cases)) {
+    const f = await personSpeaks(t), words = await f.say('Hold on.');
+    f.read(words);
+    await act(f);
+    if (keeps) assert.equal((await f.send(f.b, 'Goes.', 'after')).status, 'staged', name);
+    else await assert.rejects(f.send(f.b, 'Must not go.', 'after'), refusedAs('error.wake.turnRevokedByHuman'), name);
+    await f.finish();
+    assert.equal(f.writes.length, keeps ? 1 : 0, name);
+  }
 });
 test('the butler keeps staged messages and its per-recipient limit when the person speaks and is read', async t => {
   const f = await personSpeaks(t, { steward: true });
@@ -991,12 +991,11 @@ test('the butler keeps staged messages and its per-recipient limit when the pers
   assert.equal((await f.send(second, 'Second task.', 'two')).status, 'staged', 'no waiting for a native read');
   f.read(words);
   await assert.rejects(f.send(f.b, 'Duplicate task.', 'three'), /这一轮已经给这个收件方登记过一条/);
-  assert.equal(f.ra.wakeTurn.epoch || 0, 0, 'speaking does not replenish the same turn budget');
   await f.finish();
   assert.equal(f.writes.length, 2);
   assert.deepEqual(f.sent().map(m => m.wake.status), ['submitted', 'submitted']);
 });
-for (const steward of [true, false]) test(`late first prompt hook after turn-start: ${steward ? 'butler keeps' : 'ordinary sender retains'} its input policy`, async t => {
+for (const steward of [true, false]) test(`late first prompt hook after turn-start keeps the turn's authority (${steward ? 'butler' : 'ordinary sender'})`, async t => {
   const f = await personSpeaks(t, { steward });
   const promptId = f.ra.liveTurn.promptId, turn = f.ra.wakeTurn, control = f.s.controlRevision;
   // The native display already linked the prompt; its settings hook follows on another socket.
@@ -1004,19 +1003,16 @@ for (const steward of [true, false]) test(`late first prompt hook after turn-sta
   f.ra.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: promptId, prompt: 'Agreed.', source: 'user' });
   assert.equal(f.s.controlRevision, control + 1);
   assert.equal(f.ra.wakeTurn, turn, 'the late hook has no turnId and does not call nativeStart again');
-  assert.equal(f.ra.wakeTurn.awaiting, undefined, 'this is not the queued/read path');
-  if (steward) {
-    assert.equal((await f.send(f.b, 'First call of the new turn.', 'first')).status, 'staged');
-    await f.finish(); assert.equal(f.writes.length, 1);
-  } else await assert.rejects(f.send(f.b, 'Same ordinary rule.', 'first'), refusedAs('error.wake.turnRevokedByHuman'));
+  assert.equal((await f.send(f.b, 'First call of the new turn.', 'first')).status, 'staged');
+  await f.finish(); assert.equal(f.writes.length, 1);
 });
 for (const [name, act] of Object.entries({
   stop: async f => { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); },
   takeover: f => f.source.claim(f.a, 'another-owner'),
   'pause all': f => f.source.pauseAll('Explicit stop.'),
   'automatic messages off': f => require('../session-wake.cjs').setPolicy(f.source, null, false),
-})) test(`butler input cannot restore authority after ${name}`, async t => {
-  const f = await personSpeaks(t, { steward: true });
+})) for (const steward of [true, false]) test(`${steward ? 'butler' : 'ordinary'} input cannot restore authority after ${name}`, async t => {
+  const f = await personSpeaks(t, { steward });
   await f.send(f.b, 'Pending task.', 'before');
   await act(f);
   f.ra.emit('nativeInput', 'Later words.', { id: 'later-words', source: 'user' });
@@ -1024,7 +1020,7 @@ for (const [name, act] of Object.entries({
   await f.finish(); assert.equal(f.writes.length, 0);
 });
 
-for (const [steward, end, permission] of [[true, 'complete', false], [false, 'complete', false], [true, 'failed', false], [true, 'complete', true]]) test(`observed native input and turn end preserve only the butler's completed input-only turn (${steward}/${end}/${permission})`, async t => {
+for (const [steward, end, permission] of [[true, 'complete', false], [false, 'complete', false], [true, 'failed', false], [false, 'failed', false], [true, 'complete', true], [false, 'complete', true]]) test(`observed native input and turn end preserve a completed input-only turn only (${steward}/${end}/${permission})`, async t => {
   const f = await personSpeaks(t, { steward });
   f.ra.terminal = { alive: true };
   const bound = f.ra.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeInlineInput: true, nativePromptInput: true, addressedTool: true });
@@ -1036,7 +1032,7 @@ for (const [steward, end, permission] of [[true, 'complete', false], [false, 'co
   if (permission) observe({ id: 'control:permission', kind: 'control', status: 'complete', turnId: 'observed-turn', permissionId: 'permission:one' });
   observe({ id: 'turn:observed-turn', kind: 'turn', turnId: 'observed-turn', status: end });
   for (let n = 0; n < 8; n++) await tick();
-  const expected = steward && end === 'complete' && !permission;
+  const expected = end === 'complete' && !permission;
   assert.equal(f.writes.length, expected ? 1 : 0);
   assert.equal(f.sent()[0].wake.status, expected ? 'submitted' : 'cancelled');
 });
@@ -1051,6 +1047,20 @@ for (const [name, data, keeps] of [['text', 'hello\r', true], ['paste', '\x1b[20
   else await assert.rejects(f.send(f.ids[1], 'After stop.', 'second'), refusedAs('error.wake.turnRevokedByHuman'));
   await f.finish(); assert.equal(f.writes.length, keeps ? 2 : 0);
 });
+for (const [name, data, keeps] of [['one unsent key', 'x', true], ['text', 'hello\r', true], ['paste', '\x1b[200~pasted text\x1b[201~', true], ['Esc', '\x1b', false], ['Ctrl-C', '\x03', false]]) test(`an ordinary session's terminal ${name} ${keeps ? 'keeps' : 'withdraws'} its turn's message, registered before or after`, async t => {
+  for (const order of ['registered first', 'input first']) {
+    const f = await personSpeaks(t), keys = [];
+    f.s.view = 'terminal'; f.ra.terminal = { alive: true, input: data => keys.push(data) };
+    if (order === 'registered first') await f.send(f.b, 'Already staged.', 'first');
+    f.source.input(f.a, data, 'source-owner');
+    assert.deepEqual(keys, [data]);
+    if (order === 'input first') {
+      if (keeps) assert.equal((await f.send(f.b, 'After input.', 'first')).status, 'staged');
+      else await assert.rejects(f.send(f.b, 'After stop.', 'first'), refusedAs('error.wake.turnRevokedByHuman'));
+    }
+    await f.finish(); assert.equal(f.writes.length, keeps ? 1 : 0, order);
+  }
+});
 test('the butler keeps its authority when a Codex human steer enters its running turn', async t => {
   const f = await butler(t, 2); f.ra.steerAvailable = true; f.ra.finishTurn = () => {};
   f.ra.steer = async (_text, _tag, turnId, valid) => { assert.equal(turnId, f.ra.turnId); assert.equal(valid(), true); };
@@ -1059,9 +1069,16 @@ test('the butler keeps its authority when a Codex human steer enters its running
   assert.equal((await f.send(f.ids[1], 'After steering.', 'second')).status, 'staged');
   await f.finish(); assert.equal(f.writes.length, 2);
 });
-test('butler input during recipient lookup preserves the pending call, while a stop still wins', async t => {
+test('an ordinary session keeps its authority when a Codex human steer enters its running turn', async t => {
+  const f = await fixture(t); f.ra.steerAvailable = true; f.ra.finishTurn = () => {};
+  f.ra.steer = async (_text, _tag, turnId, valid) => { assert.equal(turnId, f.ra.turnId); assert.equal(valid(), true); };
+  await f.source.steer(f.a, 'Also tell the receiver.', 'source-owner', f.ra.turnId);
+  assert.equal((await f.call('After steering.', 'after-steer')).status, 'staged');
+  await f.finish(); assert.equal(f.writes.length, 1);
+});
+for (const steward of [true, false]) test(`${steward ? 'butler' : 'ordinary'} input during recipient lookup preserves the pending call, while a stop still wins`, async t => {
   for (const stop of [false, true]) {
-    const f = await personSpeaks(t, { steward: true }), lookup = f.source.peerRunner.lookupWake.bind(f.source.peerRunner);
+    const f = await personSpeaks(t, { steward }), lookup = f.source.peerRunner.lookupWake.bind(f.source.peerRunner);
     f.source.peerRunner.lookupWake = async (...args) => {
       const result = await lookup(...args);
       if (stop) { f.ra.interrupt = async () => ({ interrupted: true }); await f.source.interrupt(f.a, 'source-owner'); }
@@ -1180,6 +1197,22 @@ test('a held message is not sent once the person acts on the butler or the sende
     assert.equal(f.writes.length, 1, act);
     assert.deepEqual([row.wake.status, row.text], outcomes[act], act);
     assert.equal(f.source.wakeHoldTimer, null, act);
+  }
+});
+// No turn of the sender stands behind a held message: the input allowance of a running turn does not reach it.
+test('a held message is not sent once another agent\'s message enters its sender; one that entered its turn before it was held does not end it', async t => {
+  const wake = require('../session-wake.cjs');
+  for (const when of ['before it is held', 'after it is held']) {
+    const f = await toButler(t);
+    await f.turn('first', 'First.'); f.reply(); f.advance(10000);
+    f.start('second'); await f.call('Second.', 'call-second');
+    if (when === 'before it is held') f.ra.emit('nativeControlBoundary', 'control:input');
+    await f.finish();
+    const row = f.rows().at(-1); assert.equal(row.wake.status, 'held', when);
+    if (when === 'after it is held') f.ra.emit('nativeControlBoundary', 'control:input');
+    f.advance(60000); wake.retryHeld(f.source); await f.settle();
+    assert.equal(f.writes.length, when === 'before it is held' ? 2 : 1, when);
+    assert.deepEqual([row.wake.status, row.wake.cancellation?.code, row.wake.cancellation?.fields], when === 'before it is held' ? ['submitted', undefined, undefined] : ['cancelled', 'source-identity-changed', ['peerRevision']], when);
   }
 });
 test('held messages to the butler go one at a time, oldest first, and a reopened backend never sends one (option A)', async t => {
@@ -1313,10 +1346,9 @@ test('a held message is not sent once the person ends or moves the butler role, 
   }
 });
 
-// Item 3 (12ced1d6) and option A (42e60ba3) together, as the integration review of the two asked (2026-11-13): a
-// message keeps its sender's identity from when it was registered. One held from before the person spoke is not sent,
-// even once a later turn has read the person's words; one the turn registered after reading them is held and sent like
-// any other.
+// Option A (42e60ba3) with the person's words (reviewed together 2026-11-13; the input policy of 2026-11-23): a held
+// message keeps its sender's identity from when it was held. The person speaking into the sender after that ends it,
+// whatever a later turn reads; what the person said while its own turn ran does not.
 async function personToButler(t) {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
   const f = await fixture(t, 'claude'), s = f.source.get(f.a), b = f.target.get(f.b), requests = [];
@@ -1354,22 +1386,22 @@ test('a message held from an earlier turn is not sent once the person speaks int
   await f.finish();
   assert.equal(f.writes.length, 1);
 });
-test('a message the turn registers after reading the person is held for the butler\'s limit and sent once it allows; one registered before is not (items 3 and option A)', async t => {
+test('a message the turn registered before the person spoke into it is held for the butler\'s limit and sent once it allows; the turn gets no second one (option A)', async t => {
   const wake = require('../session-wake.cjs');
   const f = await personToButler(t);
   f.begin('second');
   assert.equal((await f.send('Before the person spoke.', 'before')).status, 'staged');
   f.read(await f.say('Send the butler the new plan.'));
-  assert.equal((await f.send('The new plan.', 'after')).status, 'staged');
+  await assert.rejects(f.send('The new plan.', 'after'), /这一轮已经登记过|已经请求过/);
   await f.finish();
-  const [, before, after] = f.rows();
-  assert.deepEqual([before.wake.status, before.wake.cancellation?.code], ['cancelled', 'source-identity-changed']);
-  assert.deepEqual([after.wake.status, after.wake.epoch], ['held', 1]);
+  assert.equal(f.rows().length, 2);
+  const before = f.rows().at(-1);
+  assert.equal(before.wake.status, 'held');
   assert.equal(f.writes.length, 1, 'nothing more before the limit');
   f.advance(50000); wake.retryHeld(f.source); await f.settle();
   assert.equal(f.writes.length, 2);
-  assert.match(f.writes[1].text, /\nThe new plan\.$/);
-  assert.equal(after.wake.status, 'submitted');
+  assert.match(f.writes[1].text, /\nBefore the person spoke\.$/);
+  assert.equal(before.wake.status, 'submitted');
 });
 
 // The person, 2026-11-23 (「可以,按你推荐的来」): a member's automatic message that the designated butler actually took

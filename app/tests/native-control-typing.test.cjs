@@ -26,18 +26,14 @@ async function fixture(t, steward = true) {
   assert.equal(opened.ok, true);
   return { w, s, r, keys, events, designate, producer, check: () => producer.request(client, 'check', { token: opened.value.token }, () => {}) };
 }
-test('a designated butler control call survives native typing, paste, edits and unsent chat draft', async t => {
-  const f = await fixture(t);
+for (const steward of [true, false]) test(`${steward ? 'a designated butler' : 'an ordinary session\'s'} control call survives native typing, paste, edits and unsent chat draft`, async t => {
+  const f = await fixture(t, steward);
   for (const key of ['x', 'SYNTHETIC PASTE', '\x7f', '\x1b[D']) {
     f.w.input(f.s.id, key, f.s.owner); f.w.changed();
     assert.equal((await f.check()).ok, true, JSON.stringify(key));
   }
   f.w.setDraft(f.s.id, 'SYNTHETIC UNSENT DRAFT', f.s.owner);
   assert.equal((await f.check()).ok, true); assert.equal(f.s.controlRevision, 4); assert.equal(f.keys.length, 4);
-});
-test('an ordinary source still loses its control call when native typing changes its control revision', async t => {
-  const f = await fixture(t, false); f.w.input(f.s.id, 'x', f.s.owner);
-  const result = await f.check(); assert.equal(result.ok, false); assert.equal(result.failureCheck, 'scope-control-revision');
 });
 for (const [name, change, check] of [
   ['Escape', f => f.w.input(f.s.id, '\x1b', f.s.owner), 'scope-control-revision'],
@@ -49,8 +45,8 @@ for (const [name, change, check] of [
   ['native stop', f => { f.r.stopped = true; }, 'scope-native-state'],
   ['root observation gap', f => { f.r.displayGap = true; }, 'display-gap'],
   ['role withdrawn after typing', f => { f.w.input(f.s.id, 'x', f.s.owner); f.designate(null); }, 'scope-control-revision'],
-]) test(`a butler's source control call still refuses ${name} with a fixed condition name`, async t => {
-  const f = await fixture(t); change(f);
+]) for (const steward of name === 'role withdrawn after typing' ? [true] : [true, false]) test(`${steward ? 'a butler\'s' : 'an ordinary session\'s'} source control call still refuses ${name} with a fixed condition name`, async t => {
+  const f = await fixture(t, steward); change(f);
   const result = await f.check(); assert.equal(result.ok, false); assert.equal(result.failureCheck, check);
 });
 test('asynchronous revocation keeps its fixed check name in the service notification', async t => {
