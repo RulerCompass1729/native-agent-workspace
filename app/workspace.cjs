@@ -1920,7 +1920,7 @@ class Workspace extends EventEmitter {
         if (data !== '\x1b' && !data.includes('\x03')) wake.messageInput(this, s, { control: 1 });
       }
       s.terminalInputPending = true;
-      runtime.noteHumanTerminalInput?.();
+      runtime.noteHumanTerminalInput?.(data);
     }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }

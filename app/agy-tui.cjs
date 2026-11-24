@@ -21,6 +21,8 @@ const DEFAULT_BRAIN_ROOT = path.join(os.homedir(), '.gemini', 'antigravity-cli',
 const WORKSPACE_MESSAGE_MATCHER = '^.*workspace_message$';
 const RULE_LINE = /^[─━═]{10,}$/;
 const EMPTY_PROMPT_LINE = /^[>❯](?:\s*|\s+(?:Auto mode|Plan mode|Accept edits|Ask before edits|Default mode|Bypass permissions)\b.*\(shift\+tab to cycle\))$/;
+// Keys that cannot insert text or recall history into an already-empty composer.
+const EMPTY_NOOP_INPUT = /^(?:[\x7f\x08\x15\x0b\x17]|\x1b\[(?:3~|[CDHF]))+$/;
 
 function validConversationId(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
@@ -49,30 +51,54 @@ function editorState(screen) {
     if (line.includes('Do you trust the contents of this project?')) return 'blocked';
     lines.push(line);
   }
+  const cursorY = Number.isInteger(buf.cursorY) ? buf.cursorY : -1;
   let statusIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].includes('? for shortcuts')) { statusIdx = i; break; }
   }
-  if (statusIdx < 3) return 'unknown';
-  for (let i = statusIdx + 1; i < lines.length; i++) {
-    if (lines[i].trim()) return 'unknown';
+  if (statusIdx >= 3) {
+    let trailingContent = false;
+    for (let i = statusIdx + 1; i < lines.length; i++) {
+      if (lines[i].trim()) { trailingContent = true; break; }
+    }
+    if (!trailingContent) {
+      let bottomRule = -1;
+      for (let i = statusIdx - 1; i >= 0; i--) {
+        if (RULE_LINE.test(lines[i].trim())) { bottomRule = i; break; }
+        if (lines[i].trim()) break;
+      }
+      if (bottomRule >= 2) {
+        let topRule = -1;
+        for (let i = bottomRule - 1; i >= 0; i--) {
+          if (RULE_LINE.test(lines[i].trim())) { topRule = i; break; }
+        }
+        if (topRule >= 0 && bottomRule - topRule > 1 && cursorY > topRule && cursorY < bottomRule) {
+          const box = lines.slice(topRule + 1, bottomRule).map(l => l.trim()).filter(Boolean);
+          if (box.length && /^[>❯]/.test(box[0])) {
+            if (box.length > 1) return 'draft';
+            return EMPTY_PROMPT_LINE.test(box[0]) ? 'empty' : 'draft';
+          }
+        }
+      }
+    }
   }
-  let bottomRule = -1;
-  for (let i = statusIdx - 1; i >= 0; i--) {
-    if (RULE_LINE.test(lines[i].trim())) { bottomRule = i; break; }
-    if (lines[i].trim()) return 'unknown';
+  // When a user types in agy, ? for shortcuts hides; still detect active draft text inside the composer box.
+  if (cursorY > 0 && cursorY < lines.length - 1) {
+    let topRule = -1, bottomRule = -1;
+    for (let i = cursorY - 1; i >= 0; i--) {
+      if (RULE_LINE.test(lines[i].trim())) { topRule = i; break; }
+    }
+    for (let i = cursorY + 1; i < lines.length; i++) {
+      if (RULE_LINE.test(lines[i].trim())) { bottomRule = i; break; }
+    }
+    if (topRule >= 0 && bottomRule > topRule + 1) {
+      const box = lines.slice(topRule + 1, bottomRule).map(l => l.trim()).filter(Boolean);
+      if (box.length && /^[>❯]/.test(box[0]) && (box.length > 1 || !EMPTY_PROMPT_LINE.test(box[0]))) {
+        return 'draft';
+      }
+    }
   }
-  if (bottomRule < 2) return 'unknown';
-  let topRule = -1;
-  for (let i = bottomRule - 1; i >= 0; i--) {
-    if (RULE_LINE.test(lines[i].trim())) { topRule = i; break; }
-  }
-  if (topRule < 0 || bottomRule - topRule <= 1) return 'unknown';
-  if (!Number.isInteger(buf.cursorY) || buf.cursorY <= topRule || buf.cursorY >= bottomRule) return 'unknown';
-  const box = lines.slice(topRule + 1, bottomRule).map(l => l.trim()).filter(Boolean);
-  if (!box.length || !/^[>❯]/.test(box[0])) return 'unknown';
-  if (box.length > 1) return 'draft';
-  return EMPTY_PROMPT_LINE.test(box[0]) ? 'empty' : 'draft';
+  return 'unknown';
 }
 
 function prepareBridge({ privateDir, sessionId, mcpToken, hookSocket, pythonBinary, execPath = process.execPath, appDir = __dirname }) {
@@ -211,10 +237,17 @@ class AgyTui extends EventEmitter {
     if (this.terminal?.screen && this.humanInputState === 'unseen') return true;
     return this.humanInputSettling();
   }
-  noteHumanTerminalInput() {
+  noteHumanTerminalInput(data = '') {
     this.lastHumanInputAt = this.now();
     const screen = this.terminal?.screen;
-    this.humanInputState = !screen || editorState(screen) === 'empty' ? 'unseen' : 'editing';
+    const state = screen ? editorState(screen) : 'unknown';
+    if (this.humanInputState === 'none' && screen && state === 'empty' && typeof data === 'string' && EMPTY_NOOP_INPUT.test(data)) {
+      this.humanInputState = 'none';
+    } else if (this.humanInputState === 'unseen' || !screen || state === 'empty') {
+      this.humanInputState = 'unseen';
+    } else {
+      this.humanInputState = 'editing';
+    }
     this.promptReady = false;
     this.clearHumanInputTimer();
     this.syncCapabilities();
@@ -288,7 +321,7 @@ class AgyTui extends EventEmitter {
   }
   syncScreenState(screen) {
     const state = editorState(screen);
-    if (state !== 'empty' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
+    if (state === 'draft' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
     if (state === 'empty' && this.humanInputState === 'editing' && !this.humanInputSettling()) this.humanInputState = 'none';
     this.trustPromptActive = state === 'blocked';
     this.promptReady = state === 'empty' && !this.humanInputUnconfirmed();

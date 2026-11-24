@@ -608,6 +608,13 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'empty');
   assert.equal(rt.chatAvailable, true);
 
+  // r6 #2: No-op deletion key (Backspace) on an already-empty prompt settles cleanly and never permanently blocks dispatch.
+  ws.input(sessionId, '\x7f', 'owner-1');
+  assert.equal(rt.chatAvailable, false, 'briefly settles even on empty-prompt Backspace');
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, true, 'empty-prompt Backspace recovers after quiet window');
+
   // r3 #1: Human types into TUI -> BEFORE any PTY repaint (screen still holds old empty frame), dispatch MUST refuse with 0 extra bytes written!
   ws.input(sessionId, 'h', 'owner-1');
   assert.equal(record.terminalInputPending, true);
@@ -616,11 +623,11 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   await assert.rejects(rt.send('race before echo', 't-race', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero dispatch bytes written during un-echoed keystroke window');
 
-  // r4/r5 #1: Even AFTER the quiet deadline expires, neither no-repaint NOR unrelated ANSI output (like \x1b[0m color reset)
-  // that leaves the composer unchanged may re-enable readiness without observing the editor actually leave empty (or run a turn)!
+  // r4/r5/r6 #1: Even AFTER the quiet deadline expires, neither no-repaint, unrelated ANSI output (\x1b[0m),
+  // a follow-up Backspace, NOR transient cursor movement outside the composer and back may confirm an un-echoed draft!
   clock += 1000;
   rt.syncScreenState(activeTerm.screen);
-  assert.equal(rt.chatAvailable, false, 'stale cached frame never re-enables readiness after deadline without editor transition');
+  assert.equal(rt.chatAvailable, false, 'stale cached frame never re-enables readiness after deadline without draft/turn');
   await assert.rejects(rt.send('still no repaint after 1s', 't-no-repaint', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey);
 
@@ -628,10 +635,28 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   await new Promise(resolve => activeTerm.screen.write('\x1b[0m', resolve));
   activeTerm.emit('data', { data: '\x1b[0m' });
   assert.equal(rt.chatAvailable, false, 'unrelated ANSI output leaving editor unchanged never confirms human keystroke');
-  await assert.rejects(rt.send('after unrelated color reset', 't-ansi', () => true), e => e.notSent === true);
+
+  // r6 #1 probe: Moving cursor outside composer (transient unknown) and back inside composer without changing editor text MUST stay blocked!
+  await new Promise(resolve => activeTerm.screen.write('\x1b[1;1H', resolve));
+  activeTerm.emit('data', { data: '\x1b[1;1H' });
+  assert.equal(editorState(activeTerm.screen), 'unknown');
+  await new Promise(resolve => activeTerm.screen.write('\x1b[3;3H', resolve));
+  activeTerm.emit('data', { data: '\x1b[3;3H' });
+  assert.equal(editorState(activeTerm.screen), 'empty');
+  assert.equal(rt.chatAvailable, false, 'transient cursor jump outside composer and back never confirms un-echoed draft');
+  await assert.rejects(rt.send('after cursor blink probe', 't-cursor-jump', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey);
 
-  // Once agy actually echoes the draft, editor transitions out of empty into editing state (still blocked while drafting).
+  // Follow-up Backspace while unseen cannot bypass unseen state either.
+  ws.input(sessionId, '\x7f', 'owner-1');
+  const writesAfterUnseenBs = activeTerm.writes.length;
+  clock += 600;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, false);
+  await assert.rejects(rt.send('after unseen backspace', 't-unseen-bs', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesAfterUnseenBs);
+
+  // Once agy actually echoes the draft (even with ? for shortcuts hidden), editorState detects 'draft' and transitions to editing (still blocked).
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
     rule,
@@ -639,10 +664,10 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
     rule,
     '                                                     auto · Gemini 4 Neon · high',
   ]);
-  assert.equal(editorState(activeTerm.screen), 'unknown');
+  assert.equal(editorState(activeTerm.screen), 'draft');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('auto while drafting', 't2', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero bytes written while human draft is present');
+  assert.equal(activeTerm.writes.length, writesAfterUnseenBs, 'zero bytes written while human draft is present');
 
   // Even if ? for shortcuts were visible alongside non-placeholder text, editorState still reports draft.
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> hello draft', rule, '? for shortcuts']);
