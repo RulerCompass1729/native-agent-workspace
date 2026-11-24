@@ -268,7 +268,7 @@ function codexInterrupted(s, item, row) {
 function applyCodexDelta(s, item) {
   let message = s.messages.find(m => (m.nativeItemId || m.id) === item.id && (!m.nativeId || m.nativeId === s.nativeId));
   if (codexInterrupted(s, item, message)) return null;
-  if (!message) { message = { id: s.messages.some(m => m.id === item.id) ? `native:${s.nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
+  if (!message) { message = { id: s.messages.some(m => m.id === item.id) ? `native:${s.nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant', text: '', status: 'streaming', time: Date.now() }; s.messages.push(message); }
   message.text += item.text; delete message.uiMessage;
   if (item.turnId) message.turnId = item.turnId;
   message.nativeId = s.nativeId;
@@ -289,7 +289,8 @@ function applyCodexMessage(s, item) {
   let m = s.messages.find(m => (m.nativeItemId || m.id) === item.id && (!m.nativeId || m.nativeId === nativeId));
   if (codexInterrupted(s, item, m)) return null;
   if (!m) {
-    m = { id: s.messages.some(m => m.id === item.id) ? `native:${nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant' };
+    // Live notifications only (history goes through applyCodexHistory), so arrival is the reply's time.
+    m = { id: s.messages.some(m => m.id === item.id) ? `native:${nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant', time: Date.now() };
     if (item.nativeId && item.nativeId !== s.nativeId) {
       const context = s.nativeContexts?.find(c => c.nativeId === item.nativeId);
       const index = s.messages.findIndex(message => message.id === context?.boundaryId);

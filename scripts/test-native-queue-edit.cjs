@@ -16,8 +16,9 @@ const { connectService } = require(path.join(root, 'app/service-client.cjs'));
 const { executable } = require(path.join(root, 'app/platform.cjs'));
 const located = process.env.NAW_CLAUDE_BIN || executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-// The queue records read here (enqueue, popAll/popOne, remove) were read from the 2.1.323 bundle and measured by this script.
-assert.match(nativeVersion, /^2\.1\.32[23](?=\s|$)/, 'Queued prompt editing is measured on exact 2.1.322 and 2.1.323 only');
+// The queue records read here (enqueue, popAll/popOne, remove) were read from the 2.1.323 bundle and measured by this script;
+// 2.1.331 passed the same run on 11-23 (M19).
+assert.match(nativeVersion, /^2\.1\.(32[23]|331)(?=\s|$)/, 'Queued prompt editing is measured on exact 2.1.322, 2.1.323 and 2.1.331 only');
 const common = testScratch.childProcess.execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no GUI launched.'); process.exit(75); }

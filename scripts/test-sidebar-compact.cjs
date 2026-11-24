@@ -96,7 +96,7 @@ RoomState.prototype.apply=function(...a){const s=structuredClone(apply.apply(thi
     await settle(); const m = await metrics();
     const normal = m.rows.filter((_, i) => i !== 3), label = theme + '-' + px;
     check(label + ' actual sidebar width', Math.abs(m.width - px) < .1);
-    check(label + ' ordinary three-line row height 55.5px', normal.every(r => Math.abs(r.height - 55.5) < .15));
+    check(label + ' ordinary three-line row height 46px (M28)', normal.every(r => Math.abs(r.height - 46) < .15));
     check(label + ' three text bands retained and do not overlap', m.rows.every(r => r.nameBox.bottom <= r.middleBox.y + .1 && r.middleBox.bottom <= r.folderBox.y + .1 && r.folderVisible && r.timeVisible));
     check(label + ' original font sizes and 26px images', m.rows.every(r => r.fonts.join(',') === '13px,11px,10.5px') && m.rows.filter(r => r.image).every(r => Math.abs(r.image - 26) < .1));
     check(label + ' active task and attention words remain visible', m.rows[0].taskVisible && m.rows[0].task === '整理侧栏对照方案' && m.rows[3].stateVisible && !m.rows[3].state.startsWith('会话就绪'));
