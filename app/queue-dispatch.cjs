@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { roomIds, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { uiError, uiNotice } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
@@ -1269,16 +1269,43 @@ function rotationSubjects(rooms, sessions, outside, handedOff) {
     .filter(session => ['claude', 'codex'].includes(session.provider));
 }
 
-function dispatchText(roomName, item) {
-  return [
+// R121 (a): the space's notes go with an item while the person has 「派活时附上这份笔记」 on. A member has them once
+// an item that carried this version was delivered to its current native session; a new version (the notes
+// changed, or the switch was turned on again) goes once more. A requeue forgets it (room-state.cjs queueRequeue).
+function notesDue(room, session) {
+  if (room.notesToQueue !== true || !room.notes) {
+    return null;
+  }
+  const version = createHash('sha256').update(`${room.notesToQueueSince || 0}\n${room.notes}`).digest('hex').slice(0, 16);
+  const had = (room.queue || []).some(i => i.notesSent === version && i.tag && i.sentTo === session.id &&
+    (i.sentNative || null) === (session.nativeId || null));
+  return had ? null : version;
+}
+
+const NOTES_HEAD = '附：这个空间的共享笔记（人打开了「派活时附上这份笔记」；这是背景，要做的仍是上面这一件）：';
+const NOTES_CUT = '（笔记太长，这里只附了开头；全文在这个空间的共享笔记里。）';
+
+function dispatchText(roomName, item, notes = '') {
+  const text = body => [
     `【NAW 派活】空间「${roomName}」队列里的下一件：`,
     '',
     item.text,
     '',
+    ...(body ? [NOTES_HEAD, body, ''] : []),
     '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用长等待等到它结束）、不留运行中的队友、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会提醒人，并接着给你派下一件；人的答复会直接发到你这里。',
     // How a member reports a delivery (readyLine below reads it). The example is not itself a valid line.
     '这一件交付了提交的，本轮最后一条回复里另起一行（不要放在第一行），只写这三项、各用一个空格隔开：READY <分支名> <分支上最新的提交号，7 到 40 位>。这一行不加引号、反引号、加粗或列表符号，行尾不加句号。NAW 会把这次交付记到空间里；没有提交就不写这一行。',
   ].join('\n');
+  const full = text(notes);
+  if (full.length <= SEND_TEXT_LIMIT) {
+    return full;
+  }
+  // Within the backend's limit (workspace.cjs cleanText): only the notes are cut, never between a surrogate pair.
+  let end = Math.max(0, SEND_TEXT_LIMIT - text('\n' + NOTES_CUT).length);
+  if (end > 0 && /[\uD800-\uDBFF]/u.test(notes[end - 1])) {
+    end -= 1;
+  }
+  return text(notes.slice(0, end) + '\n' + NOTES_CUT);
 }
 
 // Human-readable explanations for space/OS notices; structured reason codes are
@@ -3096,9 +3123,10 @@ class QueueDispatcher {
     }
     const name = this.name(session);
     // Record before sending: a crash after this point is never resent silently.
-    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null);
+    const notes = notesDue(room, session);
+    this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null, notes);
     try {
-      const tag = await this.send(session, dispatchText(room.name || '', item), item.id);
+      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : ''), item.id);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
       if (errorKey(error) === NATIVE_DRAFT_KEY) {

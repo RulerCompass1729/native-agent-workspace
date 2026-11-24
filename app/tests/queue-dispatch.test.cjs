@@ -4306,3 +4306,135 @@ test('a later rotation failure keeps assigned work and publishes only a fixed co
   assert.equal(f.client.state.sessions[0].state, 'working', 'The old member is not stopped');
   assert.equal(JSON.stringify(f.room.metadata('shared').events).includes('PRIVATE_CREATE_BODY'), false);
 });
+
+// R121 (a), the person 11-23: a space's shared notes go out with queued work only while the person has turned on
+// 「派活时附上这份笔记」: once with each member's first item, and again with the next item after the notes change.
+function notesSetup(t, sessions = [member('a')]) {
+  const f = dispatcherSetup(t, sessions);
+  const save = (text, attach) => f.room.notes(text, f.room.metadata('shared').revision, 'shared', { person: true, attach });
+  const finish = async (id, text = 'done') => { f.client.reply(id, text); await f.dispatcher.schedule(); await f.dispatcher.schedule(); };
+  const plain = itemId => rules.dispatchText(f.room.metadata('shared').name, f.room.value.queue.find(i => i.id === itemId));
+  return { ...f, save, finish, plain };
+}
+
+test('R121 (a): with the switch on, a member gets the notes with its first item and not with its second', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-ALPHA shared goal', true);
+  const first = f.room.queueAdd('first task', null), second = f.room.queueAdd('second task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  assert.match(f.client.sends()[0][2], /^【NAW 派活】[\s\S]*first task[\s\S]*NOTES-ALPHA shared goal[\s\S]*做完这一件就结束本轮/);
+  assert.notEqual(f.client.sends()[0][2], f.plain(first));
+  await f.finish('a');
+  assert.equal(f.client.sends().length, 2);
+  assert.equal(f.client.sends()[1][2], f.plain(second), 'the same member does not get the same notes twice');
+});
+
+test('R121 (a): after the person changes the notes, the next item carries them again', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-ALPHA', true);
+  f.room.queueAdd('first task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  f.save('NOTES-BETA', true);
+  const next = f.room.queueAdd('second task', null);
+  await f.finish('a');
+  assert.match(f.client.sends()[1][2], /second task[\s\S]*NOTES-BETA/);
+  assert.doesNotMatch(f.client.sends()[1][2], /NOTES-ALPHA/);
+  const third = f.room.queueAdd('third task', null);
+  await f.finish('a');
+  assert.equal(f.client.sends()[2][2], f.plain(third));
+  assert.ok(next);
+});
+
+test('R121 (a): empty notes and a switched-off space attach nothing', async t => {
+  const f = notesSetup(t);
+  f.save('', true);
+  const first = f.room.queueAdd('first task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  assert.equal(f.client.sends()[0][2], f.plain(first), 'empty notes are not sent');
+  f.save('NOTES-OFF', false);
+  const second = f.room.queueAdd('second task', null);
+  await f.finish('a');
+  assert.equal(f.client.sends()[1][2], f.plain(second), 'notes are never attached while the switch is off');
+  f.save('NOTES-OFF', true); f.save('NOTES-OFF', false);
+  const third = f.room.queueAdd('third task', null);
+  await f.finish('a');
+  assert.equal(f.client.sends()[2][2], f.plain(third), 'turning it off stops further attachments');
+});
+
+test('R121 (a): turning the switch on again sends the notes once more', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-AGAIN', true);
+  f.room.queueAdd('first task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  f.save('NOTES-AGAIN', false); f.save('NOTES-AGAIN', true);
+  f.room.queueAdd('second task', null);
+  await f.finish('a');
+  assert.match(f.client.sends()[1][2], /second task[\s\S]*NOTES-AGAIN/);
+});
+
+test('R121 (a): an attempt that was not delivered does not count as the notes received', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-RETRY', true);
+  const first = f.room.queueAdd('first task', null);
+  const call = f.client.call.bind(f.client);
+  const refusals = [Object.assign(Error('synthetic not sent'), { notSent: true })];
+  f.client.call = async (method, ...args) => {
+    if (method === 'dispatch' && refusals.length) {
+      f.client.calls.push([method, ...args]);
+      throw refusals.shift();
+    }
+    return call(method, ...args);
+  };
+  await f.dispatcher.start(); await f.dispatcher.schedule(); await f.dispatcher.schedule();
+  assert.equal(f.client.sends().length, 2, 'one refused attempt, then the delivery');
+  assert.match(f.client.sends()[1][2], /first task[\s\S]*NOTES-RETRY/, 'the item sent back to the queue carries the notes again');
+  const delivered = f.room.value.queue.find(i => i.id === first);
+  assert.deepEqual([delivered.status, delivered.attempts, typeof delivered.notesSent, typeof delivered.tag], ['sent', 1, 'string', 'string']);
+  // A send that fails outright leaves no delivery tag: the next item still carries that version.
+  f.save('NOTES-RETRY-2', true);
+  f.room.queueAdd('second task', null);
+  refusals.push(Error('synthetic send failure'));
+  await f.finish('a');
+  const failed = f.room.value.queue.find(i => i.text === 'second task');
+  assert.deepEqual([failed.status, failed.tag], ['failed', null]);
+  assert.match(f.client.sends().at(-1)[2], /second task[\s\S]*NOTES-RETRY-2/);
+  f.room.queueAdd('third task', null);
+  await f.dispatcher.schedule(); await f.dispatcher.schedule();
+  assert.match(f.client.sends().at(-1)[2], /third task[\s\S]*NOTES-RETRY-2/);
+  f.room.queueAdd('fourth task', null);
+  await f.finish('a');
+  assert.doesNotMatch(f.client.sends().at(-1)[2], /NOTES-RETRY/);
+});
+
+test('R121 (a): a member that joins midway, or a new native session, gets the notes with its first item; joining sends nothing', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-JOIN', true);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  assert.equal(f.client.sends().length, 0, 'turning the switch on sends nothing by itself');
+  f.room.queueAdd('first task', 'a');
+  await f.dispatcher.schedule();
+  assert.match(f.client.sends('a')[0][2], /NOTES-JOIN/);
+  f.client.state.sessions.push(member('b'));
+  await f.dispatcher.schedule(); await f.dispatcher.schedule();
+  assert.equal(f.client.sends('b').length, 0, 'joining sends nothing and uses no turn');
+  f.room.queueAdd('for b', 'b');
+  await f.dispatcher.schedule();
+  assert.match(f.client.sends('b')[0][2], /for b[\s\S]*NOTES-JOIN/, 'the member that joined midway gets them with its first item');
+  const again = f.room.queueAdd('second for a', 'a');
+  await f.finish('a');
+  assert.equal(f.client.sends('a')[1][2], f.plain(again));
+  f.client.state.sessions.find(s => s.id === 'a').nativeId = 'native-a-successor';
+  f.room.queueAdd('third for a', 'a');
+  await f.finish('a');
+  assert.match(f.client.sends('a')[2][2], /third for a[\s\S]*NOTES-JOIN/, 'a new native session has not seen them');
+});
+
+test('R121 (a): notes that would pass the send limit are cut with a pointer to the full text', () => {
+  const item = { text: 'x'.repeat(rules.ITEM_TEXT_LIMIT) };
+  const text = rules.dispatchText('Team', item, '😀'.repeat(8000));
+  assert.ok(text.length <= 16000, String(text.length));
+  assert.match(text, /共享笔记里/);
+  assert.ok(text.includes(item.text), 'the item itself is never cut');
+  assert.doesNotMatch(text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  assert.equal(rules.dispatchText('Team', { text: 'small' }, 'short notes').includes('共享笔记里'), false);
+});

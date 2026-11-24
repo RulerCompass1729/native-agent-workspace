@@ -1103,6 +1103,9 @@ main.settings-panel-open{margin-inline-end:340px}
 #notes-dialog h2{margin-bottom:8px}
 #notes-dialog p{margin:8px 0}
 #notes-dialog .dialog-actions{margin-top:12px}
+#notes-dialog .notes-attach{display:flex;align-items:center;gap:8px;margin:12px 0 0}
+#notes-dialog .notes-attach input{width:auto;margin:0}
+#notes-dialog #notes-attach-on{margin:6px 0 0 24px;color:var(--ink)}
 /* End compact existing notes dialog. */
 
 #share-dialog { padding:20px }

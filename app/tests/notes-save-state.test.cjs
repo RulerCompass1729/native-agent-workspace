@@ -14,16 +14,18 @@ function deferred() { let resolve, reject; const promise = new Promise((yes, no)
 function fixture() {
   const save = deferred(), refresh = deferred(), writes = [], notices = [], errors = [];
   const elements = { 'notes-form': {}, 'notes-dialog': { isConnected: true, open: true },
-    'room-notes-text': { value: 'Submitted original' }, 'save-notes': { disabled: false }, 'notes-error': { hidden: true, textContent: '' } };
+    'room-notes-text': { value: 'Submitted original' }, 'save-notes': { disabled: false }, 'notes-error': { hidden: true, textContent: '' },
+    'room-notes-attach': { checked: false, setAttribute() {}, removeAttribute() {} }, 'notes-attach-slot': { children: [], replaceChildren(...nodes) { this.children = nodes; } } };
   const dialogTickets = new WeakMap(), dialog = elements['notes-dialog'];
   const context = { $: id => elements[id], dialogTickets, notesRevision: 5, Number,
     uiError: key => Object.assign(Error(key), { uiMessage: { key } }),
-    ui: { showError(e, error) { errors.push(error.message); e.textContent = error.message; }, errorText: e => e.message, display: { unbind() {} } },
+    ui: { showError(e, error) { errors.push(error.message); e.textContent = error.message; }, errorText: e => e.message, display: { unbind() {}, text() {} } },
+    node: () => ({}),
     toastMessage: key => notices.push(key),
     api: { spaceAction(room, action, args) { writes.push({ room, action, args }); return save.promise; }, initial() { context.refreshes++; return refresh.promise; } }, refreshes: 0 };
-  vm.createContext(context); vm.runInContext(declaration('currentDialogTicket') + '\n' + source.slice(from, to), context);
-  function open(text = 'Submitted original', revision = 5, roomId = 'owned-room') {
-    dialog.open = true; elements['room-notes-text'].value = text; elements['save-notes'].disabled = false;
+  vm.createContext(context); vm.runInContext(declaration('currentDialogTicket') + '\n' + declaration('drawNotesAttach') + '\n' + source.slice(from, to), context);
+  function open(text = 'Submitted original', revision = 5, roomId = 'owned-room', attach = false) {
+    dialog.open = true; elements['room-notes-text'].value = text; elements['save-notes'].disabled = false; elements['room-notes-attach'].checked = attach;
     context.notesRevision = revision; dialogTickets.set(dialog, { dialog, roomId });
   }
   dialog.close = () => { dialog.open = false; vm.runInContext(clearNotes, context); };
@@ -31,7 +33,7 @@ function fixture() {
   return { context, elements, dialog, open, save, refresh, writes, notices, errors,
     submit: () => elements['notes-form'].onsubmit({ preventDefault() {} }),
     async tick() { await Promise.resolve(); await Promise.resolve(); },
-    snapshot(notes = 'Submitted original', metadataRevision = 6) { return { rooms: [{ id: 'owned-room', notes, metadataRevision }] }; } };
+    snapshot(notes = 'Submitted original', metadataRevision = 6, notesToQueue = false) { return { rooms: [{ id: 'owned-room', notes, metadataRevision, notesToQueue }] }; } };
 }
 test('unchanged successful notes close and clear without an extra snapshot', async () => {
   const f = fixture(), pending = f.submit(); assert.equal(f.elements['save-notes'].disabled, true);
@@ -71,4 +73,18 @@ test('ordinary save rejection retains the original draft and error', async () =>
 });
 test('a closed dialog cannot submit notes', async () => {
   const f = fixture(); f.dialog.close(); await f.submit(); assert.equal(f.writes.length, 0);
+});
+test('R121 (a): a switch flipped during Save keeps the dialog open; the next explicit Save sends it', async () => {
+  const f = fixture(); f.open('Submitted original', 5, 'owned-room', true);
+  const pending = f.submit(); assert.equal(f.writes[0].args[2], true);
+  f.elements['room-notes-attach'].checked = false; f.save.resolve(); await f.tick(); f.refresh.resolve(f.snapshot('Submitted original', 6, true)); await pending;
+  assert.equal(f.dialog.open, true, 'Saving the earlier choice must not discard the newer one'); assert.equal(f.context.notesRevision, 6);
+  await f.submit(); assert.equal(f.writes.length, 2); assert.deepEqual([...f.writes[1].args], ['Submitted original', 6, false]); assert.equal(f.dialog.open, false);
+  assert.equal(f.elements['room-notes-attach'].checked, false);
+});
+test('R121 (a): a snapshot whose switch differs from the one saved cannot rebase the late choice', async () => {
+  const f = fixture(); f.open('Submitted original', 5, 'owned-room', true);
+  const pending = f.submit(); f.elements['room-notes-attach'].checked = false; f.save.resolve(); await f.tick();
+  f.refresh.resolve(f.snapshot('Submitted original', 7, false)); await pending;
+  assert.equal(f.dialog.open, true); assert.deepEqual(f.errors, ['error.room.dataChangedElsewhere']); assert.equal(f.context.notesRevision, 5); assert.equal(f.writes.length, 1);
 });
