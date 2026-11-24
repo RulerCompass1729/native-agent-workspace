@@ -1157,14 +1157,21 @@ function planDispatch(input) {
   const gates = input.rotationGates instanceof Map ? input.rotationGates : null;
   function stalled(id, gate) {
     const session = byId.get(id);
-    if (!gates || gates.has(id) || !gate || gate === 'rotating' || !session || session.archived) {
+    if (!gates || gates.has(id) || !gate || gate === 'rotating' || !session || session.archived ||
+        session.state === 'ended' || session.wakeDisabled || input.wakePolicy?.enabled !== true) {
       return;
     }
     if (!['claude', 'codex'].includes(session.provider) || (input.handedOff && input.handedOff.has(id))) {
       return;
     }
+    const prior = rotations[id], episode = session.rotationEpisode;
+    // A writer's completed episode cannot still be this same failed attempt.
+    if (prior?.phase === 'failed' && ['complete', 'released'].includes(episode?.state) &&
+        validId(prior.oldNativeId) && validId(prior.episodeEpoch) && validId(prior.tag) &&
+        prior.oldNativeId === session.nativeId && episode.nativeId === session.nativeId &&
+        episode.epoch === prior.episodeEpoch && episode.tag === prior.tag) return;
     // A failed attempt leaves the reason it was due for.
-    const record = rotations[id]?.phase === 'failed' ? undefined : rotations[id];
+    const record = prior?.phase === 'failed' ? undefined : prior;
     const reason = dueReason(session, now, rotationOptions, record);
     if (reason) {
       gates.set(id, { gate, reason });

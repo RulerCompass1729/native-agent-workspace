@@ -23,7 +23,7 @@ function dispatcher(t, f) {
   const capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY];
   const client = Object.assign(new EventEmitter(), {
     close() {}, refresh: async () => {},
-    snapshot: () => ({ sessions: f.sessions, rooms: f.rooms, capabilities, wakePolicy: { enabled: true }, operatorPolicy: { domains: [] } }),
+    snapshot: () => ({ sessions: f.sessions, rooms: f.rooms, capabilities, wakePolicy: f.wakePolicy || { enabled: true }, operatorPolicy: { domains: [] } }),
     route: () => ({ client, state: { capabilities } }),
     call: async (method, ...args) => {
       if (method === 'dispatch') {
@@ -121,4 +121,69 @@ test('a designation that no longer matches the butler\'s native session: told, a
   await run(f, 2 * HOUR);
   assert.deepEqual(stalls(f).map(s => [s.memberId, s.outcome]), [['butler', 'compact:designation-mismatch']]);
   assert.deepEqual(f.sends, []);
+});
+
+function failedRotation(f, member, extra = {}) {
+  f.d.rotations[member.id] = { phase: 'failed', reason: 'rotation-failed', oldId: member.id, oldNativeId: member.nativeId,
+    episodeEpoch: 'episode-1', tag: 'rotation-tag', roomIds: ['shared'], roomId: 'shared', failedAt: NOW, ...extra };
+}
+
+for (const provider of ['claude', 'codex']) test(`ended ${provider} member is not a stalled rotation`, async t => {
+  const member = session('m1', 'native-m1', { provider, state: 'ended', roomIds: ['shared'], roomId: 'shared' });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  await run(f, 3 * HOUR);
+  assert.deepEqual(stalls(f), []);
+  assert.deepEqual(f.sends, []);
+});
+
+for (const pause of ['member', 'automatic messages']) test(`intentionally paused ${pause} does not report a rotation stall`, async t => {
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared', ...(pause === 'member' ? { wakeDisabled: true } : {}) });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  if (pause === 'automatic messages') f.wakePolicy = { enabled: false };
+  await run(f, 3 * HOUR);
+  assert.deepEqual(stalls(f), []);
+  assert.deepEqual(f.sends, []);
+});
+
+for (const state of ['complete', 'released']) test(`a failed record for the same ${state} episode is not still stalled`, async t => {
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared', rotationEpisode: {
+    nativeId: 'native-m1', epoch: 'episode-1', tag: 'rotation-tag', state } });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  failedRotation(f, member);
+  await run(f, 3 * HOUR);
+  assert.deepEqual(stalls(f), []);
+});
+
+for (const key of ['nativeId', 'epoch', 'tag']) test(`completion of a different ${key} does not hide a real failed rotation`, async t => {
+  const episode = { nativeId: 'native-m1', epoch: 'episode-1', tag: 'rotation-tag', state: 'complete' };
+  episode[key] = 'different';
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared', rotationEpisode: episode });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  failedRotation(f, member);
+  await run(f, 3 * HOUR);
+  assert.deepEqual(stalls(f).map(s => s.outcome), ['compact:rotation-failed']);
+  assert.deepEqual(f.sends, []);
+});
+
+for (const reason of ['handoff-missing', 'cannot-carry:collaboration-mode']) test(`an idle active member held by ${reason} still reports its real failed rotation`, async t => {
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared' });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  failedRotation(f, member, { reason });
+  await run(f, 3 * HOUR);
+  assert.deepEqual(stalls(f).map(s => s.outcome), ['compact:rotation-failed']);
+  assert.deepEqual(f.sends, []);
+});
+
+test('pausing clears elapsed stall time; resuming waits a fresh hour', async t => {
+  const member = session('m1', 'native-m1', { roomIds: ['shared'], roomId: 'shared', liveDraft: 'synthetic draft' });
+  const f = setup(t, { sessions: [member], compactions: { m1: 5 }, steward: null });
+  await run(f, 50 * MINUTE);
+  member.wakeDisabled = true;
+  await run(f, 2 * HOUR);
+  assert.deepEqual(stalls(f), []);
+  member.wakeDisabled = false;
+  await run(f, 50 * MINUTE);
+  assert.deepEqual(stalls(f), []);
+  await run(f, 20 * MINUTE);
+  assert.deepEqual(stalls(f).map(s => s.outcome), ['compact:person-typing']);
 });
