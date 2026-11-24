@@ -257,7 +257,7 @@ test('the bell is worked out again when the main process says a record changed, 
 test('confirmations lead the bell, All includes ended cards, and a row only navigates to its exact original card', async t => {
  const p=page(t,folder(t)),time=Date.now(),card={id:'background:old-native:same-operation',key:'requester:old-native:same-operation',operationId:'same-operation',sessionId:'requester',nativeId:'old-native',actorName:'Requester',targetName:'Target',summary:{action:'input',method:'input',target:'Target'},state:'confirmation-required',actionable:true,time,expiresAt:time+120000};
  p.status({count:1,confirmationCount:1,confirmations:[card,{...card,id:'background:new-native:same-operation',key:'requester:new-native:same-operation',nativeId:'new-native',state:'not-executed',disposition:'expired',actionable:false}]});
- await p.view.open();assert.equal(p.badge.textContent,'1');
+ await p.view.open();assert.equal(p.badge.textContent,'', 'Confirmation counts are shown in the waiting strip');
  const sections=p.dialog.all().filter(n=>n.tag==='section');assert.equal(sections[0]?.dataset.record,'confirmations');
  assert.equal(p.dialog.all().filter(n=>n.dataset.action==='openConfirmation').length,1);
  assert.equal(sections[0].all().some(n=>/acknowledge/i.test(n.dataset.action||'')),false,'Confirmation TTL has no acknowledgement');

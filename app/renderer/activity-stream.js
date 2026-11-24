@@ -69,18 +69,19 @@
       const label = waitingLabel(items, t);
       strip.hidden = !items.length && !grants.length; strip.setAttribute('aria-label', label || host.text('operator.quota.entry', { count: grants.length }));
       if (!waitingNodes) {
-        const lead = button('stream-waiting-lead', '', () => go(waitingNodes.first));
-        const more = button('small stream-waiting-more', '', () => { waitingOpen = !waitingOpen; grantsOpen = false; drawWaiting(); });
-        more.id = 'stream-waiting-more'; more.setAttribute('aria-controls', 'stream-waiting-list');
+        const lead = button('stream-waiting-lead stream-waiting-more', '', () => { waitingOpen = !waitingOpen; grantsOpen = false; drawWaiting(); });
+        lead.id = 'stream-waiting-more'; lead.setAttribute('aria-controls', 'stream-waiting-list');
         const menu = el('div', 'stream-waiting-list'); menu.id = 'stream-waiting-list'; menu.setAttribute('role', 'list');
         const grantsButton = button('small operator-grants-toggle', '', () => showGrants()); grantsButton.setAttribute('aria-controls', 'operator-grants-list');
         const grantsMenu = el('div', 'stream-waiting-list operator-grants-list'); grantsMenu.id = 'operator-grants-list'; grantsMenu.setAttribute('role', 'region');
-        waitingNodes = { lead, more, menu, grantsButton, grantsMenu }; strip.append(lead, more, grantsButton, menu, grantsMenu);
+        waitingNodes = { lead, menu, grantsButton, grantsMenu }; strip.append(lead, grantsButton, menu, grantsMenu);
       }
-      const { lead, more, menu } = waitingNodes, first = items[0]; waitingNodes.first = first;
-      lead.hidden = !first; more.hidden = !first;
+      const { lead, menu } = waitingNodes, first = items[0];
+      lead.hidden = !first;
+      lead.setAttribute('aria-expanded', String(waitingOpen && Boolean(first)));
       const { grantsButton, grantsMenu } = waitingNodes;
       grantsButton.hidden = !grants.length; grantsButton.textContent = host.text('operator.quota.entry', { count: grants.length }); grantsButton.setAttribute('aria-expanded', String(grantsOpen));
+      grantsButton.title = host.text('operator.quota.entryHelp'); grantsButton.setAttribute('aria-description', grantsButton.title);
       grantsMenu.hidden = !grantsOpen || !grants.length; grantsMenu.setAttribute('aria-label', host.text('operator.quota.entry', { count: grants.length }));
       const grantNodes = [];
       for (const domain of grants) {
@@ -91,8 +92,7 @@
       for (const row of [...grantsMenu.children]) if (!grantNodes.includes(row)) row.remove();
       for (let i = 0; i < grantNodes.length; i++) if (grantsMenu.children[i] !== grantNodes[i]) grantsMenu.insertBefore(grantNodes[i], grantsMenu.children[i] || null);
       for (const id of grantRows.keys()) if (!grants.some(d => d.id === id)) grantRows.delete(id);
-      more.textContent = t(waitingOpen ? 'close' : 'allItems'); more.setAttribute('aria-expanded', String(waitingOpen));
-      menu.hidden = !waitingOpen;
+      menu.hidden = !waitingOpen || !first;
       if (!first) { menu.replaceChildren(); waitingRows.clear(); return; }
       lead.replaceChildren();
       lead.append(el('strong', 'stream-waiting-count', label), el('span', 'stream-kind', t(first.kind)),
@@ -217,7 +217,7 @@
       if (host.inRoom()) doc.getElementById('header-actions').append(control);
       control.hidden = !host.inRoom(); control.setAttribute('aria-pressed', String(visible));
     }
-    doc.addEventListener('keydown', e => { if (e.key === 'Escape' && (waitingOpen || grantsOpen)) { const target = grantsOpen ? waitingNodes.grantsButton : waitingNodes.more; waitingOpen = false; grantsOpen = false; drawWaiting(); target.focus(); } });
+    doc.addEventListener('keydown', e => { if (e.key === 'Escape' && (waitingOpen || grantsOpen)) { const target = grantsOpen ? waitingNodes.grantsButton : waitingNodes.lead; waitingOpen = false; grantsOpen = false; drawWaiting(); target.focus(); } });
     doc.addEventListener('pointerdown', e => { if ((waitingOpen || grantsOpen) && !strip.contains(e.target)) { waitingOpen = false; grantsOpen = false; drawWaiting(); } });
     return { render, open, showCreation, showGrants, toggle(roomId) { if (openRoom === roomId) { openRoom = ''; render(); host.toggleChanged(); } else open(roomId); } };
   }

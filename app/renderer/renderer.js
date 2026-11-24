@@ -229,8 +229,11 @@ const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
 const agentDistribution = window.nativeWorkspaceAgentDistribution.bind({ host: $('agent-distribution'), document, text: uiText,
   onSession: id => attempt(() => select(id, 'chat')), onMode: () => attempt(persistView) });
-// Header squares (11-22): members of the current space plus sessions live now, the same in both headers.
-// Archived sessions and old ones (unknown state, or offline outside this space) stay out and are counted in the panel.
+function distributionStewardRole(record, rooms) {
+  if (state.steward?.sessionId === record.id) return uiText('butler.name');
+  return rooms.some(room => room.stewardTeam === true && !room.archived && inSpace(record, room.id))
+    ? uiText('distribution.stewardMember') : '';
+}
 function updateAgentDistribution() {
   if (!state) return;
   const { look, group } = window.nativeWorkspaceAgentDistribution, entries = [], skipped = { archived: 0, other: 0 };
@@ -238,8 +241,8 @@ function updateAgentDistribution() {
   for (const record of state.sessions) {
     if (record.archived) { skipped.archived++; continue; }
     const presentation = sidebarPresentation(record);
-    if (!Object.hasOwn(states, record.state) || presentation.tone === 'disconnected' && !inSpace(record)) { skipped.other++; continue; }
     entries.push({ id: record.id, name: record.name, look: look(presentation), status: group(presentation), statusText: presentation.compact,
+      stewardRole: distributionStewardRole(record, rooms),
       model: record.model ? ui.displayText(record.model, record.modelUiMessage) : '',
       rooms: rooms.filter(room => inSpace(record, room.id)).map(room => ({ id: room.id, name: spaceName(room) })) });
   }
@@ -1507,13 +1510,14 @@ function hoverAvatar(record, text) {
   dot.className = window.nativeWorkspaceAgentDistribution.look(presentation); avatar.append(dot);
   return avatar;
 }
-function hoverSessionCard(record, steward) {
+function hoverSessionCard(record, steward, agentRole = null) {
   const presentation = sidebarPresentation(record), head = node('div', undefined, 'hover-card-head'), lines = node('div', undefined, 'hover-card-lines');
-  const title = node('div', undefined, 'hover-card-title'), role = hierRole(record), status = node('div', presentation.full, 'hover-card-status');
+  const title = node('div', undefined, 'hover-card-title'), role = agentRole || hierRole(record), status = node('div', presentation.full, 'hover-card-status');
   title.append(node('span', record.name, 'hover-card-name')); if (role) title.append(node('span', role, 'hover-card-role'));
   status.dataset.tone = presentation.tone; lines.append(title, status); head.append(hoverAvatar(record, steward ? '◆' : undefined), lines);
   const facts = node('dl'), maker = sessionMaker(record), made = [maker.vendor ? maker.vendorName : '', maker.shellName].filter(Boolean).join(' · ');
-  const model = record.model ? node('span', ui.displayText(record.model, record.modelUiMessage), 'hover-card-nowrap') : null;
+  const model = record.model ? node('span', ui.displayText(record.model, record.modelUiMessage), 'hover-card-nowrap')
+    : agentRole !== null ? node('span', uiText('distribution.modelUnknown'), 'hover-card-nowrap') : null;
   hoverDetail(facts, 'hover.backend', made + (made && model ? ' · ' : ''), model);
   const spaces = allSpaces().filter(room => !room.archived && inSpace(record, room.id)).map(room => spaceName(room));
   hoverDetail(facts, 'hover.spaces', spaces.length ? spaces.join(uiText('hover.separator')) : uiText('sidebar.independent'));
@@ -1545,6 +1549,8 @@ function hoverSpaceCard(room) {
 // items) or a space heading. Keyboard focus counts only on the row's link and the heading's name button.
 function sidebarHoverItem(element, how) {
   if (element.closest('#rename-editor')) return null;
+  const cell = element.closest('#agent-distribution .agent-cell');
+  if (cell?.dataset.sessionId) return { key: 'agent:' + cell.dataset.sessionId };
   // The session header's name opens the same card, under the name, by pointer or keyboard (11-22: its third line moved into the card).
   if (element.closest('#header.compact-session #title')) return current() ? { key: 'header:' + current().id } : null;
   const row = element.closest(how === 'focus' ? '.session-link' : '[data-session-row]')?.closest('[data-session-row]');
@@ -1554,6 +1560,13 @@ function sidebarHoverItem(element, how) {
   return group && group !== 'independent' ? { key: 'space:' + group } : null;
 }
 function sidebarHoverBuild(key) {
+  if (key.startsWith('agent:')) {
+    const id = key.slice(6), record = state?.sessions.find(item => item.id === id && !item.archived);
+    const anchor = [...$('agent-distribution').querySelectorAll('.agent-cell')].find(cell => cell.dataset.sessionId === id && !cell.closest('[hidden]'));
+    if (!record || !anchor) return null;
+    const role = distributionStewardRole(record, allSpaces());
+    return { anchor, kind: 'session', below: true, content: hoverSessionCard(record, state.steward?.sessionId === id, role) };
+  }
   if (key.startsWith('header:')) {
     const record = current(), anchor = $('title');
     return record?.id === key.slice(7) && anchor?.isConnected && anchor.closest('#header.compact-session')

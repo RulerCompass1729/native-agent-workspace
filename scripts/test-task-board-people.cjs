@@ -75,7 +75,7 @@ const CREW = [
   const pictures = process.env.NAW_SCREENSHOTS_DIR;
   if (pictures) { assert.ok(!path.resolve(pictures).startsWith(fs.realpathSync(code) + path.sep)); fs.mkdirSync(pictures, { recursive: true }); }
   await req('./scripts/fixtures/default-space.cjs').revealDefaultSpace(page); await page.locator('#room-nav').click();
-  await until(async () => await page.locator('#agent-distribution .agent-cell').count() >= 20, 'Header squares for the synthetic crew');
+  await until(async () => await page.locator('#agent-distribution .agent-cell').count() === CREW.length, 'Header has every synthetic agent, including independent disconnected sessions');
   const listed = CREW.filter(([space, , s]) => space || s !== 'disconnected').length;
   for (const [width, height] of [[1240, 820], [850, 600]]) for (const theme of ['light', 'dark']) {
     await app.evaluate(({ BrowserWindow, nativeTheme }, v) => { BrowserWindow.getAllWindows()[0].setContentSize(v.width, v.height); nativeTheme.themeSource = v.theme; }, { width, height, theme });
@@ -106,7 +106,8 @@ const CREW = [
     });
     observations.push({ width, theme, board: b });
     if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-people-${theme}-${width}-open.png`) });
-    check(b.missing.length === 0, `${tag}: every header square's agent is in the member section (${b.missing.length} missing)`);
+    const offline = ids[CREW.findIndex(([, name]) => name === 'Solo off')];
+    check(b.missing.length === 1 && b.missing[0] === offline, `${tag}: only the independent disconnected agent is header-only`);
     check(b.before && b.inside, `${tag}: the member section opens above the task tabs, inside the viewport`);
     check(b.people === listed && b.long && b.cut.length === 0 && b.crewScroll <= 1, `${tag}: all ${listed} members are listed with whole names (${b.cut.length} cut)`);
     check(!b.text.includes('…') && !/至少|at least/u.test(b.text), `${tag}: no ellipsis or lower bound in the member section`);

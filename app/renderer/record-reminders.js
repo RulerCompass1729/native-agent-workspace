@@ -135,7 +135,7 @@
       let status; try { status = await (force ? api.records('status', true) : api.records('status')); } catch { status = null; }
       if (mine !== ticket) return current;
       current = status;
-      const count = status && Number.isSafeInteger(status.count) ? status.count : 0;
+      const count = Number.isSafeInteger(status?.count) ? Math.max(0, status.count - (status.confirmationCount || 0)) : 0;
       button.hidden = false; badge.textContent = count ? String(count) : '';
       button.className = 'subtle records-bell' + (count ? ' has-due' : '');
       const label = format('records.bellCount', { count }); button.setAttribute('aria-label', label); button.title = label;
@@ -157,10 +157,9 @@
       stopClock(); clockRows = []; focusTargets.clear();
       dialog.dataset.view = 'reminders'; dialog.replaceChildren();
       const title = make('h2', '', 'records.title'); title.id = (dialog.id || 'records-dialog') + '-title'; dialog.setAttribute('aria-labelledby', title.id);
-      const head = make('div', 'records-panel-head'), number = make('span', 'records-panel-count');
-      if (current?.count) say(number, current.count === 1 ? 'records.pendingOne' : 'records.pendingCount', { count: current.count });
+      const head = make('div', 'records-panel-head');
       const close = control('records.close', 'close', () => dialog.close()); close.className = 'records-close';
-      head.append(title, number, close); dialog.append(head);
+      head.append(title, close); dialog.append(head);
       const due = (current?.records || []).map(record => ({ record, items: record.items.filter(entry => entry.shown) })).filter(group => group.items.length);
       if (!current) dialog.append(make('p', 'records-note', 'records.failed', { reason: '—' }));
       else if (!Array.isArray(current.confirmations) && !due.length && !current.temp?.shown && !lastResult) dialog.append(make('p', 'records-empty', 'records.nothing'));

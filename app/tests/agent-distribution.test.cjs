@@ -21,24 +21,32 @@ const SESSIONS = [
 const presentation = record => ({ tone: { working: 'working', idle: 'idle', approval: 'approval' }[record.state] || 'disconnected', workTone: '', waiting: record.state === 'approval', compact: 'state ' + record.state });
 
 // The production universe code from renderer.js, with only its inputs stubbed.
-function universe(sessions = SESSIONS) {
+function universe(sessions = SESSIONS, { steward, rooms = ROOMS } = {}) {
   let captured;
-  const context = vm.createContext({ window: { nativeWorkspaceAgentDistribution: distribution }, state: { sessions }, allSpaces: () => ROOMS,
+  const context = vm.createContext({ window: { nativeWorkspaceAgentDistribution: distribution }, state: { sessions, steward }, allSpaces: () => rooms, uiText: key => locale.format('zh', key),
     sidebarPresentation: presentation, inSpace: (s, id = 'room-a-id') => s.roomIds.includes(id), spaceName: room => room.name,
     ui: { displayText: value => value }, agentDistribution: { update: (entries, skipped) => { captured = { entries, skipped }; } } });
   vm.runInContext(renderer.split('\n').find(line => line.startsWith('const states = {')).replace('const states', 'var states'), context);
-  vm.runInContext(slice('function updateAgentDistribution(', '// A space\'s name as shown') + '\nupdateAgentDistribution();', context);
+  vm.runInContext(slice('function distributionStewardRole(', '// A space\'s name as shown') + '\nupdateAgentDistribution();', context);
   return captured;
 }
 const text = language => (key, params) => locale.format(language, key, params);
 
-test('the squares count current-space members and live sessions; archived and old sessions are excluded and reported', () => {
+test('the squares include every non-archived session, including offline and unknown agents', () => {
   const { entries, skipped } = universe();
-  assert.deepEqual(Array.from(entries, e => e.id), ['synthetic-1', 'synthetic-2', 'synthetic-3', 'synthetic-4', 'synthetic-5', 'synthetic-9']);
-  assert.deepEqual({ ...skipped }, { archived: 1, other: 3 });
+  assert.deepEqual(Array.from(entries, e => e.id), ['synthetic-1', 'synthetic-2', 'synthetic-3', 'synthetic-4', 'synthetic-5', 'synthetic-6', 'synthetic-8', 'synthetic-9', 'synthetic-10']);
+  assert.deepEqual({ ...skipped }, { archived: 1, other: 0 });
   const byStatus = distribution.groupBy(entries, 'status', key => key);
-  assert.deepEqual(JSON.parse(JSON.stringify(byStatus.map(g => [g.status, g.members.map(e => e.id)]))), [['waiting', ['synthetic-9']], ['stuck', ['synthetic-5']], ['working', ['synthetic-1', 'synthetic-3']], ['idle', ['synthetic-2', 'synthetic-4']]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(byStatus.map(g => [g.status, g.members.map(e => e.id)]))), [['waiting', ['synthetic-9']], ['stuck', ['synthetic-5', 'synthetic-6', 'synthetic-8', 'synthetic-10']], ['working', ['synthetic-1', 'synthetic-3']], ['idle', ['synthetic-2', 'synthetic-4']]]);
   assert.equal(byStatus.reduce((n, g) => n + g.members.length, 0), entries.length);
+});
+
+test('steward roles follow the recorded designation and team space', () => {
+  const rooms = ROOMS.map((room, index) => ({ ...room, stewardTeam: index === 1 }));
+  const { entries } = universe(SESSIONS, { steward: { sessionId: 'synthetic-3' }, rooms });
+  assert.equal(entries.find(entry => entry.id === 'synthetic-3').stewardRole, '大管家');
+  assert.equal(entries.find(entry => entry.id === 'synthetic-9').stewardRole, '大管家团成员');
+  assert.equal(entries.find(entry => entry.id === 'synthetic-1').stewardRole, '');
 });
 
 test('every grouping has readable names and no internal ids, in both languages', () => {
@@ -47,9 +55,9 @@ test('every grouping has readable names and no internal ids, in both languages',
     const t = key => text(language)('distribution.' + key);
     const status = distribution.groupBy(entries, 'status', t), model = distribution.groupBy(entries, 'model', t), space = distribution.groupBy(entries, 'space', t);
     assert.deepEqual(status.map(g => g.label), ['waiting', 'stuck', 'working', 'idle'].map(k => t('status.' + k)));
-    assert.deepEqual(Object.fromEntries(model.map(g => [g.label, g.members.length])), { 'opus-5-5': 2, 'gpt-6.1-sol': 2, 'deepseek-flash': 1, [t('modelUnknown')]: 1 });
+    assert.deepEqual(Object.fromEntries(model.map(g => [g.label, g.members.length])), { 'opus-5-5': 2, 'gpt-6.1-sol': 2, 'deepseek-flash': 1, [t('modelUnknown')]: 4 });
     assert.ok(model.every((g, i) => i === 0 || model[i - 1].members.length >= g.members.length), 'largest model group first');
-    assert.deepEqual(space.map(g => [g.label, g.members.length]), [['Space A', 3], ['Space B', 2], [t('independent'), 2]]);
+    assert.deepEqual(space.map(g => [g.label, g.members.length]), [['Space A', 3], ['Space B', 3], [t('independent'), 4]]);
     for (const group of [...status, ...model, ...space]) {
       assert.ok(group.label && !/synthetic-|room-[ab]-id/u.test(group.label), group.label);
       assert.ok(!/^distribution\./u.test(group.label), 'translated: ' + group.label);
@@ -71,11 +79,11 @@ function strip(language = 'zh', options = {}) {
 test('each square has an accessible name, clicking one jumps to its session, and the strip summarises the groups', () => {
   const { host, jumps } = strip();
   const cells = host.querySelectorAll('.agent-cell');
-  assert.equal(cells.length, 6);
+  assert.equal(cells.length, 9);
   assert.equal(cells[0].getAttribute('aria-label'), 'Other space asks · state approval · claude-opus-5-5');
   assert.ok(cells.every(c => c.getAttribute('aria-label').split(' · ').length === 3 && !c.getAttribute('aria-label').includes('synthetic-')));
   assert.equal(host.querySelectorAll('.agent-cell').find(c => c.dataset.sessionId === 'synthetic-4').getAttribute('aria-label'), 'Solo idle · state idle · 未报告模型');
-  assert.equal(host.querySelector('.agent-strip').getAttribute('aria-label'), '6 个 agent：等你 1 · 卡住或断开 1 · 在做 2 · 空闲 2');
+  assert.equal(host.querySelector('.agent-strip').getAttribute('aria-label'), '9 个 agent：等你 1 · 卡住或断开 4 · 在做 2 · 空闲 2');
   assert.equal(host.querySelector('.agent-strip').getAttribute('role'), 'group');
   assert.equal(host.querySelector('.agent-strip-toggle').getAttribute('aria-label'), 'agent 分布（按状态）：分组、图例和名单');
   host.querySelectorAll('.agent-cell').find(c => c.dataset.sessionId === 'synthetic-3').fire('click');
@@ -85,18 +93,32 @@ test('each square has an accessible name, clicking one jumps to its session, and
 test('the panel switches grouping, keeps a legend and the exclusion note, and its names jump too', () => {
   const { host, jumps, modes, view } = strip('en');
   const toggle = host.querySelector('.agent-strip-toggle'), panel = host.querySelector('.agent-strip-panel');
-  toggle.fire('click');
+  const group = host.querySelector('.agent-group-trigger');
+  group.fire('click');
+  assert.equal(group.getAttribute('aria-expanded'), 'true');
+  assert.equal(group.getAttribute('aria-controls'), 'agent-strip-panel');
   assert.equal(panel.matches(':popover-open'), true); assert.equal(toggle.getAttribute('aria-expanded'), 'true');
   const radios = host.querySelectorAll('.agent-strip-mode');
   assert.deepEqual(radios.map(r => [r.dataset.mode, r.getAttribute('role'), r.getAttribute('aria-checked')]), [['status', 'radio', 'true'], ['model', 'radio', 'false'], ['space', 'radio', 'false']]);
   assert.equal(host.querySelector('.agent-strip-modes').getAttribute('aria-label'), 'Group by');
   assert.equal(host.querySelectorAll('.agent-legend-swatch').length, 6);
-  assert.equal(host.querySelector('.agent-strip-note').textContent, 'Not counted: 1 archived; 3 outside this space and not running');
+  assert.equal(host.querySelector('.agent-strip-note').textContent, 'Not counted: 1 archived; 0 outside this space and not running');
   radios[1].fire('click');
   assert.deepEqual(modes, ['model']); assert.equal(view.mode, 'model');
-  assert.deepEqual(host.querySelector('.agent-strip').querySelectorAll('.agent-group-label').map(l => l.textContent), ['gpt-6.1-sol', 'opus-5-5', 'deepseek-flash', 'Model not reported']);
+  assert.deepEqual(host.querySelector('.agent-strip').querySelectorAll('.agent-group-label').map(l => l.textContent), ['Model not reported', 'gpt-6.1-sol', 'opus-5-5', 'deepseek-flash']);
   host.querySelectorAll('.agent-strip-member').find(b => b.dataset.sessionId === 'synthetic-9').fire('click');
   assert.deepEqual(jumps, ['synthetic-9']); assert.equal(panel.matches(':popover-open'), false);
+});
+
+test('a roster update keeps keyboard focus on the same listed agent', () => {
+  const { f, host, view, entries } = strip();
+  host.querySelector('.agent-group-trigger').fire('click');
+  const member = host.querySelectorAll('.agent-strip-member').find(row => row.dataset.sessionId === 'synthetic-1');
+  member.focus();
+  view.update(entries.map(entry => entry.id === 'synthetic-2' ? { ...entry, status: 'working' } : entry));
+  assert.equal(f.doc.activeElement.dataset.sessionId, member.dataset.sessionId);
+  assert.notEqual(f.doc.activeElement, member);
+  assert.equal(host.querySelector('.agent-strip-panel').matches(':popover-open'), true);
 });
 
 test('the grouping choice is saved through the view store and restored on reopen without saving again', () => {
