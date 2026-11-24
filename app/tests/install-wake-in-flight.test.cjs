@@ -95,3 +95,18 @@ test('quiet backend records no stale wakes', async () => {
   const result = await capture(backendState(sender, wakeRow('w6', 'delivered', OLD_TURN, 'sender')));
   assert.deepEqual(result.state.staleWakes, []);
 });
+
+test('blockers names who holds the install and where, by the same rule capture refuses', async () => {
+  const sender = { id: 'sender', name: 'Sender', state: 'working', activeTurnId: CURRENT_TURN };
+  const state = backendState(sender, wakeRow('w7', 'staged', CURRENT_TURN, 'sender'));
+  state.rooms = [{ id: 'room-1', name: 'Space one', messages: [], run: { status: 'running' } }];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-wake-gate-'));
+  try {
+    const result = await createInspector(release(root, state), { run: () => '' }).blockers();
+    assert.deepEqual(result.blockers.map(b => [b.kind, b.backend, b.roomName || b.senderName]), [['relay', KEY, 'Space one'], ['wake', KEY, 'Sender']]);
+    assert.deepEqual([result.blockers[1].status, result.blockers[1].session], ['staged', 'sender']);
+    assert.deepEqual(result.stale, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -1959,6 +1959,7 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
   if (plan && plan.blocked) {
     // At work (a turn, a question, a running child or background work) passes by itself; anything else needs the person.
     let busy = 0, stuck = false;
+    const ids = [];
     for (const listed of option.sessions || []) {
       const session = sessions.find(s => s.id === listed.id);
       // Ended and background sessions are carried or block for a reason of their own.
@@ -1970,17 +1971,19 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
         stuck = true;
       } else if (!backendSwitch.migrationAcceptable(session)) {
         busy++;
+        ids.push(session.id);
       } else if (!session.nativeId) {
         stuck = true;
       }
     }
     if (busy && !stuck) {
-      return { code: settings.migrate ? 'busy' : 'busy-auto', waiting: busy };
+      return { code: settings.migrate ? 'busy' : 'busy-auto', waiting: busy, ids };
     }
-    return { code: 'blocked' };
+    return withReason({ code: 'blocked' }, plan.reason);
   }
+  // Told with its reason, so a backend that never moves says why.
   if (!plan || !plan.ready) {
-    return { code: 'not-movable' };
+    return withReason({ code: 'not-movable' }, option.moveRefused || option.reason);
   }
   if (plan.auto && settings.auto) {
     return null;
@@ -1989,6 +1992,7 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
     return { code: 'needs-person' };
   }
   let missing = false, unacceptable = false, longer = false, waiting = 0;
+  const ids = [];
   for (const stop of plan.stops || []) {
     const session = sessions.find(s => s.id === stop.id);
     if (!session) {
@@ -1998,9 +2002,11 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
     if (plan.auto) {
       if (!quietFor(session, humanAt, now, quietMs)) {
         waiting++;
+        ids.push(session.id);
       }
     } else if (!migrationReady(session, humanAt, now, quietMs, unprovenQuietMs)) {
       waiting++;
+      ids.push(session.id);
       if (!backendSwitch.migrationSafe(session)) {
         if (backendSwitch.migrationAcceptable(session)) {
           longer = true;
@@ -2017,9 +2023,15 @@ function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MI
     return { code: 'blocked' };
   }
   if (waiting) {
-    return { code: longer ? 'quiet-30m' : 'quiet-10m', waiting };
+    return { code: longer ? 'quiet-30m' : 'quiet-10m', waiting, ids };
   }
   return null;
+}
+function withReason(wait, reason) {
+  if (typeof reason === 'string' && reason) {
+    wait.reason = reason;
+  }
+  return wait;
 }
 
 function nextBackendMove(options, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {

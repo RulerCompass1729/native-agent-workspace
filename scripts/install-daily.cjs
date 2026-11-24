@@ -212,7 +212,7 @@ async function runInstall(c, { platform, inspector, apply = false }) {
       stage('installation-record');
       assert.deepEqual(receiptSnapshot(receipt)?.bytes ?? null, originalReceipt?.bytes ?? null, 'Installation record changed before write');
       regular(c.executable); const stat = fs.statSync(c.executable, { bigint: true });
-      writtenReceipt = Buffer.from(JSON.stringify({ version: c.newVersion, commit: c.commit, installedAt: new Date().toISOString(), executable: { dev: stat.dev.toString(), ino: stat.ino.toString() } }) + '\n');
+      writtenReceipt = Buffer.from(JSON.stringify({ version: c.newVersion, commit: c.commit, previous: c.oldVersion, installedAt: new Date().toISOString(), executable: { dev: stat.dev.toString(), ino: stat.ino.toString() } }) + '\n');
       atomic(receipt, writtenReceipt);
       assert.deepEqual(fs.readFileSync(receipt), writtenReceipt);
       // Persist BEFORE invoking LaunchServices: even a thrown open may have launched/written.

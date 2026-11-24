@@ -20,17 +20,24 @@ const iso = at => new Date(at).toISOString().replace(/\.\d{3}Z$/u, 'Z');
 // services.json keys: '.' or backends/<20 hex>.
 const short = key => key === '.' ? 'root' : clean(String(key).split('/').pop(), 7) || 'unknown';
 
+// The sessions a wait names (moveWait `ids`), and the reason NAW gave for not moving a backend by itself.
+function holders(b) {
+  const ids = Array.isArray(b.wait.ids) ? b.wait.ids : [];
+  const names = ids.slice(0, MAX_NAMES).map(id => clean((b.sessions.find(s => s.id === id) || {}).name, 40) || clean(id, 40));
+  return names.length ? `（${names.join('、')}${ids.length > MAX_NAMES ? ` 等 ${ids.length} 个` : ''}）` : '';
+}
+const because = b => clean(b.wait.reason, 160);
 // What each code of queue-dispatch.cjs moveWait (and main.cjs observeVersion) says.
 const WAITS = Object.freeze({
   moving: () => '正在迁',
   next: () => '排队自动迁（每分钟迁一个后台）',
-  'quiet-10m': b => `${b.count} 个会话里 ${b.wait.waiting} 个还没连续安静 10 分钟，安静后自动迁`,
-  'quiet-30m': b => `${b.count} 个会话里 ${b.wait.waiting} 个还没安静够（有队友、子 agent 或后台活的要连续安静 30 分钟），之后自动迁`,
-  busy: b => `${b.count} 个会话里 ${b.wait.waiting} 个在干活或等人回答，都停下并连续安静 10 分钟（有队友、子 agent 或后台活的 30 分钟）后自动迁`,
-  'busy-auto': b => `${b.count} 个会话里 ${b.wait.waiting} 个在干活或等人回答；停下后能证明不丢东西的自动迁，否则要人点更新`,
+  'quiet-10m': b => `${b.count} 个会话里 ${b.wait.waiting} 个${holders(b)}还没连续安静 10 分钟，安静后自动迁`,
+  'quiet-30m': b => `${b.count} 个会话里 ${b.wait.waiting} 个${holders(b)}还没安静够（有队友、子 agent 或后台活的要连续安静 30 分钟），之后自动迁`,
+  busy: b => `${b.count} 个会话里 ${b.wait.waiting} 个${holders(b)}在干活或等人回答，都停下并连续安静 10 分钟（有队友、子 agent 或后台活的 30 分钟）后自动迁`,
+  'busy-auto': b => `${b.count} 个会话里 ${b.wait.waiting} 个${holders(b)}在干活或等人回答；停下后能证明不丢东西的自动迁，否则要人点更新`,
   'needs-person': () => '自动迁移没开，要人点更新',
-  blocked: () => '有会话挡着，NAW 不自己迁，要人在后台更新里看原因',
-  'not-movable': () => 'NAW 不能自己迁（版本无法比较、会话没确认结束或连接正在更新）',
+  blocked: b => because(b) ? `有会话挡着，NAW 不自己迁：${because(b)}` : '有会话挡着，NAW 不自己迁，要人在后台更新里看原因',
+  'not-movable': b => because(b) ? `NAW 不能自己迁：${because(b)}` : 'NAW 不能自己迁（版本无法比较、会话没确认结束或连接正在更新）',
   'session-missing': () => '有会话暂时不在列表里，等它回来再迁',
   failed: () => '自动迁移失败，这次运行不再自动试，要人点更新',
 });
@@ -59,6 +66,18 @@ function readSeen(file) {
     return data && data.format === 1 && token(data.version) ? data.version : null;
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
+// Without a seen record (a profile that never ran a start with it), the daily installer's receipt names the version it
+// replaced (scripts/install-daily.cjs); only when it names this version as the one installed.
+function readReplaced(file, version) {
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > 4096 || stat.uid !== process.getuid()) return null;
+    const data = JSON.parse(fs.readFileSync(fd, 'utf8'));
+    return data && data.version === version && token(data.previous) && data.previous !== version ? data.previous : null;
+  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
 function writeSeen(file, version, at) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.rmSync(temp, { force: true });
@@ -73,7 +92,7 @@ class VersionEvents {
     Object.assign(this, { version, now, record, owe });
     this.at = now();
     // The last version a start announced; 「已装」 once per version, 「重启完成」 on every other start.
-    this.previous = readSeen(this.file);
+    this.previous = readSeen(this.file) || readReplaced(path.join(directory, 'installation.json'), version);
     this.announced = false; this.watch = new Map(); this.sequence = 0;
   }
   // Something is left to tell: this start, or a backend still on an old version.
@@ -119,11 +138,17 @@ class VersionEvents {
   }
   // A migration's quiet window (quiet-windows.cjs) reached its deadline before the move: dispatch and automatic
   // messages there resume, and NAW opens none for that backend for two hours.
-  quietWindowTimedOut(window) {
+  // `held`: what the move still waits for at the deadline ({ sessions, wait } as observe takes them), to name who.
+  quietWindowTimedOut(window, held = null) {
     const key = typeof window?.scope === 'string' ? window.scope.replace(/^backend:/u, '') : '';
     const waited = token(window?.waited) ? window.waited : 'unknown';
     const at = Number.isSafeInteger(window?.deadline) ? iso(window.deadline) : iso(this.now());
-    this.emit('quiet-window-timeout', `【NAW 版本】后台 ${short(key)} 迁移前的安静窗口到了截止时间（${at}），还没迁成：已恢复派活和自动消息；2 小时内不再为它开窗。`,
+    let still = '';
+    if (held && Array.isArray(held.sessions) && held.wait && typeof held.wait === 'object') {
+      const b = { sessions: held.sessions, count: held.sessions.length, wait: held.wait };
+      still = `，卡在：${(WAITS[held.wait.code] || WAITS['not-movable'])(b)}。`;
+    }
+    this.emit('quiet-window-timeout', `【NAW 版本】后台 ${short(key)} 迁移前的安静窗口到了截止时间（${at}），还没迁成${still || '：'}已恢复派活和自动消息；2 小时内不再为它开窗。`,
       `backend:${short(key)},waited:${waited}`);
   }
   emit(reason, text, outcome) {

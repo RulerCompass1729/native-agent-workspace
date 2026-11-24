@@ -35,7 +35,8 @@ function member(id, extra = {}) {
 function option(sessions) {
   const plan = backendSwitch.backendPlan({ runtimeVersion: OLD, capabilities: CAPS, servicePid: 4200, sessions, room: { messages: [] } });
   return { backendKey: KEY, sessions: sessions.map(s => ({ id: s.id, name: s.name })),
-    switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, blocked: plan.blocked, stops: plan.stops } : null };
+    switch: plan && (plan.stops.length || plan.blocked || plan.ready) ? { ready: plan.ready, auto: plan.auto, blocked: plan.blocked, reason: plan.reason, stops: plan.stops } : null,
+      moveRefused: plan && !plan.ready && !plan.blocked ? plan.reason || null : null };
 }
 const record = dir => JSON.parse(fs.readFileSync(path.join(dir, 'quiet-windows.json'), 'utf8'));
 
@@ -276,10 +277,18 @@ test('main.cjs: at the deadline the butler and the secretary are told once, thro
   assert.ok(event); assert.deepEqual(more, []);
   assert.equal(event.kind, 'blocked'); assert.equal(event.payload.reason, 'quiet-window-timeout');
   assert.equal(event.payload.outcome, 'backend:bbbbbbb,waited:busy');
-  assert.match(event.payload.text, /^【NAW 版本】后台 bbbbbbb 迁移前的安静窗口到了截止时间（\d{4}-\d\d-\d\dT[\d:]+Z），还没迁成：已恢复派活和自动消息；2 小时内不再为它开窗。$/u);
+  // Who still holds the move is named (the PM's 11-24 brief: at the deadline, say who and where).
+  assert.match(event.payload.text, /^【NAW 版本】后台 bbbbbbb 迁移前的安静窗口到了截止时间（\d{4}-\d\d-\d\dT[\d:]+Z），还没迁成，卡在：2 个会话里 1 个（Synthetic a）在干活或等人回答，[^。]*后自动迁。已恢复派活和自动消息；2 小时内不再为它开窗。$/u);
   assert.deepEqual(f.owed, [`${event.payload.text}\nNAW 只通知，不加任务。`]);
   f.skew += MIN; await f.pass();
   assert.deepEqual(f.record().windows, [], 'none again right after'); assert.equal(f.events().length, 1);
+});
+
+test('main.cjs moves a backend whose sessions are only recoverable instead of leaving it not movable (alpha.290)', async t => {
+  const f = wired(t);
+  for (const s of f.sessions) Object.assign(s, { provider: 'codex', state: 'recoverable' });
+  await f.pass();
+  assert.deepEqual(f.switched, [KEY]);
 });
 
 test('main.cjs: the person turning migration off closes the window, without an event', async t => {
