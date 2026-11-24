@@ -188,6 +188,16 @@ test('once the person\'s step is taken, the chip folds back and names no menu it
     assert.equal(u.step.hidden, true);
     u.show(butler({ backendVersion: '0.1.0-alpha.290' }), { step: 'release' });
     assert.equal(u.box.open, true); assert.equal(u.step.textContent, say('queue.releaseRotation', { name: 'Synthetic butler' }));
+    // A failed call is not taken: a later gap in its item leaves the chip open.
+    const f = banner(language), errors = [];
+    f.context.api.spaceAction = async () => { throw new Error('synthetic refusal'); };
+    f.context.attempt = run => Promise.resolve().then(run).catch(error => { errors.push(error.message); });
+    f.show(butler(), { step: 'release' });
+    await f.step.onclick();
+    await new Promise(setImmediate);
+    assert.deepEqual(errors, ['synthetic refusal']);
+    f.show(null, { step: 'release' });
+    assert.equal(f.box.open, true, 'a gap after a failed click does not fold the chip');
   }
 });
 

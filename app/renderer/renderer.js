@@ -5763,9 +5763,11 @@ function renderStewardWakeWarning(wakeBlock) {
   step.onclick = () => {
     const record = state?.sessions?.find(s => s.id === butler?.id);
     if (disconnected || !record) return;
-    chip.dataset.ownStepTaken = chip.dataset.ownStep || '';
-    if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) attempt(() => releaseSessionRotation(record));
-    else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) attempt(() => updateSessionBackend(record.id));
+    const mark = chip.dataset.ownStepTaken = chip.dataset.ownStep || '';
+    // Marked before the call: the window can see the step gone before the call returns. A failed call is not taken.
+    const run = action => attempt(async () => { try { return await action(); } catch (error) { if (chip.dataset.ownStepTaken === mark) chip.dataset.ownStepTaken = ''; throw error; } });
+    if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) run(() => releaseSessionRotation(record));
+    else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) run(() => updateSessionBackend(record.id));
   };
   const log = chip.querySelector('.steward-wake-record');
   log.textContent = uiText('stewardWake.openRecord');
