@@ -455,8 +455,8 @@ function sessionReady(session, wakePolicy) {
   return { ready: true, reason: '' };
 }
 
-// While a session works, what will still hold it once the turn ends (2026-11-23: a draft held the butler 258 minutes,
-// read as not-idle in each of its own turns). Its own delivery in flight (busy) is not such a reason.
+// While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
+// each of its own turns). busy stays not-idle: a delivery, approval or question in flight belongs to the turn.
 function heldReason(session, wakePolicy) {
   const reason = sessionReady(session, wakePolicy).reason;
   if (reason !== 'not-idle') {
