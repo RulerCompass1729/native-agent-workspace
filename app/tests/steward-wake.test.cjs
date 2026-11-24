@@ -373,6 +373,37 @@ test('actual dispatcher skip branches become visible and recorded without sendin
   }
 });
 
+// 2026-11-23 21:32Z–02:05Z: a draft in the butler's composer held every wake for 258 minutes. Each of its own turns
+// showed not-idle, the only time it could read the block, so the stall was taken for a state that never settled.
+test('while the butler works, the block it reads is what still holds it once the turn ends', async t => {
+  const env = passes(t, butler({ state: 'working', liveDraft: 'SYNTHETIC PRIVATE DRAFT' }));
+  env.wake.set(true); env.ledger.ingest(failure(1)); env.dispatcher.client = env.client;
+  const session = env.client.state.sessions[0];
+  const pass = async (state, liveDraft) => {
+    Object.assign(session, { state, liveDraft });
+    if (state === 'idle') env.dispatcher.idleSince.set('butler', env.clock.now - 9000); else env.dispatcher.idleSince.delete('butler');
+    await env.dispatcher.wakeSteward({ snapshot: env.client.snapshot(), now: env.clock.now }, []);
+    env.clock.now += 300000;
+    return env.wake.view({ held: true }).blocked?.reason;
+  };
+  assert.equal(await pass('working', 'SYNTHETIC PRIVATE DRAFT'), 'person-typing', 'working, with the draft that will hold it');
+  assert.equal(await pass('idle', 'SYNTHETIC PRIVATE DRAFT'), 'person-typing');
+  assert.equal(await pass('working', 'SYNTHETIC PRIVATE DRAFT'), 'person-typing');
+  assert.equal(await pass('working', ''), 'not-idle', 'working with nothing else holding it');
+  assert.equal(await pass('working', '   '), 'not-idle', 'a blank draft does not hold it');
+  Object.assign(session, { pendingTag: 'tag-1' });
+  assert.equal(await pass('working', ''), 'not-idle', 'the turn\'s own delivery is not a reason of its own');
+  Object.assign(session, { pendingTag: null, background: 1 });
+  assert.equal(await pass('working', ''), 'background-work');
+  const lines = env.record.entries().filter(e => e.kind === 'wakeBlocked').map(e => e.reason);
+  assert.deepEqual(lines, ['person-typing', 'not-idle', 'background-work'], 'one line per real reason, not one per turn');
+  assert.equal(env.client.dispatches().length, 0);
+  Object.assign(session, { background: 0 });
+  await pass('idle', '');
+  assert.equal(env.client.dispatches().length, 1, 'idle and settled with nothing holding it: the wake goes out');
+  assert.doesNotMatch(JSON.stringify(env.record.entries()), /SYNTHETIC PRIVATE/u);
+});
+
 test('a real wake record failure is visible as a record failure and sends nothing', async t => {
   const env = passes(t, butler());
   env.wake.set(true); env.ledger.ingest(failure(1)); env.dispatcher.client = env.client;
