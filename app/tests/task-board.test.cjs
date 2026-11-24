@@ -46,7 +46,7 @@ test('the real renderer intake only passes task-board fields and a waiting flag'
   const card = { key: 'actor:native:operation', id: 'message', operationId: 'operation', sessionId: 'actor', nativeId: 'native', state: 'confirmation-required', actionable: true, expiresAt: now + 100000 };
   for (const key of ['message', 'summary', 'arguments', 'guard']) Object.defineProperty(card, key, { get() { throw Error('Confirmation body access forbidden'); } });
   let input;
-  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js') }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }), state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
+  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js'), nativeWorkspaceTaskBoard: board }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }), state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
     allSpaces: () => [r, { id: 'missing', unavailable: true }], spaceName: value => value.name,
     taskBoard: { update(value) { input = value; } } });
   vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);

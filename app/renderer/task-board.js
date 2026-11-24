@@ -104,6 +104,40 @@
   const AGENT = ['waiting', 'stuck', 'working', 'idle'], AGENT_ORDER = ['waiting', 'working', 'stuck', 'idle'];
   const SQUARE = { waiting: 'approval', stuck: 'disconnected', working: 'working', idle: 'idle' };
   const RUNNING = ['idle', 'working', 'approval', 'background', 'starting', 'error'], CURRENT = { sent: 0, waiting: 1, unknown: 2, review: 3 };
+  // The tool a session is running now (11-24): its own running tool row in the current native turn.
+  // Claude reports a command's output only when it ends, so only Codex rows have a last line.
+  const firstLine = value => typeof value === 'string' ? (value.split(/\r?\n/).map(v => v.trim()).find(Boolean) || '').slice(0, 200) : '';
+  // A Codex command's text grows with its output; only its tail can hold the last line.
+  const lastLine = value => typeof value === 'string' ? (value.slice(-4096).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r\n|\n|\r/).map(v => v.trim()).filter(Boolean).at(-1) || '').slice(0, 200) : '';
+  function stepDetail(m, preview) {
+    if (m.toolKind === 'commandExecution') return firstLine(preview ? preview(m) : m.title);
+    let input = null;
+    if (typeof m.input === 'string' && m.input.length <= 262144) try { input = JSON.parse(m.input); } catch {}
+    if (!input || typeof input !== 'object') return '';
+    for (const key of ['description', 'command', 'file_path', 'path', 'pattern', 'url', 'query']) {
+      const value = firstLine(input[key]);
+      if (value) return value;
+    }
+    return '';
+  }
+  // preview: the renderer's own short form of a Codex command (nativeCommandPreview); a session waiting for the person runs nothing.
+  function runningStep(s, preview) {
+    if (!s || s.state !== 'working' || s.transportDisconnected || s.backendUnavailable || !Array.isArray(s.messages) || needsHuman(s)) return null;
+    if (typeof s.nativeId !== 'string' || !s.nativeId || typeof s.activeTurnId !== 'string' || !s.activeTurnId) return null;
+    for (let i = s.messages.length - 1; i >= Math.max(0, s.messages.length - 200); i--) {
+      const m = s.messages[i];
+      if (m?.role !== 'tool' || m.kind !== 'tool' || m.status !== 'running' || m.nativeId !== s.nativeId || m.turnId !== s.activeTurnId) continue;
+      if (!Number.isFinite(m.time)) continue;
+      const command = m.toolKind === 'commandExecution' || m.title === 'Bash';
+      return { tool: command ? 'Bash' : typeof m.title === 'string' ? m.title.slice(0, 120) : '', detail: stepDetail(m, preview), startedAt: m.time,
+        lastLine: m.toolKind === 'commandExecution' ? lastLine(m.text) : '' };
+    }
+    return null;
+  }
+  const stepClock = (value, lang) => new Intl.DateTimeFormat(lang || undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(value);
+  // The renderer hands the board a step with its words already chosen (action) and the raw facts.
+  const validStep = v => Boolean(v && typeof v.action === 'string' && v.action && typeof v.detail === 'string' && typeof v.lastLine === 'string' &&
+    Number.isFinite(v.startedAt) && v.startedAt >= 0 && v.startedAt <= 8640000000000000);
   // The board's member section (11-23): every member of every open space, then conversations outside them that are running.
   // look/agentStatus/statusText are the header square's own (renderer.js); without them the board's own judgments decide.
   function people(input, status, now = Date.now()) {
@@ -116,7 +150,8 @@
       return { id: s.id, nativeId: s.nativeId, name: s.name || '', status: state, look: typeof s.look === 'string' && s.look ? s.look : 'state-dot ' + SQUARE[state],
         statusText: typeof s.statusText === 'string' ? s.statusText : '', item: item && { id: item.id, text: item.text, kind: item.kind },
         minutes: item?.kind === 'sent' && Number.isFinite(item.sentAt) ? Math.max(0, Math.floor((now - item.sentAt) / 60000)) : null,
-        waiting: mine.filter(q => q.kind === 'waiting').length, queued: mine.filter(q => q.kind === 'queued').length, card: state === 'waiting' || state === 'working' };
+        waiting: mine.filter(q => q.kind === 'waiting').length, queued: mine.filter(q => q.kind === 'queued').length, card: state === 'waiting' || state === 'working',
+        step: state === 'working' && validStep(s.step) ? s.step : null };
     }
     const groups = [], listed = new Set();
     for (const p of status.historyGroups) {
@@ -163,6 +198,8 @@
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
     const set = (e, value) => { if (e.textContent !== value) e.textContent = value; };
     const attr = (e, name, value) => { if (e.getAttribute(name) !== value) e.setAttribute(name, value); };
+    const stepWords = step => text(step.detail ? 'activity.step' : 'activity.stepBare', { action: step.action, detail: step.detail, time: stepClock(step.startedAt, doc.documentElement?.lang) });
+    const outputWords = step => step.lastLine ? text('activity.lastOutput', { line: step.lastLine }) : '';
     const control = (handler, cls) => { const e = make('button', cls); e.type = 'button'; e.onclick = handler; return e; };
     const move = (parent, nodes) => {
       nodes.forEach((node, i) => { const before = parent.children[i] || null; if (before !== node) {
@@ -173,7 +210,7 @@
     let input = { rooms: [], sessions: [], connected: true }, data = [], opened = false, disposed = false, signature = '';
     let status = overview(input, now()), day = new Date(now()).toDateString(), waitingCount = null, limit = 10, order = [], orderPending = false;
     const selection = { tab: 'active', search: '', sort: 'recent', descending: true, scope: 'all', space: 'all' };
-    let mode = 'flat';
+    let mode = 'flat', stepRows = new Map();
     const rows = new Map(), groups = new Map(), tabs = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
     // Things to act on, most urgent first; each opens where it is handled (11-22). Progress counts live in the panel.
@@ -327,8 +364,9 @@
       let view = rows.get(item.key);
       if (!view) {
         const element = make('li', 'task-board-task'), link = control(() => activate(item.key), 'task-board-entry'), body = make('div'), name = make('span', 'task-board-task-title'), note = make('small'), state = make('span', 'task-board-status'), action = make('span', 'task-board-row-action');
+        const step = make('small', 'task-board-task-step'), output = make('small', 'task-board-task-output');
         body.append(name, note); link.append(body, state, action); element.append(link); element.dataset.taskKey = item.key;
-        view = { element, link, name, note, state, action }; rows.set(item.key, view);
+        view = { element, link, body, name, note, step, output, state, action }; rows.set(item.key, view);
       }
       const actor = input.sessions?.find(s => s.id === item.memberKey), actorName = item.memberName || actor?.name || f(item.memberKey ? 'memberMissing' : 'unassigned');
       const origin = item.spaceName || data.find(p => p.id === item.spaceId)?.name || f('independent');
@@ -338,6 +376,10 @@
       const name = title(item, actorName); set(view.name, name); view.name.title = name;
       const value = taskTime(item, selection.sort), time = value === null ? '—' : new Intl.DateTimeFormat(doc.documentElement?.lang || undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);
       set(view.note, [origin, reasonText(item), actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].filter(Boolean).join(' · '));
+      // The member's running tool goes on its newest in-progress item only.
+      const step = item.kind === 'sent' && stepRows.get(item.memberKey)?.key === item.key && validStep(actor?.step) ? actor.step : null;
+      set(view.step, step ? stepWords(step) : ''); set(view.output, step ? outputWords(step) : '');
+      move(view.body, [view.name, view.note, ...(step ? [view.step] : []), ...(step?.lastLine ? [view.output] : [])]);
       set(view.state, item.source === 'confirmation' ? item.kind === 'waiting' ? f('cardState') + ' · ' + remaining(item.expiresAt) : f('cardsUnverified') : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
       view.state.dataset.kind = item.kind;
       const destination = item.source === 'confirmation' ? 'Card' : item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
@@ -357,7 +399,7 @@
       const label = text('distribution.status.' + m.status), stateText = !m.card ? m.statusText || label : m.minutes === null ? label : f('people.minutes', { state: label, minutes: m.minutes });
       const name = make('span', 'task-board-person-name'), state = make('span', 'task-board-person-state'), parts = [square(m.look), name, state];
       name.textContent = m.name; state.textContent = stateText;
-      let detail = '';
+      let detail = '', doing = '';
       if (m.card) {
         const line = make('span', 'task-board-person-item');
         if (m.item) {
@@ -365,6 +407,10 @@
           line.textContent = words + ' '; id.textContent = '#' + m.item.id.slice(0, 8); line.append(id); detail = words + ' #' + m.item.id.slice(0, 8);
         } else { line.textContent = m.statusText; detail = m.statusText; }
         parts.push(line);
+        if (m.step) {
+          const e = make('span', 'task-board-person-step'); e.textContent = doing = stepWords(m.step); parts.push(e);
+          if (m.step.lastLine) { const o = make('span', 'task-board-person-output'); o.textContent = outputWords(m.step); parts.push(o); doing += ' · ' + o.textContent; }
+        }
         if (m.waiting || m.queued) {
           const counts = make('span', 'task-board-person-counts');
           if (m.waiting) { const e = make('span', 'task-board-person-waiting'); e.textContent = f('people.waiting', { count: m.waiting }); counts.append(e); }
@@ -372,7 +418,7 @@
           parts.push(counts);
         }
       }
-      b.replaceChildren(...parts); attr(b, 'aria-label', [m.name, stateText, detail].filter(Boolean).join(' · '));
+      b.replaceChildren(...parts); attr(b, 'aria-label', [m.name, stateText, detail, doing].filter(Boolean).join(' · '));
       return b;
     }
     function drawPeople() {
@@ -409,6 +455,8 @@
       const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : 0;
       translate(); drawPeople();
       const pool = data.flatMap(p => p.all.map(q => ({ ...q, spaceName: p.name, memberName: q.memberName || input.sessions?.find(s => s.id === q.memberKey)?.name || '' }))), result = selectTasks(pool, selection, now());
+      stepRows = new Map();
+      for (const q of pool) if (q.kind === 'sent' && q.memberKey && (!stepRows.has(q.memberKey) || (q.sentAt ?? 0) > (stepRows.get(q.memberKey).sentAt ?? 0))) stepRows.set(q.memberKey, q);
       for (const [value, button] of tabs) {
         set(button, f('count', { status: f(value === 'active' ? 'activeTab' : value === 'all' ? 'allTab' : ['sent', 'waiting', 'failed'].includes(value) ? 'tab.' + value : 'status.' + value), count: result.counts[value] }));
         button.dataset.count = String(result.counts[value]); attr(button, 'aria-selected', String(value === selection.tab)); button.tabIndex = value === selection.tab ? 0 : -1;
@@ -468,5 +516,5 @@
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); } };
   }
-  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, bind };
+  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, runningStep, stepClock, bind };
 });

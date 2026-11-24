@@ -78,7 +78,10 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-person-card:hover,.task-board-person-strip:hover{background:var(--hover)}
 .task-board-person-name{min-width:0;font-weight:600;overflow-wrap:anywhere}
 .task-board-person-state{font-size:12px;color:var(--muted);white-space:nowrap}
-.task-board-person-item,.task-board-person-counts{grid-column:2/-1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+.task-board-person-item,.task-board-person-counts,.task-board-person-step,.task-board-person-output{grid-column:2/-1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+/* 11-24 the running tool: what the member is doing now and since when; Codex also its last output line */
+.task-board-task small.task-board-task-step{color:var(--ink)}
+.task-board-task small.task-board-task-output,.task-board-person-output{color:var(--muted);font-family:ui-monospace,monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .task-board-person-id,.task-board-person-counts{color:var(--muted)}
 .task-board-person-id{font-variant-numeric:tabular-nums}
 .task-board-person-counts{display:flex;flex-wrap:wrap;gap:0 10px}
