@@ -1,0 +1,123 @@
+/* 11-22 header agent squares: one square per agent, colour = --agent-color of the same .state-dot classes
+   the sidebar corner mark uses (styles.css), so both change in the same render. */
+.agent-distribution{display:flex;align-items:center;gap:2px;min-width:0;flex:0 1 auto}
+.agent-distribution[hidden]{display:none}
+.agent-strip{display:flex;align-items:center;gap:12px;min-width:0;overflow:hidden}
+.agent-group{display:inline-flex;align-items:center;gap:5px;flex:none;min-width:0}
+.agent-group-label{font-size:12px;color:var(--muted);white-space:nowrap;max-width:9em;overflow:hidden;text-overflow:ellipsis}
+.agent-group-count{font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;color:var(--ink)}
+.agent-group-cells{display:inline-flex;align-items:center;gap:3px;flex-wrap:nowrap}
+.agent-cell.state-dot{--ring:var(--surface);position:relative;display:block;flex:none;width:10px;height:10px;min-width:0;min-height:0;padding:0;margin:0;border:0;border-radius:2px;background:var(--agent-color);box-shadow:none;cursor:pointer}
+.agent-cell.state-dot::after{content:'';position:absolute;inset:-7px -2px}
+.agent-cell.state-dot:hover{background:var(--agent-color);transform:scale(1.25)}
+.agent-cell.state-dot:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.agent-cell.state-dot.idle.bg-work{background:linear-gradient(90deg,var(--agent-color) 50%,transparent 50%);box-shadow:inset 0 0 0 1.5px var(--agent-color)}
+.agent-cell.state-dot:is(.ended,.disconnected,.recoverable){background:transparent;box-shadow:inset 0 0 0 2px var(--agent-color)}
+.agent-cell.state-dot.bg-unknown{background:transparent;border:1.5px dashed var(--agent-color)}
+.agent-cell.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
+.agent-cell.state-dot.idle:is(.goal-stopped,.goal-enabled){background:transparent;border:1.5px solid var(--agent-color);box-shadow:none}
+.agent-cell.state-dot:is(.approval,.error){background:var(--agent-color);border:0;box-shadow:0 0 0 1px var(--ring),0 0 0 2.5px var(--agent-color)}
+.agent-group[data-group="status:waiting"] .agent-group-cells{gap:6px;padding-inline:2px}
+@media(prefers-reduced-motion:no-preference){
+  .agent-cell.state-dot.working{animation:naw-status-breathe 1.8s ease-in-out infinite}
+}
+.agent-cell[hidden],.agent-group[hidden]{display:none}
+#header>#agent-distribution.agent-distribution-cut{flex:1000 1 auto}
+.agent-strip-more{flex:none;border:0;background:transparent;color:var(--muted);min-width:24px;min-height:24px;padding:0 4px;border-radius:6px;font-size:12px;font-variant-numeric:tabular-nums}
+.agent-strip-more[hidden]{display:none}
+.agent-strip-more:hover{background:var(--hover);color:var(--ink)}
+.agent-strip-toggle{flex:none;border:0;background:transparent;color:var(--muted);min-width:24px;min-height:24px;padding:0 4px;border-radius:6px;font-size:12px}
+.agent-strip-toggle[aria-expanded=true]{background:var(--hover);color:var(--ink)}
+.agent-strip-panel{position:fixed;inset:auto;margin:0;padding:10px 0 8px;max-height:min(70vh,560px);overflow:auto;background:var(--raised);color:var(--ink);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px #0003;font-size:13px}
+.agent-strip-panel[hidden]{display:none}
+.agent-strip-panel:popover-open{display:block}
+.agent-strip-modes{display:flex;gap:4px;margin:0 12px 8px;padding:3px;border-radius:8px;background:var(--panel)}
+.agent-strip-mode{flex:1;min-height:28px;padding:3px 6px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12px}
+.agent-strip-mode[aria-checked=true]{background:var(--raised);color:var(--ink);font-weight:650;box-shadow:0 0 0 1px var(--border)}
+.agent-strip-legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0 12px 6px;font-size:11px;color:var(--muted)}
+.agent-strip-legend>span{display:inline-flex;align-items:center;gap:5px}
+.agent-legend-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;box-sizing:border-box}
+.agent-legend-swatch.working{background:var(--agent-working)}
+.agent-legend-swatch.background{background:linear-gradient(90deg,var(--agent-background) 50%,transparent 50%);box-shadow:inset 0 0 0 1.5px var(--agent-background)}
+.agent-legend-swatch.waiting{background:var(--agent-waiting);box-shadow:0 0 0 1px var(--raised),0 0 0 2.5px var(--agent-waiting)}
+.agent-legend-swatch.offline{box-shadow:inset 0 0 0 2px var(--agent-offline)}
+.agent-legend-swatch.unknown{border:1.5px dashed var(--agent-unknown)}
+.agent-legend-swatch.idle{background:var(--agent-idle)}
+.agent-strip-group h3{margin:6px 0 0;padding:4px 12px;font-size:12px;font-weight:650;color:var(--muted)}
+.agent-strip-group ul{list-style:none;margin:0;padding:0}
+.agent-strip-member{display:grid;grid-template-columns:10px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:30px;padding:4px 12px;border:0;border-radius:0;background:transparent;text-align:left;font-size:13px;color:var(--ink)}
+.agent-strip-member:hover{background:var(--hover)}
+.agent-strip-member>.state-dot{--ring:var(--raised);width:9px;height:9px;border-radius:2px;background:var(--agent-color)}
+.agent-strip-member>.state-dot:is(.ended,.disconnected,.recoverable){background:transparent;box-shadow:inset 0 0 0 2px var(--agent-color)}
+.agent-strip-member>.state-dot.bg-unknown{background:transparent;border:1.5px dashed var(--agent-color)}
+.agent-strip-member>.state-dot.idle.bg-work{background:linear-gradient(90deg,var(--agent-color) 50%,transparent 50%);box-shadow:inset 0 0 0 1.5px var(--agent-color)}
+.agent-strip-member-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-strip-member-detail{font-size:11px;color:var(--muted);white-space:nowrap;max-width:12em;overflow:hidden;text-overflow:ellipsis}
+.agent-strip-note{margin:8px 12px 0;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.5}
+
+/* Top bar (11-22): one line per header. Only things to act on and live state stay; details live in hover cards.
+   Items wrap only when the window is too narrow; the header is the size container for the label cut-off. */
+#header.compact-session,#header.compact-room{container:naw-header/inline-size;display:flex;flex-wrap:wrap;align-items:center;min-height:44px;padding:6px 12px;gap:6px 10px}
+.compact-session .header-identity,.header-identity:has(.session-chain-chip:not([hidden])){order:0;flex:0 1 auto;flex-wrap:nowrap;align-items:center;gap:8px;min-width:0}
+.compact-session h1{flex:0 0 auto;max-width:220px;cursor:default}
+.compact-session .session-chain-chip{flex:0 1 auto;max-width:8em;min-width:3em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.compact-session #subtitle,.header-identity:has(.session-chain-chip:not([hidden])) #subtitle{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;flex:none}
+/* Its facts stay Tab stops; the line shows while keyboard focus is in it, never an invisible focus. */
+.compact-session #subtitle:focus-within,.header-identity:has(.session-chain-chip:not([hidden])) #subtitle:focus-within{position:static;width:auto;height:auto;overflow:visible;clip-path:none;white-space:normal;flex:0 1 auto;min-width:0}
+.compact-session #session-toolbar{order:1;flex:1 1 0;min-width:0}
+.compact-session #session-status{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;white-space:nowrap;color:var(--muted);font-size:12px;margin:0}
+.session-activity-text{min-width:0;overflow:hidden;text-overflow:ellipsis}
+#session-status>.state-dot{flex:none;width:8px;height:8px;border-radius:2px;background:var(--agent-color)}
+.compact-room .header-identity{order:0;flex:1 1 auto}
+.compact-room .room-status-bar{order:1}
+.compact-session #agent-distribution,.compact-room #agent-distribution{order:2;flex:none}
+.compact-session #steward-wake-chip,.compact-room #steward-wake-chip{order:3;min-width:0}
+/* The task board's chips and the waiting strip share one urgency order: card countdown, needs you, to verify, board. */
+:is(.compact-session,.compact-room) #task-board,:is(.compact-session,.compact-room) .task-status-chips{display:contents}
+:is(.compact-session,.compact-room) .task-status-card-time{order:4}
+#header>#stream-waiting{order:5}
+:is(.compact-session,.compact-room) .task-status-warning{order:6}
+:is(.compact-session,.compact-room) .task-board-toggle{order:7;flex:none}
+.compact-session #header-actions,.compact-room #header-actions{order:8;flex:none}
+.compact-room #room-tabs{order:9;flex:1 1 100%}
+#header-actions button,.compact-room #room-tabs button,#switch-space{min-height:32px;border-radius:8px}
+@container naw-header (max-width:1400px){.agent-group-label{display:none}}
+
+/* Space switcher shows the current space's name; the menu marks the current space. */
+.header-identity:has(> #switch-space.space-switch-named){padding-right:0}
+.header-identity:has(> #switch-space.space-switch-named)>h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+#switch-space.space-switch-named{position:static;display:inline-flex;align-items:center;gap:6px;max-width:260px;padding:2px 8px 2px 6px;border:1px solid transparent;background:transparent;font-size:14px;font-weight:600;color:var(--ink)}
+#switch-space.space-switch-named:hover,#switch-space.space-switch-named[aria-expanded=true]{background:var(--hover);border-color:var(--border)}
+.space-switch-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.space-switch-chevron{flex:none;font-size:12px;color:var(--muted)}
+
+/* The butler's paused wake-up: a muted chip; its reason and record open on demand. */
+.wake-chip{position:relative;flex:0 1 auto;font-size:12px;color:var(--muted)}
+.wake-chip>summary{display:flex;align-items:center;gap:4px;list-style:none;cursor:pointer;min-height:26px;padding:2px 9px;border-radius:13px;box-shadow:inset 0 0 0 1px var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wake-chip>summary::-webkit-details-marker{display:none}
+.wake-chip>summary::after{content:'⌄';flex:none;font-size:11px}
+.wake-chip[open]>summary{background:var(--hover);color:var(--ink)}
+.wake-chip-detail{position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:300px;padding:12px;background:var(--raised);color:var(--ink);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px #0003;font-size:13px}
+.wake-chip-detail p{margin:0 0 10px;line-height:1.6}
+.wake-chip-detail .steward-wake-step{margin:0 8px 8px 0}
+
+/* Things to act on, in urgency order: expiring card, then needs-you, then unverified. Each is its own button. */
+.task-status-chips{display:inline-flex;align-items:center;gap:6px}
+.task-status-chip{display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:2px 10px;border:0;border-radius:14px;font-size:12px;white-space:nowrap}
+.task-status-card-time.task-status-chip{color:#fff;background:var(--agent-waiting);font-weight:650;font-variant-numeric:tabular-nums}
+.task-status-warning.task-status-chip{color:var(--muted);background:transparent;box-shadow:inset 0 0 0 1px var(--border);font-weight:500}
+.task-status-warning.task-status-chip.failed{color:var(--approval-ink);font-weight:650}
+.task-status-board{color:var(--muted);font-size:12px}
+
+/* The needs-you strip (activity-stream.js) as one header chip: count, who and what first, every item under ⌄. */
+#header>.stream-waiting{flex:0 1 auto;min-width:0;max-width:min(420px,100%);min-height:28px;padding:0 2px 0 10px;gap:2px;border:0;border-radius:14px;background:color-mix(in srgb,var(--agent-waiting) 10%,transparent);z-index:30}
+#header>.stream-waiting[hidden]{display:none}
+#header>.stream-waiting .stream-waiting-lead{flex:0 1 auto;flex-wrap:nowrap;gap:6px;padding:2px 0;font-size:12px;color:var(--ink)}
+#header>.stream-waiting .stream-waiting-count{font-size:12px;font-weight:650;color:color-mix(in srgb,var(--approval-ink) 80%,var(--ink))}
+#header>.stream-waiting .stream-waiting-lead>strong:not(.stream-waiting-count){font-weight:500;white-space:nowrap}
+#header>.stream-waiting .stream-waiting-title{flex:0 1 auto;max-width:16em;color:var(--muted)}
+#header>.stream-waiting .stream-waiting-more{min-height:24px;min-width:24px;padding:0 6px;border:0;border-radius:12px;background:transparent;font-size:0}
+#header>.stream-waiting .stream-waiting-more::after{content:'⌄';font-size:12px;color:var(--muted)}
+#header>.stream-waiting .stream-waiting-more[aria-expanded=true]{background:var(--hover)}
+#header>.stream-waiting .stream-waiting-list{right:0;width:min(580px,calc(100vw - 32px));font-size:12px}
+@container naw-header (max-width:1400px){#header>.stream-waiting .stream-waiting-lead>:not(.stream-waiting-count){display:none}}

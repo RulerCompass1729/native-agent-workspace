@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="activity-stream.css">
   <link rel="stylesheet" href="sidebar-hover-card.css">
   <link rel="stylesheet" href="speech-stream.css">
+  <link rel="stylesheet" href="agent-distribution.css">
 </head>
 <body>
   <aside class="sidebar">
@@ -58,9 +59,8 @@
     </div>
   </aside>
   <main>
-    <header id="header"><div class="header-identity"><span id="steward-badge" class="steward-badge" hidden></span><h1 id="title" data-naw-text="header.workspace"></h1><button id="session-chain-chip" class="session-chain-chip" type="button" aria-haspopup="dialog" hidden></button><button id="switch-space" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-naw-aria-label="navigation.switchSpace" data-naw-title="navigation.switchSpace">⌄</button><p id="subtitle" data-naw-text="header.welcomeHelp"></p></div><section id="task-board"></section><div id="header-actions"></div></header>
+    <header id="header"><div class="header-identity"><span id="steward-badge" class="steward-badge" hidden></span><h1 id="title" data-naw-text="header.workspace"></h1><button id="session-chain-chip" class="session-chain-chip" type="button" aria-haspopup="dialog" hidden></button><button id="switch-space" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-naw-aria-label="navigation.switchSpace" data-naw-title="navigation.switchSpace">⌄</button><p id="subtitle" data-naw-text="header.welcomeHelp"></p></div><div id="agent-distribution" hidden></div><details id="steward-wake-chip" class="wake-chip" hidden><summary><span class="wake-chip-text" role="status"></span></summary><div class="wake-chip-detail"><p></p><button type="button" class="steward-wake-step primary" hidden></button><button type="button" class="steward-wake-record" data-naw-text="stewardWake.openRecord"></button></div></details><section id="task-board"></section><div id="header-actions"></div></header>
     <div id="alert" role="status" hidden></div>
-    <aside id="steward-wake-warning" class="steward-wake-warning" role="status" hidden><p></p><div class="steward-wake-actions"><button type="button" class="steward-wake-step primary" hidden></button><button type="button" class="steward-wake-record" data-naw-text="stewardWake.openRecord"></button></div></aside>
     <button id="reconnect-button" hidden data-naw-text="service.reconnect"></button>
     <button id="retry-save" hidden data-naw-text="storage.retrySave"></button>
     <button id="return-reading" class="reading-return subtle" hidden data-naw-text="search.return"></button>
@@ -74,7 +74,7 @@
     </section>
     <div id="solo-session" class="session-slot">
     <section id="session-view" hidden>
-      <div id="session-toolbar" class="session-toolbar"><button id="session-files" type="button" data-naw-text="common.files"></button><button id="member-related-records" type="button" hidden data-naw-text="room.relatedRecords"></button><button id="chat-maximize" class="pane-maximize pane-toggle" type="button" aria-label="" title="" data-naw-aria-label="terminal.maximizeChat" data-naw-title="terminal.maximizeChat"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path class="pane-maximize-icon" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><path class="pane-restore-icon" d="M6 2v4H2M10 2v4h4M14 10h-4v4M2 10h4v4"/></svg></button><span id="session-status" aria-live="polite"></span><button id="take-control" hidden data-naw-text="composer.claim"></button></div>
+      <div id="session-toolbar" class="session-toolbar"><button id="session-files" type="button" data-naw-text="common.files"></button><button id="member-related-records" type="button" hidden data-naw-text="room.relatedRecords"></button><button id="chat-maximize" class="pane-maximize pane-toggle" type="button" aria-label="" title="" data-naw-aria-label="terminal.maximizeChat" data-naw-title="terminal.maximizeChat"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path class="pane-maximize-icon" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><path class="pane-restore-icon" d="M6 2v4H2M10 2v4h4M14 10h-4v4M2 10h4v4"/></svg></button><span id="session-status" aria-live="polite"><span class="state-dot" aria-hidden="true"></span><span class="session-activity-text"></span></span><button id="take-control" hidden data-naw-text="composer.claim"></button></div>
       <div id="session-layout" class="split-workspace">
       <button id="edge-chat" class="edge-handle" type="button" hidden aria-controls="conversation-pane" data-naw-aria-label="edge.expandChat" data-naw-title="terminal.restoreSplit"><svg class="edge-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M4 3.5h12a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H8l-4.5 3v-12A1.5 1.5 0 0 1 5 4"/></svg><span class="edge-label" data-naw-text="view.chat"></span><svg class="edge-chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m8 5 5 5-5 5"/></svg></button>
       <div id="conversation-pane" class="conversation-pane">
@@ -200,6 +200,7 @@
   <script src="activity-stream.js"></script>
   <script src="cmd-links.js"></script>
   <script src="sidebar-hover-card.js"></script>
+  <script src="agent-distribution.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

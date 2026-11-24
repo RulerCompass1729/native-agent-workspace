@@ -5,11 +5,13 @@
 })(typeof window === 'undefined' ? globalThis : window, function () {
   'use strict';
   const BAR_HEIGHT = 0;
-  const COLORS = { sent: '#5c8fc1', queued: '#858276', waiting: '#e9b05b', review: '#b39b6a', failed: '#c95751', unknown: '#8a70a4', done: '#62916b', cancelled: '#aeb5aa', empty: '#eef0eb' };
-  const KINDS = ['sent', 'queued', 'waiting', 'review', 'failed', 'unknown', 'done', 'cancelled'];
-  const PRIORITY = ['waiting', 'failed', 'unknown', 'review', 'sent', 'queued', 'done', 'cancelled'];
+  const COLORS = { sent: '#5c8fc1', queued: '#858276', waiting: '#e9b05b', review: '#b39b6a', stale: '#9c9483', failed: '#c95751', unknown: '#8a70a4', done: '#62916b', cancelled: '#aeb5aa', empty: '#eef0eb' };
+  const KINDS = ['sent', 'queued', 'waiting', 'review', 'stale', 'failed', 'unknown', 'done', 'cancelled'];
+  const PRIORITY = ['waiting', 'failed', 'unknown', 'review', 'stale', 'sent', 'queued', 'done', 'cancelled'];
+  // The same rule as the 等你 strip (task-stream.js), resolved when called: the browser loads that file after this one.
+  const endedSession = session => (typeof module === 'object' && module.exports ? require('../task-stream.js') : globalThis.nativeWorkspaceTaskStream).endedSession(session);
   const kind = item => !['sent', 'queued', 'waiting', 'failed', 'done', 'cancelled'].includes(item.status) ? 'unknown'
-    : item.status === 'waiting' && ['no-reply', 'person-intervened'].includes(item.reason) ? 'review' : item.status;
+    : item.status === 'waiting' && ['no-reply', 'person-intervened', 'input-purpose-unconfirmed'].includes(item.reason) ? 'review' : item.status;
   function project(rooms, sessions, now = Date.now()) {
     const day = new Date(now), start = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime(), end = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
     const members = new Map((sessions || []).map(s => [s.id, s.name]));
@@ -42,14 +44,15 @@
     let unknown = 0;
     const finish = p => {
       const current = p.all.filter(q => q.current), counts = Object.fromEntries(KINDS.map(k => [k, current.filter(q => q.kind === k).length]));
-      return { ...p, current, counts, transit: counts.sent + counts.queued + counts.waiting + counts.review, attention: counts.waiting + counts.review + counts.failed + counts.unknown };
+      return { ...p, current, counts, transit: counts.sent + counts.queued + counts.waiting + counts.review, attention: counts.waiting + counts.review + counts.stale + counts.failed + counts.unknown };
     };
     const historyGroups = project(input.rooms, input.sessions, now).map(p => {
       const statusExcluded = p.archived && p.available && !p.all.some(q => !['done', 'cancelled'].includes(q.kind));
       if (!p.available && !statusExcluded) unknown++;
       return finish({ ...p, statusExcluded, source: 'space', all: p.all.map(q => {
         const member = sessions.get(q.memberKey);
-        const k = q.kind === 'sent' ? !fresh(member, input.connected !== false) ? 'unknown' : needsHuman(member) ? 'waiting' : uncertainIdle(member) ? 'unknown' : 'sent' : q.kind;
+        const k = q.kind === 'sent' ? !fresh(member, input.connected !== false) ? 'unknown' : needsHuman(member) ? 'waiting' : uncertainIdle(member) ? 'unknown' : 'sent'
+          : q.kind === 'waiting' && endedSession(member) ? 'stale' : q.kind;
         return { ...q, kind: k, source: 'space' };
       }) });
     });
@@ -88,14 +91,48 @@
     if (cardRows.length || !cardsAvailable) groups.push(finish({ id: '@confirmations', source: 'confirmation', name: '', available: cardsAvailable, all: cardRows }));
     const current = groups.flatMap(p => p.current);
     unknown += current.filter(q => q.kind === 'unknown').length;
-    const cardCount = cardRows.filter(c => c.expiresAt !== null).length;
+    // Only a card the person can still act on has a deadline to show. An unverifiable card keeps
+    // its row and its unknown count, but its stored expiry is evidence, not a countdown.
+    const dueCards = cardRows.filter(c => c.kind === 'waiting' && c.expiresAt !== null);
+    const cardCount = dueCards.length;
     return { groups, historyGroups: historyGroups.concat(groups.filter(p => p.source !== 'space')), cards: cardRows, doing: current.filter(q => q.kind === 'sent').length,
       waiting: current.filter(q => q.kind === 'waiting' && q.source !== 'confirmation').length + cardCount,
       done: current.filter(q => q.kind === 'done').length, cancelled: current.filter(q => q.kind === 'cancelled').length,
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
-      nextExpiry: cardRows.reduce((value, c) => c.expiresAt !== null && (value === null || c.expiresAt < value) ? c.expiresAt : value, null), stale: input.connected === false };
+      nextExpiry: dueCards.reduce((value, c) => value === null || c.expiresAt < value ? c.expiresAt : value, null), stale: input.connected === false };
   }
-  const TABS = ['active', 'waiting', 'sent', 'queued', 'review', 'unknown', 'failed', 'done', 'cancelled', 'all'];
+  const AGENT = ['waiting', 'stuck', 'working', 'idle'], AGENT_ORDER = ['waiting', 'working', 'stuck', 'idle'];
+  const SQUARE = { waiting: 'approval', stuck: 'disconnected', working: 'working', idle: 'idle' };
+  const RUNNING = ['idle', 'working', 'approval', 'background', 'starting', 'error'], CURRENT = { sent: 0, waiting: 1, unknown: 2, review: 3 };
+  // The board's member section (11-23): every member of every open space, then conversations outside them that are running.
+  // look/agentStatus/statusText are the header square's own (renderer.js); without them the board's own judgments decide.
+  function people(input, status, now = Date.now()) {
+    const all = (input.sessions || []).filter(Boolean), sessions = all.filter(s => !s.archived), connected = input.connected !== false;
+    const agent = s => AGENT.includes(s.agentStatus) ? s.agentStatus : !fresh(s, connected) ? 'stuck' : needsHuman(s) ? 'waiting' : observedWork(s) ? 'working' : 'idle';
+    const order = list => list.sort((a, b) => AGENT_ORDER.indexOf(a.status) - AGENT_ORDER.indexOf(b.status));
+    function entry(s, items) {
+      const mine = items.filter(q => q.source === 'space' && q.memberKey === s.id), state = agent(s);
+      const item = mine.filter(q => Object.hasOwn(CURRENT, q.kind)).sort((a, b) => CURRENT[a.kind] - CURRENT[b.kind] || (b.sentAt ?? 0) - (a.sentAt ?? 0))[0] || null;
+      return { id: s.id, nativeId: s.nativeId, name: s.name || '', status: state, look: typeof s.look === 'string' && s.look ? s.look : 'state-dot ' + SQUARE[state],
+        statusText: typeof s.statusText === 'string' ? s.statusText : '', item: item && { id: item.id, text: item.text, kind: item.kind },
+        minutes: item?.kind === 'sent' && Number.isFinite(item.sentAt) ? Math.max(0, Math.floor((now - item.sentAt) / 60000)) : null,
+        waiting: mine.filter(q => q.kind === 'waiting').length, queued: mine.filter(q => q.kind === 'queued').length, card: state === 'waiting' || state === 'working' };
+    }
+    const groups = [], listed = new Set();
+    for (const p of status.historyGroups) {
+      if (p.source !== 'space' || p.archived) continue;
+      const members = order(sessions.filter(s => Array.isArray(s.roomIds) && s.roomIds.includes(p.id)).map(s => entry(s, p.all)));
+      for (const m of members) listed.add(m.id);
+      const stale = p.all.filter(q => q.kind === 'stale').length;
+      if (members.length || stale) groups.push({ id: p.id, name: p.name, members, stale });
+    }
+    const alone = order(sessions.filter(s => !listed.has(s.id) && Array.isArray(s.roomIds) && RUNNING.includes(s.state)).map(s => entry(s, [])));
+    if (alone.length) groups.push({ id: '@independent', name: '', members: alone, stale: 0 });
+    const unique = new Map(groups.flatMap(g => g.members).map(m => [m.id, m.status]));
+    return { groups, total: unique.size, counts: Object.fromEntries(AGENT.map(k => [k, [...unique.values()].filter(v => v === k).length])),
+      excluded: { archived: all.length - sessions.length, other: sessions.length - unique.size } };
+  }
+  const TABS = ['active', 'waiting', 'sent', 'queued', 'review', 'stale', 'unknown', 'failed', 'done', 'cancelled', 'all'];
   const timestamp = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 8640000000000000 ? value : null;
   function taskTime(item, sort) {
     if (sort === 'create') return timestamp(item.createdAt);
@@ -139,10 +176,13 @@
     let mode = 'flat';
     const rows = new Map(), groups = new Map(), tabs = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
-    const track = make('span', 'task-status-track'); attr(track, 'aria-hidden', 'true');
-    const doing = make('span', 'task-status-doing'), waiting = make('span', 'task-status-waiting'), cardTime = make('span', 'task-status-card-time'), done = make('span', 'task-status-done'), warning = make('span', 'task-status-warning');
-    const queued = make('span', 'task-status-queued'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
-    toggle.append(track, doing, waiting, cardTime, queued, done, warning, chevron);
+    // Things to act on, most urgent first; each opens where it is handled (11-22). Progress counts live in the panel.
+    const chips = make('span', 'task-status-chips');
+    // 等你 is the waiting strip's chip (activity-stream.js), so its count is not repeated here.
+    const cardTime = control(openCard, 'task-status-card-time task-status-chip');
+    const warning = control(() => open(status.unknown ? 'unknown' : status.failed ? 'failed' : 'active'), 'task-status-warning task-status-chip');
+    const board = make('span', 'task-status-board'), chevron = make('span', 'task-status-chevron'); set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true');
+    chips.append(cardTime, warning); toggle.append(board, chevron);
     const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel'; panel.dataset.mode = 'full';
     attr(panel, 'popover', 'auto'); attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'popovertarget', panel.id); attr(toggle, 'aria-controls', panel.id);
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), caption = make('span'), dismiss = control(close, 'task-board-close');
@@ -177,7 +217,10 @@
     const moreLine = make('div', 'task-board-more-line'), shown = make('span'), more = control(() => { if (!more.hasAttribute('aria-disabled')) { limit += 10; drawPanel(); } }, 'task-board-more');
     moreLine.append(shown, more);
     const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
-    panel.append(heading, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(toggle, panel);
+    const crew = make('section', 'task-board-people'), crewSummary = make('p', 'task-board-people-summary'), crewSpaces = make('div', 'task-board-people-spaces');
+    const crewExcluded = make('p', 'task-board-people-excluded'), personViews = new Map(), spaceViews = new Map();
+    crew.append(crewSummary, crewSpaces, crewExcluded);
+    panel.append(heading, crew, tablist, tabHint, stateHelp, controls, results, hint, availability, list, moreLine, footer); host.classList.add('task-board'); host.append(chips, toggle, panel);
     function options(select, values, name) {
       const previous = select.value;
       move(select, values.map(value => { let o = [...select.options].find(o => o.value === value); if (!o) { o = make('option'); o.value = value; } set(o, name(value)); return o; }));
@@ -188,7 +231,7 @@
       set(h2, f('title')); set(caption, f('global')); set(dismiss, '×'); attr(dismiss, 'aria-label', f('collapse'));
       attr(tablist, 'aria-label', f('filter'));
       set(tabHint, f('tabsHint'));
-      stateHelp.hidden = !['waiting', 'review', 'unknown'].includes(selection.tab);
+      stateHelp.hidden = !['waiting', 'review', 'stale', 'unknown'].includes(selection.tab);
       set(stateHelp, stateHelp.hidden ? '' : f('stateHelp.' + selection.tab));
       if (stateHelp.hidden) list.removeAttribute('aria-describedby'); else attr(list, 'aria-describedby', stateHelp.id);
       for (const [key, e] of labels) set(e, f(key));
@@ -217,12 +260,13 @@
       const width = Math.max(1, Math.min(1120, win.innerWidth - (win.innerWidth <= 600 ? 0 : 32)));
       Object.assign(panel.style, { left: Math.max(0, (win.innerWidth - width) / 2) + 'px', top: top + 'px', width: width + 'px', maxHeight: Math.max(1, Math.min(780, win.innerHeight - top - 12)) + 'px' });
     }
-    function open() {
+    function open(tab) {
       if (disposed) return;
       if (!opened) {
         Object.assign(selection, { tab: 'active', search: '', sort: 'recent', descending: true, scope: 'all', space: 'all' });
         mode = 'flat'; order = []; limit = 10; search.value = ''; list.scrollTop = 0;
       }
+      if (TABS.includes(tab)) selection.tab = tab;
       opened = true; panel.hidden = false; drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
     }
     function closed(restore = false) {
@@ -234,7 +278,8 @@
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
     panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
     function currentItems() {
-      const priority = q => q.source === 'confirmation' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
+      // An unverifiable card is a status to check, not an approval: keep it out of the approval's square slot.
+      const priority = q => q.source === 'confirmation' && q.kind === 'waiting' ? 0 : ({ waiting: 1, sent: 2, queued: 3, review: 4, stale: 4, failed: 5, unknown: 6 })[q.kind] ?? 7;
       return status.groups.flatMap(p => p.current).filter(q => !['done', 'cancelled'].includes(q.kind)).sort((a, b) => priority(a) - priority(b) || (a.source === 'confirmation' && b.source === 'confirmation' ? (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity) : 0));
     }
     function remaining(expiresAt) {
@@ -242,23 +287,19 @@
       return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
     function drawBar() {
-      const count = waitingCount ?? status.waiting - status.cardCount;
-      set(doing, status.stale ? f('unupdated') : f('doingCount', { count: status.doing }));
-      set(waiting, status.stale ? '' : f(status.unknown ? count ? 'waitingUnknown' : 'waitingUnavailable' : 'waitingCount', { count }));
-      waiting.hidden = status.stale; waiting.classList.toggle('needs-person', count > 0);
-      const uncertain = status.cards.some(c => c.kind === 'unknown');
-      set(cardTime, [!status.cardsAvailable ? f('cardsUnavailable') : '', status.cardCount ? f(status.cardCount === 1 ? 'cardDeadlineOne' : 'cardDeadline', { count: status.cardCount, time: remaining(status.nextExpiry) }) : '', uncertain ? f('cardsUnverified') : ''].filter(Boolean).join(' · '));
+      // Only a card the person can still act on gets this chip; unread and unverifiable cards are already in the warning's count.
+      const time = status.cardCount ? remaining(status.nextExpiry) : '';
+      set(cardTime, status.cardCount ? f('cardChipTime', { time }) : '');
       cardTime.hidden = !cardTime.textContent;
-      set(done, status.stale ? '' : f('queueDoneToday', { count: status.done })); done.hidden = status.stale;
-      set(warning, status.unknown ? f('unknownCount', { count: status.unknown }) : status.failed ? f('failedCount', { count: status.failed }) : ''); warning.hidden = !warning.textContent;
-      const items = currentItems(), cap = win.innerWidth <= 1000 ? 8 : 20;
-      track.hidden = !items.length || status.stale;
-      const cells = items.slice(0, cap).map(item => { let cell = [...track.children].find(c => c.dataset.itemKey === item.key); if (!cell) cell = make('i'); cell.className = 'task-status-square ' + (item.source === 'confirmation' ? 'confirmation' : item.kind); cell.dataset.itemKey = item.key; return cell; });
-      if (items.length > cap) { let more = track.querySelector('.task-status-more'); if (!more) more = make('span', 'task-status-more'); set(more, status.unknown ? '…' : '+' + (items.length - cap)); cells.push(more); }
-      move(track, cells);
-      const queuedCount = items.filter(q => q.kind === 'queued').length; set(queued, f('queuedCount', { count: queuedCount })); queued.hidden = !queuedCount || status.stale;
-      attr(toggle, 'aria-label', [doing, waiting, cardTime, queued, done, warning].filter(e => !e.hidden).map(e => e.textContent).join(' · ') + ' · ' + f('expand'));
+      attr(cardTime, 'aria-label', status.cardCount ? f(status.cardCount === 1 ? 'cardChipLabelOne' : 'cardChipLabel', { count: status.cardCount, time }) : '');
+      set(warning, status.stale ? f('unupdated') : status.unknown ? f('unknownChip', { count: status.unknown }) : status.failed ? f('failedChip', { count: status.failed }) : '');
+      warning.hidden = !warning.textContent; warning.classList.toggle('failed', !status.stale && !status.unknown && status.failed > 0); attr(warning, 'aria-label', f('unknownChipLabel', { text: warning.textContent }));
+      set(board, f('boardButton')); attr(toggle, 'aria-label', f('boardButton'));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
+    }
+    function openCard() {
+      const card = currentItems().find(q => q.source === 'confirmation' && q.kind === 'waiting');
+      if (card) activate(card.key); else open('waiting');
     }
     function activate(key) {
       const item = data.flatMap(p => p.all).find(q => q.key === key);
@@ -267,12 +308,16 @@
         if (!item.target || item.expiresAt !== null && item.expiresAt <= now()) { update(); return; }
         close(false); onConfirmation?.(item.target); return;
       }
-      const session = (item.source !== 'space' || item.actualRecipient) && input.sessions?.find(s => s.id === item.memberKey && !s.archived);
+      const session = item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && input.sessions?.find(s => s.id === item.memberKey && !s.archived);
       close(false);
       if (session && onSession) onSession(session.id, session.nativeId);
       else if (data.some(p => p.source === 'space' && p.id === item.spaceId)) onQueue(item.spaceId);
     }
 
+    // The waiting reasons that leave a task for the person to look at. Their text stays on the row
+    // because a dispatched row opens its session directly, without the space queue that explains it.
+    const REVIEW_REASONS = { 'no-reply': 'reasonNoReply', 'person-intervened': 'reasonIntervened', 'input-purpose-unconfirmed': 'reasonInputPurposeUnconfirmed' };
+    function reasonText(item) { const key = item.kind === 'review' ? REVIEW_REASONS[item.reason] : null; return key ? f(key) : ''; }
     function title(item, actorName) {
       if (item.source === 'confirmation') return f('confirmation');
       if (item.source === 'conversation') return actorName;
@@ -292,19 +337,77 @@
       view.link.classList.toggle('task-board-card-link', item.source === 'confirmation');
       const name = title(item, actorName); set(view.name, name); view.name.title = name;
       const value = taskTime(item, selection.sort), time = value === null ? '—' : new Intl.DateTimeFormat(doc.documentElement?.lang || undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value);
-      set(view.note, [origin, actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].join(' · '));
-      set(view.state, item.source === 'confirmation' ? item.expiresAt === null ? f('cardsUnverified') : f('cardState') + ' · ' + remaining(item.expiresAt) : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
+      set(view.note, [origin, reasonText(item), actorName, f('time.' + selection.sort, { time }), '#' + item.id.slice(0, 8)].filter(Boolean).join(' · '));
+      set(view.state, item.source === 'confirmation' ? item.kind === 'waiting' ? f('cardState') + ' · ' + remaining(item.expiresAt) : f('cardsUnverified') : f(item.kind === 'sent' ? 'conversationWorking' : 'status.' + item.kind));
       view.state.dataset.kind = item.kind;
-      const destination = item.source === 'confirmation' ? 'Card' : (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
+      const destination = item.source === 'confirmation' ? 'Card' : item.kind !== 'stale' && (item.source !== 'space' || item.actualRecipient) && actor && !actor.archived ? 'Session' : 'Queue';
       set(view.action, f(['waiting', 'review', 'unknown'].includes(item.kind) ? 'action.' + item.kind + '.' + destination.toLowerCase() : 'open' + destination));
       return view.element;
+    }
+    function openPerson(id) {
+      const session = input.sessions?.find(s => s.id === id && !s.archived);
+      close(false); if (session) onSession?.(session.id, session.nativeId);
+    }
+    function square(look) { const e = make('span', look + ' task-board-person-square'); attr(e, 'aria-hidden', 'true'); return e; }
+    function person(m, spaceId) {
+      const key = JSON.stringify([spaceId, m.id]);
+      let b = personViews.get(key);
+      if (!b) { b = control(() => openPerson(b.dataset.personId), ''); b.dataset.personId = m.id; personViews.set(key, b); }
+      b.className = 'task-board-person ' + (m.card ? 'task-board-person-card' : 'task-board-person-strip'); b.dataset.agentStatus = m.status;
+      const label = text('distribution.status.' + m.status), stateText = !m.card ? m.statusText || label : m.minutes === null ? label : f('people.minutes', { state: label, minutes: m.minutes });
+      const name = make('span', 'task-board-person-name'), state = make('span', 'task-board-person-state'), parts = [square(m.look), name, state];
+      name.textContent = m.name; state.textContent = stateText;
+      let detail = '';
+      if (m.card) {
+        const line = make('span', 'task-board-person-item');
+        if (m.item) {
+          const words = m.item.text.split(/\r?\n/).map(v => v.trim()).find(Boolean) || f('untitled', { id: m.item.id.slice(0, 8) }), id = make('span', 'task-board-person-id');
+          line.textContent = words + ' '; id.textContent = '#' + m.item.id.slice(0, 8); line.append(id); detail = words + ' #' + m.item.id.slice(0, 8);
+        } else { line.textContent = m.statusText; detail = m.statusText; }
+        parts.push(line);
+        if (m.waiting || m.queued) {
+          const counts = make('span', 'task-board-person-counts');
+          if (m.waiting) { const e = make('span', 'task-board-person-waiting'); e.textContent = f('people.waiting', { count: m.waiting }); counts.append(e); }
+          if (m.queued) { const e = make('span'); e.textContent = f('people.queued', { count: m.queued }); counts.append(e); }
+          parts.push(counts);
+        }
+      }
+      b.replaceChildren(...parts); attr(b, 'aria-label', [m.name, stateText, detail].filter(Boolean).join(' · '));
+      return b;
+    }
+    function drawPeople() {
+      const view = people(input, status, now()), total = make('strong');
+      total.textContent = f(view.total === 1 ? 'people.totalOne' : 'people.total', { count: view.total });
+      crewSummary.replaceChildren(total, ...AGENT.filter(k => view.counts[k]).map(k => {
+        const e = make('span', 'task-board-people-count'), words = make('span'); words.textContent = f('people.count.' + k + (view.counts[k] === 1 ? 'One' : ''), { count: view.counts[k] });
+        e.append(square('state-dot ' + SQUARE[k]), words); return e;
+      }));
+      const used = new Set();
+      move(crewSpaces, view.groups.map(g => {
+        let v = spaceViews.get(g.id);
+        if (!v) {
+          v = { element: make('section', 'task-board-people-space'), heading: make('h3'), cards: make('div', 'task-board-people-cards'), strips: make('div', 'task-board-people-strips'), stale: control(() => { chooseTab('stale'); tablist.scrollIntoView({ block: 'start' }); tabs.get('stale').focus({ preventScroll: true }); }, 'task-board-people-stale') };
+          v.element.dataset.peopleSpace = g.id; spaceViews.set(g.id, v);
+        }
+        set(v.heading, f('people.space', { name: g.id === '@independent' ? f('independent') : g.name, count: g.members.length }));
+        const cards = g.members.filter(m => m.card).map(m => person(m, g.id)), strips = g.members.filter(m => !m.card).map(m => person(m, g.id));
+        for (const node of [...cards, ...strips]) used.add(node);
+        move(v.cards, cards); move(v.strips, strips); set(v.stale, g.stale ? f(g.stale === 1 ? 'people.staleOne' : 'people.stale', { count: g.stale }) : '');
+        move(v.element, [v.heading, ...(cards.length ? [v.cards] : []), ...(strips.length ? [v.strips] : []), ...(g.stale ? [v.stale] : [])]);
+        return v.element;
+      }));
+      for (const [key, node] of personViews) if (!used.has(node)) personViews.delete(key);
+      for (const [key, v] of spaceViews) if (!view.groups.some(g => g.id === key)) spaceViews.delete(key);
+      crewExcluded.hidden = !view.excluded.archived && !view.excluded.other;
+      set(crewExcluded, crewExcluded.hidden ? '' : f('people.excluded', view.excluded));
+      attr(crew, 'aria-label', f('people.title'));
     }
     function drawPanel() {
       if (!opened) return;
       const focused = doc.activeElement, inside = list.contains(focused), scroll = list.scrollTop;
       const first = [...list.querySelectorAll('.task-board-task')].find(e => e.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
       const offset = first ? first.getBoundingClientRect().top - list.getBoundingClientRect().top : 0;
-      translate();
+      translate(); drawPeople();
       const pool = data.flatMap(p => p.all.map(q => ({ ...q, spaceName: p.name, memberName: q.memberName || input.sessions?.find(s => s.id === q.memberKey)?.name || '' }))), result = selectTasks(pool, selection, now());
       for (const [value, button] of tabs) {
         set(button, f('count', { status: f(value === 'active' ? 'activeTab' : value === 'all' ? 'allTab' : ['sent', 'waiting', 'failed'].includes(value) ? 'tab.' + value : 'status.' + value), count: result.counts[value] }));
@@ -350,7 +453,7 @@
       if (disposed) return;
       input = next; status = overview(input, now()); day = new Date(now()).toDateString();
       data = status.historyGroups.map(p => ({ ...p, name: p.source === 'conversation' ? f('independent') : p.source === 'confirmation' ? f('confirmations') : p.archived ? f('archivedName', { name: p.name }) : p.name }));
-      const nextSignature = JSON.stringify([data, status, input.connected, day, f('title')]);
+      const nextSignature = JSON.stringify([data, status, input.sessions, input.connected, day, Math.floor(now() / 60000), f('title')]);
       if (signature === nextSignature) return; signature = nextSignature; translate(); drawBar(); drawPanel();
     }
     function tick() {
@@ -365,5 +468,5 @@
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     return { update, open, close, tick, setWaitingCount(count) { if (!disposed && Number.isSafeInteger(count) && count >= 0 && count !== waitingCount) { waitingCount = count; drawBar(); } }, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groups.clear(); rows.clear(); } };
   }
-  return { BAR_HEIGHT, COLORS, kind, project, overview, selectTasks, bind };
+  return { BAR_HEIGHT, COLORS, kind, project, overview, people, selectTasks, bind };
 });

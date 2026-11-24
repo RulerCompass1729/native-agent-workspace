@@ -308,14 +308,16 @@ test('a later segment names the segment before it: 「接自「X」· 共 N 段�
   f.context.renderSessionChainChip(record('latest'));
   assert.equal(chip.hidden, false);
   assert.equal(chip.dataset.sessionId, 'latest');
-  assert.equal(chip.textContent, '接自「middle」· 共 3 段');
-  assert.equal(chip.getAttribute('title'), '这串会话（3 段）');
+  // One short cell in the one-line header (11-22); who it continues from stays in its name and tooltip.
+  assert.equal(chip.textContent, '接续 3 段');
+  assert.equal(chip.getAttribute('aria-label'), '接自「middle」· 共 3 段');
+  assert.equal(chip.getAttribute('title'), '接自「middle」· 共 3 段');
   // The predecessor is archived: its name carries the marker, in the language shown now.
   f.context.renderSessionChainChip(record('middle'));
-  assert.equal(chip.textContent, '接自「[已归档] old」· 共 3 段');
+  assert.equal(chip.getAttribute('aria-label'), '接自「[已归档] old」· 共 3 段');
   f.switch('en');
-  assert.equal(chip.textContent, 'Continued from “[archived] old” · 3 segments');
-  assert.equal(chip.getAttribute('title'), 'Conversation chain (3 segments)');
+  assert.equal(chip.textContent, '3 segments');
+  assert.equal(chip.getAttribute('aria-label'), 'Continued from “[archived] old” · 3 segments');
   f.switch('zh');
   for (const s of [record('old'), record('alone'), null]) {
     f.context.renderSessionChainChip(s);
@@ -328,7 +330,7 @@ test('a later segment names the segment before it: 「接自「X」· 共 N 段�
 test('a segment continued from two kept branches names both, and the chip opens the same whole chain', () => {
   const f = uiFixture([handoff('a', 'joined', 100, 'kept'), handoff('b', 'joined', 200)], [session('a'), session('b', 50), session('joined', 200)]);
   f.context.renderSessionChainChip(f.state.sessions.find(s => s.id === 'joined'));
-  assert.equal(f.$('session-chain-chip').textContent, '接自「a / b」· 共 3 段');
+  assert.equal(f.$('session-chain-chip').getAttribute('aria-label'), '接自「a / b」· 共 3 段');
   f.context.openSessionChain(f.$('session-chain-chip').dataset.sessionId);
   assert.equal(f.$('session-chain-dialog').open, true);
   assert.deepEqual(f.$('session-chain-list').children.map(row => row.dataset.sessionId), ['a', 'b', 'joined']);

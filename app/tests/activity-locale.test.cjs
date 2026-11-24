@@ -21,14 +21,17 @@ function statusFixture(record) {
   const createBindings = vm.runInNewContext('(' + bootstrap.slice(start, end).trim() + ')');
   let language = 'zh'; const attrs = new Map();
   const element = { textContent: '', childElementCount: 0, setAttribute: (key, value) => attrs.set(key, value), removeAttribute: key => attrs.delete(key) };
+  element.querySelector = () => element;
   const root = { querySelectorAll: () => [element] }, uiText = (key, params) => locale.format(language, key, params);
   const display = createBindings(uiText), ui = { display, displayText: (raw, message) => locale.displayText(language, raw, message) };
   const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
-  const statement = renderer.split('\n').find(line => line.includes("ui.display.computed($('session-status'), 'text'"));
+  const statement = renderer.split('\n').find(line => line.includes("ui.display.computed($('session-status').querySelector('.session-activity-text'), 'text'"));
   assert.ok(statement);
   // The status line also names a temporary Claude fallback version; take the real function with it.
   const pinText = renderer.slice(renderer.indexOf('function claudePinText('), renderer.indexOf('function nativeVersionText('));
-  vm.runInNewContext(pinText + statement, { s: record, ui, uiText, $: () => element, sessionStatus: () => 'IDLE', disconnected: false, own: true });
+  const activity = renderer.slice(renderer.indexOf('function headerActivity('), renderer.indexOf("let state, owner, selected = ''"));
+  const window = { nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js') };
+  vm.runInNewContext(pinText + activity + statement, { s: record, ui, uiText, $: () => element, window, stateText: () => 'IDLE', switchedAway: () => false, disconnected: false, own: true });
   return { element, switch(value) { language = value; display.refresh(root); } };
 }
 

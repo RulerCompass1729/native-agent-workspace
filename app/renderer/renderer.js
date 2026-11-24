@@ -28,6 +28,16 @@ const sessionStatus = (record, recoveryBadge = false) => {
   const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? uiText('state.switched') : record.claudeQuestion ? uiText('state.question') : stateText(record), !disconnected, uiText);
   return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };
+// The header line: what the session is doing, in words. Unverified child/background state shows as the dot's dashed outline instead.
+function headerActivity(record) {
+  if (record.state === 'stopping' && record.nativeContextPending && !switchedAway(record)) return uiText('collab.contextUnknown');
+  const doing = !record.activity ? '' : record.activityUiMessage ? ui.displayText(record.activity, record.activityUiMessage)
+    : window.nativeWorkspaceAgentDistribution.plainActivity(record.activity, uiText);
+  const word = switchedAway(record) ? uiText('state.switched') : record.claudeQuestion ? uiText('state.question') : stateText(record);
+  const quiet = (key, params) => ['fleet.unknown', 'fleet.workUnconfirmed'].includes(key) ? '' : uiText(key, params);
+  const base = doing && record.state === 'working' ? doing : [word, doing].filter(Boolean).join(' · ');
+  return window.nativeWorkspaceFleet.fleetStatus(record, base, !disconnected, quiet).replace(/^ · /, '') || base;
+}
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [], getRooms: () => state?.rooms || [], text: (key, params) => uiText(key, params), display: ui.display,
   // The address, Tailscale user and port live in this window's saved view, so a restart does not ask for them again.
@@ -217,6 +227,24 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
+const agentDistribution = window.nativeWorkspaceAgentDistribution.bind({ host: $('agent-distribution'), document, text: uiText,
+  onSession: id => attempt(() => select(id, 'chat')), onMode: () => attempt(persistView) });
+// Header squares (11-22): members of the current space plus sessions live now, the same in both headers.
+// Archived sessions and old ones (unknown state, or offline outside this space) stay out and are counted in the panel.
+function updateAgentDistribution() {
+  if (!state) return;
+  const { look, group } = window.nativeWorkspaceAgentDistribution, entries = [], skipped = { archived: 0, other: 0 };
+  const rooms = allSpaces().filter(room => !room.archived);
+  for (const record of state.sessions) {
+    if (record.archived) { skipped.archived++; continue; }
+    const presentation = sidebarPresentation(record);
+    if (!Object.hasOwn(states, record.state) || presentation.tone === 'disconnected' && !inSpace(record)) { skipped.other++; continue; }
+    entries.push({ id: record.id, name: record.name, look: look(presentation), status: group(presentation), statusText: presentation.compact,
+      model: record.model ? ui.displayText(record.model, record.modelUiMessage) : '',
+      rooms: rooms.filter(room => inSpace(record, room.id)).map(room => ({ id: room.id, name: spaceName(room) })) });
+  }
+  agentDistribution.update(entries, skipped);
+}
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
 function updateTaskBoard() {
@@ -228,8 +256,9 @@ function updateTaskBoard() {
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
     sessions: state.sessions.map(s => {
       let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
-      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected);
+      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected), presentation = sidebarPresentation(s), { look, group } = window.nativeWorkspaceAgentDistribution;
       return { id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
+        look: look(presentation), agentStatus: group(presentation), statusText: presentation.compact,
         transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
         approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
         claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),
@@ -1457,7 +1486,7 @@ function hoverDetail(list, key, ...values) {
 }
 function hoverAvatar(record, text) {
   const presentation = sidebarPresentation(record), avatar = paintVendorMark(node('span'), record, text), dot = node('span');
-  dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; avatar.append(dot);
+  dot.className = window.nativeWorkspaceAgentDistribution.look(presentation); avatar.append(dot);
   return avatar;
 }
 function hoverSessionCard(record, steward) {
@@ -1498,6 +1527,8 @@ function hoverSpaceCard(room) {
 // items) or a space heading. Keyboard focus counts only on the row's link and the heading's name button.
 function sidebarHoverItem(element, how) {
   if (element.closest('#rename-editor')) return null;
+  // The session header's name opens the same card, under the name, by pointer or keyboard (11-22: its third line moved into the card).
+  if (element.closest('#header.compact-session #title')) return current() ? { key: 'header:' + current().id } : null;
   const row = element.closest(how === 'focus' ? '.session-link' : '[data-session-row]')?.closest('[data-session-row]');
   if (row?.dataset.occurrence) return { key: 'row:' + row.dataset.occurrence };
   const heading = how === 'focus' ? element.closest('.session-space-heading')?.closest('h3') : element.closest('.session-space-group > h3');
@@ -1505,6 +1536,11 @@ function sidebarHoverItem(element, how) {
   return group && group !== 'independent' ? { key: 'space:' + group } : null;
 }
 function sidebarHoverBuild(key) {
+  if (key.startsWith('header:')) {
+    const record = current(), anchor = $('title');
+    return record?.id === key.slice(7) && anchor?.isConnected && anchor.closest('#header.compact-session')
+      ? { anchor, kind: 'session', below: true, content: hoverSessionCard(record, !$('steward-badge').hidden) } : null;
+  }
   if (key.startsWith('row:')) {
     const row = sessionRows.get(key.slice(4)), record = row && state.sessions.find(item => item.id === row.sessionId);
     return record && row.element.isConnected && !row.element.closest('[hidden]') ? { anchor: row.element, kind: 'session', content: hoverSessionCard(record, row.element.classList.contains('steward-row')) } : null;
@@ -1814,7 +1850,7 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: uiText('sidebar.spaceUnavailableName'), archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); const view = captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], sidebarCollapsedFolders: [...sidebarCollapsedFolders], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: view.roomFilter, roomSearch: view.roomSearch, roomThread: view.roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); const view = captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, agentGrouping: agentDistribution.mode, sidebarCollapsedGroups: [...sidebarCollapsedGroups], sidebarCollapsedFolders: [...sidebarCollapsedFolders], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: view.roomFilter, roomSearch: view.roomSearch, roomThread: view.roomThread, roomReplyTo }); }
 // Opening a space never changes which sessions the sidebar lists (T-132).
 async function selectSpace(id) {
   if (!spaceRecord(id)) throw uiError("error.spaceUnavailable");
@@ -3579,8 +3615,10 @@ function renderSessionChainChip(s) {
   chip.hidden = !origin; chip.dataset.sessionId = origin ? s.id : '';
   if (!origin) return;
   const names = () => origin.previous.map(link => archivedName(link.record, link.name)).join(' / ');
-  ui.display.computed(chip, 'text', () => uiText('chain.from', { name: names(), count: origin.count }));
-  ui.display.attribute(chip, 'title', 'chain.menu', { count: origin.count });
+  // One short cell in the one-line header; who it continues from stays in the name and tooltip.
+  ui.display.computed(chip, 'text', () => uiText('chain.fromShort', { count: origin.count }));
+  ui.display.computed(chip, 'aria-label', () => uiText('chain.from', { name: names(), count: origin.count }));
+  ui.display.computed(chip, 'title', () => uiText('chain.from', { name: names(), count: origin.count }));
 }
 async function archiveChainSession(id) {
   const others = sessionChainModel(id)?.sessions.filter(link => link.id !== id) || [];
@@ -3840,7 +3878,8 @@ function independentNavigationSessions() {
 function openSpaceNavigation(kind, anchor) {
   if (spaceNavigationMenu) { spaceNavigationMenu(); return; }
   const rooms = () => allSpaces().filter(room => !room.archived);
-  const rows = kind === 'spaces' ? rooms().map(room => ({ id: room.id, label: uiText('navigation.spaceItem', { name: spaceName(room), count: members(room.id).length }) }))
+  const here = id => id === spaceId ? ' · ' + uiText('navigation.current') : '';
+  const rows = kind === 'spaces' ? rooms().map(room => ({ id: room.id, label: uiText('navigation.spaceItem', { name: spaceName(room), count: members(room.id).length }) + here(room.id) }))
     : independentNavigationSessions().map(record => ({ id: record.id, label: participantLabel(record, state.sessions) + ' · ' + sidebarPresentation(record).full }));
   const items = rows.length ? rows : [{ id: 'empty', label: uiText(kind === 'spaces' ? 'sidebar.noSpaces' : 'navigation.noIndependent'), disabled: true }];
   anchor.setAttribute('aria-expanded', 'true');
@@ -3852,10 +3891,20 @@ function openSpaceNavigation(kind, anchor) {
     attempt(() => kind === 'spaces' ? selectSpace(id) : select(id));
   } });
 }
+// The space's own name is the switch button (11-22); the visually hidden h1 keeps the page heading.
+function renderSpaceSwitch(room) {
+  const button = $('switch-space'), name = room ? spaceName(room) : '';
+  button.classList.toggle('space-switch-named', Boolean(room));
+  if (!room) { if (button.querySelector('.space-switch-name')) button.textContent = '⌄'; ui.display.attribute(button, 'aria-label', 'navigation.switchSpace'); return; }
+  if (!button.querySelector('.space-switch-name')) button.replaceChildren(node('span', '', 'space-switch-name'), node('span', '⌄', 'space-switch-chevron'));
+  button.querySelector('.space-switch-name').textContent = name;
+  ui.display.computed(button, 'aria-label', () => uiText('navigation.switchNamed', { name }));
+}
 function renderSpaceRail() {
   const active = selected === 'room', surface = $('sidebar-toggle').closest('.naw[data-native-surface="sidebar"]');
   $('space-rail-routes').hidden = !active;
   $('switch-space').hidden = !active || Boolean(focusedRoomMember());
+  renderSpaceSwitch(active && !focusedRoomMember() ? spaceRecord(spaceId) : null);
   if (!surface) return;
   const collapsed = surface.dataset.collapsed === 'true';
   if (active && spaceRailBefore === null) { spaceRailBefore = collapsed; if (!collapsed) ui.toggleSidebar(); }
@@ -3947,7 +3996,7 @@ function sidebarPresentation(record) {
     ? 'approval' : fleet.running || ['working', 'starting', 'background'].includes(record.state) ? 'working' : record.state === 'idle' ? 'idle' : record.state || 'disconnected';
   const childTone = workTone || (tone === 'idle' && fleet.unknown ? 'bg-unknown' : '');
   const marker = tone === 'approval' || tone === 'disconnected' ? '!' : tone === 'working' || childTone === 'bg-work' ? '…' : childTone === 'goal-stopped' ? '!' : childTone === 'bg-unknown' ? '◌' : '○';
-  return { compact: compact + goalSuffix, full: full + goalSuffix, tone, workTone: childTone, marker,
+  return { compact: compact + goalSuffix, full: full + goalSuffix, tone, workTone: childTone, marker, waiting: live && (waiting || record.state === 'approval'),
     detail: Boolean(goal.text || waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
 }
 function sidebarDetails(record) {
@@ -4283,7 +4332,7 @@ function renderSessions() {
     else { if (row.name.textContent !== record.name) row.name.textContent = record.name; const shortId = sessionShortId(record.id); if (row.shortId.textContent !== shortId) row.shortId.textContent = shortId; ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact); }
     row.element.classList.toggle('same-name', repeated.has(record.id));
     const timeText = sessionActivityTime(record); if (row.time.textContent !== timeText) row.time.textContent = timeText;
-    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; row.dot.dataset.nativeState = record.state;
+    row.dot.className = window.nativeWorkspaceAgentDistribution.look(presentation); row.dot.dataset.nativeState = record.state;
     row.marker.textContent = presentation.marker; row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
@@ -4514,7 +4563,7 @@ function renderInterfaceLanguage() {
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
   activityStream?.render();
-  updateTaskBoard();
+  updateTaskBoard(); updateAgentDistribution();
 }
 async function changeInterfaceLanguage(value) {
   if (changingLanguage) { renderInterfaceLanguage(); return; }
@@ -5636,35 +5685,37 @@ const nativeActivityClock = setInterval(() => {
   if (newlyStaleStatus(state.sessions)) render();
 }, 1000);
 function renderStewardWakeWarning(wakeBlock) {
-  const wakeWarning = $('steward-wake-warning');
-  if (wakeWarning) {
-    wakeWarning.hidden = !wakeBlock;
-    if (wakeBlock) {
-      // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
-      const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId), name = butler?.name || butler?.id;
-      const action = name ? uiText('queue.releaseRotation', { name }) : '';
-      const own = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release';
-      const item = !own ? null : wakeBlock.step === 'release' ? rotationReleaseAction(butler)[0] : backendUpdateAction(butler)[0];
-      const text = item ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
-        : own ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
-        : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason: uiText(`stewardWake.reason.${wakeBlock.reason}`) });
-      const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
-      wakeWarning.querySelector('p').textContent = undelivered
-        ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;
-      const step = wakeWarning.querySelector('.steward-wake-step');
-      step.hidden = !item; step.textContent = item?.label || ''; step.disabled = disconnected;
-      // The same calls as its sidebar menu items, on the record as it is when clicked.
-      step.onclick = () => {
-        const record = state?.sessions?.find(s => s.id === butler?.id);
-        if (disconnected || !record) return;
-        if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) attempt(() => releaseSessionRotation(record));
-        else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) attempt(() => updateSessionBackend(record.id));
-      };
-      const log = wakeWarning.querySelector('.steward-wake-record');
-      log.textContent = uiText('stewardWake.openRecord');
-      log.onclick = () => stewardSteps?.open();
-    }
-  }
+  const chip = $('steward-wake-chip');
+  if (!chip) return;
+  chip.hidden = !wakeBlock;
+  if (!wakeBlock) { chip.open = false; return; }
+  const reason = uiText(`stewardWake.reason.${wakeBlock.reason}`);
+  // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
+  const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId), name = butler?.name || butler?.id;
+  const action = name ? uiText('queue.releaseRotation', { name }) : '';
+  const own = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release';
+  const item = !own ? null : wakeBlock.step === 'release' ? rotationReleaseAction(butler)[0] : backendUpdateAction(butler)[0];
+  const text = item ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
+    : own ? uiText(`stewardWake.ownHandoff.${wakeBlock.step}`, { minutes: wakeBlock.minutes, action: action || uiText('stewardWake.ownHandoff.action'), update: uiText('menu.updateThisBackend') })
+    : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason });
+  const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
+  const full = undelivered ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;
+  chip.querySelector('.wake-chip-text').textContent = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
+  chip.querySelector('summary').setAttribute('aria-label', full);
+  // An ordinary reason: the chip's own advice. The person's step: what only they can do.
+  chip.querySelector('p').textContent = own ? full : uiText('stewardWake.chipDetail', { reason });
+  const step = chip.querySelector('.steward-wake-step');
+  step.hidden = !item; step.textContent = item?.label || ''; step.disabled = disconnected;
+  // The same calls as its sidebar menu items, on the record as it is when clicked.
+  step.onclick = () => {
+    const record = state?.sessions?.find(s => s.id === butler?.id);
+    if (disconnected || !record) return;
+    if (wakeBlock.step === 'release' && rotationReleaseAction(record).length) attempt(() => releaseSessionRotation(record));
+    else if (wakeBlock.step === 'update-backend' && backendUpdateAction(record).length) attempt(() => updateSessionBackend(record.id));
+  };
+  const log = chip.querySelector('.steward-wake-record');
+  log.textContent = uiText('stewardWake.openRecord');
+  log.onclick = () => { chip.open = false; stewardSteps?.open(); };
 }
 function render() {
   if (!state || rendering) return;
@@ -5728,7 +5779,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderResumeAll(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
-    updateTaskBoard();
+    updateTaskBoard(); updateAgentDistribution();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -5754,8 +5805,10 @@ function render() {
       }
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}`);
-      ui.display.computed($('session-status'), 'title', () => nativeVersionText(s));
+      // The line says what the session is doing in words; the full status, children and versions stay in its title.
+      $('session-status').querySelector('.state-dot').className = window.nativeWorkspaceAgentDistribution.look(sidebarPresentation(s));
+      ui.display.computed($('session-status').querySelector('.session-activity-text'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${headerActivity(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}`);
+      ui.display.computed($('session-status'), 'title', () => [`${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${claudePinText(s)}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner && !s.ownerPageless ? uiText('native.otherWindow') : ''}`, nativeVersionText(s)].filter(Boolean).join('\n'));
       $('take-control').hidden = !heldElsewhere(s) || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = !terminalVisible;
@@ -6879,6 +6932,7 @@ const QUEUE_REASONS = {
   'waiting-provider': 'queue.reason.waitingProvider',
   'no-reply': 'queue.reason.noReply',
   'person-intervened': 'queue.reason.personIntervened',
+  'input-purpose-unconfirmed': 'queue.reason.inputPurposeUnconfirmed',
   'record-missing': 'queue.reason.recordMissing',
   'send-unconfirmed': 'queue.reason.sendUnconfirmed',
   'member-missing': 'queue.reason.memberMissing',
@@ -6941,9 +6995,9 @@ function queueRow(item, memberIds) {
     name = queueMemberName(memberId);
   }
   let statusKey = 'queue.status.' + item.status;
-  // These two waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
+  // These waiting kinds ask the person nothing: the item is left for them to look at (11-12). They are named
   // as in UNHELD_WAITING (queue-dispatch.cjs): a decision can still carry an earlier refusal's reason.
-  if (item.status === 'waiting' && ['person-intervened', 'no-reply'].includes(item.reason)) {
+  if (item.status === 'waiting' && ['person-intervened', 'no-reply', 'input-purpose-unconfirmed'].includes(item.reason)) {
     statusKey = 'queue.status.lookAt';
   }
   if (item.status === 'queued' && item.assignee && !memberIds.has(item.assignee)) {
@@ -6954,7 +7008,7 @@ function queueRow(item, memberIds) {
   let statusParams;
   if (statusKey !== 'queue.status.orphan' && statusKey !== 'queue.status.queued' && statusKey !== 'queue.status.cancelled' && statusKey !== 'queue.status.cancelledBySteward') {
     // Read again when the language changes: an archived member's marker is in the person's language.
-    statusParams = () => ({ name: memberId ? queueMemberName(memberId) : '' });
+    statusParams = () => ({ name: memberId ? queueMemberName(memberId) : statusKey === 'queue.status.lookAt' ? uiText('taskBoard.unassigned') : '' });
   }
   const dialogs = item.status === 'queued' ? state.sessions.filter(s => memberIds.has(s.id) && (!item.assignee || s.id === item.assignee) && s.nativeTerminalDialog) : [];
   if (dialogs.length) { statusKey = 'state.terminalDialog'; statusParams = () => ({ title: dialogs.map(s => s.name + ' · ' + s.nativeTerminalDialog.title).join('、') }); }
@@ -7950,7 +8004,7 @@ $('setup-dialog').addEventListener('keydown', event => {
 });
 sidebarHoverCard = (() => {
   const list = $('session-list'), surface = list?.closest('.naw') || list?.closest('.sidebar');
-  return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: surface, surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;
+  return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: [surface, $('header')], surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;
 })();
 disposers.push(() => sidebarHoverCard?.dispose(), ui.language.subscribe(() => sidebarHoverCard?.dismiss()));
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
@@ -7974,7 +8028,7 @@ attempt(async () => {
   if (latestViewStorage !== undefined) { state.viewStorageWarning = latestViewStorage; state.viewStorageWarningUiMessage = latestViewStorageUiMessage; }
   roomViews = state.viewState.roomViews || Object.create(null);
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
-  spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat';
+  spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat'; agentDistribution.setMode(state.viewState.agentGrouping || 'status');
   sidebarCollapsedGroups = new Set(state.viewState.sidebarCollapsedGroups || []);
   sidebarCollapsedFolders = new Set(state.viewState.sidebarCollapsedFolders || []);
   columnTerminalHeights = { ...(state.viewState.columnTerminalHeights || {}) };

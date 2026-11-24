@@ -5,7 +5,7 @@ function actual(name) { const start = source.indexOf(`function ${name}(`); asser
 function harness() {
   const calls = [], nodes = new Map(), surface = { dataset: { collapsed: 'false' } }, locale = localeUI('en'); let menu;
   const $ = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, attrs: {}, isConnected: true, setAttribute(k, v) { this.attrs[k] = v; }, getBoundingClientRect: () => ({ left: 0, top: 0 }), getClientRects: () => [{}], focus() {}, closest: () => surface }); return nodes.get(id); };
-  const context = vm.createContext({ ...locale, $, selected: 'room', spaceRailBefore: null, spaceNavigationMenu: null,
+  const context = vm.createContext({ ...locale, $, selected: 'room', spaceId: 'shared', spaceRailBefore: null, spaceNavigationMenu: null, spaceRecord: id => context.roomList.find(room => room.id === id), switched: [], renderSpaceSwitch: room => context.switched.push(room?.id || null),
     focusedRoomMember: () => Boolean(context.selected === 'room' && context.roomSurface === 'overview' && context.roomSession), roomSurface: 'overview', roomSession: '',
     state: { room: { name: 'Demo' }, sessions: [], steward: {} }, roomList: [{ id: 'shared', name: 'Demo' }, { id: '00000000-0000-4000-8000-000000000001', name: 'Archived', archived: true }],
     allSpaces() { return context.roomList; }, inSpace: (record, id) => spaces.isMember(record, id), members: () => [], orderedMembers: () => context.state.sessions,
@@ -33,7 +33,7 @@ test('independent navigation excludes active-space members, archived sessions an
 });
 test('space and independent menus invoke only the existing navigation routes with exact IDs', () => {
   const { context: c, $, menu, calls } = harness(); c.state.sessions = [{ id: 'free', name: 'Independent' }];
-  c.openSpaceNavigation('spaces', $('space')); assert.deepEqual(Array.from(menu().items, r => r.id), ['shared']); menu().onSelect('shared'); assert.deepEqual(calls, [['space', 'shared']]);
+  c.openSpaceNavigation('spaces', $('space')); assert.deepEqual(Array.from(menu().items, r => r.id), ['shared']); assert.equal(menu().items[0].label.endsWith(' · Current space'), true); menu().onSelect('shared'); assert.deepEqual(calls, [['space', 'shared']]);
   menu().onClose(); c.openSpaceNavigation('sessions', $('sessions')); assert.deepEqual(Array.from(menu().items, r => r.id), ['free']); menu().onSelect('free'); assert.deepEqual(calls.at(-1), ['session', 'free']);
 });
 for (const change of ['space archived', 'session joined', 'session archived', 'butler designated']) test(`an open navigation menu rechecks ${change} before selecting`, () => {
@@ -50,6 +50,7 @@ test('the rail changes DSH geometry once per entry and restores the prior width 
   c.renderSpaceRail(); c.renderSpaceRail(); assert.deepEqual(calls, [['toggle']]); assert.equal($('space-rail-routes').hidden, false);
   c.selected = 'free'; c.renderSpaceRail(); assert.deepEqual(calls, [['toggle'], ['toggle']]); assert.equal(surface.dataset.collapsed, 'false'); assert.equal($('switch-space').hidden, true);
   surface.dataset.collapsed = 'true'; calls.length = 0; c.selected = 'room'; c.renderSpaceRail(); c.selected = 'free'; c.renderSpaceRail(); assert.deepEqual(calls, []);
+  assert.deepEqual(Array.from(c.switched), ['shared', 'shared', null, 'shared', null], 'The switch carries the space name only while the space view is shown');
 });
 test('the independent empty state offers no implicit create, join or native-control action', () => {
   const { context: c, $, menu, calls } = harness(); c.openSpaceNavigation('sessions', $('anchor'));

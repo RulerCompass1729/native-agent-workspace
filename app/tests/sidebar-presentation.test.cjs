@@ -189,3 +189,14 @@ test('existing session-menu fact readers change language without reopening or re
   assert.equal(h.updates.length, 0); assert.equal(JSON.stringify(h.record), before); assert.deepEqual(h.actions, []); assert.deepEqual(h.copied, []);
   h.ctx.setLanguage('zh'); assert.deepEqual(facts.map(item => item.labelRead()), original);
 });
+
+test('the header square groups a session exactly where the waiting strip counts it (task-stream.js needsApproval)', () => {
+  const { group } = require('../renderer/agent-distribution.js'), { needsApproval } = require('../task-stream.js');
+  for (const [patch, expected] of [[{ state: 'approval' }, 'waiting'], [{ state: 'approval', approval: {} }, 'waiting'], [{ claudeQuestion: {} }, 'waiting'],
+    [{ state: 'error' }, 'stuck'], [{ state: 'working' }, 'working'], [{}, 'idle']]) {
+    const record = row(patch), p = harness(record).present();
+    assert.equal(group(p), expected, JSON.stringify(patch));
+    assert.equal(group(p) === 'waiting', needsApproval(record), JSON.stringify(patch));
+  }
+  assert.equal(group(harness(row({ state: 'approval' }), false).present()), 'stuck', 'A disconnected session is not counted as waiting');
+});

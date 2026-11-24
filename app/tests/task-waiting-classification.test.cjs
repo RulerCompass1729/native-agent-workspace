@@ -19,7 +19,7 @@ for (const language of ['zh', 'en']) {
     else request.pending = false;
     s.render(); assert.equal(s.observed.at(-1), 1); assert.equal(s.count(), 1); assert.equal(s.hidden(), false);
   });
-  for (const reason of ['no-reply', 'person-intervened']) test(`${language}: ${reason} remains reviewable without asking for a decision`, t => {
+  for (const reason of ['no-reply', 'person-intervened', 'input-purpose-unconfirmed']) test(`${language}: ${reason} remains reviewable without asking for a decision`, t => {
     const v = input(); v.sessions = []; v.rooms[0].queue = [{ id: 'review', status: 'waiting', reason, text: 'Synthetic review' }];
     const s = scene(language, v); t.after(s.dispose);
     assert.equal(s.count(), 0); assert.equal(s.observed.at(-1), 0); assert.equal(s.hidden(), false);
@@ -32,7 +32,7 @@ for (const language of ['zh', 'en']) {
     v.confirmations = [{ id: 'card', key: 'card', sessionId: 'member', nativeId: 'native', actionable: true, expiresAt: Date.now() + 100000 }];
     const s = scene(language, v); t.after(s.dispose);
     assert.equal(s.count(), 3);
-    assert.equal(s.label(), language === 'zh' ? '有 1 件等你确认 · 3 件等你 · 1 件待查看' : '1 action needs your confirmation · 3 waiting for you · 1 to review');
+    assert.equal(s.label(), language === 'zh' ? '有 1 件等你确认 · 3 件待你处理 · 1 件待查看' : '1 action needs your confirmation · 3 to handle · 1 to review');
   });
 }
 test('an unclassified approval state and overflow still ask the person; pending neighbours never hide a live request', t => {

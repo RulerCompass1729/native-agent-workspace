@@ -70,8 +70,8 @@ test('the permanent strip counts confirmations separately from decisions and pic
   const sandbox = vm.createContext({}); vm.runInContext(source, sandbox);
   const label = (language, kinds) => sandbox.nativeWorkspaceActivityStream.waitingLabel(kinds.map(kind => ({ kind })),
     (key, params) => locale.format(language, 'stream.' + key, params));
-  for (const [language, only, mixed, other] of [['zh', '有 2 件等你确认', '有 2 件等你确认 · 1 件等你 · 1 件待查看', '1 件等你 · 1 件待查看'],
-    ['en', '2 actions need your confirmation', '2 actions need your confirmation · 1 waiting for you · 1 to review', '1 waiting for you · 1 to review']]) {
+  for (const [language, only, mixed, other] of [['zh', '有 2 件等你确认', '有 2 件等你确认 · 1 件待你处理 · 1 件待查看', '1 件待你处理 · 1 件待查看'],
+    ['en', '2 actions need your confirmation', '2 actions need your confirmation · 1 to handle · 1 to review', '1 to handle · 1 to review']]) {
     assert.equal(label(language, ['background-confirmation', 'background-confirmation']), only);
     assert.equal(label(language, ['background-confirmation', 'decide', 'background-confirmation', 'look']), mixed);
     assert.equal(label(language, ['decide', 'look']), other);

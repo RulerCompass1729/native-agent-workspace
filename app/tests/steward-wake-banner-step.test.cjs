@@ -18,8 +18,9 @@ const EPISODE = { nativeId: 'native-butler', epoch: 'epoch-a', tag: 'tag-a', sta
 const butler = (extra = {}) => ({ id: 'butler', nativeId: 'native-butler', name: 'Synthetic butler', rotationEpisode: { ...EPISODE }, ...extra });
 
 function banner(language) {
-  const p = { textContent: '' }, step = { hidden: true }, record = { textContent: '' };
-  const parts = { p, '.steward-wake-step': step, '.steward-wake-record': record }, box = { hidden: true, querySelector: selector => parts[selector] };
+  const p = { textContent: '' }, step = { hidden: true }, record = { textContent: '' }, summary = { setAttribute(k, v) { this[k] = v; } };
+  // The header wake chip (statusbar-people) holds the step in its detail.
+  const parts = { p, summary, '.wake-chip-text': { textContent: '' }, '.steward-wake-step': step, '.steward-wake-record': record }, box = { hidden: true, open: false, querySelector: selector => parts[selector] };
   const calls = [], pending = [];
   const context = vm.createContext({
     state: null, disconnected: false, $: () => box, stewardSteps: { open: () => calls.push(['record']) },
@@ -41,7 +42,7 @@ function banner(language) {
     context.renderStewardWakeWarning({ minutes: 7, reason: 'rotation-control-unresolved', ...block });
   };
   const click = async () => { step.onclick(); await Promise.all(pending.splice(0)); };
-  return { p, step, box, calls, context, show, click };
+  return { p, step, box, summary, calls, context, show, click };
 }
 
 test('the banner\'s step is its sidebar menu item: the same label and the same call, from the person\'s window', async () => {
@@ -116,7 +117,8 @@ test('the banner adds the undelivered count only with the person\'s step', () =>
     assert.equal(b.p.textContent, say('stewardWake.withUndelivered', { text: say('stewardWake.ownHandoffButton.release', { minutes: 7 }), count: '100+' }));
     assert.match(b.p.textContent, /100\+/u);
     b.show(butler(), { reason: 'source-unavailable', undelivered: 2 });
-    assert.equal(b.p.textContent, say('stewardWake.stalled', { minutes: 7, reason: say('stewardWake.reason.source-unavailable') }));
+    assert.equal(b.p.textContent, say('stewardWake.chipDetail', { reason: say('stewardWake.reason.source-unavailable') }));
+    assert.equal(b.summary['aria-label'], say('stewardWake.stalled', { minutes: 7, reason: say('stewardWake.reason.source-unavailable') }));
   }
 });
 

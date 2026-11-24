@@ -86,7 +86,7 @@ test('a dismissed item stays quiet until it is left; keyboard focus and pointer 
 test('the card ships in both builds, stays out of the mouse and accessibility tree, and is translucent at the chosen level', () => {
   const build = read('scripts/build-ui.cjs'), html = read('app/renderer/index.html'), css = read('app/renderer/sidebar-hover-card.css'), js = read('app/renderer/sidebar-hover-card.js');
   assert.match(build, /read\('app\/renderer\/activity-stream\.css'\) \+ '\\n' \+ read\('app\/renderer\/sidebar-hover-card\.css'\)/);
-  assert.match(build, /'activity-stream\.js', 'sidebar-hover-card\.js', 'renderer\.js'/);
+  assert.match(build, /'activity-stream\.js', 'sidebar-hover-card\.js', 'agent-distribution\.js', 'renderer\.js'/);
   assert.ok(html.indexOf('href="sidebar-hover-card.css"') > html.indexOf('href="activity-stream.css"'));
   assert.ok(html.indexOf('src="sidebar-hover-card.js"') > 0 && html.indexOf('src="sidebar-hover-card.js"') < html.indexOf('src="renderer.js"'));
   assert.match(css, /--naw-hover-card-opacity:70%;/); assert.match(css, /backdrop-filter:blur\(8px\);backdrop-filter:blur\(8px\)/);

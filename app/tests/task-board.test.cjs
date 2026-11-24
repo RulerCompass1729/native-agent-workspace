@@ -46,7 +46,7 @@ test('the real renderer intake only passes task-board fields and a waiting flag'
   const card = { key: 'actor:native:operation', id: 'message', operationId: 'operation', sessionId: 'actor', nativeId: 'native', state: 'confirmation-required', actionable: true, expiresAt: now + 100000 };
   for (const key of ['message', 'summary', 'arguments', 'guard']) Object.defineProperty(card, key, { get() { throw Error('Confirmation body access forbidden'); } });
   let input;
-  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js') }, state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
+  const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js') }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }), state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
     allSpaces: () => [r, { id: 'missing', unavailable: true }], spaceName: value => value.name,
     taskBoard: { update(value) { input = value; } } });
   vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
@@ -68,4 +68,8 @@ test('unknown/unavailable queues are not presented as empty and healthy', () => 
 });
 test('the palette separates decisions, reviews, queued tasks and empty tracks', () => {
   assert.notEqual(board.COLORS.review, board.COLORS.waiting); assert.notEqual(board.COLORS.queued, board.COLORS.empty);
+});
+test('an input-purpose check is a review, not a person decision', () => {
+  const [p] = board.project([room([task('waiting', 'd'), task('waiting', 'n', { reason: 'no-reply' }), task('waiting', 'i', { reason: 'input-purpose-unconfirmed' })])], [], now);
+  assert.equal(p.counts.waiting, 1); assert.equal(p.counts.review, 2); assert.equal(p.attention, 3);
 });

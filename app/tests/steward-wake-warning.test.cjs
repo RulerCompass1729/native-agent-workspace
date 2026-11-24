@@ -4,10 +4,10 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '..', '..'
 const source = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf8');
 const locale = require('../ui-locale.js'), messages = require('../ui-messages.js');
 
-test('a desktop warning persists, follows state and language, opens the existing log without taking focus', () => {
+test('the wake chip persists, follows state and language, and opens the existing log from its detail', () => {
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('  // A saved full-page records view', start);
-  const p = { textContent: '' }, button = { textContent: '' }, step = { hidden: true }, parts = { p, '.steward-wake-step': step, '.steward-wake-record': button };
-  const box = { hidden: true, querySelector: selector => parts[selector] };
+  const p = { textContent: '' }, button = { textContent: '' }, text = { textContent: '' }, step = { hidden: true }, summary = { setAttribute(k, v) { this[k] = v; } };
+  const parts = { p, summary, '.wake-chip-text': text, '.steward-wake-step': step, '.steward-wake-record': button }, box = { hidden: true, open: false, querySelector: tag => parts[tag] };
   let opens = 0;
   const context = vm.createContext({ state: {}, rendering: false, disconnected: false, $: () => box, stewardSteps: { open: () => { opens++; } }, uiText: (k, v) => locale.format('zh', k, v) });
   vm.runInContext(source.slice(start, end) + '\n}', context);
@@ -16,12 +16,14 @@ test('a desktop warning persists, follows state and language, opens the existing
     context.uiText = (k, v) => locale.format(language, k, v);
     context.state = { stewardWakeStatus: { minutes: 12, reason: 'source-unavailable' } };
     context.render();
+    const reason = locale.format(language, 'stewardWake.reason.source-unavailable');
     assert.equal(box.hidden, false);
-    assert.match(p.textContent, /12/u);
-    assert.ok(p.textContent.includes(locale.format(language, 'stewardWake.reason.source-unavailable')));
+    assert.equal(text.textContent, locale.format(language, 'stewardWake.chip', { minutes: 12 }));
+    assert.ok(summary['aria-label'].includes(reason) && /12/u.test(summary['aria-label']));
+    assert.ok(p.textContent.includes(reason));
     assert.equal(button.textContent, locale.format(language, 'stewardWake.openRecord'));
     assert.equal(step.hidden, true, 'no step of the person\'s for an ordinary reason');
-    button.onclick();
+    box.open = true; button.onclick(); assert.equal(box.open, false);
     context.render(); assert.equal(box.hidden, false);
     context.state = { stewardWakeStatus: null }; context.render(); assert.equal(box.hidden, true);
   }
@@ -44,9 +46,10 @@ test('a disconnected backend cannot hide a wake alert: the existing page receive
   assert.equal(sent.at(-1), blocked, 'also visible before an initial snapshot can load');
 });
 
-test('the warning is a live status with a native keyboard button and every fixed reason is bilingual', () => {
+test('the wake chip is a live status that opens natively by keyboard and every fixed reason is bilingual', () => {
   const html = fs.readFileSync(path.join(root, 'app/renderer/index.html'), 'utf8');
-  assert.match(html, /<aside id="steward-wake-warning"[^>]*role="status"[^>]*hidden><p><\/p><div class="steward-wake-actions"><button type="button" class="steward-wake-step primary" hidden><\/button><button type="button" class="steward-wake-record"/u);
+  // The chip's detail holds the person's step (R129) before the log button.
+  assert.match(html, /<details id="steward-wake-chip" class="wake-chip" hidden><summary><span class="wake-chip-text" role="status"><\/span><\/summary><div class="wake-chip-detail"><p><\/p><button type="button" class="steward-wake-step primary" hidden><\/button><button type="button" class="steward-wake-record"/u);
   for (const reason of require('../steward-wake.cjs').BLOCK_REASONS) for (const language of ['zh', 'en']) {
     assert.ok(messages[language][`stewardWake.reason.${reason}`], `${language} ${reason}`);
   }

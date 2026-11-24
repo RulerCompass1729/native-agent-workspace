@@ -56,9 +56,19 @@
     };
   }
 
+  // Under a header item, left-aligned with it, kept MARGIN inside the window; above it when there is no room below.
+  function placeBelow(anchor, card, view) {
+    const left = Math.max(MARGIN, Math.min(anchor.left, view.width - card.width - MARGIN));
+    const below = anchor.bottom + GAP, top = below + card.height <= view.height - MARGIN ? below : anchor.top - GAP - card.height;
+    return { left: Math.round(left), top: Math.round(Math.max(MARGIN, top)) };
+  }
+
   // DOM wiring. `resolve(element, how)` names the item under an element ({ key } or null); `build(key)` returns
-  // { anchor, kind, content } for an item that still exists, or null.
+  // { anchor, kind, content, below? } for an item that still exists, or null. `root` may be one element or several.
   function mount({ root, surface, resolve, build, delay, grace }) {
+    const listed = (Array.isArray(root) ? root : [root]).filter(Boolean);
+    // A root inside another one is already covered; listening on both would see each event twice.
+    const roots = listed.filter(r => !listed.some(other => other !== r && other.contains(r))), within = node => roots.some(r => r.contains(node));
     const card = document.createElement('div');
     card.id = 'naw-hover-card'; card.setAttribute('aria-hidden', 'true'); card.hidden = true;
     const popover = typeof card.showPopover === 'function';
@@ -71,7 +81,7 @@
       card.hidden = false;
       if (popover && !card.matches(':popover-open')) card.showPopover();
       const a = item.anchor.getBoundingClientRect(), s = (surface || item.anchor).getBoundingClientRect(), c = card.getBoundingClientRect();
-      const at = place(a, s, c, { width: innerWidth, height: innerHeight });
+      const view = { width: innerWidth, height: innerHeight }, at = item.below ? placeBelow(a, c, view) : place(a, s, c, view);
       card.style.left = at.left + 'px'; card.style.top = at.top + 'px';
     }
     function hide() {
@@ -93,11 +103,11 @@
       if (key) control.leave(key, 'pointer');
     }
     const listeners = [
-      [root, 'pointerover', event => {
+      [roots[0], 'pointerover', event => {
         if (event.pointerType === 'touch' || event.buttons || overCard(event)) return;
         const key = keyOf(event.target, 'pointer'); if (key) control.enter(key, 'pointer');
       }],
-      [root, 'pointerout', event => {
+      [roots[0], 'pointerout', event => {
         const key = keyOf(event.target, 'pointer'); if (!key || keyOf(event.relatedTarget, 'pointer') === key) return;
         control.leave(key, 'pointer');
       }],
@@ -105,25 +115,26 @@
         if (overCard(event)) { cardPointer = control.open; control.enter(cardPointer, 'pointer'); }
         else if (cardPointer) {
           leaveCard();
-          if (event.pointerType !== 'touch' && !event.buttons && root.contains(event.target)) {
+          if (event.pointerType !== 'touch' && !event.buttons && within(event.target)) {
             const key = keyOf(event.target, 'pointer'); if (key) control.enter(key, 'pointer');
           }
         }
       }, true],
       [document, 'pointerout', event => { if (!event.relatedTarget) leaveCard(); }, true],
-      [root, 'focusin', event => {
+      [roots[0], 'focusin', event => {
         const key = keyOf(event.target, 'focus'); if (key && event.target.matches(':focus-visible')) control.enter(key, 'focus');
       }],
-      [root, 'focusout', event => { const key = keyOf(event.target, 'focus'); if (key) control.leave(key, 'focus'); }],
+      [roots[0], 'focusout', event => { const key = keyOf(event.target, 'focus'); if (key) control.leave(key, 'focus'); }],
       [document, 'pointerdown', () => control.dismiss(), true],
       [document, 'contextmenu', () => control.dismiss(), true],
       [document, 'dragstart', () => control.dismiss(), true],
-      [document, 'scroll', event => { if (event.target instanceof Node && root.contains(event.target)) control.dismiss(); }, true],
+      [document, 'scroll', event => { if (event.target instanceof Node && within(event.target)) control.dismiss(); }, true],
       [document, 'keydown', event => {
         if (['Escape', 'Enter', ' ', 'ContextMenu'].includes(event.key) || event.shiftKey && event.key === 'F10') control.dismiss();
       }, true],
       [window, 'blur', () => control.dismiss()],
     ];
+    for (const entry of [...listeners]) if (entry[0] === roots[0]) for (const other of roots.slice(1)) listeners.push([other, ...entry.slice(1)]);
     for (const [target, type, listener, capture] of listeners) target.addEventListener(type, listener, Boolean(capture));
     return {
       element: card,
@@ -135,7 +146,7 @@
     };
   }
 
-  const api = { DELAY, GRACE, place, controller, mount };
+  const api = { DELAY, GRACE, place, placeBelow, controller, mount };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else global.nativeWorkspaceHoverCard = api;
 })(typeof window === 'object' ? window : globalThis);

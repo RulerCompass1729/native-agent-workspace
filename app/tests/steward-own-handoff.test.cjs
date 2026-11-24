@@ -115,7 +115,8 @@ test('a butler in a space keeps the in-space rule; the switch off shows nothing'
 test('the banner says only the reason and the person\'s step, with the butler\'s own menu label, in both languages', () => {
   const root = path.resolve(__dirname, '..', '..'), source = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf8');
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('function render() {', start);
-  const p = { textContent: '' }, parts = { p, '.steward-wake-step': {}, '.steward-wake-record': {} }, box = { hidden: true, querySelector: selector => parts[selector] };
+  const p = { textContent: '' }, summary = { setAttribute(k, v) { this[k] = v; } };
+  const parts = { p, summary, '.wake-chip-text': {}, '.steward-wake-step': {}, '.steward-wake-record': {} }, box = { hidden: true, querySelector: selector => parts[selector] };
   // No menu item for this record (steward-wake-banner-step.test.cjs has the ones with): the text names the menu path.
   const context = vm.createContext({ state: null, disconnected: false, rotationReleaseAction: () => [], backendUpdateAction: () => [], $: () => box, stewardSteps: { open() {} }, uiText: null });
   vm.runInContext(source.slice(start, end), context);
@@ -132,6 +133,7 @@ test('the banner says only the reason and the person\'s step, with the butler\'s
     context.renderStewardWakeWarning({ minutes: 3, reason: 'rotation-control-unresolved', step: 'release' });
     assert.ok(p.textContent.includes(locale.format(language, 'stewardWake.ownHandoff.action')), 'before the state loads');
     context.renderStewardWakeWarning({ minutes: 12, reason: 'source-unavailable' });
-    assert.equal(p.textContent, locale.format(language, 'stewardWake.stalled', { minutes: 12, reason: locale.format(language, 'stewardWake.reason.source-unavailable') }));
+    assert.equal(p.textContent, locale.format(language, 'stewardWake.chipDetail', { reason: locale.format(language, 'stewardWake.reason.source-unavailable') }));
+    assert.equal(summary['aria-label'], locale.format(language, 'stewardWake.stalled', { minutes: 12, reason: locale.format(language, 'stewardWake.reason.source-unavailable') }));
   }
 });
