@@ -163,6 +163,18 @@ test('the person still ends a held one: pausing handoffs at once, typing into th
   assert.equal(g.writes.length, 0);
 });
 
+test('scrolling or typing in the sender\'s terminal during its turn leaves its message held for the window', async t => {
+  const f = await fixture(t); f.open(40);
+  f.source.get(f.a).view = 'terminal'; f.ra.terminal = { alive: true, input() {} };
+  const one = await f.turn('one', 'Through the scroll.');
+  f.source.input(f.a, '\x1b[<64;10;5M', 'source-owner'); f.source.input(f.a, 'x', 'source-owner');
+  await one.finish();
+  const row = f.rows().at(-1);
+  assert.equal(row.wake.status, 'held');
+  f.close(); f.advance(MIN); await f.retry();
+  assert.deepEqual([f.writes.length, row.wake.status], [1, 'submitted']);
+});
+
 test('after the move the same native session gets it on its new backend; another native session there does not', async t => {
   const f = await fixture(t); f.open(40);
   const one = await f.turn('one', 'Across the move.'); await one.finish();

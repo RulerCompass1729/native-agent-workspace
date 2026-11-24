@@ -75,20 +75,19 @@ function setPolicy(w, id, value) {
   return true;
 }
 function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailure ? { warning: w.wakeGuardFailure, warningUiMessage: w.wakeGuardFailureUiMessage || null } : {}) }; } catch { const fallback = uiError('error.warning.wakeGuardUnavailable'); return { enabled: false, unavailable: true, warning: w.wakeGuardFailure || fallback.message, warningUiMessage: w.wakeGuardFailure ? w.wakeGuardFailureUiMessage || null : fallback.uiMessage }; } }
-// The sender's human-control state when its turn started. A person taking over,
-// typing, queueing or steering later withdraws an ordinary sender's wake authority.
-// Only the designated butler keeps its wake permission across ordinary input. Count the
-// exact control/peer changes made by input, without hiding takeover, stop, connection,
-// membership or permission changes. Runtime-only: reopening never replays a wake.
+// The sender's human-control state when its turn started. Ordinary input into the session (the person typing, queueing
+// or steering, another agent's message, a background notice) neither withdraws nor renews what the turn may send: every
+// session has the input policy the designated butler has had since 2026-11-14 (the person, 2026-11-23). Count the
+// exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover, stop, connection, membership
+// or permission changes. Runtime-only: reopening never replays a wake.
 const inputChanges = new WeakMap();
 function messageInput(w, s, { control = 0, peer = 0 }) {
-  if (!isSteward(w, s)) return;
   const prior = inputChanges.get(s) || { control: 0, peer: 0 };
   inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer });
 }
 function sourceIdentity(w, s) {
   const proof = identity(s), input = inputChanges.get(s);
-  if (input && isSteward(w, s)) {
+  if (input) {
     if (input.control) proof.controlRevision -= input.control;
     if (input.peer) proof.peerRevision -= input.peer;
   }
@@ -105,41 +104,6 @@ function nativeStart(w, r, info, s) {
   } catch { /* Withdrawn at the next start, or at reopen. */ }
   try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(w, s) }; }
   catch { r.wakeTurn = null; }
-}
-// Ordinary senders keep the earlier read-to-renew policy; the butler's input does not
-// revoke or renew its turn budget (the person, 2026-11-14).
-// The person's words, queued into the sender's running turn (the wake proposal, item 3, board 11-12 16:44: 「③只做读到
-// 真人的话后重新授权、不在真人的话后附行」). Their control change ends what the turn may send, as before; once native
-// confirms that the turn read them (Claude: the turn's next model request carried them), the turn may send again, since
-// what it sends from then on has seen the person's words. What it registered before stays withdrawn: those rows keep
-// the sender's old identity and are cancelled when the turn ends. A later person action, a takeover, pausing
-// everything or a new connection changes the proof again, and the read authorizes nothing. `humanQueued` notes the
-// person's latest such words (taken right after their control change); `humanRead` is their read.
-function humanQueued(w, r, s, tag) {
-  if (isSteward(w, s)) return;
-  const turn = r.wakeTurn;
-  if (turn && turn.nativeId === s.nativeId && turn.turnId === r.turnId) turn.awaiting = { tag, human: humanProof(w, s) };
-}
-function humanRead(w, r, s, tag, turnId) {
-  if (isSteward(w, s)) return false;
-  const turn = r.wakeTurn, awaiting = turn?.awaiting;
-  if (!awaiting || awaiting.tag !== tag) return false;
-  delete turn.awaiting;
-  if (turn.nativeId !== s.nativeId || turn.turnId !== turnId || r.turnId !== turnId) return false;
-  // The proof taken with the person's words: any later person action, and pausing everything (the boundary), still
-  // refuse in stage().
-  turn.human = awaiting.human; turn.epoch = (turn.epoch || 0) + 1;
-  return true;
-}
-// Words this turn will not read (not taken into it, run as their own later turn, or an unconfirmed outcome): the turn
-// is refused as revoked, not told to wait for a read.
-function humanNotRead(r, tag) {
-  if (r.wakeTurn?.awaiting?.tag === tag) delete r.wakeTurn.awaiting;
-}
-// Still to be read: the refusal says the turn can send again once it has, rather than that it is over for the turn.
-function awaitingRead(w, r, s, native) {
-  const awaiting = r.wakeTurn?.awaiting;
-  return Boolean(awaiting && native?.valid?.() !== false && r.wakeTurn.boundary === boundary(w) && humanProof(w, s) === awaiting.human);
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
 function same(s, expected) { return s && JSON.stringify(identity(s)) === JSON.stringify(expected); }
@@ -166,7 +130,9 @@ function notSent(error, hold) {
 // again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (three in
 // a row, busy, waiting, switched off, a changed identity) and every other recipient stay as before: not sent, not
 // retried. Each offer is a full delivery attempt again, so the person acting on either session or pausing all
-// handoffs still ends it. The recipient's backend says so, with the time its limit opens.
+// handoffs still ends it. The recipient's backend says so, with the time its limit opens. No turn of the sender stands
+// behind a held message, so the input allowance of a running turn does not cover it: any input into the sender since
+// it was first held ends it (the person's and another agent's are one count there).
 function holdFor(w, s, error) {
   if (error?.cooldown !== true || !isSteward(w, s)) return undefined;
   const at = s.wakeBudget?.lastAt;
@@ -213,6 +179,9 @@ const shortKey = key => key === '.' ? 'root' : String(key).split('/').pop().slic
 function holdQuiet(w, row, window) {
   const intent = row.wake, now = Date.now();
   intent.status = 'held'; intent.heldAt ??= now;
+  // As for the 60-second limit: once held, any input into its sender ends it.
+  const s = w.sessions.get(intent.senderId);
+  if (s) intent.heldProof ??= identity(s);
   intent.retryAt = Math.max(now + 1000, Math.min(window.deadline, now + QUIET_CHECK_MS));
   row.text = `收件方的后台在迁移前的安静窗口里；这条先存着，窗口结束后再试一次。\n${intent.body}`;
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.quietHeld', params: { body: intent.body } }, 'notice.', row.text) || undefined;
@@ -269,10 +238,8 @@ function stage(w, s, r, native, args) {
   catch (error) { undelivered(w, s, r, args, error); throw error; }
 }
 function stageCall(w, s, r, native, args) {
-  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError(awaitingRead(w, r, s, native) ? "error.wake.turnAwaitingHumanRead" : "error.wake.turnRevokedByHuman");
-  // Item 3: the calls the turn made before it read the person's words do not count against what it sends after.
-  const epoch = r.wakeTurn.epoch || 0;
-  const turn = r.wakeStagePending?.turnId === native?.turnId && r.wakeStagePending.nativeId === native?.nativeId && r.wakeStagePending.epoch === epoch ? r.wakeStagePending : null;
+  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(w, s)) throw uiError("error.wake.turnRevokedByHuman");
+  const turn = r.wakeStagePending?.turnId === native?.turnId && r.wakeStagePending.nativeId === native?.nativeId ? r.wakeStagePending : null;
   const pending = turn?.calls.find(call => call.callId === native?.callId);
   if (pending) {
     if (pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return ['staged', 'not-sent'].includes(row?.wake?.status) ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
@@ -288,7 +255,7 @@ function stageCall(w, s, r, native, args) {
   const call = { callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise, failed: false };
   promise.catch(error => { call.failed = true; undelivered(w, s, r, args, error); });
   if (turn) turn.calls.push(call);
-  else r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, epoch, calls: [call] };
+  else r.wakeStagePending = { nativeId: native?.nativeId, turnId: native?.turnId, calls: [call] };
   return promise;
 }
 async function stageOnce(w, s, r, native, args) {
@@ -300,20 +267,19 @@ async function stageOnce(w, s, r, native, args) {
   if (args.recipient_id === s.id) throw uiError("error.wake.cannotWakeSelf");
   const replay = (s.messages || []).find(m => m.wake?.nativeId === native.nativeId && m.wake.callId === native.callId && m.wake.turnId !== native.turnId);
   if (replay) throw uiError("error.wake.nativeCallAlreadyRegistered");
-  const epoch = turn.epoch || 0, ofTurn = (s.messages || []).filter(m => m.wake?.nativeId === native.nativeId && m.wake.turnId === native.turnId);
+  const ofTurn = (s.messages || []).filter(m => m.wake?.nativeId === native.nativeId && m.wake.turnId === native.turnId);
   const previous = ofTurn.find(m => m.wake.callId === native.callId);
   if (previous) {
-    if ((previous.wake.epoch || 0) === epoch && previous.wake.recipientId === args.recipient_id && previous.wake.body === args.message && previous.wake.status === 'staged') return { status: 'staged', id: previous.id, message: '同一调用已登记，尚未投递；不会重复登记。' };
+    if (previous.wake.recipientId === args.recipient_id && previous.wake.body === args.message && previous.wake.status === 'staged') return { status: 'staged', id: previous.id, message: '同一调用已登记，尚未投递；不会重复登记。' };
     throw uiError("error.wake.turnAlreadyRegistered");
   }
-  // Every row of the turn since it last read the person's words counts, a refused one too: each message is tried once.
-  const earlier = ofTurn.filter(m => (m.wake.epoch || 0) === epoch);
-  if (earlier.length) {
+  // Every row of the turn counts, a refused one too: each message is tried once.
+  if (ofTurn.length) {
     if (!isSteward(w, s)) throw uiError("error.wake.turnAlreadyRegistered");
-    stewardLimit(earlier.map(m => m.wake.recipientId), args.recipient_id);
+    stewardLimit(ofTurn.map(m => m.wake.recipientId), args.recipient_id);
   }
   const intent = { id: randomUUID(), nativeId: native.nativeId, turnId: native.turnId, callId: native.callId, senderId: s.id, senderName: s.name,
-    sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, ...(epoch ? { epoch } : {}), time: Date.now(), status: 'staged' };
+    sourceProof: sourceIdentity(w, s), recipientId: args.recipient_id, body: args.message, boundary: turn.boundary, time: Date.now(), status: 'staged' };
   // The code says which (closed, storage, runtime changed…); the person reads one sentence for all of them.
   const issue = sourceIssue(w, s, r, intent);
   if (issue) throw Object.assign(uiError("error.wake.turnRevokedByHumanOrSetting"), { sourceIssue: issue.code });
@@ -375,18 +341,17 @@ const TURN_END_CANCELLED = Object.freeze({
   steward: ['这一轮结束时没能确认发送方还是大管家，只发第一条', 'notice.wake.stewardEnded'],
 });
 function complete(w, s, r, info) {
-  // The turn's first registered message, whatever became of it, since the turn last read the person's words (item 3);
-  // only the butler's turn has others.
-  const first = epoch => (s.messages || []).find(m => m.wake?.nativeId === info.nativeId && m.wake.turnId === info.turnId && (m.wake.epoch || 0) === epoch);
+  // The turn's first registered message, whatever became of it; only the butler's turn has others.
+  const first = (s.messages || []).find(m => m.wake?.nativeId === info.nativeId && m.wake.turnId === info.turnId);
   let steward = null;
   for (const row of s.messages || []) {
     const intent = row.wake;
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
-    // Input can end Claude's sharing proof even when the native turn completed. Only the
-    // butler keeps wake authority then; missing/failed/permission-boundary ends still cancel.
-    const completed = info.status === 'completed' || info.status === 'boundary' && info.completedAfterInput === true && isSteward(w, s);
+    // Input can end Claude's sharing proof even when the native turn completed: the turn's wake authority stays.
+    // Missing, failed and permission-boundary ends still cancel.
+    const completed = info.status === 'completed' || info.status === 'boundary' && info.completedAfterInput === true;
     let issue = !completed ? { code: 'turn-not-completed' } : sourceIssue(w, s, r, intent), reason = info.status;
-    if (!issue && row !== first(intent.epoch || 0) && !(steward ??= isSteward(w, s))) { issue = { code: 'steward-role-ended' }; reason = 'steward'; }
+    if (!issue && row !== first && !(steward ??= isSteward(w, s))) { issue = { code: 'steward-role-ended' }; reason = 'steward'; }
     if (issue) {
       intent.cancellation = { ...issue, nativeStatus: info.status ?? null, at: Date.now() };
       const [why, key] = TURN_END_CANCELLED[Object.hasOwn(TURN_END_CANCELLED, reason) ? reason : 'other'];
@@ -441,6 +406,8 @@ function heldRows(w) {
 function hold(w, row, retryAt) {
   const intent = row.wake, now = Date.now();
   intent.status = 'held'; intent.heldAt ??= now;
+  const s = w.sessions.get(intent.senderId);
+  if (s) intent.heldProof ??= identity(s);
   // Never sooner than a second from now, never later than the limit itself allows.
   intent.retryAt = Math.min(Math.max(retryAt, now + 1000), now + COOLDOWN + 1000);
   row.text = `收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了再试一次。\n${intent.body}`;
@@ -466,6 +433,11 @@ function dropHeld(w, row, issue) {
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined;
   try { durable(w); } catch { /* Shown now; the next save keeps it. */ }
 }
+function heldIssue(s, intent) {
+  const current = identity(s);
+  if (JSON.stringify(current) === JSON.stringify(intent.heldProof)) return null;
+  return { code: 'source-identity-changed', fields: Object.keys(current).filter(key => JSON.stringify(current[key]) !== JSON.stringify(intent.heldProof?.[key])) };
+}
 function retryHeld(w) {
   clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
   if (w.closed) return;
@@ -484,7 +456,7 @@ function retryHeld(w) {
       // The sender as complete() checks it at the turn's end, and the butler role; the recipient's side checks everything again.
       // A message held for a quiet window was never only the butler's to keep.
       const quietly = Boolean(row.wake.quietWindow);
-      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (quietly || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
+      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || heldIssue(s, row.wake) || (quietly || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
       catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
       if (issue) { dropHeld(w, row, issue); continue; }
       if (keepQuiet(w, row)) { try { durable(w); } catch { /* Shown now; a later attempt checks storage first. */ } continue; }
@@ -678,4 +650,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, humanQueued, humanRead, humanNotRead, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
