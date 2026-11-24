@@ -147,6 +147,8 @@ class StewardWake {
   // An event or a patrol is waiting to go out.
   pending() { return this.due() || this.patrolWanted && this.active(); }
   skip(reason) {
+    // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
+    if (this.blocked?.step) return;
     if (!this.pending()) { this.clearBlocked(); return; }
     const now = this.now();
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
