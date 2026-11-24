@@ -4438,3 +4438,34 @@ test('R121 (a): notes that would pass the send limit are cut with a pointer to t
   assert.doesNotMatch(text, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
   assert.equal(rules.dispatchText('Team', { text: 'small' }, 'short notes').includes('共享笔记里'), false);
 });
+
+test('R121 (a) review B2: notes changed back to an earlier version go with the next item again', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-A', true);
+  f.room.queueAdd('first task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  f.save('NOTES-B', true);
+  f.room.queueAdd('second task', null);
+  await f.finish('a');
+  assert.match(f.client.sends()[1][2], /second task[\s\S]*NOTES-B/);
+  f.save('NOTES-A', true);
+  f.room.queueAdd('third task', null);
+  await f.finish('a');
+  assert.match(f.client.sends()[2][2], /third task[\s\S]*NOTES-A/, 'the member is working from B; A must go again');
+  const fourth = f.room.queueAdd('fourth task', null);
+  await f.finish('a');
+  assert.equal(f.client.sends()[3][2], f.plain(fourth));
+});
+
+test('R121 (a) review B1: control characters in the notes never reach the send, and the item is still delivered', async t => {
+  const f = notesSetup(t);
+  f.save('NOTES-CTRL\u0001 bell\u0007 tab\tkept\r\nline\u001f end\u007f', true);
+  const first = f.room.queueAdd('first task', null);
+  await f.dispatcher.start(); await f.dispatcher.schedule();
+  const sent = f.client.sends()[0][2];
+  assert.doesNotMatch(sent, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u, 'workspace.cjs cleanText refuses these');
+  assert.match(sent, /NOTES-CTRL bell tab\tkept\r\nline end/);
+  const row = f.room.value.queue.find(i => i.id === first);
+  assert.equal(row.status, 'sent'); assert.ok(row.tag && row.notesSent);
+  assert.equal(rules.dispatchText('x', { text: 'y' }, '\u0001\u0002'), rules.dispatchText('x', { text: 'y' }), 'notes made only of control characters attach nothing');
+});

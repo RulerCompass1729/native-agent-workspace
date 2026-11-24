@@ -1269,23 +1269,30 @@ function rotationSubjects(rooms, sessions, outside, handedOff) {
     .filter(session => ['claude', 'codex'].includes(session.provider));
 }
 
-// R121 (a): the space's notes go with an item while the person has 「派活时附上这份笔记」 on. A member has them once
-// an item that carried this version was delivered to its current native session; a new version (the notes
-// changed, or the switch was turned on again) goes once more. A requeue forgets it (room-state.cjs queueRequeue).
+// R121 (a): the space's notes go with an item while the person has 「派活时附上这份笔记」 on. A member has them when
+// the last notes delivered to its current native session were this version; a new version (the notes changed,
+// changed back, or the switch was turned on again) goes once more. A requeue forgets it (room-state.cjs queueRequeue).
 function notesDue(room, session) {
   if (room.notesToQueue !== true || !room.notes) {
     return null;
   }
   const version = createHash('sha256').update(`${room.notesToQueueSince || 0}\n${room.notes}`).digest('hex').slice(0, 16);
-  const had = (room.queue || []).some(i => i.notesSent === version && i.tag && i.sentTo === session.id &&
-    (i.sentNative || null) === (session.nativeId || null));
-  return had ? null : version;
+  let last = null;
+  for (const i of room.queue || []) {
+    if (i.notesSent && i.tag && i.sentTo === session.id && (i.sentNative || null) === (session.nativeId || null) &&
+      (!last || (i.sentAt || 0) >= (last.sentAt || 0))) {
+      last = i;
+    }
+  }
+  return last?.notesSent === version ? null : version;
 }
 
 const NOTES_HEAD = '附：这个空间的共享笔记（人打开了「派活时附上这份笔记」；这是背景，要做的仍是上面这一件）：';
 const NOTES_CUT = '（笔记太长，这里只附了开头；全文在这个空间的共享笔记里。）';
 
 function dispatchText(roomName, item, notes = '') {
+  // workspace.cjs cleanText refuses these, and the notes field does not; they are invisible in the dialog.
+  notes = notes.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '');
   const text = body => [
     `【NAW 派活】空间「${roomName}」队列里的下一件：`,
     '',
