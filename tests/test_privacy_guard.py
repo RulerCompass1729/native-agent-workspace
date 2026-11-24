@@ -622,5 +622,209 @@ print(outcome(scan_all), len(calls))
         self.blocked(self.call("git", "commit", "-qm", "Large file", ok=False))
 
 
+    def published_old_key(self):
+        fake = "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0"
+        self.file("old-key.txt", fake)
+        self.unsafe_commit()
+        self.call("git", "rm", "-q", "old-key.txt")
+        self.unsafe_commit("Remote already removed its synthetic key")
+        self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "push", "-q", "origin", "main")
+        old = self.call("git", "rev-parse", "HEAD").stdout.strip()
+        self.call("git", "commit", "--allow-empty", "-qm", "New safe outgoing commit")
+        return old
+
+    def test_push_scope_ignores_cleaned_remote_history(self):
+        self.published_old_key()
+        result = self.call("git", "push", "origin", "main")
+        self.assertIn("verified outgoing", result.stderr)
+
+    def test_push_scope_unpublished_intermediate_key_is_blocked(self):
+        self.call("git", "push", "-q", "origin", "main")
+        fake = "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0"
+        self.file("new-key.txt", fake)
+        self.unsafe_commit()
+        self.call("git", "rm", "-q", "new-key.txt")
+        self.unsafe_commit("Clean tip after unpublished secret")
+        self.blocked(self.call("git", "push", "origin", "main", ok=False))
+
+    def test_push_scope_actual_url_does_not_borrow_origin_history(self):
+        self.published_old_key()
+        alternate = self.base / "alternate.git"
+        self.call("git", "init", "--bare", "-q", str(alternate))
+        self.blocked(self.call("git", "push", str(alternate), "main", ok=False))
+
+    def scope_call(self, remote, old, code=""):
+        tip = self.call("git", "rev-parse", "HEAD").stdout.strip()
+        update = "refs/heads/main %s refs/heads/main %s\n" % (tip, old)
+        script = "import sys\nimport scripts.privacy_guard as pg\n" + code + "\n" + \
+            "sys.argv=['guard','push','--remote'," + repr(remote) + "]\n" + \
+            "import io;sys.stdin=io.TextIOWrapper(io.BytesIO(" + repr(update.encode()) + "))\n" + \
+            "raise SystemExit(pg.main())\n"
+        return self.call(sys.executable, "-c", script, ok=False)
+
+    def test_push_scope_missing_remote_proof_falls_back(self):
+        old = self.published_old_key()
+        self.blocked(self.scope_call(str(self.base / "missing.git"), old))
+
+    def test_push_scope_stale_advertisement_falls_back(self):
+        self.published_old_key()
+        wrong = self.call("git", "rev-parse", "HEAD~2").stdout.strip()
+        result = self.scope_call(str(self.remote), wrong)
+        self.blocked(result)
+        self.assertIn("full history", result.stderr)
+
+    def test_push_scope_missing_remote_object_falls_back(self):
+        old = self.published_old_key()
+        tree = self.call("git", "--git-dir=" + str(self.remote), "rev-parse", "main^{tree}").stdout.strip()
+        raw = ("tree %s\nauthor Fixture <fixture@example.com> 1800000000 +0000\n"
+               "committer Fixture <fixture@example.com> 1800000000 +0000\n\nRemote-only fixture\n") % tree
+        result = subprocess.run(["git", "--git-dir=" + str(self.remote), "hash-object", "-w", "-t", "commit", "--stdin"],
+                                input=raw, text=True, capture_output=True, env=self.env, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        self.call("git", "--git-dir=" + str(self.remote), "update-ref", "refs/heads/remote-only", result.stdout.strip())
+        result = self.scope_call(str(self.remote), old)
+        self.blocked(result)
+        self.assertIn("full history", result.stderr)
+
+    def test_push_scope_changed_after_scan_falls_back(self):
+        old = self.published_old_key()
+        code = "real=pg.remote_snapshot\nn=0\ndef changed(*args):\n global n\n n+=1\n return real(*args) if n==1 else None\npg.remote_snapshot=changed"
+        result = self.scope_call(str(self.remote), old, code)
+        self.blocked(result)
+        self.assertIn("full history", result.stderr)
+
+    def test_push_scope_inherited_key_in_new_tree_is_still_blocked(self):
+        self.file("key.txt", "gh" + "p_" + "A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0")
+        self.unsafe_commit()
+        self.call("git", "-c", "core.hooksPath=" + str(self.base / "no-hooks"), "push", "-q", "origin", "main")
+        self.unsafe_commit("New commit still carries the key in its tree")
+        self.blocked(self.call("git", "push", "origin", "main", ok=False))
+
+
+    def test_push_scope_rechecks_after_gitleaks(self):
+        old = self.published_old_key()
+        code = "real=pg.remote_snapshot\nflushed=False\noriginal=pg.Scanner.flush\ndef flush(self,*args,**kw):\n global flushed\n flushed=True\n return original(self,*args,**kw)\npg.Scanner.flush=flush\ndef fresh(*args):\n return None if flushed else real(*args)\npg.remote_snapshot=fresh"
+        result = self.scope_call(str(self.remote), old, code)
+        self.blocked(result)
+        self.assertIn("full history", result.stderr)
+
+    def test_batch_objects_rejects_corrupt_or_oversized_responses(self):
+        code = """
+import scripts.privacy_guard as pg
+oid = pg.git('rev-parse','HEAD:scripts/privacy_guard.py').strip()
+original = pg.run
+for kind in ('wrong oid', 'oversized', 'truncated', 'extra'):
+    calls = []
+    def response(args, **kw):
+        calls.append(args)
+        result = original(args, **kw)
+        if args[1:3] == ['cat-file','--batch-check']:
+            if kind == 'wrong oid': return b'f'*len(oid)+b' blob 1\\n'
+            if kind == 'oversized': return oid+b' blob '+str(pg.MAX_BLOB+1).encode()+b'\\n'
+        if args[1:3] == ['cat-file','--batch']:
+            if kind == 'truncated': return result[:-2]
+            if kind == 'extra': return result+b'extra'
+        return result
+    pg.run = response
+    try:
+        pg.batch_objects([oid])
+    except pg.Blocked:
+        if kind in ('wrong oid','oversized'):
+            assert not any(a[1:3] == ['cat-file','--batch'] for a in calls)
+    else:
+        raise SystemExit('bad response passed')
+pg.run=original
+print('batch corruptions blocked')
+"""
+        self.assertIn('batch corruptions blocked',self.call(sys.executable,'-c',code).stdout)
+
+    def test_batch_objects_reads_multiple_blobs_per_process(self):
+        for i in range(50):
+            self.file('batch/%d.txt' % i, 'unique safe contents %d\n' % i)
+        code = """
+import scripts.privacy_guard as pg
+original=pg.run
+calls=[]
+def track(args,**kw):
+    if args[1:2] == ['cat-file']: calls.append(args)
+    return original(args,**kw)
+pg.run=track
+scan=pg.Scanner();scan.staged();scan.finish()
+assert calls and all(a[2] in ['--batch-check','--batch'] for a in calls)
+assert len(calls) <= 2*((len(scan.blobs)+15)//16)
+print('bounded batch calls',len(calls),'blobs',len(scan.blobs))
+"""
+        self.assertIn('bounded batch calls',self.call(sys.executable,'-c',code).stdout)
+
+
+    def test_push_scope_excludes_every_remote_ref_not_only_target(self):
+        self.call('git','push','-q','origin','main')
+        self.call('git','checkout','-qb','published')
+        self.file('old-key.txt','gh'+'p_'+'A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0')
+        self.unsafe_commit()
+        self.call('git','rm','-q','old-key.txt')
+        self.unsafe_commit('Published branch cleaned its historical key')
+        self.call('git','-c','core.hooksPath='+str(self.base/'no-hooks'),'push','-q','origin','published')
+        self.call('git','checkout','-q','main')
+        self.call('git','merge','--no-ff','-qm','Merge published safe branch','published')
+        result=self.call('git','push','origin','main')
+        self.assertIn('1 commits',result.stdout)
+        self.assertIn('verified outgoing',result.stderr)
+
+
+    def test_push_scope_cancel_reaps_owned_probe(self):
+        code = """
+import os,signal,sys
+from unittest.mock import patch
+import scripts.privacy_guard as pg
+original=pg.subprocess.Popen
+owned=[]
+def interrupted(*args,**kw):
+    if not kw.get('start_new_session'):return original(*args,**kw)
+    process=original([sys.executable,'-c','import time;time.sleep(60)'],**kw)
+    owned.append(process);communicate=process.communicate
+    def call(*args,**kw):
+        if kw.get('timeout') is not None:raise KeyboardInterrupt()
+        return communicate(*args,**kw)
+    process.communicate=call
+    return process
+try:
+    with patch.object(pg.subprocess,'Popen',interrupted):
+        try:pg.remote_snapshot('synthetic-remote',[])
+        except KeyboardInterrupt:pass
+    assert owned and owned[0].poll() is not None, 'probe outlived cancellation'
+    print('cancel reaped owned probe')
+finally:
+    for process in owned:
+        if process.poll() is None:
+            os.killpg(process.pid,signal.SIGKILL)
+        process.communicate()
+"""
+        self.assertIn('cancel reaped owned probe',self.call(sys.executable,'-c',code).stdout)
+
+
+    def test_push_scope_double_url_rewrite_cannot_borrow_another_repository(self):
+        self.call('git','push','-q','origin','main')
+        old=self.call('git','rev-parse','HEAD').stdout.strip()
+        other=self.base/'other.git'
+        self.call('git','clone','--bare','-q',str(self.remote),str(other))
+        self.call('git','checkout','-qb','published')
+        self.file('old-key.txt','gh'+'p_'+'A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0')
+        self.unsafe_commit()
+        self.call('git','rm','-q','old-key.txt')
+        self.unsafe_commit('Clean tree after key in unpublished history')
+        self.call('git','-c','core.hooksPath='+str(self.base/'no-hooks'),'push','-q',str(other),'published')
+        self.call('git','checkout','-q','main')
+        self.call('git','merge','--no-ff','-qm','Merge branch not on actual target','published')
+        self.call('git','config','url.'+str(self.remote)+'.insteadOf','fixture-alias:')
+        self.call('git','config','url.'+str(other)+'.insteadOf',str(self.remote))
+        self.call('git','remote','set-url','origin','fixture-alias:')
+        result=self.call('git','push','origin','main',ok=False)
+        self.blocked(result)
+        self.assertIn('full history',result.stderr)
+        actual=self.call('git','--git-dir='+str(self.remote),'rev-parse','main').stdout.strip()
+        self.assertEqual(actual,old)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
