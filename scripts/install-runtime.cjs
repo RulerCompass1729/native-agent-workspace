@@ -71,18 +71,25 @@ function staleWake(state, s, m) {
   return { id: m.wake.id ?? null, sender: sender.id, turnId: m.wake.turnId ?? null, reason: 'staged; sender idle and the wake turn is not its current turn' };
 }
 // A relay or automatic message in flight would be paused or withdrawn by the new app's startup.
-// A held wake still goes out from the butler limit timer, so it blocks too.
-function assertQuiet(view) {
-  assert.ok(!view.layout.pending, 'No pending backend activation');
-  const stale = [];
+// A held wake still goes out from the butler limit timer, so it blocks too. Each blocker says who and where.
+function quietBlockers(view) {
+  const blockers = [], stale = [];
+  if (view.layout.pending) {
+    blockers.push({ kind: 'activation', backend: view.layout.pending, message: 'No pending backend activation' });
+  }
   for (const backend of view.backends) {
     const state = backend.state;
+    const name = id => (state.sessions.find(s => s.id === id) || {}).name || null;
     const rooms = [state.room, ...(Array.isArray(state.rooms) ? state.rooms : [])];
     for (const room of rooms) {
-      assert.notEqual(room && room.run && room.run.status, 'running', 'No running collaboration relay: ' + backend.key);
+      if (room && room.run && room.run.status === 'running') {
+        blockers.push({ kind: 'relay', backend: backend.key, room: room.id || 'shared', roomName: room.name || null, message: 'No running collaboration relay: ' + backend.key });
+      }
     }
     for (const lease of state.peerLeases || []) {
-      assert.notEqual(lease && lease.status, 'running', 'No running peer lease: ' + backend.key);
+      if (lease && lease.status === 'running') {
+        blockers.push({ kind: 'peer-lease', backend: backend.key, message: 'No running peer lease: ' + backend.key });
+      }
     }
     for (const s of state.sessions) {
       for (const m of s.messages || []) {
@@ -91,10 +98,18 @@ function assertQuiet(view) {
           stale.push({ backend: backend.key, ...wake });
           continue;
         }
-        assert.ok(!['staged', 'sending', 'held'].includes(m && m.wake && m.wake.status), 'No automatic message in flight: ' + backend.key);
+        if (['staged', 'sending', 'held'].includes(m && m.wake && m.wake.status)) {
+          const sender = m.wake.senderId || s.id;
+          blockers.push({ kind: 'wake', backend: backend.key, status: m.wake.status, sender, senderName: name(sender), session: s.id, sessionName: s.name || null, message: 'No automatic message in flight: ' + backend.key });
+        }
       }
     }
   }
+  return { blockers, stale };
+}
+function assertQuiet(view) {
+  const { blockers, stale } = quietBlockers(view);
+  assert.ok(!blockers.length, blockers.length ? blockers[0].message : '');
   return stale;
 }
 
@@ -206,8 +221,30 @@ function views() {
     for (const service of state.services) assert.ok(service.identity, 'Backend identity unavailable');
     return { state, views: views(), restarting: restartedKeys(view), expectedActive: predictActive(view), view };
   }
+  // A session still working may finish its turn, reply or start the next one meanwhile; it stays on its backend.
+  // Only a loss stops the install: a backend or session gone or restarted, a running session leaving the running
+  // states (ended, recoverable, disconnected, error or a state this check does not know), a record dropped or a
+  // draft changed (alpha.284 rolled back on a session going from working to idle).
   function retained(before, after) {
-    assert.deepEqual(after.state, before.state, 'Backend, session and native process state retained');
+    const was = before.state, now = after.state;
+    assert.deepEqual([now.active, now.pending], [was.active, was.pending], 'Active backend retained');
+    assert.deepEqual(now.services.map(s => s.key), was.services.map(s => s.key), 'Backends retained');
+    for (const service of was.services) {
+      const kept = now.services.find(s => s.key === service.key);
+      assert.deepEqual([kept.pid, kept.identity, kept.version], [service.pid, service.identity, service.version], 'Backend process unchanged: ' + service.key);
+      assert.ok(kept.sessions >= service.sessions, 'Sessions kept: ' + service.key);
+      assert.ok(kept.messages >= service.messages, 'Room records kept: ' + service.key);
+    }
+    const running = ['starting', 'working', 'approval', 'stopping', 'background', 'idle'];
+    for (const session of was.sessions) {
+      const kept = now.sessions.find(s => s.id === session.id);
+      assert.ok(kept, 'Session retained: ' + session.id);
+      assert.deepEqual([kept.nativeId, kept.backend, kept.settings, kept.draft], [session.nativeId, session.backend, session.settings, session.draft], 'Session, settings and native draft retained: ' + session.id);
+      assert.ok(!running.includes(session.state) || running.includes(kept.state), `Session still running: ${session.id} ${session.state} -> ${kept.state}`);
+      if (session.identity) {
+        assert.deepEqual([kept.pid, kept.identity], [session.pid, session.identity], 'Native process retained: ' + session.id);
+      }
+    }
     assert.deepEqual(after.views, before.views, 'Flushed UI drafts retained');
   }
   async function verifyUpgrade(baseline) {
@@ -275,6 +312,11 @@ function views() {
 
     return after;
   }
-  return { capture, retained, verifyUpgrade, backUp: snapshot => backUpRestarted(snapshot.view) };
+  // For an operator's bounded wait: what capture would refuse now, without refusing.
+  async function blockers() {
+    const view = await readBackends();
+    return { view, ...quietBlockers(view) };
+  }
+  return { capture, retained, verifyUpgrade, blockers, backUp: snapshot => backUpRestarted(snapshot.view) };
 }
 module.exports = { createInspector };

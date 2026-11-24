@@ -1410,8 +1410,12 @@ function connectionUpdateOptions(client, applicationVersion, profile = roomState
     const effectiveActive = entry.state.sessions.some(value => (client.sessionState?.(value) || value.state) !== 'ended');
     // Moving idle sessions too (T-122): automatic only where the runtime proves nothing would be lost.
     const plan = old && !unavailable && entry !== client.active ? backendSwitch.backendPlan(entry.state, value => client.sessionState?.(value) || value.state, runningRelays(client)) : null;
+    // A plan that stops nothing (its sessions only carried, such as recoverable ones whose process is gone) still
+    // moves (alpha.290: such a backend was told as not movable for good). A refused one keeps the menu's own
+    // guidance; its reason goes only to the version line (moveRefused).
     options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
-      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, blocked: Boolean(plan.blocked), reason: plan.reason, reasonUiMessage: plan.reasonUiMessage || null, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
+      switch: plan && (plan.stops.length || plan.blocked || plan.ready) ? { ready: plan.ready, auto: plan.auto, blocked: Boolean(plan.blocked), reason: plan.reason, reasonUiMessage: plan.reasonUiMessage || null, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
+      moveRefused: plan && !plan.ready && !plan.blocked ? plan.reason || null : null,
       count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
       // Which sessions this backend holds, so a menu can name them (T-131).
       sessions: visible.map(value => ({ id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 80) : '' })),
@@ -1682,7 +1686,15 @@ function passQuietWindows(input) {
   let result;
   try { result = quietWindows.pass(input); } catch { return; }
   for (const window of result.closed) {
-    if (window.code === 'timeout') try { versionEvents?.quietWindowTimedOut(window); } catch { /* Kept in its record. */ }
+    if (window.code !== 'timeout') continue;
+    // Who still holds the move, by the same rule, so the line names them.
+    let held = null;
+    try {
+      const option = input.options.find(o => `backend:${o.backendKey}` === window.scope);
+      const wait = option && queueRules.moveWait(option, input.settings, input.sessions, input.humanAt, Date.now(), input.failed, input.quietMs, input.unprovenQuietMs);
+      if (wait) held = { sessions: option.sessions || [], wait };
+    } catch { held = null; }
+    try { versionEvents?.quietWindowTimedOut(window, held); } catch { /* Kept in its record. */ }
   }
 }
 function quietWindowMoved(key, code) {

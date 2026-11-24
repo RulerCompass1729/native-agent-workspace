@@ -92,8 +92,8 @@ test('286 to 287: the butler gets one event and the secretary one notice, with v
   assert.match(event.payload.title, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u);
   const text = event.payload.text;
   assert.match(text, new RegExp(`^【NAW 版本】已装 ${NEW}（原来是 ${OLD}），\\d{4}-\\d\\d-\\d\\dT[\\d:]+Z 重启完成。\n还有 2 个后台不在 0\\.1\\.0-alpha\\.287：\n`, 'u'));
-  assert.match(text, /- e2b6a43（0\.1\.0-alpha\.286；大管家、项目经理、A、B）：4 个会话里 1 个在干活或等人回答，都停下并连续安静 10 分钟/u);
-  assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；C）：1 个会话里 1 个还没连续安静 10 分钟，安静后自动迁/u);
+  assert.match(text, /- e2b6a43（0\.1\.0-alpha\.286；大管家、项目经理、A、B）：4 个会话里 1 个（A）在干活或等人回答，都停下并连续安静 10 分钟/u);
+  assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；C）：1 个会话里 1 个（C）还没连续安静 10 分钟，安静后自动迁/u);
   assert.match(text, /迁完或失败时再发一条。$/u);
   assert.doesNotMatch(text, /SECRET-CONVERSATION-BODY/u, 'nothing of any conversation');
   const owed = f.owed();
@@ -146,6 +146,19 @@ test('a restart on the same version says 「重启完成」 and does not say 「
   }
 });
 
+test('a first start without a seen record names the version the daily installer replaced (290: 「原来是 没有记录」)', t => {
+  const dir = directory(t);
+  const receipt = (version, previous) => fs.writeFileSync(path.join(dir, 'installation.json'), JSON.stringify({ version, commit: 'c'.repeat(40), previous, installedAt: '2026-11-24T04:24:00.000Z' }), { mode: 0o600 });
+  receipt('0.1.0-alpha.287', '0.1.0-alpha.286');
+  const first = app(t, { dir, entries: [] }); first.observe();
+  assert.match(first.recorded()[0].payload.text, /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 0\.1\.0-alpha\.286），/u);
+  // A receipt for another version, or one naming no previous version, is not used.
+  const other = directory(t);
+  fs.writeFileSync(path.join(other, 'installation.json'), JSON.stringify({ version: '0.1.0-alpha.286', previous: '0.1.0-alpha.285' }), { mode: 0o600 });
+  const stale = app(t, { dir: other, entries: [] }); stale.observe();
+  assert.match(stale.recorded()[0].payload.text, /（原来是 没有记录）/u);
+});
+
 test('a backend that moved gets a follow-up with what is left; one that failed gets one too, once; the last one ends it', t => {
   const dir = directory(t); seen(dir, OLD);
   const [a, b] = backends();
@@ -156,7 +169,7 @@ test('a backend that moved gets a follow-up with what is left; one that failed g
   assert.equal(rows.length, 2);
   assert.equal(rows[1].kind, 'blocked'); assert.equal(rows[1].payload.reason, 'backend-moved');
   assert.equal(rows[1].payload.outcome, 'moved:1,gone:0,failed:0,behind:1');
-  assert.match(rows[1].payload.text, /^【NAW 版本】后台迁移（0\.1\.0-alpha\.287）：\n- bbbbbbb 迁完：1 个会话里 1 个已在 0\.1\.0-alpha\.287\n还有 1 个后台不在 0\.1\.0-alpha\.287：\n- e2b6a43（[^）]+）：4 个会话里 1 个在干活或等人回答/u);
+  assert.match(rows[1].payload.text, /^【NAW 版本】后台迁移（0\.1\.0-alpha\.287）：\n- bbbbbbb 迁完：1 个会话里 1 个已在 0\.1\.0-alpha\.287\n还有 1 个后台不在 0\.1\.0-alpha\.287：\n- e2b6a43（[^）]+）：4 个会话里 1 个（A）在干活或等人回答/u);
   f.scope.autoSwitchFailed.add(KEY_A); f.observe(); f.observe();
   rows = f.recorded();
   assert.equal(rows.length, 3, 'a failure is told once');
@@ -192,27 +205,30 @@ test('what each old backend waits for, by the same rule as the move NAW chooses'
   const option = sessions => {
     const plan = backendSwitch.backendPlan(entry(sessions));
     return { backendKey: KEY_B, sessions: sessions.map(s => ({ id: s.id, name: s.name })),
-      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, blocked: plan.blocked, stops: plan.stops } : null };
+      switch: plan && (plan.stops.length || plan.blocked || plan.ready) ? { ready: plan.ready, auto: plan.auto, blocked: plan.blocked, reason: plan.reason, stops: plan.stops } : null,
+      moveRefused: plan && !plan.ready && !plan.blocked ? plan.reason || null : null };
   };
   const wait = (sessions, settings = { auto: true, migrate: true }, fail = failed) => rules.moveWait(option(sessions), settings, sessions, humanAt, now, fail);
+  const code = (...args) => wait(...args)?.code;
   const quiet = stoppable('q', 'Q', 3600000);
   assert.equal(wait([quiet]), null, 'quiet for long enough: moved');
   assert.equal(rules.nextBackendMove([option([quiet])], { auto: true, migrate: true }, [quiet], humanAt, now, failed)?.backendKey, KEY_B);
-  assert.deepEqual(wait([stoppable('q', 'Q', 60000)]), { code: 'quiet-10m', waiting: 1 });
+  assert.deepEqual(wait([stoppable('q', 'Q', 60000)]), { code: 'quiet-10m', waiting: 1, ids: ['q'] });
   const team = stoppable('t', 'T', 20 * 60000, { fleet: [{ event: 'TeammateIdle', time: now - 20 * 60000 }] });
-  assert.deepEqual(wait([team]), { code: 'quiet-30m', waiting: 1 });
+  assert.deepEqual(wait([team]), { code: 'quiet-30m', waiting: 1, ids: ['t'] });
   assert.equal(wait([stoppable('t', 'T', 40 * 60000, { fleet: [{ event: 'TeammateIdle', time: now - 40 * 60000 }] })]), null);
-  assert.deepEqual(wait([quiet, stoppable('w', 'W', 0, { state: 'working' })]), { code: 'busy', waiting: 1 });
-  assert.deepEqual(wait([quiet, stoppable('w', 'W', 0, { state: 'working' })], { auto: true, migrate: false }), { code: 'busy-auto', waiting: 1 });
-  assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stoppable('e', 'E', 0, { state: 'ended' })]), { code: 'busy', waiting: 1 }, 'an ended session is not at work');
-  assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'approval' })]), { code: 'busy', waiting: 1 }, 'one waiting for the person is counted');
-  assert.deepEqual(wait([stoppable('d', 'D', 3600000, { state: 'disconnected' })]), { code: 'blocked' }, 'a broken session needs the person');
+  assert.deepEqual(wait([quiet, stoppable('w', 'W', 0, { state: 'working' })]), { code: 'busy', waiting: 1, ids: ['w'] });
+  assert.deepEqual(wait([quiet, stoppable('w', 'W', 0, { state: 'working' })], { auto: true, migrate: false }), { code: 'busy-auto', waiting: 1, ids: ['w'] });
+  assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stoppable('e', 'E', 0, { state: 'ended' })]), { code: 'busy', waiting: 1, ids: ['w'] }, 'an ended session is not at work');
+  assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'approval' })]), { code: 'busy', waiting: 1, ids: ['w'] }, 'one waiting for the person is counted');
+  assert.equal(code([stoppable('d', 'D', 3600000, { state: 'disconnected' })]), 'blocked', 'a broken session needs the person');
+  assert.match(wait([stoppable('d', 'D', 3600000, { state: 'disconnected' })]).reason, /^等空闲后更新：D/u, 'with the reason that names it');
   for (const stuck of [stoppable('d', 'D', 3600000, { state: 'disconnected' }), stoppable('n', 'N', 3600000, { nativeId: null }), stoppable('o', 'O', 3600000, { provider: 'other' })])
-    assert.deepEqual(wait([stoppable('w', 'W', 0, { state: 'working' }), stuck]), { code: 'blocked' }, `not told as passing by itself: ${stuck.id}`);
-  assert.deepEqual(wait([stoppable('h', 'H', 0, { state: 'working', provider: 'dsh' })]), { code: 'blocked' }, 'an unsupported provider at work never moves by itself');
-  assert.deepEqual(wait([stoppable('s', 'S', 0, { state: 'working', nativeId: null })]), { code: 'busy', waiting: 1 }, 'a starting session gets its identity');
+    assert.equal(code([stoppable('w', 'W', 0, { state: 'working' }), stuck]), 'blocked', `not told as passing by itself: ${stuck.id}`);
+  assert.equal(code([stoppable('h', 'H', 0, { state: 'working', provider: 'dsh' })]), 'blocked', 'an unsupported provider at work never moves by itself');
+  assert.deepEqual(wait([stoppable('s', 'S', 0, { state: 'working', nativeId: null })]), { code: 'busy', waiting: 1, ids: ['s'] }, 'a starting session gets its identity');
   assert.deepEqual(wait([quiet], { auto: true, migrate: false }), { code: 'needs-person' });
-  assert.deepEqual(wait([stoppable('n', 'N', 3600000, { nativeId: null })]), { code: 'blocked' });
+  assert.equal(code([stoppable('n', 'N', 3600000, { nativeId: null })]), 'blocked');
   assert.deepEqual(wait([quiet], { auto: true, migrate: true }, new Set([KEY_B])), { code: 'failed' });
   assert.equal(rules.nextBackendMove([option([stoppable('q', 'Q', 60000)])], { auto: true, migrate: true }, [stoppable('q', 'Q', 60000)], humanAt, now, failed), null);
   // Proven by the runtime and automatic updates on: moved at once, whatever the quiet.
@@ -220,6 +236,25 @@ test('what each old backend waits for, by the same rule as the move NAW chooses'
   assert.equal(wait([proven], { auto: true, migrate: false }), null);
   for (const code of ['quiet-10m', 'quiet-30m', 'busy', 'busy-auto', 'needs-person', 'blocked', 'not-movable', 'session-missing', 'failed', 'moving', 'next'])
     assert.equal(typeof events?.WAITS[code], 'function', `a sentence for ${code}`);
+});
+
+test('alpha.290: a backend left with only recoverable sessions is queued to move, and one NAW refuses is told with its reason', t => {
+  const dir = directory(t); seen(dir, OLD);
+  // Codex sessions whose process is gone: nothing to stop, only carried (backend-switch.cjs sessionPlan).
+  const carried = { key: KEY_A, client: {}, state: { runtimeVersion: OLD, capabilities: CAPS, servicePid: 4101, room: { messages: [] }, sessions: [
+    stoppable('r1', 'R1', 0, { provider: 'codex', state: 'recoverable' }), stoppable('r2', 'R2', 0, { provider: 'codex', state: 'recoverable' })] } };
+  const early = { key: KEY_B, client: {}, state: { runtimeVersion: OLD, capabilities: ['atomicShutdown'], servicePid: 4102, room: { messages: [] }, sessions: [stoppable('o', 'O', 3600000)] } };
+  const f = app(t, { dir, entries: [carried, early] });
+  const [option] = f.scope.connectionUpdateOptions(f.client, NEW, f.scope.roomState);
+  assert.deepEqual([option.ready, option.switch?.ready, option.switch?.stops], [false, true, []], 'a plan that stops nothing is kept');
+  assert.equal(rules.nextBackendMove([option], { auto: true, migrate: true }, f.client.snapshot().sessions, new Map(), Date.now(), new Set())?.backendKey, KEY_A,
+    'the person\'s migration setting moves it');
+  assert.deepEqual(rules.moveWait(option, { auto: true, migrate: false }, f.client.snapshot().sessions, new Map(), Date.now(), new Set()), { code: 'needs-person' },
+    'without it the person is asked, as for any move the runtime cannot prove');
+  f.observe();
+  const text = f.recorded()[0].payload.text;
+  assert.match(text, /- e2b6a43（0\.1\.0-alpha\.286；R1、R2）：排队自动迁（每分钟迁一个后台）/u);
+  assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；O）：NAW 不能自己迁：这个早期后台不支持安全的一步更新。/u);
 });
 
 test('without a designated secretary only the butler\'s event is kept, without an error; a secretary that is the butler is not told twice', t => {
