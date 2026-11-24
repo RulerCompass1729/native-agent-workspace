@@ -6,7 +6,7 @@ function windowId(source) {
   return id;
 }
 
-function windowFrames(contexts, localPageWindows) {
+function windowFrames(contexts, localPageWindows, electronWindows) {
   const proof = { windows: [], hiddenBackgroundWindows: [] }, ids = new Set(), owners = new Set();
   for (const c of contexts) {
     if (c.win.isDestroyed()) continue;
@@ -35,6 +35,19 @@ function windowFrames(contexts, localPageWindows) {
       ids.add(id);
       proof.localPageWindowIds.push(id);
     }
+  }
+  if (electronWindows !== undefined) {
+    // Every BrowserWindow, so the installer can tell an unregistered NAW window from a system one.
+    const listed = new Set();
+    for (const win of electronWindows) {
+      if (win.isDestroyed()) continue;
+      const source = win.getMediaSourceId(), id = windowId(source);
+      if (listed.has(id) || listed.size >= 1000 || win.getMediaSourceId() !== source || win.isDestroyed())
+        throw Error('Window frame unavailable');
+      listed.add(id);
+    }
+    for (const id of ids) if (!listed.has(id)) throw Error('Window frame unavailable');
+    proof.electronWindowIds = [...listed];
   }
   return proof;
 }

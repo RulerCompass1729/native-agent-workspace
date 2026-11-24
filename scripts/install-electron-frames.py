@@ -80,22 +80,41 @@ def observation(value, pid):
     return records, sorted(displays, key=lambda row: row['id']), layers
 
 
-def infer_menu_windows(records, displays, layers, managed):
+def outside_menu_bands(box, displays):
+    # Anything touching a menu-bar band must pass the exact menu rule; unknown displays give no exemption.
+    if not displays or any(d['menuBarHeight'] is None for d in displays):
+        return False
+    for d in displays:
+        band = d['bounds']
+        if (box['x'] < band['x'] + band['width'] and band['x'] < box['x'] + box['width'] and
+                box['y'] < band['y'] + d['menuBarHeight'] and band['y'] < box['y'] + box['height']):
+            return False
+    return True
+
+
+def infer_menu_windows(records, displays, layers, managed, electron=None):
     # Authorized geometry inference, not proof of an AppKit class or creator.
-    counts = {}
+    counts, offscreen = {}, []
     for row in records:
         if row['id'] in managed:
             continue
+        require(electron is None or row['id'] not in electron)
         box = row['bounds']
         matches = [d for d in displays if layers.get(row['id']) == 0 and d['menuBarHeight'] is not None and
                    box['x'] == d['bounds']['x'] and box['y'] == d['bounds']['y'] and
                    box['width'] == d['bounds']['width'] and box['height'] <= d['menuBarHeight']]
+        if not matches and layers.get(row['id']) == 0 and row['onScreen'] is False and outside_menu_bands(box, displays):
+            # One hidden window that is no BrowserWindow (v4) or unproven (older GUI); compare() judges it.
+            offscreen.append(dict(bounds=box, basis='unproven' if electron is None else 'outside-electron'))
+            require(len(offscreen) <= 1)
+            continue
         require(len(matches) == 1)
         number = matches[0]['id']
         counts[number] = counts.get(number, 0) + 1
         require(counts[number] <= 4)
-    return [dict(display=d['id'], count=counts[d['id']], bounds=d['bounds'], menuBarHeight=d['menuBarHeight'])
-            for d in displays if d['id'] in counts]
+    menus = [dict(display=d['id'], count=counts[d['id']], bounds=d['bounds'], menuBarHeight=d['menuBarHeight'])
+             for d in displays if d['id'] in counts]
+    return menus, offscreen
 
 
 def descriptor(profile, pid):
@@ -153,21 +172,21 @@ def exchange(d, pid, kind, nonce):
 
 def request(profile, pid, started):
     d, identity = descriptor(profile, pid)
-    nonce = secrets.token_hex(16)
-    value = exchange(d, pid, 'window-frames-v3', nonce)
-    version = 3
-    if value == LEGACY_UNSUPPORTED and value['retry'] is False:
-        # A current broker reports an unavailable capture separately.
+    for kind, version in [('window-frames-v4', 4), ('window-frames-v3', 3), ('window-frames', 1)]:
         nonce = secrets.token_hex(16)
-        value = exchange(d, pid, 'window-frames', nonce)
-        version = 1
+        value = exchange(d, pid, kind, nonce)
+        # A current broker reports an unavailable capture separately.
+        if not (value == LEGACY_UNSUPPORTED and value['retry'] is False):
+            break
     return validate(value, pid, started, nonce, time.time() * 1000, identity, version)
 
 
 def validate(value, pid, started, nonce, now, identity, version=1):
     keys = {'version', 'basis', 'pid', 'started', 'profile', 'nonce', 'capturedAt', 'windows', 'hiddenBackgroundWindows'}
-    if version == 3:
+    if version >= 3:
         keys.add('localPageWindowIds')
+    if version == 4:
+        keys.add('electronWindowIds')
     require(isinstance(value, dict) and set(value) == keys)
     require(type(value['version']) is int and value['version'] == version and value['basis'] == BASIS and type(value['pid']) is int and value['pid'] == pid and value['started'] == started and value['nonce'] == nonce)
     require(value['profile'] == identity)
@@ -185,13 +204,19 @@ def validate(value, pid, started, nonce, now, identity, version=1):
             owners.add(owner); ids.add(number)
             require(len(ids) <= 1000)
             rows[number] = dict(row, frame=rectangle(row['frame']))
-    if version == 3:
+    if version >= 3:
         locals_ids = value['localPageWindowIds']
         require(isinstance(locals_ids, list) and len(ids) + len(locals_ids) <= 1000)
         for number in locals_ids:
             require(type(number) is int and 0 < number <= 0xffffffff and number not in ids)
             ids.add(number)
         result['localPageWindowIds'] = locals_ids
+    if version == 4:
+        listed = value['electronWindowIds']
+        require(isinstance(listed, list) and len(listed) <= 1000)
+        require(all(type(n) is int and 0 < n <= 0xffffffff for n in listed) and len(set(listed)) == len(listed))
+        require(ids.issubset(listed))
+        result['electronWindowIds'] = listed
     return result
 
 
@@ -203,11 +228,12 @@ def collect(pid, profile, started, sample=observe, frames=request):
     local_pages = proof.get('localPageWindowIds', [])
     managed = set(live).union(background, local_pages)
     require(len(managed) == len(live) + len(background) + len(local_pages) and managed.issubset({row['id'] for row in before}))
-    inferred = infer_menu_windows(before, displays, layers, managed)
+    electron = proof.get('electronWindowIds')
+    inferred, offscreen = infer_menu_windows(before, displays, layers, managed, None if electron is None else set(electron))
     require(all(row['onScreen'] is False for row in before if row['id'] in background))
     result = [dict(row, frame=live[row['id']]['frame'], owner=live[row['id']]['owner'], frameBasis=BASIS) for row in before if row['id'] in live]
     require(observation(sample(pid), pid) == (before, displays, layers))
-    return dict(pid=pid, windows=result, inferredMenuWindows=inferred)
+    return dict(pid=pid, windows=result, inferredMenuWindows=inferred, offscreenWindows=offscreen)
 
 
 if __name__ == '__main__':
