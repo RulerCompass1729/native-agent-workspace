@@ -616,7 +616,16 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   await assert.rejects(rt.send('race before echo', 't-race', () => true), e => e.notSent === true);
   assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero dispatch bytes written during un-echoed keystroke window');
 
-  // Even an unrelated repaint arriving during the quiet window cannot re-enable dispatch before settling.
+  // r4 #1: Even AFTER the quiet deadline expires, without a post-input PTY repaint from agy, cached screen stays unconfirmed and dispatch MUST still refuse!
+  clock += 1000;
+  rt.syncScreenState(activeTerm.screen);
+  assert.equal(rt.chatAvailable, false, 'stale cached frame never re-enables readiness after deadline without post-input repaint');
+  await assert.rejects(rt.send('still no repaint after 1s', 't-no-repaint', () => true), e => e.notSent === true);
+  assert.equal(activeTerm.writes.length, writesRightAfterKey);
+
+  // Start another human keystroke and verify an unrelated repaint during the settle window still cannot re-enable dispatch before quietMs elapses.
+  ws.input(sessionId, 'e', 'owner-1');
+  const writesAfterSecondKey = activeTerm.writes.length;
   clock += 100;
   await paint(activeTerm, [
     'Antigravity CLI 1.5.16',
@@ -627,7 +636,7 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   ]);
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('race during settle', 't-settle', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesRightAfterKey);
+  assert.equal(activeTerm.writes.length, writesAfterSecondKey);
 
   // Once agy echoes the draft and the quiet window elapses, editorState still blocks dispatch.
   clock += 500;
@@ -641,7 +650,7 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   assert.equal(editorState(activeTerm.screen), 'unknown');
   assert.equal(rt.chatAvailable, false);
   await assert.rejects(rt.send('auto while drafting', 't2', () => true), e => e.notSent === true);
-  assert.equal(activeTerm.writes.length, writesRightAfterKey, 'zero bytes written while human draft is present');
+  assert.equal(activeTerm.writes.length, writesAfterSecondKey, 'zero bytes written while human draft is present');
 
   // Even if ? for shortcuts were visible alongside non-placeholder text, editorState still reports draft.
   await paint(activeTerm, ['Antigravity CLI 1.5.16', rule, '> hello draft', rule, '? for shortcuts']);

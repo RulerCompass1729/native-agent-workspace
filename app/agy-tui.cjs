@@ -193,6 +193,8 @@ class AgyTui extends EventEmitter {
     this.addressedSendAvailable = false;
     this.liveTurn = null;
     this.pendingSend = null;
+    this.screenRevision = 0;
+    this.humanInputRevision = -1;
     this.lastHumanInputAt = -Infinity;
     this.humanInputTimer = null;
     this.mcpCalls = new Map();
@@ -203,11 +205,14 @@ class AgyTui extends EventEmitter {
   clearHumanInputTimer() {
     if (this.humanInputTimer) { clearTimeout(this.humanInputTimer); this.humanInputTimer = null; }
   }
-  humanInputSettling() {
-    return this.lastHumanInputAt >= 0 && (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
+  humanInputUnconfirmed() {
+    if (this.lastHumanInputAt < 0) return false;
+    if (this.terminal?.screen && this.screenRevision <= this.humanInputRevision) return true;
+    return (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
   }
   noteHumanTerminalInput() {
     this.lastHumanInputAt = this.now();
+    this.humanInputRevision = this.screenRevision;
     this.promptReady = false;
     this.clearHumanInputTimer();
     this.syncCapabilities();
@@ -282,7 +287,7 @@ class AgyTui extends EventEmitter {
   syncScreenState(screen) {
     const state = editorState(screen);
     this.trustPromptActive = state === 'blocked';
-    this.promptReady = state === 'empty' && !this.humanInputSettling();
+    this.promptReady = state === 'empty' && !this.humanInputUnconfirmed();
     this.syncCapabilities();
   }
   observeTerminalText(text) {
@@ -306,6 +311,7 @@ class AgyTui extends EventEmitter {
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
+      if (typeof event?.data === 'string' && event.data.length > 0) this.screenRevision++;
       if (terminal.screen) this.syncScreenState(terminal.screen);
       else if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
       this.emit('terminal', event);
@@ -348,7 +354,7 @@ class AgyTui extends EventEmitter {
   }
   send(text, tag, guard = () => true) {
     const screen = this.terminal?.screen;
-    const promptBlocked = this.humanInputSettling() || (screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true);
+    const promptBlocked = this.humanInputUnconfirmed() || (screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true);
     if (this.stopped || !this.terminal?.alive || !this.chatAvailable || !this.promptReady || this.trustPromptActive ||
       promptBlocked || this.pendingSend || this.liveTurn) {
       return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
