@@ -153,8 +153,9 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
       accepted = true;
       const operation = Promise.resolve().then(async () => {
         const request = JSON.parse(data.slice(0, end));
-        if (request.kind === 'window-frames' || request.kind === 'window-frames-v3') {
-          const includeLocalPages = request.kind === 'window-frames-v3';
+        const frameVersion = new Map([['window-frames', 1], ['window-frames-v3', 3], ['window-frames-v4', 4]]).get(request.kind);
+        if (frameVersion) {
+          const includeLocalPages = frameVersion >= 3, includeElectron = frameVersion === 4;
           const unavailable = () => failed('admission', includeLocalPages ? 'operation-unconfirmed' : 'invalid-request');
           const target = request.identity;
           if (closed || Object.keys(request).sort().join(',') !== 'capability,identity,kind,nonce' ||
@@ -166,11 +167,12 @@ async function createOutboxBroker({ descriptorFile, bind, createView, bindContro
           try {
             const identity = processIdentityUTC(process.pid);
             if (!identity || JSON.stringify(profileIdentity()) !== JSON.stringify(frameProfile)) return unavailable();
-            const proof = windowFrames(includeLocalPages);
-            return { version: includeLocalPages ? 3 : 1, basis: 'electron-getbounds-v1', ...identity,
+            const proof = windowFrames(includeLocalPages, includeElectron);
+            return { version: frameVersion, basis: 'electron-getbounds-v1', ...identity,
               profile: frameProfile, nonce: request.nonce, capturedAt: Date.now(),
               windows: proof.windows, hiddenBackgroundWindows: proof.hiddenBackgroundWindows,
-              ...(includeLocalPages ? { localPageWindowIds: proof.localPageWindowIds } : {}) };
+              ...(includeLocalPages ? { localPageWindowIds: proof.localPageWindowIds } : {}),
+              ...(includeElectron ? { electronWindowIds: proof.electronWindowIds } : {}) };
           } catch {
             return unavailable();
           }

@@ -354,7 +354,6 @@ test('every sentence exists in both languages, and the words say what the design
     // The sender of a wake in the butler's conversation; checked in steward-wake.test.cjs.
     'reading.stewardWake', 'stewardWake.openRecord', 'stewardWake.stalled',
     // The butler's own handoff holding its wakes (R117); checked in steward-own-handoff.test.cjs.
-    'stewardWake.ownHandoff.release', 'stewardWake.ownHandoff.update-backend', 'stewardWake.ownHandoff.action',
     // The banner's own step for it and the undelivered count (R129); checked in steward-wake-banner-step.test.cjs.
     'stewardWake.ownHandoffButton.release', 'stewardWake.ownHandoffButton.update-backend', 'stewardWake.withUndelivered',
     // The wake chip in the header (11-22): its short text and the detail it opens.

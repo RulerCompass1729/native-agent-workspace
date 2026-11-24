@@ -19,7 +19,8 @@ test('top-aligned full-width unregistered windows are recorded as geometry infer
   assert.deepEqual(value.inferredMenuWindows, [{ display: 9, count: 4, bounds: fixture().displays[0].bounds, menuBarHeight: 30 }]);
 });
 for (const [name, change] of [
-  ['500x500 unknown', p => { p.windows[1].bounds = { x: 0, y: 940, width: 500, height: 500 }; }],
+  ['500x500 unknown on screen', p => { p.windows[1].bounds = { x: 0, y: 940, width: 500, height: 500 }; p.windows[1].onScreen = true; }],
+  ['two offscreen unknowns', p => { p.windows[1].bounds = { x: 0, y: 940, width: 500, height: 500 }; p.windows[2].bounds = { x: 0, y: 940, width: 500, height: 500 }; }],
   ['not at display top', p => { p.windows[1].bounds.y = 1; }],
   ['31 high with menu height30', p => { p.windows[1].bounds.height = 31; }],
   ['one pixel narrower', p => { p.windows[1].bounds.width--; }],
@@ -33,6 +34,13 @@ for (const [name, change] of [
 ]) test('geometry inference refuses ' + name, () => {
   const p = fixture(); change(p); const result = collect(p);
   assert.equal(result.status, 1); assert.match(result.stderr, /frame 口径待核实/);
+});
+test('one offscreen unknown without an Electron list is recorded as unproven, not as a menu window', () => {
+  const p = fixture(); p.windows[1].bounds = { x: 0, y: 940, width: 500, height: 500 };
+  const result = collect(p); assert.equal(result.status, 0, result.stderr);
+  const value = JSON.parse(result.stdout);
+  assert.deepEqual(value.offscreenWindows, [{ bounds: { x: 0, y: 940, width: 500, height: 500 }, basis: 'unproven' }]);
+  assert.equal(value.inferredMenuWindows[0].count, 3);
 });
 test('endpoint-managed thin windows remain business windows', () => {
   const value = JSON.parse(collect(fixture(), undefined, [1, 2]).stdout);

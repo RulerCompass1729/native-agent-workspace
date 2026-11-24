@@ -16,10 +16,13 @@ function fixture(t, sessions, { runtimeVersion, event = true } = {}) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const clock = { now: NOW }, room = new RoomState(dir), ledger = new ButlerLedger(dir, { now: () => clock.now });
   const ingress = new ButlerIngress(dir, { roomState: room, ledger, now: () => clock.now }), actions = new PersonActions({ ingress, now: () => clock.now });
-  const calls = [], records = [], changes = [];
+  const calls = [], records = [], changes = [], read = { fail: false };
   const client = Object.assign(new EventEmitter(), {
     close() {}, refresh: async () => {},
-    snapshot: () => ({ sessions, rooms: [], wakePolicy: { enabled: true }, operatorPolicy: { domains: [] } }),
+    snapshot: () => {
+      if (read.fail) throw Error('synthetic read failure');
+      return { sessions, rooms: [], wakePolicy: { enabled: true }, operatorPolicy: { domains: [] } };
+    },
     route: () => ({ client, state: { capabilities: [CAPABILITY], ...(runtimeVersion ? { runtimeVersion } : {}) } }),
     call: async (method, ...args) => {
       calls.push([method, ...args]);
@@ -36,7 +39,7 @@ function fixture(t, sessions, { runtimeVersion, event = true } = {}) {
   if (event) actions.call('operatorAction', ['member', 'grant', {}], 'synthetic-domain');
   const dispatches = () => calls.filter(c => c[0] === 'dispatch').map(c => c[1]);
   const pass = async (ms = 9000) => { await d.schedule(); clock.now += ms; await d.schedule(); };
-  return { clock, wake, d, dispatches, records, changes, pass };
+  return { clock, wake, d, dispatches, records, changes, pass, read };
 }
 const invalid = { nativeId: 'native-butler', epoch: 'epoch-a', tag: 'tag-a', state: 'invalid' };
 
@@ -51,6 +54,22 @@ test('the person clicks a card while the butler\'s own handoff is unresolved: to
   assert.deepEqual(f.dispatches(), []);
   assert.equal(f.wake.view().blocked.step, 'release'); assert.equal(f.wake.view().blocked.minutes, 11);
   assert.equal(f.records.length, 1, 'one record line per hold');
+});
+
+// 289 #2 (review of f77f4d45): a failed pass during a hold read nothing new; the hold stays as the last read found it.
+test('a failed pass during the hold keeps its step and reason and adds no record line, due or not', async t => {
+  for (const event of [true, false]) {
+    const butler = session('butler', 'native-butler', { rotationEpisode: { ...invalid } }), f = fixture(t, [butler], { runtimeVersion: '0.1.0-alpha.270', event });
+    assert.equal(f.wake.due(), event);
+    await f.pass();
+    assert.equal(f.wake.view().blocked.step, 'update-backend');
+    f.read.fail = true; f.clock.now += 11 * 60000; await f.pass();
+    assert.deepEqual(f.wake.view().blocked, { since: NOW, reason: 'rotation-control-unresolved', minutes: 11, step: 'update-backend' }, `due ${event}`);
+    f.read.fail = false; f.clock.now += 60000; await f.pass();
+    assert.deepEqual(f.wake.view().blocked, { since: NOW, reason: 'rotation-control-unresolved', minutes: 12, step: 'update-backend' }, `due ${event}`);
+    assert.deepEqual(f.records, [{ kind: 'wakeBlocked', reason: 'rotation-control-unresolved', since: NOW }], `one record line per hold, due ${event}`);
+    assert.deepEqual(f.dispatches(), []);
+  }
 });
 
 test('the hold is said whether or not anything is due', async t => {
@@ -112,26 +131,26 @@ test('a butler in a space keeps the in-space rule; the switch off shows nothing'
   assert.equal(off.wake.view().blocked, undefined);
 });
 
-test('the banner says only the reason and the person\'s step, with the butler\'s own menu label, in both languages', () => {
+test('the banner says only the reason and the person\'s step; without a menu item it names none, in both languages', () => {
   const root = path.resolve(__dirname, '..', '..'), source = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf8');
   const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('function render() {', start);
   const p = { textContent: '' }, summary = { setAttribute(k, v) { this[k] = v; } };
   const parts = { p, summary, '.wake-chip-text': {}, '.steward-wake-step': {}, '.steward-wake-record': {} }, box = { hidden: true, querySelector: selector => parts[selector] };
-  // No menu item for this record (steward-wake-banner-step.test.cjs has the ones with): the text names the menu path.
+  // No menu item for this record (steward-wake-banner-step.test.cjs has the ones with): 289 #4, the text points at nothing.
   const context = vm.createContext({ state: null, disconnected: false, rotationReleaseAction: () => [], backendUpdateAction: () => [], $: () => box, stewardSteps: { open() {} }, uiText: null });
   vm.runInContext(source.slice(start, end), context);
   for (const language of ['zh', 'en']) {
     context.uiText = (k, v) => locale.format(language, k, v);
-    context.state = { steward: { sessionId: 'butler' }, sessions: [{ id: 'butler', name: 'Synthetic butler' }] };
-    context.renderStewardWakeWarning({ minutes: 3, reason: 'rotation-control-unresolved', step: 'release' });
-    assert.equal(box.hidden, false);
-    assert.ok(p.textContent.includes(locale.format(language, 'queue.releaseRotation', { name: 'Synthetic butler' })), p.textContent);
-    assert.ok(!p.textContent.includes(locale.format(language, 'menu.updateThisBackend')));
-    context.renderStewardWakeWarning({ minutes: 3, reason: 'rotation-control-unresolved', step: 'update-backend' });
-    assert.ok(p.textContent.includes(locale.format(language, 'menu.updateThisBackend')), p.textContent);
-    context.state = null;
-    context.renderStewardWakeWarning({ minutes: 3, reason: 'rotation-control-unresolved', step: 'release' });
-    assert.ok(p.textContent.includes(locale.format(language, 'stewardWake.ownHandoff.action')), 'before the state loads');
+    const labels = [locale.format(language, 'queue.releaseRotation', { name: 'Synthetic butler' }), locale.format(language, 'menu.updateThisBackend')];
+    for (const loaded of [true, false]) {
+      context.state = loaded ? { steward: { sessionId: 'butler' }, sessions: [{ id: 'butler', name: 'Synthetic butler' }] } : null;
+      for (const step of ['release', 'update-backend']) {
+        context.renderStewardWakeWarning({ minutes: 3, reason: 'rotation-control-unresolved', step });
+        assert.equal(box.hidden, false);
+        assert.equal(p.textContent, locale.format(language, `stewardWake.ownHandoffButton.${step}`, { minutes: 3 }), `${step} loaded ${loaded}`);
+        for (const label of labels) assert.ok(!p.textContent.includes(label), p.textContent);
+      }
+    }
     context.renderStewardWakeWarning({ minutes: 12, reason: 'source-unavailable' });
     assert.equal(p.textContent, locale.format(language, 'stewardWake.chipDetail', { reason: locale.format(language, 'stewardWake.reason.source-unavailable') }));
     assert.equal(summary['aria-label'], locale.format(language, 'stewardWake.stalled', { minutes: 12, reason: locale.format(language, 'stewardWake.reason.source-unavailable') }));

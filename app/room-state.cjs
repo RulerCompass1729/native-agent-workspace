@@ -750,7 +750,9 @@ class RoomState {
   // for nobody is cancelled instead: marked done, it would name nobody in its row (queue.status.doneBySteward).
   // answer: what the person sent from the row of an item waiting for them, recorded once native received it; only
   // their window passes it (main.cjs spaceAction).
-  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null, answer) {
+  // recipient: the session that received the answer. A decision can go to a successor (queueCarry) while an answer
+  // is on its way to the session before: the record then names that one, which did receive it.
+  queueResolve(itemId, id = DEFAULT_ROOM_ID, by = null, answer, recipient) {
     const item = this.queueFind(id, itemId);
     const assigned = item.status === 'queued' && typeof item.assignee === 'string' && item.assignee.length > 0;
     if (!assigned && !['waiting', 'sent'].includes(item.status) || answer !== undefined && (by !== null || item.status !== 'waiting')) {
@@ -758,6 +760,22 @@ class RoomState {
     }
     const now = Date.now(), next = { ...item, status: 'done', finishedAt: now, ...(by === 'steward' ? { finishedBy: 'steward' } : {}) };
     if (answer !== undefined) {
+      if (recipient !== undefined && recipient !== item.sentTo) {
+        const before = item.carriedFrom;
+        if (typeof recipient !== 'string') {
+          throw uiError("error.queue.invalid");
+        }
+        if (!before || before.id !== recipient) {
+          throw uiError("error.queue.notWaiting");
+        }
+        next.sentTo = before.id;
+        if (before.nativeId) {
+          next.sentNative = before.nativeId;
+        } else {
+          delete next.sentNative;
+        }
+        delete next.carriedFrom;
+      }
       next.answer = { text: answer, deliveredAt: now };
       try { queueRules.validateQueue([next]); } catch { throw uiError("error.queue.invalid"); }
     }
@@ -866,6 +884,33 @@ class RoomState {
           memberName: name, task: queueRules.shortText(item.text, 40), reply,
           question: decisionQuestion });
       } catch { /* Notification failure cannot undo the persisted space record. */ }
+    }
+  }
+  // The open decisions of a session that handed over to a successor now point at the successor: the row answers
+  // it, and what the person writes there is that decision's answer. askedBy keeps who first asked; carriedFrom the
+  // session just before, where an answer already sent may still arrive (queueResolve). Nothing is announced: the
+  // rotation's own line says who took over. A second call with the same sessions changes nothing.
+  queueCarry(id, fromId, toId, toNative = null) {
+    this.writable(id);
+    const queue = [];
+    let changed = false;
+    for (const item of this.queueItems(id)) {
+      if (item.sentTo !== fromId || !queueRules.openDecision(item)) {
+        queue.push(item);
+        continue;
+      }
+      const from = { id: fromId, ...(item.sentNative ? { nativeId: item.sentNative } : {}) };
+      const next = { ...item, sentTo: toId, askedBy: item.askedBy || from, carriedFrom: from };
+      if (toNative) {
+        next.sentNative = toNative;
+      } else {
+        delete next.sentNative;
+      }
+      changed = true;
+      queue.push(next);
+    }
+    if (changed) {
+      this.update({ queue: queueRules.validateQueue(queue) }, undefined, id);
     }
   }
   queueReassign(id, fromId, toId) {
