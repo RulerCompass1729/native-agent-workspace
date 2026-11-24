@@ -143,7 +143,8 @@ const sidebarBox=()=>page.evaluate(()=>{const e=document.querySelector('.naw[dat
 function readMembers(){
  const ctx=document.createElement('canvas').getContext('2d'),side=document.querySelector('.naw[data-native-surface="sidebar"]'),drawn=e=>Boolean(e&&e.getClientRects().length);
  const paint=c=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=c;ctx.fillRect(0,0,1,1);return 'rgb('+[...ctx.getImageData(0,0,1,1).data].slice(0,3).join(', ')+')';},ink=c=>[c.backgroundColor,c.backgroundImage,c.borderTopColor,c.boxShadow].join(' '),look=e=>[...e.classList].filter(c=>c!=='agent-cell').sort().join(' ');
- const rows=[...side.querySelectorAll('.session-row')].filter(drawn).map(row=>{
+ // The butler's own slot above the list stays in every view; only the list itself holds the members.
+ const rows=[...side.querySelectorAll('#session-list .session-row')].filter(drawn).map(row=>{
   const id=row.dataset.sessionRow,icon=row.querySelector('.agent-icon'),dot=row.querySelector('.agent-icon>.state-dot'),cell=document.querySelector('#agent-distribution .agent-strip .agent-cell[data-session-id="'+id+'"]');
   if(!dot||!cell)return {id,member:row.classList.contains('space-member-row'),missing:!dot?'sidebar':'header'};
   const a=getComputedStyle(dot),b=getComputedStyle(cell),color=a.getPropertyValue('--agent-color').trim(),rgb=paint(color);
