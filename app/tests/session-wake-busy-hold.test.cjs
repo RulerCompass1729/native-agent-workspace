@@ -412,11 +412,65 @@ test('an answer that could not be saved has told nothing: the next one does, als
   f.source.persist = function () { during = f.row.wake.senderTold; this.storeSnapshot(); this.storageWarning = { key: 'x' }; };
   await assert.rejects(f.call('Not saved.', 'call-two'));
   f.source.persist = persist; f.source.storageWarning = null;
-  assert.deepEqual([during, f.row.wake.senderTold, f.rows().at(-1).wake.saidHeld], [true, undefined, undefined]);
+  assert.deepEqual([during, f.row.wake.senderTold, f.rows().at(-1).wake.saidHeld], [undefined, undefined, undefined], 'not marked before the answer is saved');
   const later = JSON.parse(f.source.storeSnapshot(undefined, true).workspace).sessions.find(s => s.id === f.a).messages;
   assert.equal(later.find(m => m.id === f.row.id).wake.senderTold, undefined);
   await f.end(); f.advance(MIN); f.begin('three');
   assert.ok((await f.call('Next.', 'call-three')).message.includes(LOSS));
+});
+// 298's independent review of that, 11-25: a save replaces workspace.json, then the room records. `fail` refuses a
+// file's rename in the saves it returns true for; what was refused is listed.
+const saving = async (f, fail, act) => {
+  const rename = fs.renameSync, refused = []; let saves = 0;
+  f.source.rooms.set('99999999-9999-4999-8999-999999999999', { id: '99999999-9999-4999-8999-999999999999', name: 'Two', messages: [], revision: 0 });
+  fs.renameSync = (from, to) => {
+    const name = path.dirname(String(to)) === f.root ? path.basename(String(to)) : '';
+    if (name === 'workspace.json') saves += 1;
+    if (['workspace.json', 'room-records.json'].includes(name) && fail(saves, name)) { refused.push(`${saves} ${name}`); throw Object.assign(Error('no space'), { code: 'ENOSPC' }); }
+    return rename(from, to);
+  };
+  try { return { answer: await act().catch(error => ({ error })), refused, saves }; } finally { fs.renameSync = rename; }
+};
+const reopen = f => { f.source.storageWarning = null; f.source.storageFailure = null; f.source.get(f.a).messages = saved(f); };
+const lossOf = async t => {
+  const f = await held(t); f.other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  idle(f); await stopped(f); await settle(); await f.look(); assert.equal(f.row.wake.status, 'not-sent');
+  f.onDisk = () => saved(f).find(m => m.id === f.row.id).wake.senderTold;
+  f.begin('two'); f.next = () => f.call('Next.', 'call-two', f.other);
+  return f;
+};
+test('a save that replaced workspace.json and failed on the room records told nothing: told once after the backend reopens', async t => {
+  const f = await lossOf(t);
+  const { answer, refused } = await saving(f, (save, name) => name === 'room-records.json', f.next);
+  assert.ok(answer.error); assert.deepEqual(refused, ['1 room-records.json']);
+  assert.deepEqual([f.onDisk(), f.row.wake.senderTold], [undefined, undefined]);
+  assert.ok(saved(f).some(m => m.wake?.body === 'Next.'), 'workspace.json is the one the failed save wrote');
+  reopen(f);
+  f.advance(MIN); f.begin('three'); const told = await f.call('Third.', 'call-three', f.other);
+  assert.ok(told.message.includes(LOSS) && told.message.includes('「While it works.」'), told.message);
+  assert.equal(f.onDisk(), true);
+  reopen(f); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+  assert.equal(f.to(f.b).length, 0, 'nothing is sent again');
+});
+for (const [name, fail, marked] of [
+  ['neither file', (save, file) => save === 2 && file === 'workspace.json', undefined],
+  ['only workspace.json', (save, file) => save === 2 && file === 'room-records.json', true],
+]) test(`the save of the mark that wrote ${name}: the answer tells the loss, and it is never left untold`, async t => {
+  const f = await lossOf(t);
+  const { answer, refused, saves } = await saving(f, fail, f.next);
+  assert.deepEqual([answer.status, refused.length, saves], ['staged', 1, 2]);
+  assert.ok(answer.message.includes('「While it works.」'));
+  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [true, marked]);
+  assert.ok(saved(f).some(m => m.wake?.body === 'Next.' && m.wake.status === 'staged'), 'what was answered is saved');
+  f.source.storageWarning = null; f.source.storageFailure = null;
+  await f.end(); f.advance(MIN); f.begin('three');
+  assert.ok(!(await f.call('Third.', 'call-three', f.other)).message.includes('「While it works.」'), 'not again by the same backend');
+});
+test('an answer that tells of nothing is saved once', async t => {
+  const f = await fixture(t); f.begin('one');
+  const { answer, saves } = await saving(f, () => false, () => f.call('Plain.', 'call-one'));
+  assert.deepEqual([answer.status, saves], ['staged', 1]);
 });
 // Each answered `readiness: 'held'` while still staged, and lost before anything held it.
 const cooldown = async t => {
@@ -463,6 +517,8 @@ test('answered as held and delivered, or answered as checked and lost: nothing t
   old({ nativeId, status: 'cancelled', busyHold: { deadline: 1 }, recipientId: f.b, body: 'Old busy.' });
   await f.end(f.source, f.a, 'interrupted'); f.advance(MIN); f.begin('four'); const last = await f.call('Last.', 'call-four');
   assert.deepEqual(last.message.split('「').slice(1).map(part => part.split('」')[0]), ['Old held.', 'Old busy.']);
+  await f.end(f.source, f.a, 'interrupted'); f.advance(MIN); f.begin('five');
+  assert.ok(!(await f.call('Then.', 'call-five')).message.includes('「Old '), 'each once, those told together too');
 });
 test('the person writing to the sender through a space during an offer withdraws it: not held again', async t => {
   const f = await fixture(t); f.source.join(f.a, true); busy(f);
