@@ -110,7 +110,11 @@ test('a pending individual answer is excluded from a new batch and a stale batch
  try{
   a=vm.runInContext('answerConfirmationCard(first,1)',s);
   b=vm.runInContext('answerConfirmationBatch(stale,false)',s);await tick();assert.equal(calls,1);
-  vm.runInContext('renderBackgroundControls(entry,message)',s);assert.match(s.entry.backgroundControls.textContent,/2 项/);
+  vm.runInContext('renderBackgroundControls(entry,message)',s);
+  assert.match(s.entry.backgroundControls.textContent,/正在提交答复/);
+  s.message=cards[1].message;
+  vm.runInContext('renderBackgroundControls(entry,message)',s);
+  assert.match(s.entry.backgroundControls.textContent,/2 项/);
  }finally{for(const release of finish)release({state:'complete'});await Promise.allSettled([a,b]);}
 });
 test('submitting an unexpired single card cannot be overwritten by its expiry countdown',async()=>{

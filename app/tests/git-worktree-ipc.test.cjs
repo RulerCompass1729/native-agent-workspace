@@ -5,7 +5,7 @@ const source=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8');
 function handler(name,extra={}) {
   const prefix=`  register('${name}', `, start=source.indexOf(prefix), end=source.indexOf('\n  });',start);
   assert.ok(start>=0&&end>start); const expression=source.slice(start+prefix.length,end+4);
-  return vm.runInNewContext('('+expression+')',{assertNativeCreation:()=>{},uiError,displayText:(key,params)=>require('../ui-locale.js').format('zh',key,params),...extra});
+  return vm.runInNewContext('('+expression+')',{assertNativeCreation:()=>{},backgroundOperation:require('../background-operation.cjs'),uiError,displayText:(key,params)=>require('../ui-locale.js').format('zh',key,params),...extra});
 }
 function context() {
   const calls=[],pending=[];

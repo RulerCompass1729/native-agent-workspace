@@ -61,6 +61,7 @@ function harness(store) {
   } };
   const context = { client, win: { isDestroyed: () => false } };
   const sandbox = { register: (name, handler) => handlers.set(name, handler), creationDefaults: store,
+    backgroundOperation: require('../background-operation.cjs'),
     assertNativeCreation() {}, uiError: key => Object.assign(Error(key), { key }) };
   vm.runInNewContext(section("  register('createDefaults',", "  register('nativeHistory',"), sandbox);
   return { handlers, context, get created() { return created; }, set fail(value) { failCreate = value; },
