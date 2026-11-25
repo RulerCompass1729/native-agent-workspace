@@ -3,7 +3,7 @@ const carrier=require('../mobile-carrier.cjs');
 function fixture(){
  const host='demo.example.ts.net',status={BackendState:'Running',Self:{DNSName:host+'.',UserID:7},User:{'7':{LoginName:'synthetic-person'}}};
  const serve={TCP:{},Web:{},AllowFunnel:{}};
- for(const [p,target] of [[443,8001],[8443,8780],[10000,48765]]){serve.TCP[p]={HTTPS:true};serve.Web[host+':'+p]={Handlers:{'/':{Proxy:'http://127.0.0.1:'+target}}};}
+ for(const [p,target] of [[443,7301],[8443,7303],[10000,48765]]){serve.TCP[p]={HTTPS:true};serve.Web[host+':'+p]={Handlers:{'/':{Proxy:'http://127.0.0.1:'+target}}};}
  return {host,status,serve};
 }
 test('an exact completed shared-host binding can recover without remembering a confirmation switch',()=>{
@@ -26,7 +26,7 @@ test('recovery refuses '+change,()=>{
  if(change==='account-id'){f.status.Self.UserID=8;f.status.User['8']={LoginName:'synthetic-person'};}
  if(change==='origin'){f.serve.TCP[10001]=f.serve.TCP[10000];delete f.serve.TCP[10000];f.serve.Web[f.host+':10001']=f.serve.Web[f.host+':10000'];delete f.serve.Web[f.host+':10000'];}
  if(change==='mapping')f.serve.Web[f.host+':10000'].Handlers['/'].Proxy='http://127.0.0.1:48766';
- if(change==='new-service'){f.serve.TCP[10443]={HTTPS:true};f.serve.Web[f.host+':10443']={Handlers:{'/':{Proxy:'http://127.0.0.1:8002'}}};}
+ if(change==='new-service'){f.serve.TCP[10443]={HTTPS:true};f.serve.Web[f.host+':10443']={Handlers:{'/':{Proxy:'http://127.0.0.1:7302'}}};}
  if(change==='changed-service')f.serve.Web[f.host+':443'].Handlers['/'].Proxy='http://127.0.0.1:9000';
  if(change==='removed-service'){delete f.serve.TCP[443];delete f.serve.Web[f.host+':443'];}
  if(change==='foreground')f.serve.Foreground={synthetic:{TCP:{'10443':{HTTPS:true}},Web:{[f.host+':10443']:{Handlers:{'/':{Proxy:'http://127.0.0.1:9000'}}}}}};
