@@ -106,6 +106,10 @@ or start paid model runs as a side effect of editing documents.
   provider's session-to-session messaging to or between NAW sessions: it leaves no record
   in the space and does not reach other providers. A native team's internal
   messaging (Claude Agent Teams, Codex fleets) stays as the provider runs it.
+  Computer use in the daily app types only into the target space's composer after
+  confirming the single recipient and that no draft is present, starts the message
+  with its sender's name, prefers the workspace tools when available, keeps
+  screenshots private, and follows the daily-app rules below.
   Writing a board or lane entry records a message; it does not prove the
   recipient received it.
 
@@ -141,8 +145,10 @@ or start paid model runs as a side effect of editing documents.
   Clean up only processes owned by that test, preserving native user sessions.
   Finish isolated installed tests before normal-profile quit/reopen checks:
   quitting by bundle ID can target an isolated instance of the same application.
-- Do not quit, restart or attach a debugger to the app instance the person is
-  using; test with the isolated profile.
+- Do not quit, restart, hide or attach a debugger to the person's running daily
+  app for tests or installation without their explicit permission for that operation.
+  Use the isolated profile/launcher for diagnosis. After an authorized daily restart,
+  reopen visibly with an ordinary launch; never leave it hidden or a debug port open.
 - Installed native tests must start through normal service bootstrap, which
   copies writable provider plugins into the private runtime directory. Do not
   directly fork the signed bundle's daemon for real providers: native plugin
