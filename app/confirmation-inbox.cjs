@@ -18,8 +18,15 @@ function confirmationSummary(card) {
   out.detail = [out.summary.target, out.summary.room, out.summary.name].filter(Boolean).join(' · ');
   return out;
 }
+// Kept with the card object: a settled card is the same object from one state to the next (background-control.cjs).
+const texts = new WeakMap();
+function summaryText(card) {
+  let text = texts.get(card);
+  if (text === undefined) texts.set(card, text = JSON.stringify(confirmationSummary(card)));
+  return text;
+}
 function inboxStatus(records, temp, confirmations) {
   const confirmationCount = confirmations.filter(card => card.actionable === true).length;
   return { ...records, temp, confirmations, confirmationCount, count: records.count + (temp?.shown ? 1 : 0) + confirmationCount };
 }
-module.exports = { confirmationSummary, inboxStatus };
+module.exports = { confirmationSummary, summaryText, inboxStatus };

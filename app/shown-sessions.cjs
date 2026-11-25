@@ -4,36 +4,50 @@
 // from messages elsewhere (sidebar times, handoff chain, terminal start, newest reply excerpt). The page
 // reports what it shows; until its first report a window gets every message, as before.
 
+// The times a Date can hold. Not asked of a Date: one per message of every session was most of a push's garbage.
+const MAX_DATE = 8.64e15;
 // What the page reads from a session's messages when it does not show them. Each field follows the page
 // code it replaces, rule for rule: sessionActivityTime (latestAt), sessionChainModel (turnFirstAt,
 // turnLastAt), the terminal checks (hasAssistant) and collaboration excerpt (lastAssistant).
 // Not cached: some message lists grow in place.
 function messageSummary(messages) {
-  let latestAt = null, turnFirstAt = null, turnLastAt = null, hasAssistant = false, lastAssistant = null;
+  let latestAt = -Infinity, turnFirstAt = Infinity, turnLastAt = -Infinity, hasAssistant = false, lastAssistant = null;
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || typeof m !== 'object') continue;
     if (m.role === 'assistant') {
       hasAssistant = true;
       if (typeof m.id === 'string' && m.id && typeof m.text === 'string' && m.text.trim()) lastAssistant = m;
     }
-    if (m.volatile || m.kind === 'gap' || !Number.isFinite(m.time)) continue;
-    if (Number.isFinite(new Date(m.time).getTime())) latestAt = latestAt === null ? m.time : Math.max(latestAt, m.time);
+    const { time } = m;
+    if (m.volatile || m.kind === 'gap' || !Number.isFinite(time)) continue;
+    if (Math.abs(time) <= MAX_DATE) latestAt = Math.max(latestAt, time);
     if (m.role === 'user' || m.role === 'assistant') {
-      turnFirstAt = turnFirstAt === null ? m.time : Math.min(turnFirstAt, m.time);
-      turnLastAt = turnLastAt === null ? m.time : Math.max(turnLastAt, m.time);
+      turnFirstAt = Math.min(turnFirstAt, time);
+      turnLastAt = Math.max(turnLastAt, time);
     }
   }
-  return { latestAt, turnFirstAt, turnLastAt, hasAssistant, lastAssistant };
+  const known = time => Number.isFinite(time) ? time : null;
+  return { latestAt: known(latestAt), turnFirstAt: known(turnFirstAt), turnLastAt: known(turnLastAt), hasAssistant, lastAssistant };
 }
 
+// A session's operation rows, not made until it is known what the page gets: messages() makes its messages with them,
+// times() only their times, if any. A summary needs no more, but needs them in place: sorting moves messages around them.
+const RECORDS = Symbol('records');
+function leaveRecords(session, records) { session[RECORDS] = records; }
+function bare(session) { const { [RECORDS]: _, ...rest } = session; return rest; }
+function whole(session) { return session?.[RECORDS] ? { ...bare(session), messages: session[RECORDS].messages() } : session; }
+
 function omitted(session) {
-  return { ...session, messages: [], messagesOmitted: true, messageSummary: messageSummary(session.messages) };
+  const times = session[RECORDS]?.times();
+  return { ...bare(session), messages: [], messagesOmitted: true,
+    messageSummary: messageSummary(times ? [...session.messages, ...times].sort((a, b) => a.time - b.time) : session.messages) };
 }
 
 // shown: a Set of session ids, or null for every session.
 function omitHidden(display, shown) {
-  if (!shown || !display || !Array.isArray(display.sessions)) return display;
-  return { ...display, sessions: display.sessions.map(s => shown.has(s.id) ? s : omitted(s)) };
+  if (!display || !Array.isArray(display.sessions)) return display;
+  if (!shown) return display.sessions.some(s => s?.[RECORDS]) ? { ...display, sessions: display.sessions.map(whole) } : display;
+  return { ...display, sessions: display.sessions.map(s => shown.has(s.id) ? whole(s) : omitted(s)) };
 }
 
 const MAX_SHOWN = 1000;
@@ -49,8 +63,8 @@ function reportShown(previous, ids, display) {
   const added = ids.filter(id => !previous.has(id));
   if (!added.length) return { shown, messages: {} };
   const wanted = new Set(added), messages = {};
-  for (const s of display().sessions || []) if (wanted.has(s.id)) messages[s.id] = s.messages;
+  for (const s of display().sessions || []) if (wanted.has(s.id)) messages[s.id] = whole(s).messages;
   return { shown, messages };
 }
 
-module.exports = { messageSummary, omitHidden, reportShown, validShown };
+module.exports = { messageSummary, leaveRecords, omitHidden, reportShown, validShown };

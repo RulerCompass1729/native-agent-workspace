@@ -21,7 +21,7 @@ const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
-const { omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
+const { leaveRecords, omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
 const { searchRecords } = require('./renderer/local-search.js');
 const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
 const { createLocalPages } = require('./local-pages.cjs');
@@ -969,7 +969,7 @@ function pushState(context, display) {
   }
   if (context.statePush) {
     // Made again if it has to wait: it then includes what was sent to the page meanwhile (a new session name).
-    context.statePush.push(display, () => displayState(context.client.snapshot(), context));
+    context.statePush.push(display, () => displayState(context.client.snapshot(), context, null, true));
     return;
   }
   context.win.webContents.send('workspace:state', omitHidden(display, context.shown), 0);
@@ -1025,7 +1025,7 @@ function bindClient(context) {
   const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed() && !context.background) {
     observePersonActions(data);
-    const display = displayState(data, context);
+    const display = displayState(data, context, null, true);
     pushState(context, display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
   // B6 E4: what the backend marks as stuck, and a native version NAW has not verified, are recorded in the session's spaces. Records only.
@@ -1049,7 +1049,8 @@ function bindClient(context) {
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) reconnectClosed(context, client).catch(() => { if (context.client === client) noticeDisconnected(context); }); });
 }
-function displayState(snapshot, context, read = null) {
+function displayState(snapshot, context, read = null, toPage = false) {
+  // toPage: goes to the page through omitHidden or reportShown, which make the rows left out here as they are needed.
   if (context?.client) snapshot = confirmationSnapshot(context.client, snapshot);
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
@@ -1059,12 +1060,18 @@ function displayState(snapshot, context, read = null) {
       .map(message => ({ sessionId: s.id, nativeId: s.nativeId, message })));
   const backgroundConfirmations = context?.background ? [] : backgroundControl?.confirmations(display, snapshot) || [];
   if (!context?.background && context?.win) {
-    const key = JSON.stringify(backgroundConfirmations.map(confirmationInbox.confirmationSummary));
+    const key = backgroundConfirmations.map(confirmationInbox.summaryText).join('\n');
     if (key !== confirmationProjectionKeys.get(context.win)) { confirmationProjectionKeys.set(context.win, key); recordsChanged(true); }
   }
-  if (backgroundControl) for (const s of display.sessions) {
-    const rows = backgroundControl.rows(s.id, context?.background ? null : display, { expire: context?.background === true });
-    if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
+  const control = backgroundControl, withRecords = s => {
+    const rows = control.rows(s.id, context?.background ? null : display, { expire: context?.background === true });
+    return rows.length ? [...s.messages, ...rows].sort((a, b) => a.time - b.time) : s.messages;
+  };
+  let times = null;
+  const timesOf = id => (times ||= control.recordTimes()).get(id);
+  if (control) for (const s of display.sessions) {
+    if (toPage && !context.background) leaveRecords(s, { times: () => timesOf(s.id), messages: () => withRecords(s) });
+    else s.messages = withRecords(s);
     if (context?.background) {
       s.liveDraft = ''; s.draft = '';
     }
@@ -1211,7 +1218,7 @@ async function broadcastRoom() {
     // A background window has no page: do not fetch and build a state that would be dropped.
     if (context.background || context.win.isDestroyed() || context.client.socket.destroyed) return;
     const snapshot = await context.client.call('initial');
-    pushState(context, displayState(snapshot, context));
+    pushState(context, displayState(snapshot, context, null, true));
   }));
 }
 function broadcastName(id, name) {
@@ -1542,7 +1549,7 @@ async function replaceBackendSockets(key) {
   for (const { context, client, state } of replacements) {
     context.client.replaceService(key, client, state);
     if (!context.client.socket.destroyed && !context.win.isDestroyed() && !context.background) {
-      const refreshed = displayState(await context.client.refresh(), context);
+      const refreshed = displayState(await context.client.refresh(), context, null, true);
       // This complete state is newer than any snapshot still waiting behind the bound.
       context.statePush?.discardWaiting();
       sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));
@@ -1563,7 +1570,7 @@ function reconnectClosed(context, client) {
     },
     restored: (target, restored, keys) => {
       if (target.background || target.win.isDestroyed()) return;
-      const display = displayState(restored.snapshot(), target);
+      const display = displayState(restored.snapshot(), target, null, true);
       target.statePush?.discardWaiting();
       const sessions = restored.entries.filter(e => keys.includes(e.key)).flatMap(e => e.state.sessions.map(s => s.id));
       sendToPage(target, 'workspace:reconnected', omitHidden(display, target.shown), sessions);
@@ -2886,7 +2893,7 @@ async function boot() {
       if (!conversationReaderAllowed(request.actor) || c.view.selected !== id || !expected || !target || target.nativeId !== expected.nativeId) throw uiError('error.background.conversationChanged');
       read = { sessionId: id, nativeId: target.nativeId };
     }
-    const display = displayState(snapshot, c, read);
+    const display = displayState(snapshot, c, read, true);
     if (!c.background) notifyCapacity(display, c.win);
     const result = { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
     return c.background ? backgroundOperation.conversationSnapshot(result, c.actor, read, c.view.selected, conversationAccess(c.actor, snapshot)) : omitHidden(result, c.shown);
@@ -2894,7 +2901,7 @@ async function boot() {
   // The sessions whose messages the page shows. The reply holds the messages of the ones it did not have.
   register('shownSessions', (c, ids) => {
     if (c.background || !validShown(ids)) throw uiError("error.main.invalidViewState");
-    const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c));
+    const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c, null, true));
     c.shown = report.shown;
     return { messages: report.messages };
   });
