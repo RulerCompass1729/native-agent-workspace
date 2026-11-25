@@ -79,11 +79,11 @@ test('the dispatcher hands the line to the space record with the outcome', () =>
   const calls = [];
   // settle() first asks, through its own stillSent, whether the item is still out (the person or the butler may have closed it).
   rules.QueueDispatcher.prototype.settle.call({ roomState: { queueFind: () => ({ status: 'sent' }), queueSettle: (...args) => calls.push(args) },
-    stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {}, clearRuns() {} },
+    stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {} },
     { kind: 'settle', roomId: 'shared', itemId: '1', status: 'done', sessionId: 'a', reply: 'line', ready: READY }, { sessions: [{ id: 'a' }] });
   assert.deepEqual(calls, [['shared', '1', 'done', '', 'Member', 'line', undefined, READY]]);
   rules.QueueDispatcher.prototype.settle.call({ roomState: { queueFind: () => ({ status: 'sent' }), queueSettle: (...args) => calls.push(args) },
-    stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {}, clearRuns() {} },
+    stillSent: rules.QueueDispatcher.prototype.stillSent, name: () => 'Member', broadcast: async () => {} },
     { kind: 'settle', roomId: 'shared', itemId: '2', status: 'done', sessionId: 'a', reply: 'PASS More detail', reportTitle: 'PASS' }, { sessions: [{ id: 'a' }] });
   assert.deepEqual(calls[1], ['shared', '2', 'done', '', 'Member', 'PASS More detail', undefined, undefined, 'PASS']);
 });

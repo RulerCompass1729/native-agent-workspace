@@ -1545,26 +1545,23 @@ test('between ordinary sessions, a delivered answer still clears nothing', async
   assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false]);
 });
 
-// R232 (2026-11-25, the person: 「消息放开到每件最多 8 条消息」): an item NAW records as done, whoever queued it, clears every
-// sender's run to the member that did it and the member's run to the butler, once an item.
+// R232 (2026-11-25, the person: 「消息放开到每件最多 8 条消息」): an item the butler queued clears the butler's run to its member
+// when NAW records it as done, once an item. An item anyone else queued, and every other run, clears nothing.
 const QUEUE_DONE = 'agentWakeQueueDoneV1';
-async function queueOf(t, { sourceOffers = true, targetOffers = true, ...options } = {}) {
-  const f = await butlerAndMember(t, options), rules = require('../queue-dispatch.cjs'), { RoomState } = require('../room-state.cjs'), { StewardRole } = require('../steward-role.cjs');
+async function butlerQueue(t, { capabilities = [QUEUE_DONE], ...options } = {}) {
+  const f = await butlerAndMember(t, options), rules = require('../queue-dispatch.cjs'), { RoomState } = require('../room-state.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-queue-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const room = new RoomState(directory), calls = [];
-  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: directory, connect: async () => { throw Error('unused'); }, tickMs: 3600000,
-    steward: () => new StewardRole(f.root).current() });
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: directory, connect: async () => { throw Error('unused'); }, tickMs: 3600000 });
   t.after(() => dispatcher.close());
-  const entry = (name, w, offers) => ({ w, state: { capabilities: ['agentWakeV1', ...(offers ? [QUEUE_DONE] : [])] }, client: { async call(method, spec) {
-    calls.push([name, method, spec]);
-    if (method !== 'wakeQueueDone') throw Error('Unexpected method ' + method);
-    return require('../session-wake.cjs').queueDone(w, spec);
-  } } });
-  const entries = [entry('source', f.source, sourceOffers), entry('target', f.target, targetOffers)];
   const snapshot = () => ({ sessions: [...f.source.sessions.values(), ...f.target.sessions.values()].map(s => ({ ...s })) });
-  dispatcher.client = { snapshot, close() {}, route: id => entries.find(e => e.w.sessions.has(id)) || (() => { throw Error('Not one backend'); })() };
-  const CREATORS = { steward: { kind: 'secretary', name: 'Butler', sessionId: f.butler }, secretary: { kind: 'secretary', name: 'Secretary', sessionId: 'secretary' }, person: { kind: 'person', name: 'You', sessionId: null } };
-  const item = (by = 'steward') => { const id = room.queueAdd('Bounded task.', f.member, 'shared', CREATORS[by], by === 'steward' ? by : null); room.queueMarkSent('shared', id, f.member, 'Member', Date.now()); return id; };
+  dispatcher.client = { snapshot, close() {}, route: id => ({ state: { capabilities }, client: { async call(method, spec) {
+    calls.push([f.source.sessions.has(id) ? 'source' : 'target', method, spec]);
+    if (method !== 'wakeQueueDone') throw Error('Unexpected method ' + method);
+    return require('../session-wake.cjs').queueDone(f.source.sessions.has(id) ? f.source : f.target, spec);
+  } } }) };
+  const creator = by => by === 'steward' ? { kind: 'secretary', name: 'Butler', sessionId: f.butler } : { kind: 'person', name: 'You', sessionId: null };
+  const item = (by = 'steward') => { const id = room.queueAdd('Bounded task.', f.member, 'shared', creator(by), by === 'steward' ? by : null); room.queueMarkSent('shared', id, f.member, 'Member', Date.now()); return id; };
   const close = async (itemId, status = 'done', reason, extra = {}) => {
     dispatcher.settle({ kind: 'settle', roomId: 'shared', itemId, status, sessionId: f.member, ...(reason ? { reason } : {}), ...extra }, snapshot());
     await settle();
@@ -1576,166 +1573,160 @@ async function queueOf(t, { sourceOffers = true, targetOffers = true, ...options
   return { ...f, room, dispatcher, calls, item, close, snapshot, run, record, other };
 }
 const runs = f => [f.run(f.butler, f.member), f.run(f.other, f.member), f.run(f.member, f.butler)];
-// Each run is filled without the one that clears another: a delivered message from the member clears the butler's.
+// The member's messages go first: each one delivered clears the butler's run to it.
 async function full(f) {
   await eight(f, f.member, f.butler); await eight(f); await eight(f, f.other, f.member);
   assert.deepEqual(runs(f), [8, 8, 8]);
+}
+test('the butler\'s ninth message to a member goes once an item the butler queued for it is recorded as done; nothing else changes', async t => {
+  const f = await butlerQueue(t), id = f.item();
+  await full(f);
   for (const [from, to] of [[f.butler, f.member], [f.other, f.member], [f.member, f.butler]]) {
     const ninth = await f.send(from, to);
     assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false], 'the ninth without an item done');
     assert.match(ninth.result.message, /连续 8 次/);
   }
-}
-for (const by of ['steward', 'secretary', 'person']) test(`an item done (queued by: ${by}) lets every sender write to its member again, and the member to the butler; nothing else changes`, async t => {
-  const f = await queueOf(t), id = f.item(by);
-  await f.send(f.other, f.butler); await f.send(f.member, f.other); await f.send(f.butler, f.other);
-  await full(f);
-  const member = structuredClone(f.record(f.member).wakeBudget), butler = structuredClone(f.record(f.butler).wakeBudget), other = structuredClone(f.record(f.other).wakeBudget);
+  const before = structuredClone(f.record(f.member).wakeBudget), butler = structuredClone(f.record(f.butler).wakeBudget);
   assert.equal(await f.close(id), 'done');
-  const cleared = (budget, ...from) => ({ ...budget, senders: { ...budget.senders, ...Object.fromEntries(from.map(s => [f.record(s).nativeId, { ...budget.senders[f.record(s).nativeId], streak: 0 }])) } });
-  assert.deepEqual(f.record(f.member).wakeBudget, cleared(member, f.butler, f.other), 'every sender to the member; the minute and the message ids stay');
-  assert.deepEqual(f.record(f.butler).wakeBudget, cleared(butler, f.member), 'the member to the butler; another member to the butler stays');
-  assert.deepEqual(f.record(f.other).wakeBudget, other, 'the member and the butler to another member stay');
-  assert.deepEqual(runs(f), [0, 0, 0]);
-  const saved = (dir, sessionId) => JSON.parse(fs.readFileSync(path.join(dir, 'workspace.json'))).sessions.find(s => s.id === sessionId).wakeBudget;
-  assert.deepEqual([saved(f.source.dataDir, f.member), saved(f.target.dataDir, f.butler)], [f.record(f.member).wakeBudget, f.record(f.butler).wakeBudget], 'both saved');
-  assert.deepEqual(f.calls.map(([name, method, spec]) => [name, method, spec]), ['source', 'target'].map(name => [name, 'wakeQueueDone', { sessionId: f.member, nativeId: f.record(f.member).nativeId }]));
-  await full(f);
-});
-test('with the item done, a message within the same minute is still refused, both ways', async t => {
-  const f = await queueOf(t), id = f.item();
-  await f.send(f.member, f.butler); f.advance(-60001); await f.send(f.butler, f.member);
-  await f.close(id);
-  const wake = require('../session-wake.cjs');
-  for (const [from, to] of [[f.butler, f.member], [f.other, f.member], [f.member, f.butler]]) {
-    const s = f.record(to), key = f.record(from).nativeId;
-    f.advance(s.wakeBudget.lastAt + 59999 - f.now());
-    assert.equal(wake.budgetAllows(s, 'next', from, key), false, '60 seconds since the last one');
-    f.advance(1);
-    assert.equal(wake.budgetAllows(s, 'next', from, key), true);
+  assert.deepEqual(f.record(f.member).wakeBudget, { ...before, senders: { ...before.senders, [f.butlerKey]: { ...before.senders[f.butlerKey], streak: 0 } } }, 'only the butler\'s run to this member');
+  assert.deepEqual(f.record(f.butler).wakeBudget, butler, 'the member\'s run to the butler stays');
+  assert.deepEqual(runs(f), [0, 8, 8]);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'))).sessions.find(s => s.id === f.member);
+  assert.equal(saved.wakeBudget.senders[f.butlerKey].streak, 0, 'saved');
+  assert.deepEqual(f.calls, [['source', 'wakeQueueDone', { sessionId: f.member, nativeId: f.record(f.member).nativeId }]], 'the member\'s backend, once');
+  for (const [from, to] of [[f.other, f.member], [f.member, f.butler]]) {
+    const ninth = await f.send(from, to);
+    assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false], 'still refused after the item is done');
   }
+  await eight(f);
+  const ninth = await f.send(f.butler, f.member);
+  assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false], 'the next eight, then refused as before');
 });
-test('a delivery with a READY line clears them too', async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
-  assert.equal(await f.close(id, 'done', undefined, { ready: { branch: 'lane/x', commit: '0123abcd' } }), 'done');
-  assert.deepEqual(runs(f), [0, 0, 0]);
+test('a member\'s message to the butler refused at the limit stays refused however many items it has done', async t => {
+  const f = await butlerQueue(t);
+  await eight(f, f.member, f.butler);
+  for (let n = 0; n < 3; n++) {
+    assert.equal(await f.close(f.item()), 'done');
+    const ninth = await f.send(f.member, f.butler);
+    assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false]);
+  }
+  assert.equal(f.run(f.member, f.butler), 8);
 });
-for (const [name, status, reason] of [
-  ['a question for the person', 'waiting'],
-  ['a turn the person stepped into', 'waiting', 'person-intervened'],
-  ['an empty reply', 'waiting', 'no-reply'],
-  ['a failed item', 'failed', 'record-missing'],
-]) test(`no run is cleared after ${name}`, async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
-  assert.equal(await f.close(id, status, reason), status);
-  assert.deepEqual([runs(f), f.calls], [[8, 8, 8], []]);
-});
-test('no run is cleared by an item marked handled or cancelled by hand', async t => {
-  const f = await queueOf(t);
-  await full(f);
-  for (const by of ['steward', null]) f.room.queueResolve(f.item(), 'shared', by);
-  f.room.queueCancel(f.room.queueAdd('Never sent.', f.member, 'shared', { kind: 'person', name: 'You', sessionId: null }), 'shared');
-  await settle();
-  assert.deepEqual([runs(f), f.calls], [[8, 8, 8], []]);
-});
-test('once the butler moved on, the member\'s run to the former one stays; to the successor it is cleared', async t => {
-  const f = await queueOf(t), id = f.item(), next = await f.target.create('codex', f.root, 'target-owner', 'Next butler');
-  await full(f);
-  const wake = require('../session-wake.cjs'), member = f.record(f.member);
-  wake.reserveBudget(f.record(next), 'one', f.member, member.nativeId);
-  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: next, nativeId: f.record(next).nativeId } }), { mode: 0o600 });
-  assert.equal(await f.close(id), 'done');
-  assert.deepEqual([...runs(f), f.run(f.member, next)], [0, 0, 8, 0]);
-});
-test('the butler and the member on one backend: one call clears both', async t => {
-  const f = await queueOf(t, { designate: false }), id = f.item(), wake = require('../session-wake.cjs');
+test('the butler and the member on one backend: the member\'s run to the butler stays', async t => {
+  const f = await butlerQueue(t, { designate: false }), id = f.item(), wake = require('../session-wake.cjs');
   fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.other, nativeId: f.record(f.other).nativeId } }), { mode: 0o600 });
   wake.reserveBudget(f.record(f.other), 'one', f.member, f.record(f.member).nativeId);
   wake.reserveBudget(f.record(f.member), 'two', f.other, f.record(f.other).nativeId);
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual([f.run(f.member, f.other), f.run(f.other, f.member), f.calls.map(call => call[0])], [0, 0, ['source']]);
+  assert.deepEqual([f.run(f.other, f.member), f.run(f.member, f.other), f.calls.map(call => call[0])], [0, 1, ['source']]);
 });
-for (const [name, record] of [['no butler', JSON.stringify({ version: 1, selected: null })], ['an unreadable designation', '{']]) test(`${name}: only the runs to the member are cleared, and the item is done`, async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
+test('with the item done, a message within the same minute is still refused', async t => {
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
+  await f.close(id);
+  const wake = require('../session-wake.cjs'), s = f.source.get(f.member);
+  assert.equal(wake.budgetAllows(s, 'next', f.butler, f.butlerKey), false, '60 seconds since the last one');
+  f.advance(60001);
+  assert.equal(wake.budgetAllows(s, 'next', f.butler, f.butlerKey), true);
+});
+test('a delivery with a READY line clears the run too', async t => {
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
+  assert.equal(await f.close(id, 'done', undefined, { ready: { branch: 'lane/x', commit: '0123abcd' } }), 'done');
+  assert.equal(f.streak(f.butlerKey), 0);
+});
+for (const [name, by, status, reason] of [
+  ['an item the person queued', 'person', 'done'],
+  ['a question for the person', 'steward', 'waiting'],
+  ['a turn the person stepped into', 'steward', 'waiting', 'person-intervened'],
+  ['an empty reply', 'steward', 'waiting', 'no-reply'],
+  ['a failed item', 'steward', 'failed', 'record-missing'],
+]) test(`the butler's run stays after ${name}`, async t => {
+  const f = await butlerQueue(t), id = f.item(by);
+  await eight(f);
+  assert.equal(await f.close(id, status, reason), status);
+  assert.deepEqual([f.streak(f.butlerKey), f.calls], [8, []]);
+  assert.equal((await f.send(f.butler, f.member)).sent, false);
+});
+test('the butler\'s run stays when the item is marked handled or cancelled by hand', async t => {
+  const f = await butlerQueue(t);
+  await eight(f);
+  for (const by of ['steward', null]) f.room.queueResolve(f.item(), 'shared', by);
+  f.room.queueCancel(f.room.queueAdd('Never sent.', f.member, 'shared', { kind: 'secretary', name: 'Butler', sessionId: f.butler }, 'steward'), 'shared', 'steward');
+  await settle();
+  assert.deepEqual([f.streak(f.butlerKey), f.calls], [8, []]);
+});
+test('a secretary\'s item clears nothing', async t => {
+  const f = await butlerQueue(t);
+  await eight(f);
+  const id = f.room.queueAdd('Bounded task.', f.member, 'shared', { kind: 'secretary', name: 'Secretary', sessionId: 'secretary' });
+  f.room.queueMarkSent('shared', id, f.member, 'Member', Date.now());
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([f.streak(f.butlerKey), f.calls], [8, []]);
+});
+test('once the butler moved on, the former one\'s run stays; the successor\'s is cleared', async t => {
+  const f = await butlerQueue(t), id = f.item(), next = await f.target.create('codex', f.root, 'target-owner', 'Next butler');
+  await eight(f);
+  assert.equal((await f.send(next, f.member)).sent, true);
+  const nextKey = f.target.get(next).nativeId;
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: next, nativeId: nextKey } }), { mode: 0o600 });
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([f.streak(f.butlerKey), f.streak(nextKey)], [8, 0]);
+});
+for (const [name, record] of [['no butler', JSON.stringify({ version: 1, selected: null })], ['an unreadable designation', '{']]) test(`${name}: nothing is cleared and the item is still done`, async t => {
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
   fs.writeFileSync(path.join(f.root, 'steward.json'), record, { mode: 0o600 });
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual([runs(f), f.calls.map(call => call[0])], [[0, 0, 8], ['source']]);
+  assert.deepEqual([f.streak(f.butlerKey), f.calls.length], [8, 1]);
 });
-for (const [name, options, after, told] of [
-  ['the member\'s', { sourceOffers: false }, [8, 8, 0], ['target']],
-  ['the butler\'s', { targetOffers: false }, [0, 0, 8], ['source']],
-  ['neither', { sourceOffers: false, targetOffers: false }, [8, 8, 8], []],
-]) test(`a backend that does not offer it keeps its limit, and nothing fails: ${name}`, async t => {
-  const f = await queueOf(t, options), id = f.item();
-  await full(f);
+test('a backend that does not offer it keeps its limit, and nothing fails', async t => {
+  const f = await butlerQueue(t, { capabilities: ['agentWakeV1'] }), id = f.item();
+  await eight(f);
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual([runs(f), f.calls.map(call => call[0])], [after, told]);
+  assert.deepEqual([f.streak(f.butlerKey), f.calls], [8, []]);
+  assert.equal((await f.send(f.butler, f.member)).sent, false);
 });
 test('one item clears once: its settlement seen again asks nothing', async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
   assert.equal(await f.close(id), 'done');
-  await full(f);
+  await eight(f);
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual([runs(f), f.calls.length], [[8, 8, 8], 2]);
+  assert.deepEqual([f.streak(f.butlerKey), f.calls.length], [8, 1]);
 });
 test('an item whose settlement was not saved clears nothing', async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
   f.room.write = () => { throw Error('Synthetic disk failure'); };
   await assert.rejects(f.close(id), /Synthetic disk failure/);
   await settle();
-  assert.deepEqual([f.room.queueFind('shared', id).status, runs(f), f.calls], ['sent', [8, 8, 8], []]);
+  assert.deepEqual([f.room.queueFind('shared', id).status, f.streak(f.butlerKey), f.calls], ['sent', 8, []]);
 });
-test('a clear a backend cannot save is taken back there, also from what it saves next, and is not tried again', async t => {
-  const f = await queueOf(t), id = f.item();
-  await full(f);
+test('a clear the backend cannot save is taken back, also from what it saves next, and is not tried again', async t => {
+  const f = await butlerQueue(t), id = f.item();
+  await eight(f);
   const real = fs.renameSync, file = path.join(f.source.dataDir, 'workspace.json');
   t.mock.method(fs, 'renameSync', (from, to) => { if (to === file) throw Object.assign(Error('Synthetic disk full'), { code: 'ENOSPC' }); return real(from, to); });
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual(runs(f), [8, 8, 0], 'the member\'s backend could not save; the butler\'s did');
+  assert.equal(f.streak(f.butlerKey), 8);
   t.mock.restoreAll(); f.source.storageWarning = null; assert.equal(f.source.persist(), true);
-  const saved = JSON.parse(fs.readFileSync(file)).sessions.find(s => s.id === f.member).wakeBudget.senders;
-  assert.deepEqual([saved[f.butlerKey].streak, saved[f.record(f.other).nativeId].streak], [8, 8]);
+  assert.equal(JSON.parse(fs.readFileSync(file)).sessions.find(s => s.id === f.member).wakeBudget.senders[f.butlerKey].streak, 8);
   assert.equal(await f.close(id), 'done');
-  assert.deepEqual([runs(f), f.calls.length], [[8, 8, 0], 2]);
+  assert.deepEqual([f.streak(f.butlerKey), f.calls.length], [8, 1]);
 });
-test('the backends clear only for the very native session they were told of, and the butler\'s only as designated', async t => {
-  const f = await queueOf(t), { queueDone } = require('../session-wake.cjs'), nativeId = f.record(f.member).nativeId;
-  await full(f);
-  for (const w of [f.source, f.target]) for (const spec of [undefined, {}, { sessionId: f.member }, { sessionId: f.member, nativeId: '' }, { sessionId: '', nativeId }, { sessionId: 'nobody', nativeId: 'native-nobody' }])
-    assert.equal(queueDone(w, spec), false);
-  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId: 'native-other' }), false);
-  const native = f.record(f.butler).nativeId;
-  f.record(f.butler).nativeId = 'native-elsewhere';
-  assert.equal(queueDone(f.target, { sessionId: f.member, nativeId }), false, 'the designated session is another native one now');
-  f.record(f.butler).nativeId = native;
-  assert.deepEqual(runs(f), [8, 8, 8]);
-  for (const w of [f.source, f.target]) {
-    assert.equal(queueDone(w, { sessionId: f.member, nativeId }), true);
-    assert.equal(queueDone(w, { sessionId: f.member, nativeId }), false, 'nothing left to clear');
-  }
-  assert.deepEqual(runs(f), [0, 0, 0]);
-});
-test('a member that took another native context since is not cleared, nor is its run to a butler on its backend', async t => {
-  const f = await queueOf(t, { designate: false }), { queueDone, reserveBudget } = require('../session-wake.cjs');
-  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.other, nativeId: f.record(f.other).nativeId } }), { mode: 0o600 });
-  reserveBudget(f.record(f.other), 'one', f.member, 'native-former');
-  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId: 'native-former' }), false);
-  assert.equal(f.record(f.other).wakeBudget.senders['native-former'].streak, 1);
-});
-test('once the item is done a message refused for the limit goes when sent again; one within its minute is held, as before', async t => {
-  const f = await queueOf(t), id = f.item();
-  await eight(f, f.member, f.butler);
-  assert.equal((await f.send(f.member, f.butler)).result.status, 'not-sent', 'refused, not held');
-  await f.close(id);
-  const again = await f.send(f.member, f.butler);
-  assert.deepEqual([again.sent, again.row.wake.status], [true, 'submitted']);
-  f.advance(10000 - 60001); const soon = await f.send(f.member, f.butler);
-  assert.equal(soon.row.wake.status, 'held');
+test('the backend clears only for the very native session it was told of', async t => {
+  const f = await butlerQueue(t), { queueDone } = require('../session-wake.cjs'), nativeId = f.source.get(f.member).nativeId;
+  await eight(f);
+  for (const spec of [undefined, {}, { sessionId: f.member }, { sessionId: f.member, nativeId: '' }, { sessionId: f.member, nativeId: 'native-other' }, { sessionId: 'nobody', nativeId }])
+    assert.equal(queueDone(f.source, spec), false);
+  f.source.get(f.member).nativeId = undefined;
+  assert.equal(queueDone(f.source, { sessionId: f.member }), false);
+  f.source.get(f.member).nativeId = nativeId;
+  assert.equal(f.streak(f.butlerKey), 8);
+  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId }), true);
+  assert.equal(f.streak(f.butlerKey), 0);
+  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId }), false, 'nothing left to clear');
 });
 
 // The person, 11-24 (W3 follow-up ②, 「按你推荐的来」): three changes nobody made to stop anything leave a turn's messages

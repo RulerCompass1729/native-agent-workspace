@@ -283,7 +283,7 @@ const GUARDED_STOP_CAPABILITY = 'guardedSessionStopV1';
 const CONDITIONAL_STOP_CAPABILITY = 'conditionalMaintenanceStopV1';
 // That stop pausing only the relays the stopped session is in, not every relay the service holds (cd3e2a8d).
 const PARTICIPANT_STOP_CAPABILITY = 'participantMaintenanceStopV1';
-// Told of an item recorded as done, it clears the runs that item ends (session-wake.cjs queueDone).
+// Told of an item the butler queued that is done, it clears the butler's run to that member (session-wake.cjs queueDone).
 const QUEUE_DONE_CAPABILITY = 'agentWakeQueueDoneV1';
 // How long a refused receipt may take to settle into the end it proves (backend-switch.cjs settleMs).
 const STOP_SETTLE_MS = 10000;
@@ -3769,7 +3769,8 @@ class QueueDispatcher {
   }
 
   settle(action, snapshot) {
-    if (!this.stillSent(action.roomId, action.itemId)) {
+    const item = this.roomState.queueFind(action.roomId, action.itemId);
+    if (item.status !== 'sent') {
       return;
     }
     const session = snapshot.sessions.find(s => s.id === action.sessionId);
@@ -3787,34 +3788,19 @@ class QueueDispatcher {
       action.reportTitle === undefined ? [] : [action.reportTitle];
     this.roomState.queueSettle(action.roomId, action.itemId, action.status, action.reason || '', name, action.reply || '', action.question, action.ready, ...report);
     this.broadcast().catch(() => {});
-    if (action.status === 'done') {
-      this.clearRuns(session, snapshot.sessions);
+    if (action.status === 'done' && item.addedBy === 'steward') {
+      this.clearButlerRun(session).catch(() => {});
     }
   }
 
-  // Only after the item is recorded as done, so once an item. Not awaited and never tried again: a backend that does
-  // not offer it, or fails, keeps its limit.
-  clearRuns(member, sessions) {
-    if (!member?.nativeId) {
-      return;
-    }
-    const entries = new Set();
-    for (const session of [member, this.stewardSession(sessions)?.session]) {
-      try {
-        entries.add(this.client.route(session.id));
-      } catch { /* Nobody, or no one backend has it. */ }
-    }
-    for (const entry of entries) {
-      this.tellDone(entry, { sessionId: member.id, nativeId: member.nativeId }).catch(() => {});
-    }
-  }
-
-  async tellDone(entry, spec) {
+  // Only after the item is recorded as done, so once an item. Not awaited and never tried again.
+  async clearButlerRun(session) {
+    const entry = this.client.route(session.id);
     if (!entry.state.capabilities?.includes(QUEUE_DONE_CAPABILITY)) {
       return;
     }
     this.client.operationGuard?.(entry)();
-    await withTimeout(entry.client.call('wakeQueueDone', spec), CALL_TIMEOUT_MS, 'queue-done-timeout');
+    await withTimeout(entry.client.call('wakeQueueDone', { sessionId: session.id, nativeId: session.nativeId }), CALL_TIMEOUT_MS, 'queue-done-timeout');
   }
 
   // The designated butler when it is this very native session, in a space or not; anything else names nobody.

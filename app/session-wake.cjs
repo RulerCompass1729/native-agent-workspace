@@ -673,27 +673,14 @@ function answeredButler(w, intent) {
   const s = w.sessions.get(intent.senderId);
   if (s && stillButler(w, intent)) clearSenderStreak(s, intent.recipientId, intent.targetProof.nativeId);
 }
-// R232 (2026-11-25, the person: 「每件最多 8 条消息」): main tells the backends once of an item it recorded as done
-// (queue-dispatch.cjs settle), whoever queued it. The member's own clears every sender's run to it; the butler's clears
-// the member's run to the butler. The receiver-wide minute and every other run stay.
+// Main's dispatcher calls this once for an item the butler queued that it recorded as done (queue-dispatch.cjs settle):
+// it clears the run of the session that is the butler now, as answeredButler does. Every other run stays.
 function queueDone(w, spec) {
-  const { sessionId, nativeId } = spec || {};
-  if (typeof sessionId !== 'string' || !sessionId || typeof nativeId !== 'string' || !nativeId) return false;
-  const member = w.sessions.get(sessionId);
-  if (member && member.nativeId !== nativeId) return false;
-  let steward = null;
-  try { steward = stewardNow(w); } catch { /* A designation that cannot be read names nobody. */ }
-  let butler = steward && w.sessions.get(steward.sessionId);
-  if (butler?.nativeId !== steward?.nativeId) butler = null;
-  const before = [member, butler].filter(Boolean).map(s => [s, s.wakeBudget]);
-  let cleared = false;
-  if (member) for (const key of Object.keys(budgetView(member).senders)) cleared = clearSenderStreak(member, key) || cleared;
-  if (butler) cleared = clearSenderStreak(butler, sessionId, nativeId) || cleared;
-  if (!cleared) return false;
-  try { durable(w); } catch (error) {
-    for (const [s, budget] of before) { s.wakeBudget = budget; w.edited?.(s); }
-    throw error;
-  }
+  const s = w.sessions.get(spec?.sessionId), steward = stewardNow(w);
+  if (!s || !steward || typeof spec.nativeId !== 'string' || !spec.nativeId || s.nativeId !== spec.nativeId) return false;
+  const before = s.wakeBudget;
+  if (!clearSenderStreak(s, steward.sessionId, steward.nativeId)) return false;
+  try { durable(w); } catch (error) { s.wakeBudget = before; w.edited?.(s); throw error; }
   return true;
 }
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }

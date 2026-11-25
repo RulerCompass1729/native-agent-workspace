@@ -16,7 +16,7 @@ function fixture(t) {
   room.queueMarkSent('shared', itemId, session.id, 'PRIVATE NAME CANARY', NOW, false, session.nativeId);
   const dispatcher = { roomState: room, client: { snapshot: () => ({ sessions: [session] }) },
     stillSent: (...args) => room.queueFind(...args).status === 'sent',
-    name: () => 'PRIVATE NAME CANARY', broadcast: () => Promise.resolve(), clearRuns() {} };
+    name: () => 'PRIVATE NAME CANARY', broadcast: () => Promise.resolve() };
   const settle = (status = 'waiting', reason = 'no-reply', planned = session) => QueueDispatcher.prototype.settle.call(dispatcher,
     { roomId: 'shared', itemId, sessionId: session.id, status, reason, reply: status === 'done' ? 'Synthetic complete reply' : '' }, { sessions: [planned] });
   return { dir, room, ingress, session, itemId, settle, client: dispatcher.client, events: () => ingress.ledger.snapshot().events,

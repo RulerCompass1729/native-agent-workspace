@@ -20,7 +20,7 @@ async function fixture(t,root=ROOT){
  w.on('change',()=>ingress.observeRecoveryFailures(w.snapshot().sessions));
  const itemId=room.queueAdd('Synthetic diagnostic task',null);room.queueMarkSent('shared',itemId,s.id,'Synthetic member',NOW-2000,false,s.nativeId);
  const tag=await w.send(s.id,'Synthetic diagnostic task','naw-dispatcher',null,null,null,null,null,null,null,{itemId});room.queueSetDelivery('shared',itemId,tag,0);
- const client={snapshot:()=>w.snapshot()},dispatcher={roomState:room,client,stillSent:(...a)=>room.queueFind(...a).status==='sent',name:()=> 'Synthetic member',broadcast:()=>Promise.resolve(),clearRuns(){}};
+ const client={snapshot:()=>w.snapshot()},dispatcher={roomState:room,client,stillSent:(...a)=>room.queueFind(...a).status==='sent',name:()=> 'Synthetic member',broadcast:()=>Promise.resolve()};
  const snapshot=()=>w.snapshot().sessions.find(x=>x.id===s.id);
  const plan=(queue=room.queueItems('shared'),sessions=[snapshot()])=>M.rules.planDispatch({rooms:[{id:'shared',name:'Synthetic team',queue}],sessions,wakePolicy:{enabled:true},idleSince:new Map(sessions.map(x=>[x.id,NOW-60000])),now:NOW,settleMs:0});
  const settle=()=>{const action=plan().find(a=>a.kind==='settle'&&a.itemId===itemId);assert.ok(action,'A real plan produced a settlement');M.rules.QueueDispatcher.prototype.settle.call(dispatcher,action,client.snapshot());return action;};
