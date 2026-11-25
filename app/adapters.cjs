@@ -856,6 +856,7 @@ class Claude extends EventEmitter {
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.id === 'control:model' && (message.kind !== 'control' || message.status !== 'complete' || typeof message.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(message.model))) ||
+      message.selected !== undefined && (message.id !== 'control:model' || message.selected !== true) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
       (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
       (message.kind === 'input' && (inline || nativePrompt ? (inline ? !this.nativeInlineInput : !this.nativePromptInput) ||
@@ -887,6 +888,8 @@ class Claude extends EventEmitter {
         return { observed: true };
       } else if (message.id === 'control:model') {
         // Metadata is not an input/turn boundary and grants no sharing authority.
+        // A replayed choice is still the person's latest one; a replayed report may be stale.
+        if (message.selected) this.emit('modelSelected', message.model);
         if (!message.replayed) {
           this.nativeModelEpoch = this.observationEpoch;
           if (!this.displayGap) this.observeCreationSetting('model', message.model);
