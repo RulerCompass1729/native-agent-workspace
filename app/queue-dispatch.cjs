@@ -2990,16 +2990,18 @@ class QueueDispatcher {
     return Boolean(record?.handoffConfirmed && !RESTING_PHASES.includes(record.phase) && record.roomIds?.includes(roomId));
   }
 
-  // What `id` continues from, the session it has not finished taking over included.
+  // What `id` continues from, the sessions whose replacement is not finished included (waitingOld: one of them may wait
+  // behind a successor that was itself replaced meanwhile).
   earlierSessions(id) {
-    const ids = new Set(this.continuedFrom(id));
-    for (const [oldId, record] of Object.entries(this.rotations)) {
-      if (record.newId === id && oldId !== id && !RESTING_PHASES.includes(record.phase)) {
-        for (const earlier of [oldId, ...this.continuedFrom(oldId)]) {
-          ids.add(earlier);
-        }
+    const ids = new Set([id]);
+    // A Set goes on to what is added while it is walked.
+    for (const at of ids) {
+      for (const earlier of this.continuedFrom(at)) ids.add(earlier);
+      for (const [oldId, record] of Object.entries(this.rotations)) {
+        if (record.newId === at && !RESTING_PHASES.includes(record.phase)) ids.add(oldId);
       }
     }
+    ids.delete(id);
     return [...ids];
   }
 

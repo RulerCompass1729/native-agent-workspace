@@ -179,6 +179,13 @@ test('what a session continues from: finished rotations, and the one it has not 
     f.dispatcher.rotations = { second: { phase, newId: 'third', roomIds: ['shared'] } };
     assert.deepEqual(f.dispatcher.earlierSessions('third'), [], phase);
   }
+  // The old session is still in use, and the one that has its work was replaced meanwhile.
+  f.dispatcher.log.push(done('third', 'fourth'));
+  f.dispatcher.rotations = { second: { phase: 'handed', newId: 'third', roomIds: ['shared'], handoffConfirmed: true, waitSince: NOW } };
+  assert.deepEqual(f.dispatcher.earlierSessions('fourth'), ['third', 'second', 'first']);
+  // A log that loops ends.
+  f.dispatcher.log.push(done('fourth', 'first'));
+  assert.deepEqual(f.dispatcher.earlierSessions('fourth'), ['third', 'second', 'first']);
   f.dispatcher.rotations = {};
 });
 
