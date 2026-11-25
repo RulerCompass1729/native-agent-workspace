@@ -11,7 +11,7 @@ const { createHash, randomUUID } = require('node:crypto');
 
 const { AgyTui, editorState, launchSpec, prepareBridge, resolveSessionTranscript, readFinalReply, validConversationId } = require('../agy-tui.cjs');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { NativeHost } = require('../adapters.cjs');
+const { NativeHost, Terminal: NativeTerminal } = require('../adapters.cjs');
 const { Workspace } = require('../workspace.cjs');
 const { nativeEnvironment, pythonExecutable } = require('../platform.cjs');
 const operation = require('../background-operation.cjs');
@@ -47,14 +47,14 @@ test('launchSpec keeps default model and effort, honors bridgeDir, skipPermissio
     hookSocket: '/tmp/synthetic.sock',
   });
   assert.deepEqual(fresh.argv, ['/synthetic/bin/agy', '--add-dir', '/tmp/synthetic-bridge', '--dangerously-skip-permissions']);
-  assert.deepEqual(fresh.env, { NAW_HOOK_TOKEN: 'tok-1', NAW_HOOK_SOCKET: '/tmp/synthetic.sock' });
+  assert.deepEqual(fresh.env, { AGY_CLI_DISABLE_AUTO_UPDATE: 'true', NAW_HOOK_TOKEN: 'tok-1', NAW_HOOK_SOCKET: '/tmp/synthetic.sock' });
 
   const resumed = launchSpec({
     record: { recovering: true, nativeId: id, skipPermissions: true },
     binary: '/synthetic/bin/agy',
   });
   assert.deepEqual(resumed.argv, ['/synthetic/bin/agy', '--conversation', id, '--dangerously-skip-permissions']);
-  assert.deepEqual(resumed.env, {});
+  assert.deepEqual(resumed.env, { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' });
 
   const nonUuidResume = launchSpec({
     record: { recovering: true, nativeId: `naw-agy:${id}` },
@@ -63,6 +63,48 @@ test('launchSpec keeps default model and effort, honors bridgeDir, skipPermissio
   assert.deepEqual(nonUuidResume.argv, ['/synthetic/bin/agy']);
 
   assert.throws(() => launchSpec({ record: {}, binary: 'agy' }), e => e.uiMessage?.key === 'error.nativeRuntimeMissing');
+});
+
+// agy 1.5.16 turns its updater off only for lowercase `true`; `TRUE`, `1` and `yes` leave it on.
+test('a real NativeHost launch and resume give agy AGY_CLI_DISABLE_AUTO_UPDATE=true over any inherited value, and no other program', { timeout: 30000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-update-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const privateDir = path.join(dir, 'p');
+  fs.mkdirSync(privateDir, { mode: 0o700 });
+  const host = new NativeHost(privateDir, dir);
+  const out = path.join(dir, 'env.txt');
+  const printEnv = path.join(dir, 'agy');
+  fs.writeFileSync(printEnv, `#!/bin/sh\nprintf '%s|%s\\n' "\${AGY_CLI_DISABLE_AUTO_UPDATE-unset}" "$*" >> '${out}'\n`, { mode: 0o755 });
+  // create() resolves programs again; without this the test would start the person's real agy.
+  host.binaries.agy = printEnv;
+  host.resolvePrograms = () => host.binaries;
+  const inherited = process.env.AGY_CLI_DISABLE_AUTO_UPDATE;
+  t.after(() => {
+    if (inherited === undefined) delete process.env.AGY_CLI_DISABLE_AUTO_UPDATE;
+    else process.env.AGY_CLI_DISABLE_AUTO_UPDATE = inherited;
+  });
+  const line = async closed => { await closed; return fs.readFileSync(out, 'utf8').trim().split('\n').at(-1); };
+  const id = randomUUID();
+  for (const value of [undefined, 'TRUE', '1', 'false']) {
+    if (value === undefined) delete process.env.AGY_CLI_DISABLE_AUTO_UPDATE;
+    else process.env.AGY_CLI_DISABLE_AUTO_UPDATE = value;
+    for (const record of [
+      { id: 'fresh', provider: 'agy', cwd: dir },
+      { id: 'resumed', provider: 'agy', cwd: dir, nativeId: id, recovering: true },
+    ]) {
+      const rt = host.create(record);
+      assert.equal(host.binaries.agy, printEnv);
+      await rt.start();
+      const terminal = rt.terminal;
+      t.after(() => terminal.screen.dispose());
+      const seen = await line(new Promise(resolve => terminal.once('closed', resolve)));
+      assert.equal(seen.split('|')[0], 'true', `${record.id} inheriting ${value}`);
+      assert.equal(seen.includes('--conversation ' + id), record.recovering === true);
+    }
+    const other = new NativeTerminal([printEnv], dir, {});
+    t.after(() => other.screen.dispose());
+    assert.equal((await line(new Promise(resolve => other.once('closed', resolve)))).split('|')[0], value === undefined ? 'unset' : value);
+  }
 });
 
 test('prepareBridge writes separate MCP token + PreToolUse/PostToolUse matchers; transcript checks bind realpath to session', t => {
@@ -1053,15 +1095,47 @@ test('background-operation summarizes agy create as terminal-only', () => {
   assert.equal(summary.createKey, sameView.createKey);
 });
 
-test('agy_hook.py is a no-op outside NAW and forwards metadata + hashed PreToolUse proof inside NAW', async t => {
+// Measured on agy 1.5.16: from PreToolUse, `{}` is a denial; only empty output with exit 0 leaves the call to agy's own permissions.
+test('agy_hook.py makes no PreToolUse decision without both NAW values', () => {
+  const python = pythonExecutable();
+  const script = path.join(__dirname, '../agy_hook.py');
+  const envClean = { ...process.env };
+  delete envClean.NAW_HOOK_TOKEN;
+  delete envClean.NAW_HOOK_SOCKET;
+  const tool = (name, args = {}) => ({ hookEventName: 'PreToolUse', conversationId: 'c', toolCall: { id: 'call_1', name, args } });
+  const inputs = [
+    ['another MCP tool', JSON.stringify(tool('call_mcp_tool', { ServerName: 'other_mcp', ToolName: 'foo', Arguments: {} }))],
+    ['the workspace message', JSON.stringify(tool('call_mcp_tool', { ServerName: 'naw_workspace', ToolName: 'workspace_message', Arguments: { recipient_id: 'p', message: 'm' } }))],
+    ['a plain command', JSON.stringify(tool('run_command', { CommandLine: 'true' }))],
+    ['unreadable input', '{"hookEventName":"PreToolUse","toolCall":'],
+    ['input that is not an object', '["PreToolUse"]'],
+    ['no event name', JSON.stringify({ toolCall: { name: 'call_mcp_tool' } })],
+    ['no input', ''],
+  ];
+  for (const [where, values] of [
+    ['neither', {}],
+    ['only the token', { NAW_HOOK_TOKEN: 'hook-secret' }],
+    ['only the socket', { NAW_HOOK_SOCKET: '/nonexistent/naw.sock' }],
+    ['empty values', { NAW_HOOK_TOKEN: '', NAW_HOOK_SOCKET: '' }],
+  ]) {
+    for (const [what, input] of inputs) {
+      const out = execFileSync(python, [script], { input, encoding: 'utf8', env: { ...envClean, ...values } });
+      assert.equal(out, '', `${where}: ${what}`);
+    }
+    for (const event of ['SessionStart', 'PreInvocation', 'PostInvocation', 'PostToolUse', 'Stop']) {
+      const out = execFileSync(python, [script], { input: JSON.stringify({ hookEventName: event }), encoding: 'utf8', env: { ...envClean, ...values } });
+      assert.deepEqual(JSON.parse(out), {}, `${where}: ${event}`);
+    }
+  }
+});
+
+test('agy_hook.py forwards metadata + hashed PreToolUse proof inside NAW', async t => {
   const python = pythonExecutable();
   assert.ok(python, 'python3 required');
   const script = path.join(__dirname, '../agy_hook.py');
   const envClean = { ...process.env };
   delete envClean.NAW_HOOK_TOKEN;
   delete envClean.NAW_HOOK_SOCKET;
-  const noop = execFileSync(python, [script], { input: '{"hookEventName":"SessionStart"}', encoding: 'utf8', env: envClean });
-  assert.deepEqual(JSON.parse(noop), {});
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-hook-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

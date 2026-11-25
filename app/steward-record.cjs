@@ -98,7 +98,7 @@ class StewardRecord {
     if (this.failed) throw Error('The butler record is unavailable');
     const at = this.now(), value = { ...fields, at };
     try { this.log.append([{ time: at, value }], at); }
-    catch (error) { this.failed = true; try { this.onFailed(); } catch { /* The refused call still says so. */ } throw error; }
+    catch (error) { this.failed = true; this.failedAt = at; try { this.onFailed(); } catch { /* The refused call still says so. */ } throw error; }
     this.lines.push(value);
   }
   // The person designated or revoked the butler (the person-only `steward` call).
@@ -195,6 +195,25 @@ class StewardRecord {
       if (value.session) out.push({ session: value.session, from: value.event === 'followed' ? 0 : value.at, to: null });
     }
     return out;
+  }
+  // Whether that native session held the role at `at`, by the role lines alone: undefined when they cannot say. Asked on
+  // every state, worked out again only when the lines change. `chain`: the butler of now and the sessions it continued
+  // from. A rotation's successor has no line until NAW notices it, so one of the chain is in the role while any is.
+  heldRole(id, nativeId, at, chain) {
+    if (typeof nativeId !== 'string' || this.failed && !(at < this.failedAt)) return undefined;
+    if (this.kept?.lines !== this.lines || this.kept.count !== this.lines.length) this.kept = { lines: this.lines, count: this.lines.length, periods: this.periods(), roles: this.roles() };
+    const { periods, roles } = this.kept;
+    if (periods.some(({ session, from, to }) => session.id === id && session.nativeId === nativeId && at >= from && (to === null || at < to))) return true;
+    const onChain = chain?.has(id) === true, linked = session => onChain && chain.has(session?.id);
+    const next = roles.find(line => line.at > at), last = roles.findLast(line => line.at <= at);
+    // The person's own choice of it comes after: it did not follow the one before.
+    if (next?.event === 'designated' && next.session.id === id) return false;
+    // The same session under another native identity did not hold it.
+    if (linked(last?.session)) return last.session.id !== id;
+    // Not caught up with the butler of now; before any line; or the role changed some time before the line that says so.
+    if (!next && onChain) return undefined;
+    if (next?.event === 'designated') return false;
+    return !last || next && (next.event === 'started' || linked(next.session)) ? undefined : false;
   }
   // Deleting exported blocks: only which steps they held stays, without what was asked.
   deleteBlocks(names) {

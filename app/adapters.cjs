@@ -16,6 +16,7 @@ const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.c
 const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
+const sessionModel = require('./session-model.cjs');
 const codexQualification = require('./codex-qualification.cjs');
 const claudeModCheck = require('./claude-mod-check.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
@@ -272,6 +273,8 @@ function createTerminalSerializeAddon() {
 }
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Codex: how many tenths of a second its report of changed settings may take.
+const SETTINGS_REPORT_TRIES = 50;
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 const dshTui = require('./dsh-tui.cjs');
@@ -503,8 +506,9 @@ function claudeFailureCause(file, nativeId, messageId) {
           row.isApiErrorMessage !== true || row.message?.model !== '<synthetic>') return false;
         // Native 2.1.323 omits the HTTP status on a connection error; explicit
         // null is the other no-status encoding. No other value is admitted.
+        // stream_idle_timeout: native's own idle timer gave up on an open stream after part of the answer (2.1.331).
         return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden'
-          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && row.apiError === 'connection_failed' ? 'connectionFailed' : false;
+          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && ['connection_failed', 'stream_idle_timeout'].includes(row.apiError) ? 'connectionFailed' : false;
       } catch { /* torn line: no authority to retry */ }
     }
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
@@ -1114,8 +1118,8 @@ class Claude extends EventEmitter {
     turn.failureReads = (turn.failureReads || 0) + 1;
     turn.pendingFailure = cause === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
-    // An unknown error body grants nothing: only the saved typed 403 or the
-    // exact no-status connection_failed pair can admit this otherwise unnamed
+    // An unknown error body grants nothing: only the saved typed 403 or an
+    // exact no-status connection cause can admit this otherwise unnamed
     // failure. Other unknown rows retain their existing behavior.
     if (turn.errorRowUnclassified && cause !== 'requestForbidden' && cause !== 'connectionFailed') return;
     turn.endReported = true;
@@ -1351,6 +1355,10 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
+    // An agent that ends in the turn that started or resumed it is in no turn-end report, and its notification has
+    // no source (real 2.1.332, 11-25): its start is what makes it known.
+    if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
+      typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;
@@ -3002,6 +3010,40 @@ class Codex extends EventEmitter {
     if (!this.turnId) throw uiError("error.nativeTurnUnconfirmedInterrupt");
     await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
   }
+  // Only where the thread is loaded on the owned server.
+  modelRpc() {
+    const rpc = this.host.rpc;
+    if (!rpc || !this.record.nativeId || this.stopped || this.closed || this.transportDisconnected || this.backendExitConfirmed) throw uiError('error.modelChange.unavailable');
+    return rpc;
+  }
+  async models() {
+    const rpc = this.modelRpc(), rows = [];
+    for (let cursor = null, page = 0; page < 20; page++) {
+      const result = await rpc.call('model/list', { limit: 100, ...(cursor ? { cursor } : {}) });
+      if (!Array.isArray(result?.data)) throw uiError('error.modelChange.unavailable');
+      rows.push(...result.data);
+      cursor = result.nextCursor;
+      if (cursor == null) return sessionModel.codexModels(rows);
+      if (typeof cursor !== 'string') break;
+    }
+    throw uiError('error.modelChange.unavailable');
+  }
+  // From the next turn on. `guard` runs after native listed its models, right before the change. No version is
+  // asked for: native either refuses the request or reports the settings it took, and only that report counts.
+  async changeModel(value, guard) {
+    const { model, effort } = sessionModel.codexValue(value, await this.models());
+    const rpc = this.modelRpc(), threadId = this.record.nativeId;
+    guard();
+    const taken = () => this.nativeSettings?.nativeId === threadId && this.nativeSettings.model === model && this.nativeSettings.effort === effort;
+    try { await rpc.call('thread/settings/update', { threadId, model, effort }); }
+    catch (error) {
+      if (['error.nativeRequestTimeout', 'error.nativeDisconnectedNoReplay'].includes(error?.uiMessage?.key)) throw uiError('error.modelChange.unconfirmed');
+      throw error;
+    }
+    for (let n = 0; n < SETTINGS_REPORT_TRIES && !taken(); n++) await delay(100);
+    if (!taken()) throw uiError('error.modelChange.unconfirmed');
+    return { model, effort };
+  }
   async openTerminal(guard = () => true) {
     if (!guard()) throw uiError("error.terminalOwnerChanged");
     if (this.recoveryReady && !this.hasHistory && !await this.recoveryReady) throw uiError("error.nativeResumeUnconfirmed");
@@ -3044,7 +3086,7 @@ class Codex extends EventEmitter {
     if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
-  async reconnect() {
+  async reconnect({ keepTurn = false } = {}) {
     const transportOnly = Boolean(this.transportDisconnected);
     if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw uiError("error.nativeConnectionStateChanged");
     const lifecycle = ++this.lifecycleRevision;
@@ -3054,6 +3096,7 @@ class Codex extends EventEmitter {
     // Re-subscribe to the owned thread. Omit every configuration override except a profile's
     // model catalog (codexResumeParams): thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
+    const running = keepTurn ? this.turnId : null;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
     this.rememberHistoryWatermarks();
@@ -3100,6 +3143,20 @@ class Codex extends EventEmitter {
       try { await this.openTerminal(); }
       catch { this.emit('activity', ...uiActivity("notice.activity.connectedTerminalOpenFailed")); }
     }
+    await this.keepRunningTurn(running, rpc, current);
+  }
+  // For the window that kept control (keepTurn): the turn that ran when the connection dropped is this connection's too
+  // only when native says that it is the thread's latest turn and still in progress; otherwise unknown, as before.
+  async keepRunningTurn(turnId, rpc, current) {
+    if (!turnId || !verifiedCodexProtocol(rpc) || !current()) return;
+    let page, timer;
+    try {
+      page = await Promise.race([new Promise(resolve => { timer = setTimeout(resolve, 3000); }),
+        rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' })]);
+    } catch { return; } finally { clearTimeout(timer); }
+    const latest = page?.data?.[0];
+    if (!current() || this.turnId || this.textEndedTurns.has(turnId) || latest?.id !== turnId || latest.status !== 'inProgress') return;
+    this.turnId = turnId; this.turn(turnId).liveStarted = true;
   }
   transportClosed() {
     if (this.closed || this.backendExitConfirmed) return;

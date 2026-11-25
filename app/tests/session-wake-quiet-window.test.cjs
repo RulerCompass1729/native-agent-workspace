@@ -245,3 +245,52 @@ test('one held for the butler\'s minute before the window opened is held for the
   f.close(); f.advance(MIN); await f.retry();
   assert.equal(f.writes.length, 2); assert.equal(f.writes[1].text.split('\n')[1], 'Second.'); assert.equal(row.wake.status, 'submitted');
 });
+
+// R221: a large Claude session idle for 45 minutes is handed over. Its window closes early, and what another backend
+// holds for it is tried again up to a minute later: it is handed over after that, not in between (the message was lost).
+const rules = require('../queue-dispatch.cjs'), { QuietWindows } = require('../quiet-windows.cjs'), { RoomState } = require('../room-state.cjs');
+function dispatcherFor(t, f) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-wake-quiet-dispatch-')); fs.chmodSync(dir, 0o700);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const idleAt = f.now(), asked = [], client = new EventEmitter(), own = () => f.target.get(f.b);
+  const session = () => ({ id: f.b, name: 'Receiver', provider: 'claude', nativeId: own().nativeId, model: 'claude-test-model', state: own().state, roomIds: ['shared'], roomId: 'shared',
+    cwd: f.root, createdAt: idleAt - 120 * MIN, lastActivityAt: idleAt, background: 0, scheduled: 0, backgroundStale: false, chatAvailable: true, liveDraft: '', controlRevision: 0, draftRevision: 0,
+    placementRevision: 0, pendingTag: own().pendingTag, pendingQueue: f.rb.pendingQueue, serviceCapabilities: [rules.CAPABILITY, 'guardedSessionStopV1'], fleet: [], messages: [] });
+  client.snapshot = () => ({ sessions: [session()], rooms: [{ id: 'shared', messages: [], run: null }], wakePolicy: { enabled: true }, capabilities: [rules.CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY] });
+  client.refresh = async () => client.snapshot(); client.close = () => {};
+  client.route = () => ({ client, state: { capabilities: [rules.CAPABILITY, rules.ROTATION_CAPABILITY] } });
+  client.call = async (method, id, text) => {
+    if (method !== 'dispatch') return client.snapshot();
+    asked.push(text.split('\n')[0]); f.rb.emit('state', 'working');
+    return 'tag-handoff';
+  };
+  const compactions = { contexts: new Map([[f.b, { tokens: 180000, at: idleAt, ttlMs: 60 * MIN }]]), sample: async () => new Map(), recheck: async () => {} };
+  const d = new rules.QueueDispatcher({ roomState: new RoomState(dir), dataDir: dir, clients: () => client, now: f.now, settleMs: 0, tickMs: 3600000, broadcast: async () => {}, compactions,
+    sampleProcesses: async () => '', samplePressure: async () => '' });
+  t.after(() => d.close());
+  return { asked, dispatcher: d, pass: async () => { d.dirty = true; await d.tick(); await settle(); } };
+}
+for (const [code, opened, close] of [
+  ['still-busy', 16, q => q.pass({ options: [{ backendKey: KEY, sessions: [] }], settings: { migrate: true }, sessions: [], humanAt: new Map(), failed: new Set() }).closed[0].code],
+  ['person', 40, (q, now) => q.pass({ options: [{ backendKey: KEY, sessions: [] }], settings: { migrate: true }, sessions: [], humanAt: new Map([['z', now]]), failed: new Set() }).closed[0].code],
+  ['moved', 40, q => q.moved(KEY, 'moved').code],
+]) test(`a message held for a window that closes early (${code}) reaches a large idle recipient before it is handed over`, async t => {
+  const f = await fixture(t), g = dispatcherFor(t, f), start = f.now(), to = minutes => f.advance(start + minutes * MIN - f.now());
+  to(opened); f.open(40);
+  g.dispatcher.quietWindows = new QuietWindows(f.root, { now: f.now, moveWait: () => ({ code: 'busy', ids: ['z'] }) });
+  const one = await f.turn('one', 'Held.'); await one.finish();
+  const row = f.rows().at(-1);
+  assert.equal(row.wake.status, 'held');
+  for (let minute = opened + 1; minute <= 45; minute++) { to(minute); await f.retry(); await g.pass(); }
+  assert.deepEqual([row.wake.status, g.asked], ['held', []], 'both wait for the window');
+  to(46); await f.retry(); to(46.05);
+  assert.equal(close(g.dispatcher.quietWindows, f.now()), code);
+  if (code === 'moved') f.move();
+  to(46.1); await f.retry(); await g.pass();
+  assert.equal(row.wake.status, 'held', 'its next look is at 47');
+  assert.deepEqual(g.asked, [], 'not in between');
+  to(47); await f.retry();
+  assert.deepEqual([row.wake.status, f.writes.length], ['submitted', 1], 'within a minute of the window');
+  to(48.2); await g.pass();
+  assert.deepEqual(g.asked, [], 'it is at work on it');
+});

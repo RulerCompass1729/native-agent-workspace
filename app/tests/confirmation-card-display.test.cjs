@@ -94,6 +94,21 @@ test('a stop card names what its question does to which session, and marks that 
   assert.equal(operation.operationSummary({ method: 'stop', arguments: ['gone'] }, { id: 'agent' }, names).action, null);
   assert.equal(operation.operationSummary({ method: 'stop', arguments: [] }, { id: 'agent' }, {}).action, null);
 });
+test('a card that changes a model names the session and the value, in words for the native default', () => {
+  const names = { sessions: [{ id: 'agent', name: 'Butler', provider: 'claude' }, { id: 'c', name: 'Claude one', provider: 'claude' }] };
+  const change = (value, id = 'c') => operation.operationSummary({ method: 'changeModel', arguments: [id, value] }, { id: 'agent' }, names);
+  const words = summary => ['zh', 'en'].map(language => { const p = page(language, names.sessions); p.window.nativeWorkspaceModelDialog = require('../renderer/model-dialog.js'); return p.backgroundSummaryText(summary); });
+  const summary = change({ model: 'claude-opus-5-5', effort: 'xhigh' });
+  assert.deepEqual([summary.action, summary.method, summary.target, summary.model, summary.effort, summary.risks], ['changeModel', 'changeModel', 'Claude one', 'claude-opus-5-5', 'xhigh', []]);
+  assert.deepEqual(words(summary), ['换会话的模型 · 对象：Claude one · 换成 claude-opus-5-5 · xhigh', 'Change a session\'s model · Session: Claude one · Change to claude-opus-5-5 · xhigh']);
+  const none = ['zh', 'en'].map(language => locale.format(language, 'standing.nativeDefault'));
+  assert.deepEqual(words(change({ model: null, effort: null })).map(line => line.split(' · ').slice(2).join(' · ')), ['换成 ' + none[0], 'Change to ' + none[1]]);
+  assert.deepEqual(words(change({ model: null, effort: 'low' }))[0].split(' · ').slice(2).join(' · '), `换成 ${none[0]} · low`);
+  // A session asking for its own model is asked about like any other, and its name is on the card.
+  for (const id of ['agent', 'c']) assert.equal(operation.maintenanceAction('changeModel', [id, {}], { id: 'agent' }), 'changeModel');
+  assert.equal(change({ model: 'x', effort: 'low' }, 'agent').target, 'Butler');
+  assert.equal(require('../steward-standing.cjs').localAction({ method: 'changeModel', arguments: ['agent', { model: 'x', effort: 'low' }], paths: [] }) || null, null, 'No standing authorization covers it');
+});
 test('the permanent strip counts confirmations separately from decisions and picture reviews', () => {
   const source = fs.readFileSync(path.join(__dirname, '../renderer/activity-stream.js'), 'utf8');
   const sandbox = vm.createContext({}); vm.runInContext(source, sandbox);

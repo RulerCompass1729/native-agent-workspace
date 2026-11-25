@@ -3,6 +3,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { Workspace } = require('../workspace.cjs'), { Claude } = require('../adapters.cjs');
 const { ScopedOutboxRuntime } = require('../scoped-outbox-runtime.cjs'), { rootCall } = require('../background-control-native.cjs');
 
+const otherAgent = { id: 'other', name: 'Other', nativeId: 'other-native', provider: 'claude', callId: 'c', turnId: 't', operationId: 'o' };
 // Real input bookkeeping, Claude root identity and service-side proof consumption.
 // No provider process, native keyboard injection, model, or daily app.
 async function fixture(t, steward = true) {
@@ -33,11 +34,24 @@ for (const steward of [true, false]) test(`${steward ? 'a designated butler' : '
     assert.equal((await f.check()).ok, true, JSON.stringify(key));
   }
   f.w.setDraft(f.s.id, 'SYNTHETIC UNSENT DRAFT', f.s.owner);
-  assert.equal((await f.check()).ok, true); assert.equal(f.s.controlRevision, 4); assert.equal(f.keys.length, 4);
+  // The person's native input may arrive inside an older background operation's ambient context; it stays the person's.
+  require('../background-operation.cjs').run(otherAgent, () => { f.s.controlRevision++; f.s.peerRevision++; require('../session-wake.cjs').messageInput(f.w, f.s, { control: 1, peer: 1 }); });
+  assert.equal((await f.check()).ok, true); assert.equal(f.s.controlRevision, 5); assert.equal(f.keys.length, 4);
 });
 for (const [name, change, check] of [
   ['Escape', f => f.w.input(f.s.id, '\x1b', f.s.owner), 'scope-control-revision'],
   ['Ctrl-C', f => f.w.input(f.s.id, '\x03', f.s.owner), 'scope-control-revision'],
+  ['another agent\'s background input', f => require('../background-operation.cjs').run(otherAgent, () => f.w.input(f.s.id, 'x', f.s.owner)), 'scope-control-revision'],
+  ['another agent\'s background queue', f => {
+    Object.defineProperty(f.r, 'queueAvailable', { value: true });
+    require('../background-operation.cjs').run(otherAgent, () => f.w.queue(f.s.id, 'x', f.s.owner)).catch(() => {});
+    assert.deepEqual([f.s.controlRevision, f.s.peerRevision], [1, 1]);
+  }, 'scope-control-revision'],
+  ['another agent\'s background steer', f => {
+    Object.defineProperty(f.r, 'steerAvailable', { value: true }); f.r.turnId = 'owned-turn'; f.s.provider = 'codex';
+    require('../background-operation.cjs').run(otherAgent, () => f.w.steer(f.s.id, 'x', f.s.owner, 'owned-turn')).catch(() => {});
+    f.s.provider = 'claude'; assert.equal(f.s.controlRevision, 1);
+  }, 'scope-control-revision'],
   ['takeover', f => { f.s.owner = 'other-human'; }, 'scope-owner'],
   ['non-input control', f => { f.s.controlRevision++; }, 'scope-control-revision'],
   ['native identity', f => { f.s.nativeId = randomUUID(); }, 'scope-native-id'],
@@ -47,7 +61,12 @@ for (const [name, change, check] of [
   ['role withdrawn after typing', f => { f.w.input(f.s.id, 'x', f.s.owner); f.designate(null); }, 'scope-control-revision'],
 ]) for (const steward of name === 'role withdrawn after typing' ? [true] : [true, false]) test(`${steward ? 'a butler\'s' : 'an ordinary session\'s'} source control call still refuses ${name} with a fixed condition name`, async t => {
   const f = await fixture(t, steward); change(f);
-  const result = await f.check(); assert.equal(result.ok, false); assert.equal(result.failureCheck, check);
+  const result = await f.check(); assert.equal(result.ok, false);
+  assert.equal(result.failureCheck || f.events.at(-1)?.failureCheck, check);
+});
+test('a butler\'s control call with no input meanwhile goes on when the role is withdrawn', async t => {
+  const f = await fixture(t); f.designate(null);
+  assert.equal((await f.check()).ok, true);
 });
 test('asynchronous revocation keeps its fixed check name in the service notification', async t => {
   const f = await fixture(t); f.s.controlRevision++; f.w.changed();

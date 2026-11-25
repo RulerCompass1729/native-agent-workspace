@@ -5,7 +5,7 @@
   'use strict';
   const STATES = ['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'not-executed', 'unconfirmed'];
   const MESSAGES = ['staged', 'sending', 'consumed', 'submitted', 'unconfirmed', 'not-sent', 'cancelled'];
-  const REASONS = ['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'standing-authorization-unavailable'];
+  const REASONS = ['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'model-change-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'standing-authorization-unavailable'];
   const ROLES = ['designated', 'revoked', 'followed', 'started'];
   // The butler's call on NAW's switch for waking it (steward-record.cjs view `wake`): turned on, off, or looked at.
   const WAKE_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.wakeOn', off: 'stewardRecord.step.wakeOff', check: 'stewardRecord.step.wakeCheck' });
@@ -84,7 +84,7 @@
       // Opened: the whole sentence, and NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
       body.append(say(make('p'), key, marked(entry, params)));
       if (entry.kind === 'patrol') body.append(say(make('p'), 'stewardRecord.step.patrolDetail', { sessions: entry.sessions, items: entry.items, minutes: entry.minutes }));
-      if (entry.kind === 'wakeBlocked') body.append(say(make('p'), 'stewardWake.stalled', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
+      if (entry.kind === 'wakeBlocked') body.append(say(make('p'), entry.minutes ? 'stewardWake.stalled' : 'stewardWake.notWoken', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
       if (entry.error) { const why = make('p', 'steward-record-error'); why.textContent = entry.error; body.append(why); }
     }
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;

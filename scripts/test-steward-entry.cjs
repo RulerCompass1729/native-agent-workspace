@@ -78,18 +78,20 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own fixture ready');
   await launch(); await size(1280, 800);
   const say = (key, params) => locale.format('zh', key, params);
-  const dialog = page.locator('#steward-dialog'), picks = () => dialog.locator('.steward-pick').evaluateAll(rows => rows.map(row => [row.querySelector('strong').textContent, row.querySelector('small').textContent, row.querySelector('input').disabled, row.querySelector('input').checked]));
+  const dialog = page.locator('#steward-dialog'), picks = () => dialog.locator('.steward-pick:has(input:not([value="new"]))').evaluateAll(rows => rows.map(row => [row.querySelector('strong').textContent, row.querySelector('small').textContent, row.querySelector('input').disabled, row.querySelector('input').checked]));
 
   // 1. A new profile: the entry is at the top of the sidebar and says nobody is designated. The built-in butler's own
   //    row stays hidden (its switch is closed). The chooser has nobody to offer and says what to do.
   let seen = await sidebar();
   assert.deepEqual([seen.empty, seen.emptyLabel, seen.butler, seen.builtIn, seen.badge], [`${say('butler.name')} ${say('butler.row.empty')}`, say('steward.emptyLabel'), null, false, null]);
-  assert.deepEqual(seen.order, ['brand', 'steward-entry', 'butler-row', 'new-session'], 'The entry sits right under the brand, above everything else');
+  assert.deepEqual(seen.order, ['brand', 'steward-entry', 'butler-row', 'space-rail-routes'], 'The entry sits right under the brand, above everything else');
   assert.equal(record(), undefined, 'Nothing is written before the person designates');
   await page.locator('#steward-empty').click(); await dialog.waitFor({ state: 'visible' });
-  assert.deepEqual([await picks(), await page.locator('#steward-none').innerText(), await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-duty').isVisible()], [[], say('steward.choose.none'), true, false]);
+  // A new session is the one thing to choose (steward-ui.test.cjs, and the probe named in its review, cover opening it).
+  assert.deepEqual([await picks(), await dialog.locator('.steward-pick').allInnerTexts(), await page.locator('#steward-none').isVisible(), await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-duty').isVisible()],
+    [[], [`＋\n${say('steward.new.title')}\n${say('steward.new.outside')}`], false, true, true]);
   await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' });
-  checks.push('With nobody designated the entry is at the top of the sidebar and says so; the built-in butler row stays hidden; the chooser says there is no session to choose');
+  checks.push('With nobody designated the entry is at the top of the sidebar and says so; the built-in butler row stays hidden; the chooser offers a new session and nothing else');
 
   // The cast: a space with one member, and two sessions of the person's own.
   await page.locator('#create-first-space').click(); await page.locator('#space-create-name').fill('网站改版'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
@@ -122,7 +124,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await finish(main); await until(async () => (await sidebar()).butler?.status === say('steward.rowStatus', { name: 'Claude 主会话', status: ready }), 'Its turn ended');
   seen = await sidebar();
   assert.deepEqual(seen.butler, { id: main, title: say('butler.name'), status: say('steward.rowStatus', { name: 'Claude 主会话', status: ready }), icon: '◆', active: true, label: seen.butler.label, draggable: null });
-  assert.ok(seen.butler.label.startsWith(say('steward.rowLabel', { details: 'Claude 主会话 · Claude · ' })), seen.butler.label);
+  assert.ok(seen.butler.label.startsWith(say('steward.rowLabel', { details: `Claude 主会话 · ${say('vendor.label', { vendor: 'Anthropic', shell: 'Claude Code' })} · ` })), seen.butler.label);
   assert.deepEqual([seen.empty, seen.listed, seen.count, seen.title, seen.badge], [null, [member, docs], '2', 'Claude 主会话', '◆ ' + say('butler.name')], 'It left the list, the count follows, and the window shows its conversation with the mark');
   assert.deepEqual(record(), { sessionId: main, nativeId: nativeOf(main) }); assert.deepEqual((await snapshot()).steward, { sessionId: main, nativeId: nativeOf(main) });
   assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty, undefined, 'The default text is not written into the record');
@@ -139,7 +141,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // 4. Its menus: change and revoke are offered on it; reordering and spaces are not. On another session,
   //    "make it the butler" stands above the secretary's item; a space member is not offered it.
   await page.locator('#session-header-more').click(); let items = await menuItems(); await shot('zh-1280-butler-menu'); await closeMenu();
-  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its record, change and revoke');
+  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its model, its record, change and revoke');
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); items = await menuItems(); await closeMenu();
   for (const key of ['menu.stewardChange', 'menu.stewardRevoke', 'menu.rename', 'menu.archiveSession']) assert.ok(items.includes(say(key)), key);
   for (const text of [say('menu.moveUp'), say('menu.moveDown'), say('menu.stewardSet'), say('menu.joinSpace', { name: '网站改版' })]) assert.equal(items.includes(text), false, text);
@@ -176,7 +178,8 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   const own = '你只做排期和汇报，不写代码。\n要我定的事攒成一张清单。';
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: say('menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
   assert.deepEqual((await picks())[0], ['Claude 主会话', say('steward.choose.current'), false, true]);
-  assert.deepEqual([await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-confirm').innerText()], [false, say('steward.choose.resend')]);
+  await until(async () => !(await page.locator('#steward-confirm').isDisabled()), 'the permission has been read');
+  assert.equal(await page.locator('#steward-confirm').innerText(), say('steward.choose.resend'));
   await page.locator('#steward-duty').fill(own); await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
   let got = await fixture('stats', main); sends++;
   assert.deepEqual([got.stats.sends, got.lastSend.text, JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty], [sends, say('steward.duty.header') + '\n' + own, own]);
@@ -217,7 +220,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   assert.deepEqual(rail, { inside: true, above: true, narrow: true, icon: true }); await shot('zh-850-butler');
   await language('en'); await size(1280, 800);
   seen = await sidebar(); assert.deepEqual([seen.butler.title, seen.badge], [locale.format('en', 'butler.name'), '◆ ' + locale.format('en', 'butler.name')]);
-  assert.ok(seen.butler.label.startsWith(locale.format('en', 'steward.rowLabel', { details: 'Claude 主会话 · Claude · ' })));
+  assert.ok(seen.butler.label.startsWith(locale.format('en', 'steward.rowLabel', { details: `Claude 主会话 · ${locale.format('en', 'vendor.label', { vendor: 'Anthropic', shell: 'Claude Code' })} · ` })));
   await shot('en-1280-butler');
   // The chooser in English offers the English default, since the person kept the default.
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: locale.format('en', 'menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });

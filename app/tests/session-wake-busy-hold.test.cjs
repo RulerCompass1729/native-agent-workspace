@@ -384,6 +384,166 @@ test('a notice that could not be saved with its answer is given with the next on
   assert.match(told, /「While it works\.」/);
   assert.ok(!told.includes('Not saved.'), 'a message that could not be saved was never answered as held');
 });
+
+// 298's independent review, 11-24: findings 1 and 2, and the PM's three rows.
+const LOSS = '你之前存着等送的一条没有送到：', UNKNOWN = '你之前存着等送的一条没能确认是否送到';
+const saved = f => JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'), 'utf8')).sessions.find(s => s.id === f.a).messages;
+const windows = (f, open) => fs.writeFileSync(path.join(f.root, 'quiet-windows.json'), JSON.stringify({ format: 1, history: [],
+  windows: open ? [{ id: randomUUID(), scope: `backend:${KEY}`, reason: 'migration', openedBy: 'naw', openedAt: f.now(), deadline: f.now() + 40 * MIN, waited: 'busy', sessions: [f.b] }] : [] }), { mode: 0o600 });
+test('what an answer tells of a lost message is saved with that answer: never told again after the backend ends', async t => {
+  const f = await held(t), other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  idle(f); await stopped(f); await settle(); await f.look();
+  assert.equal(f.row.wake.status, 'not-sent');
+  f.begin('two'); const told = await f.call('Next.', 'call-two', other);
+  assert.equal(told.status, 'staged'); assert.ok(told.message.includes(LOSS) && told.message.includes('While it works.'));
+  // The backend ends here: what it reopens with is what was saved with the answer.
+  const reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  f.source.get(f.a).messages = saved(f);
+  f.advance(MIN); f.begin('three'); const again = await f.call('Third.', 'call-three', other);
+  assert.equal(again.status, 'staged'); assert.ok(!again.message.includes(LOSS) && !again.message.includes('While it works.'));
+  assert.equal(f.to(f.b).length, 0);
+  assert.equal(reopened.get(f.a).messages.find(m => m.id === f.row.id).wake.senderTold, true);
+});
+test('an answer that could not be saved has told nothing: the next one does, also from what is saved later', async t => {
+  const f = await held(t);
+  f.source.claim(f.a, 'another-window'); await f.look(); f.source.claim(f.a, 'source-owner');
+  f.begin('two');
+  const persist = f.source.persist; let during = null;
+  f.source.persist = function () { during = f.row.wake.senderTold; this.storeSnapshot(); this.storageWarning = { key: 'x' }; };
+  await assert.rejects(f.call('Not saved.', 'call-two'));
+  f.source.persist = persist; f.source.storageWarning = null;
+  assert.deepEqual([during, f.row.wake.senderTold, f.rows().at(-1).wake.saidHeld], [undefined, undefined, undefined], 'not marked before the answer is saved');
+  const later = JSON.parse(f.source.storeSnapshot(undefined, true).workspace).sessions.find(s => s.id === f.a).messages;
+  assert.equal(later.find(m => m.id === f.row.id).wake.senderTold, undefined);
+  await f.end(); f.advance(MIN); f.begin('three');
+  assert.ok((await f.call('Next.', 'call-three')).message.includes(LOSS));
+});
+// 298's independent review of that, 11-25: a save replaces workspace.json, then the room records. `fail` refuses a
+// file's rename in the saves it returns true for; what was refused is listed.
+const saving = async (f, fail, act) => {
+  const rename = fs.renameSync, refused = []; let saves = 0;
+  f.source.rooms.set('99999999-9999-4999-8999-999999999999', { id: '99999999-9999-4999-8999-999999999999', name: 'Two', messages: [], revision: 0 });
+  fs.renameSync = (from, to) => {
+    const name = path.dirname(String(to)) === f.root ? path.basename(String(to)) : '';
+    if (name === 'workspace.json') saves += 1;
+    if (['workspace.json', 'room-records.json'].includes(name) && fail(saves, name)) { refused.push(`${saves} ${name}`); throw Object.assign(Error('no space'), { code: 'ENOSPC' }); }
+    return rename(from, to);
+  };
+  try { return { answer: await act().catch(error => ({ error })), refused, saves }; } finally { fs.renameSync = rename; }
+};
+const reopen = f => { f.source.storageWarning = null; f.source.storageFailure = null; f.source.get(f.a).messages = saved(f); };
+const lossOf = async t => {
+  const f = await held(t); f.other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  idle(f); await stopped(f); await settle(); await f.look(); assert.equal(f.row.wake.status, 'not-sent');
+  f.onDisk = () => saved(f).find(m => m.id === f.row.id).wake.senderTold;
+  f.begin('two'); f.next = () => f.call('Next.', 'call-two', f.other);
+  return f;
+};
+test('a save that replaced workspace.json and failed on the room records told nothing: told once after the backend reopens', async t => {
+  const f = await lossOf(t);
+  const { answer, refused } = await saving(f, (save, name) => name === 'room-records.json', f.next);
+  assert.ok(answer.error); assert.deepEqual(refused, ['1 room-records.json']);
+  assert.deepEqual([f.onDisk(), f.row.wake.senderTold], [undefined, undefined]);
+  assert.ok(saved(f).some(m => m.wake?.body === 'Next.'), 'workspace.json is the one the failed save wrote');
+  reopen(f);
+  f.advance(MIN); f.begin('three'); const told = await f.call('Third.', 'call-three', f.other);
+  assert.ok(told.message.includes(LOSS) && told.message.includes('「While it works.」'), told.message);
+  assert.equal(f.onDisk(), true);
+  reopen(f); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+  assert.equal(f.to(f.b).length, 0, 'nothing is sent again');
+});
+test('the save of the mark that wrote neither file: the answer does not tell the loss, and one later answer does', async t => {
+  const f = await lossOf(t);
+  f.source.get(f.a).messages.push({ id: randomUUID(), role: 'system', kind: 'notice', origin: 'agent-wake-intent', text: 'Old.', wake: { nativeId: f.source.get(f.a).nativeId, status: 'cancelled', heldAt: 1, recipientId: f.b, body: 'Another lost.' } });
+  const { answer, refused } = await saving(f, (save, file) => save === 2 && file === 'workspace.json', f.next);
+  assert.deepEqual([answer.status, refused], ['staged', ['2 workspace.json']]);
+  assert.ok(!answer.message.includes('你之前存着等送的一条'), answer.message);
+  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [undefined, undefined]);
+  const later = JSON.parse(f.source.storeSnapshot(undefined, true).workspace).sessions.find(s => s.id === f.a).messages;
+  assert.equal(later.find(m => m.id === f.row.id).wake.senderTold, undefined, 'nor in what is saved later');
+  assert.ok(saved(f).some(m => m.wake?.body === 'Next.' && m.wake.status === 'staged'), 'what was answered is saved');
+  f.source.storageWarning = null; f.source.storageFailure = null;
+  await f.end(); f.advance(MIN); f.begin('three');
+  const told = (await f.call('Third.', 'call-three', f.other)).message;
+  assert.deepEqual(told.split('「').slice(1).map(part => part.split('」')[0]), ['While it works.', 'Another lost.'], 'once the warning is cleared');
+  assert.equal(f.onDisk(), true);
+  await f.end(); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+});
+test('the save of the mark that wrote neither file, then a restart: one later answer tells the loss', async t => {
+  const f = await lossOf(t);
+  const { answer } = await saving(f, (save, file) => save === 2 && file === 'workspace.json', f.next);
+  assert.ok(!answer.message.includes('「While it works.」'));
+  reopen(f); f.advance(MIN); f.begin('three');
+  const told = await f.call('Third.', 'call-three', f.other);
+  assert.ok(told.message.includes(LOSS) && told.message.includes('「While it works.」'), told.message);
+  reopen(f); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+  assert.equal(f.to(f.b).length, 0, 'nothing is sent again');
+});
+test('the save of the mark that wrote only workspace.json: the answer tells the loss, and none after it', async t => {
+  const f = await lossOf(t);
+  const { answer, refused } = await saving(f, (save, file) => save === 2 && file === 'room-records.json', f.next);
+  assert.deepEqual([answer.status, refused], ['staged', ['2 room-records.json']]);
+  assert.ok(answer.message.includes('「While it works.」'));
+  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [true, true]);
+  reopen(f); f.advance(MIN); f.begin('three');
+  assert.ok(!(await f.call('Third.', 'call-three', f.other)).message.includes('「While it works.」'), 'not again after a restart');
+});
+test('an answer that tells of nothing is saved once', async t => {
+  const f = await fixture(t); f.begin('one');
+  const { answer, saves } = await saving(f, () => false, () => f.call('Plain.', 'call-one'));
+  assert.deepEqual([answer.status, saves], ['staged', 1]);
+});
+// Each answered `readiness: 'held'` while still staged, and lost before anything held it.
+const cooldown = async t => {
+  const f = await fixture(t, { steward: 'recipient' }); await f.turn('first', 'Seed.'); f.reply(); f.advance(10000); return f;
+};
+const quietly = async t => { const f = await fixture(t); windows(f, true); return f; };
+const answeredHeld = {
+  'the butler\'s minute, the recipient stopped': [cooldown, async f => { await stopped(f); await f.end(); }, 'not-sent'],
+  'the butler\'s minute, the sender\'s turn interrupted': [cooldown, f => f.end(f.source, f.a, 'interrupted'), 'cancelled'],
+  'a quiet window, the sender\'s turn interrupted': [quietly, f => f.end(f.source, f.a, 'interrupted'), 'cancelled'],
+  'a quiet window that closed, the recipient stopped': [quietly, async f => { windows(f, false); await stopped(f); await f.end(); }, 'not-sent'],
+  'a quiet window that closed, the connection lost': [quietly, async f => { windows(f, false); f.source.peerRunner.transferWake = async () => { throw Error('The connection closed.'); }; await f.end(); }, 'unconfirmed'],
+};
+for (const [name, [make, act, status]] of Object.entries(answeredHeld)) test(`answered as held, told once when it is lost: ${name}`, async t => {
+  const f = await make(t), sent = f.writes.length, other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  f.begin('two'); const ack = await f.call('Probe text.', 'call-two');
+  assert.deepEqual([ack.status, ack.readiness], ['staged', 'held']);
+  const row = f.rows().at(-1);
+  assert.equal(row.wake.heldAt ?? row.wake.busyHold, undefined);
+  const kept = saved(f).find(m => m.id === row.id).wake.saidHeld;
+  await act(f); assert.equal(row.wake.status, status); windows(f, false);
+  delete f.source.peerRunner.transferWake;
+  f.advance(MIN); f.begin('three'); const next = await f.call('Next.', 'call-three', other);
+  assert.equal(next.status, 'staged');
+  assert.ok(next.message.includes(`\n${status === 'unconfirmed' ? UNKNOWN : LOSS}`) && next.message.includes('「Probe text.」'), next.message);
+  await f.end(); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', other)).message.includes('Probe text.'), 'once');
+  assert.equal(f.to(f.b).length, sent, 'nothing is sent again');
+  assert.equal(kept, true, 'saved with the answer');
+});
+test('answered as held and delivered, or answered as checked and lost: nothing to tell; a row from before the mark neither', async t => {
+  const f = await quietly(t); f.begin('one'); assert.equal((await f.call('Probe text.', 'call-one')).readiness, 'held');
+  windows(f, false); await f.end(); assert.equal(f.rows().at(-1).wake.status, 'submitted'); f.reply();
+  f.advance(MIN); f.begin('two'); const checked = await f.call('Plain text.', 'call-two');
+  assert.equal(checked.readiness, 'checked'); assert.equal(f.rows().at(-1).wake.saidHeld, undefined);
+  await f.end(f.source, f.a, 'interrupted'); assert.equal(f.rows().at(-1).wake.status, 'cancelled');
+  const { nativeId } = f.source.get(f.a), old = wake => f.source.get(f.a).messages.push({ id: randomUUID(), role: 'system', kind: 'notice', origin: 'agent-wake-intent', text: 'Old.', wake });
+  old({ nativeId, status: 'cancelled', quietWindow: { id: 'w', deadline: 1 }, recipientId: f.b, body: 'Old quiet.' });
+  old({ nativeId, status: 'not-sent', recipientId: f.b, body: 'Old cooldown.' }); old(null); old(undefined);
+  f.advance(MIN); f.begin('three'); const next = await f.call('Next.', 'call-three');
+  assert.ok(!next.message.includes('你之前存着等送的一条'));
+  // One that was held, or held for a recipient at work, needs no mark.
+  old({ nativeId, status: 'not-sent', heldAt: 1, recipientId: f.b, body: 'Old held.' });
+  old({ nativeId, status: 'cancelled', busyHold: { deadline: 1 }, recipientId: f.b, body: 'Old busy.' });
+  await f.end(f.source, f.a, 'interrupted'); f.advance(MIN); f.begin('four'); const last = await f.call('Last.', 'call-four');
+  assert.deepEqual(last.message.split('「').slice(1).map(part => part.split('」')[0]), ['Old held.', 'Old busy.']);
+  await f.end(f.source, f.a, 'interrupted'); f.advance(MIN); f.begin('five');
+  assert.ok(!(await f.call('Then.', 'call-five')).message.includes('「Old '), 'each once, those told together too');
+});
 test('the person writing to the sender through a space during an offer withdraws it: not held again', async t => {
   const f = await fixture(t); f.source.join(f.a, true); busy(f);
   await f.turn('one', 'While it works.');

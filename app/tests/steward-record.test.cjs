@@ -199,7 +199,7 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     { kind: 'invoke', method: 'openSession', target: 'B', state: null },
     { kind: 'invoke', method: 'send', state: 'complete', duplicate: true },
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
-    ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
+    ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'model-change-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
     ...['sent', 'not-sent', 'unconfirmed', null].map(state => ({ kind: 'wake', target: 'B', state })),
     ...['on', 'off', 'check'].map(wake => ({ kind: 'invoke', method: 'stewardWake', wake, state: 'complete' })),
     { kind: 'invoke', method: 'stewardEvents', state: 'complete' },
@@ -363,7 +363,7 @@ test('the person sees whether NAW wakes the butler and when it last tried, and c
     const d = wakeDialog({ ...base, current, wake }, calls); await d.open();
     const [box] = find(d.dialog, n => n.className === 'steward-record-wake'); if (!box) return null;
     const [input] = find(box, n => n.type === 'checkbox'), [status] = find(box, n => n.className === 'steward-record-wake-status');
-    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次，它在忙时不唤醒。').length];
+    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次（你点它发的卡会马上唤醒），它在忙时不唤醒。').length];
   };
   assert.deepEqual(await states({ on: false, at: null, failed: false }), [false, '关着', 1, 1]);
   assert.deepEqual(await states({ on: true, at: null, failed: false }), [true, '开着 · 还没唤醒过', 1, 1]);

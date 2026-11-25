@@ -648,7 +648,7 @@ test('the entry is wired for the person\'s window, and its words exist in both l
   const told = dispatcher => JSON.parse(JSON.stringify(vm.runInNewContext(`${flag}\nhandoffEnabled`, { queueDispatcher: dispatcher })));
   assert.deepEqual([told(null), told(undefined), told({ integration: null, integrationError: null }), told({ integration: {}, integrationError: null }), told({ integration: null, integrationError: { message: 'Synthetic build fault' } })],
     [{}, {}, {}, { handoffEnabled: true }, { handoffEnabled: true }]);
-  assert.ok(!/integrationHandoffs/.test(slice('function displayState(snapshot, context, read = null) {', '\nfunction reportViewStorage(')), 'The state function names nothing new');
+  assert.ok(!/integrationHandoffs/.test(slice('function displayState(snapshot, context, read = null, toPage = false) {', '\nfunction reportViewStorage(')), 'The state function names nothing new');
   assert.match(source, /const result = \{ \.\.\.display, spaceManagers: managers, integrator, \.\.\.handoffEnabled, /);
   // The task given back names the task, the branch and (when there are any) the integrator's words, in both languages.
   for (const language of ['zh', 'en']) {

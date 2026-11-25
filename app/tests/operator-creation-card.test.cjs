@@ -10,7 +10,7 @@ function display(background = false) {
   const code = source.slice(source.indexOf('function displayState('), source.indexOf('function reportViewStorage('));
   const scope = { structuredClone, confirmationSnapshot: (_c, v) => v, roomState: { apply: v => structuredClone(v) }, sessionLabels: { apply: v => v }, submissionState: v => v,
     backgroundControl: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    activeManagers: () => ({}), integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null, stewardWake: null,
+    activeManagers: () => ({}), integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null, stewardWake: null, sessionModelChanges: null,
     localVendorIcons: () => ({}), viewStorageWarning: '', viewStorageWarningUiMessage: null, endedByMove: () => [], roomPeerIdentity: () => null,
     backgroundOperation: { conversationSnapshot: v => v }, conversationAccess: () => [], snapshot: { sessions: [session()], room: { id: 'shared', messages: [] }, rooms: [] },
     context: { background, actor: 's', view: { selected: 's' } } };

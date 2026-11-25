@@ -832,7 +832,8 @@ class ButlerLedger {
   // by its first record, so a restart keeps every position good. One from another ledger (a new profile, a replaced
   // file), past the newest event or malformed is refused, and the reader starts again from the beginning (null).
   // Reading changes nothing: what the separate butler's batches take stays as it is.
-  eventsAfter(position = null, limit = 50) {
+  // `ids`: with each event's own id, for NAW itself; the butler's read has none.
+  eventsAfter(position = null, limit = 50, { ids = false } = {}) {
     this.healthy();
     requireValue(Number.isSafeInteger(limit) && limit > 0 && limit <= MAX_BATCH, 'Invalid event read limit');
     const origin = this.state.origin;
@@ -847,10 +848,10 @@ class ButlerLedger {
     // at the same position for good) or cuts events from its middle; one event always comes, however long.
     const later = this.state.events.filter(event => event.sequence > after), events = [];
     let bytes = 0;
-    for (const { sequence, time, kind, payload } of later.slice(0, limit)) {
+    for (const { eventId, sequence, time, kind, payload } of later.slice(0, limit)) {
       const event = clone(eventView({ sequence, time, kind, payload })), size = Buffer.byteLength(JSON.stringify(event));
       if (events.length && bytes + size > READ_BYTES) break;
-      events.push(event); bytes += size;
+      events.push(ids ? { ...event, eventId } : event); bytes += size;
     }
     return { events, through: origin === null ? null : `${origin}:${events.at(-1)?.sequence ?? after}`, more: later.length > events.length };
   }

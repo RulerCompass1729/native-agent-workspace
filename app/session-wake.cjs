@@ -127,24 +127,44 @@ function setPolicy(w, id, value) {
 }
 function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailure ? { warning: w.wakeGuardFailure, warningUiMessage: w.wakeGuardFailureUiMessage || null } : {}) }; } catch { const fallback = uiError('error.warning.wakeGuardUnavailable'); return { enabled: false, unavailable: true, warning: w.wakeGuardFailure || fallback.message, warningUiMessage: w.wakeGuardFailure ? w.wakeGuardFailureUiMessage || null : fallback.uiMessage }; } }
 // The sender's human-control state when its turn started. Ordinary input into the session (the person typing, queueing
-// or steering, another agent's message, a background notice) neither withdraws nor renews what the turn may send: every
-// session has the input policy the designated butler has had since 2026-11-14 (the person, 2026-11-23). Count the
-// exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover, stop, connection, membership
-// or permission changes. Runtime-only: reopening never replays a wake.
+// or steering, another agent's message, its queue or steer through background control, a background notice) neither
+// withdraws nor renews what the turn may send: every session has the input policy the designated butler has had since
+// 2026-11-14 (the person, 2026-11-23 and 24). Count the exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover,
+// stop, membership or permission changes. Runtime-only: reopening never replays a wake.
 const inputChanges = new WeakMap();
-function messageInput(w, s, { control = 0, peer = 0 }) {
-  const prior = inputChanges.get(s) || { control: 0, peer: 0 };
-  inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer });
+// byAgent is said by the caller: an event's ambient background operation may be an older one its connection was opened in.
+function messageInput(w, s, { control = 0, peer = 0, connection = 0, byAgent = false }) {
+  const prior = inputChanges.get(s) || { control: 0, peer: 0, connection: 0, agentControl: 0 };
+  inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer, connection: prior.connection + connection,
+    agentControl: prior.agentControl + (byAgent ? control : 0) });
+}
+// The same window reconnected to the same turn, still running (workspace.cjs resume): its own two changes are counted.
+function reconnected(w, s) {
+  messageInput(w, s, { control: 1, connection: 1 });
+  const list = causes.get(s) || [], at = list.findLastIndex(e => e.code === labelled('reconnect'));
+  if (at >= 0) causes.set(s, list.toSpliced(at, 1));
 }
 function sourceIdentity(w, s) {
   const proof = identity(s), input = inputChanges.get(s);
+  proof.connectionRevision ||= 0;
   if (input) {
     if (input.control) proof.controlRevision -= input.control;
     if (input.peer) proof.peerRevision -= input.peer;
+    proof.connectionRevision -= input.connection;
   }
   return proof;
 }
-const humanProof = (w, s) => s ? JSON.stringify([s.owner ?? null, sourceIdentity(w, s).controlRevision || 0, s.connectionRevision || 0]) : null;
+// What a control call of the session rests on (scoped-outbox-runtime.cjs): another agent's background queue or steer still ends it.
+function callerIdentity(w, s) {
+  const proof = { ...sourceIdentity(w, s), connectionRevision: s.connectionRevision ?? null }, input = inputChanges.get(s);
+  if (input) proof.controlRevision += input.agentControl;
+  return proof;
+}
+function humanProof(w, s) {
+  if (!s) return null;
+  const proof = sourceIdentity(w, s);
+  return JSON.stringify([s.owner ?? null, proof.controlRevision || 0, proof.connectionRevision || 0]);
+}
 function nativeStart(w, r, info, s) {
   // A wake still staged from an earlier turn of this native session: that turn's end never reached NAW (a failed turn
   // with no capacity report, a lost end row), so "after its turn ends normally" can no longer happen. Withdrawn now,
@@ -171,7 +191,6 @@ function sourceIssue(w, s, r, intent) {
   }
   return null;
 }
-function sourceValid(w, s, r, intent) { return !sourceIssue(w, s, r, intent); }
 function durable(w) { w.changed(); w.persist(); if (w.storageWarning) throw uiError("error.wake.recordSaveFailed"); }
 function notSent(error, hold) {
   return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null, ...hold };
@@ -398,13 +417,27 @@ async function stageOnce(w, s, r, native, args) {
   if (same) refusedNotice(row, quietSame());
   else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
-  const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
+  // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
+  if (intent.quietWindow || waits) intent.saidHeld = true;
+  // The call answers that it is saved: if it does not go out after that, main tells the butler whose it is (butler-ingress.cjs).
+  if (intent.status === 'staged') intent.told = true;
+  const lost = untold(s, native.nativeId);
+  let missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
-  for (const { wake: told } of lost) told.senderTold = true;
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; delete intent.told; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  // Told in this answer only with its mark on disk. Marked after the answer's own save, which can fail partway and
+  // leave on disk what it was to save. If the mark is not saved, a later answer tells it.
+  if (lost.length) {
+    for (const { wake: told } of lost) told.senderTold = true;
+    w.changed();
+    if (!w.persist()) {
+      for (const { wake: told } of lost) delete told.senderTold;
+      w.edited?.(s); missed = '';
+    }
+  }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
@@ -427,7 +460,7 @@ async function stageOnce(w, s, r, native, args) {
 // Messages this native session was told are held, that did not go out or may not have, each said once with its next
 // call's answer: nothing else tells an agent of it without starting a turn (the butler is also woken, butler-ingress.cjs).
 function untold(s, nativeId) {
-  return (s.messages || []).filter(({ wake: intent }) => (intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
+  return (s.messages || []).filter(({ wake: intent }) => (intent?.saidHeld || intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
 }
 function lostNotice({ wake: intent, text }) {
   const shown = String(text), reason = shown.endsWith(intent.body) ? shown.slice(0, -intent.body.length) : shown;
@@ -487,13 +520,13 @@ function deliver(w, row) {
 // before anything was reserved or written (not-sent) can be held and offered again; an uncertain outcome never is.
 function transfer(w, row, readdress = false) {
   const intent = row.wake;
-  intent.status = 'sending'; durable(w);
+  intent.status = 'sending'; delete intent.takeRefused; durable(w);
   // A recipient that cannot be found again was never offered it: not sent.
   return place(w, intent, readdress).then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
     if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
-      intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+      intent.status = result.status; if (result.status !== 'submitted') intent.settledAt = Date.now(); row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
       // It took one: the others held here for it wait out its new minute instead of being refused for it first.
       if (result.status === 'submitted') {
         for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
@@ -501,7 +534,10 @@ function transfer(w, row, readdress = false) {
       }
     }
     durable(w);
-  }).catch(error => { intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
+  }).catch(error => {
+    // Never taken (a take saves 'consumed' first), so it did not go out, and a take from now on is refused.
+    if (intent.status === 'sending') { intent.untaken = true; intent.takeRefused ||= { code: 'not-taken' }; }
+    intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
     .finally(() => arm(w));
 }
 function heldRows(w) {
@@ -588,9 +624,20 @@ function cancelParticipant(w, id, reason, reasonUiMessage) {
     if (cause && why) row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason: rawReason, body: row.wake.body }, cause, causeParam: 'reason' }, 'notice.', row.text) || row.uiMessage;
   }
 }
+// Kept on the row: a code and changed field names only.
+function takeIssue(w, s, r, intent, spec) {
+  if (intent.status !== 'sending') return { code: 'not-being-sent' };
+  if (intent.recipientId !== spec.recipientId) return { code: 'recipient-mismatch' };
+  if (intent.targetKey !== spec.targetKey) return { code: 'backend-mismatch' };
+  if (!r) return { code: 'source-runtime-changed' };
+  return sourceIssue(w, s, r, intent);
+}
 function take(w, spec) {
   const s = w.sessions.get(spec?.senderId), r = s && w.runtimes.get(s.id), row = s?.messages.find(m => m.id === spec.id), intent = row?.wake;
-  if (!intent || intent.status !== 'sending' || intent.recipientId !== spec.recipientId || intent.targetKey !== spec.targetKey || !r || !sourceValid(w, s, r, intent)) throw uiError("error.wake.credentialInvalid");
+  const issue = intent && takeIssue(w, s, r, intent, spec);
+  if (issue) intent.takeRefused = intent.status === 'sending' ? issue : intent.takeRefused || issue;
+  if (!intent || issue) throw uiError("error.wake.credentialInvalid");
+  delete intent.takeRefused;
   intent.status = 'consumed'; durable(w); return { ...intent };
 }
 function budgetView(s) {
@@ -767,4 +814,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

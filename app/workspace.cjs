@@ -78,10 +78,11 @@ const RECOVERY_REASONS = Object.freeze({
 });
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
-// Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
-// is hover, not a human instruction; presses, drags and releases still are.
-const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
-const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
+// Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude) and the wheel (64 up,
+// 65 down) are not a human instruction, nor are focus reports; presses, drags and releases still are.
+const pointerOnly = button => (button & 35) === 35 || button === 64 || button === 65;
+const isPointerOnly = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => pointerOnly(Number(m[1])));
+const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || /^\x1b\[[IO]$/.test(data) || isPointerOnly(data);
 
 // Settings a new session starts with instead of the provider defaults; NAW's session rotation
 // carries the old session's. Absent fields keep the native defaults. queue-dispatch.cjs decides
@@ -91,6 +92,7 @@ const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 const { readCodexProfile, PROFILE_PATTERN: CODEX_PROFILE_PATTERN } = require('./codex-profile.cjs');
+const sessionModel = require('./session-model.cjs');
 // Who made the model a session runs (vendor) and which native program runs it (shell), for the
 // interface to tell DeepSeek-through-Codex from Codex. A Codex vendor is the model provider
 // Codex reports for the thread (or, before that, the one its profile names); null until known.
@@ -210,7 +212,7 @@ class Workspace extends EventEmitter {
       }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
-        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
+        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.wake.settledAt = Date.now(); message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
         // Held, so never sent: reopening does not offer it again.
         if (message.wake?.status === 'held') { message.wake.status = 'cancelled'; message.wake.settledAt = Date.now(); message.text = `NAW 后台重开过；存着的自动消息没有补送。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldRestored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
       }
@@ -965,12 +967,15 @@ class Workspace extends EventEmitter {
     // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
     // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
     // ended; a new native process starts with none.
-    const rememberTasks = ids => {
-      const known = runtime.backgroundTaskIds ||= new Set();
+    const rememberTasks = (ids, kept = 'backgroundTaskIds') => {
+      const known = runtime[kept] ||= new Set();
       for (const id of ids) { known.delete(id); known.add(id); }
       while (known.size > 200) known.delete(known.values().next().value);
     };
     on('backgroundStarted', id => rememberTasks([id]));
+    // Apart: an agent that sends no notification keeps its ID here, and must not push out a task still running.
+    on('agentStarted', id => rememberTasks([id], 'agentTaskIds'));
+    const taskKept = id => [runtime.backgroundTaskIds, runtime.agentTaskIds].some(known => known?.has(id));
     on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
       rememberTasks(Array.isArray(info.ids) ? info.ids : []);
@@ -1018,7 +1023,7 @@ class Workspace extends EventEmitter {
       // Not the person: no wake.human, pause or controlRevision. Its submission still sends the mod's
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
-      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
+      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && taskKept(id));
       return {blocks,onlyBlocks,taskIds,reported,machine:sourced||reported,inputSource:sourced?item.source:reported?'task-notification':null};
     };
     on('nativeInputOrigin', (text, item, reply) => {
@@ -1033,7 +1038,7 @@ class Workspace extends EventEmitter {
       // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task
       // (real 2.1.322: an event carries task-id, summary and event; an end, like a finished Bash, a status). What a watched
       // command printed into an event or a summary is not the block's own status.
-      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) runtime.backgroundTaskIds.delete(taskIds[i]); });
+      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) for (const known of [runtime.backgroundTaskIds, runtime.agentTaskIds]) known?.delete(taskIds[i]); });
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);
@@ -1717,8 +1722,8 @@ class Workspace extends EventEmitter {
       if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
       // Private input still ends the old public reply scope; the session's wake permission survives.
       if (!shared) s.controlRevision++;
-      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
-      else wake.cause(s, 'input', shared);
+      if (!shared) wake.messageInput(this, s, { control: 1, peer: 1, byAgent: Boolean(backgroundOperation.current()) });
+      else wake.cause(s, 'input', true);
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
@@ -1803,7 +1808,7 @@ class Workspace extends EventEmitter {
     if (mobile) { mobile.human(); wake.messageInput(this, s, { control: 1, peer: 1 }); }
     else {
       if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
-      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
+      if (!shared) wake.messageInput(this, s, { control: 1, byAgent: Boolean(backgroundOperation.current()) });
       else wake.cause(s, 'input');
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
@@ -2201,6 +2206,7 @@ class Workspace extends EventEmitter {
   // `scope` 'participant' (participantMaintenanceStopV1): a rotation ends this one session, so its stop pauses
   // only the relays, grants and continuations this session is in; another space's relay keeps running. Without
   // it (the backend switch, which ends every session) the stop pauses all of them, as before.
+  // `requireAuto` 'typed': proven idle apart from text perhaps typed in the native terminal, which the caller saved.
   maintenanceStop(id, expected, requireAuto = false, scope = null) {
     const { sessionPlan, sameStop } = require('./backend-switch.cjs');
     const s = this.get(id), runtime = this.runtime(id);
@@ -2210,7 +2216,8 @@ class Workspace extends EventEmitter {
       for (const room of this.rooms.values()) if (room.run?.status === 'running') for (const member of room.run.ids || []) running.add(member);
       const current = { ...s, draftRevision: this.draftRevisions.get(id) || 0,
         activeTurnId: runtime.turnId, pendingQueue: runtime.pendingQueue, pendingSteer: runtime.pendingSteer,
-        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest };
+        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest,
+        ...(requireAuto === 'typed' ? { terminalInputPending: false } : {}) };
       const plan = sessionPlan(current, current.state, running);
       if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
           !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2287,6 +2294,59 @@ class Workspace extends EventEmitter {
         !['ended', 'recoverable', 'disconnected'].includes(s.state)) throw uiError('error.workspace.nativeEndUnconfirmed');
     return { state: s.state };
   }
+  modelChangeable(id) {
+    const s = this.get(id);
+    if (!['claude', 'codex'].includes(s.provider) || otherVendor(s) || s.requestedSettings?.profile) throw uiError('error.modelChange.unsupported');
+    if (!s.nativeId || s.nativeContextPending || s.recovering || this.stops.has(id) || !['idle', 'working', 'approval'].includes(s.state)) throw uiError('error.modelChange.unavailable');
+    return s;
+  }
+  async modelChoices(id) {
+    const s = this.modelChangeable(id);
+    if (s.provider === 'claude') { if (s.state === 'idle') this.assertClaudeRestarts(s); return sessionModel.claudeChoices(s); }
+    const nativeId = s.nativeId, models = await this.runtime(id).models();
+    if (this.sessions.get(id) !== s || s.nativeId !== nativeId) throw uiError('error.modelChange.changed');
+    return { provider: 'codex', current: sessionModel.current(s), nativeDefault: false, models };
+  }
+  // Stopped, native could not bring it back: no folder to start in, or no conversation to resume yet.
+  assertClaudeRestarts(s) {
+    let folder = false;
+    try { folder = fs.statSync(s.cwd).isDirectory(); } catch { /* as if there were none */ }
+    if (!folder) throw uiError('error.workspace.originalDirectoryUnavailable');
+    const transcript = sessionModel.claudeTranscript(s);
+    if (transcript ? !transcript.conversation : !s.messages.some(m => ['user', 'assistant'].includes(m.role))) throw uiError('error.modelChange.unstarted');
+  }
+  // `expected`: for Claude the exact idle session to stop and resume (a sessionPlan stop proof), for Codex its
+  // native identity. The window that had the session keeps it. An error says whether anything was done: it is
+  // modelChange.unconfirmed or .stopped from the moment the stop began.
+  async changeModel(id, value, expected, requireAuto = true) {
+    const s = this.modelChangeable(id), nativeId = expected?.nativeId;
+    const changed = () => uiError('error.modelChange.changed');
+    if (typeof nativeId !== 'string' || s.nativeId !== nativeId) throw changed();
+    if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
+    if (s.provider === 'codex') return this.runtime(id).changeModel(value, () => {
+      if (this.closed || this.sessions.get(id) !== s || s.nativeId !== nativeId || this.modelChangeable(id) !== s) throw changed();
+    });
+    const wanted = sessionModel.claudeValue(value, s);
+    if (![true, 'typed'].includes(requireAuto)) throw changed();
+    this.assertClaudeRestarts(s);
+    const { sameStop, endedByThisStop } = require('./backend-switch.cjs');
+    const now = () => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0 });
+    let stopped;
+    try { stopped = (await this.maintenanceStop(id, expected, requireAuto, 'participant')).stoppedState; }
+    catch (error) {
+      const key = error?.uiMessage?.key;
+      // A Claude terminal that ends itself during the stop (see endedByThisStop).
+      if (key === 'error.backendSwitchDisconnectUnconfirmed') stopped = await endedByThisStop({ call: async () => ({ sessions: [now()] }) }, expected, 10000);
+      if (!stopped) throw key === 'error.backendSwitchSessionChanged' || sameStop(now(), expected) ? error : uiError('error.modelChange.unconfirmed');
+    }
+    if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw uiError('error.modelChange.unconfirmed');
+    // Native comes back in the mode it was left in, except bypass, which the resume asks for: not when it was left for another.
+    const left = sessionModel.claudeTranscript(s)?.permissionMode;
+    if (s.nativePermissionMode === 'bypassPermissions' && sessionModel.CLAUDE_MODES.includes(left)) s.nativePermissionMode = left;
+    sessionModel.applyClaude(s, wanted); this.changed(); this.persist();
+    try { await this.resume(id, s.owner, true); } catch { throw uiError('error.modelChange.stopped'); }
+    return wanted;
+  }
   maintenanceResume(id, expected, owner) {
     const { sameStop } = require('./backend-switch.cjs'), s = this.get(id);
     if (!expected || s.state !== expected.state || !sameStop({ ...s, draftRevision: this.draftRevisions.get(id) || 0 }, expected)) throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2358,7 +2418,7 @@ class Workspace extends EventEmitter {
     if (!maintenance) begin();
     return operation;
   }
-  async resume(id, owner) {
+  async resume(id, owner, participantOnly = false) {
     const s = this.get(id);
     if (s.worktreePreparation && s.worktreePreparation.status !== 'ready') throw uiError("error.workspace.gitRecoveryUnconfirmed", { arg1: s.worktreePreparation.target, arg2: s.worktreePreparation.branch });
     if (s.nativeContextPending) throw uiError("error.workspace.nativeContextIdentityUnconfirmed");
@@ -2374,10 +2434,14 @@ class Workspace extends EventEmitter {
       }
       s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect');
-      const generation = s.connectionRevision;
+      const generation = s.connectionRevision, turn = s.owner === owner && !backgroundOperation.current() ? retained.turnId : null;
       s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
       this.pause('重新连接原会话；之前的交接不会自动继续。', undefined, false, uiActivity('notice.run.reconnecting')[1]); this.changed();
-      try { await retained.reconnect(); }
+      try {
+        await retained.reconnect({ keepTurn: Boolean(turn) });
+        // The same window, native session and running turn: only the connection was replaced, so the turn keeps its messages.
+        if (turn && retained.turnId === turn && s.owner === owner && generation === s.connectionRevision) wake.reconnected(this, s);
+      }
       catch (error) {
         if (generation === s.connectionRevision && !['ended', 'recoverable'].includes(s.state) && this.runtimes.get(id) === retained && !this.stops.has(id)) { s.state = retained.transportDisconnected ? 'error' : 'disconnected'; setActivity(s, error.message, error.uiMessage); }
         throw error;
@@ -2394,7 +2458,9 @@ class Workspace extends EventEmitter {
     if (!fs.statSync(s.cwd).isDirectory()) throw uiError("error.workspace.originalDirectoryUnavailable");
     s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect'); s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
     // Membership is retained, but an interrupted automatic run never restarts.
-    this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]); this.changed();
+    if (participantOnly) this.pauseParticipant(id, '恢复原生会话后，请重新选择本次协作任务。', false, uiActivity('notice.run.resumedTask')[1]);
+    else this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]);
+    this.changed();
     let runtime;
     const generation = s.connectionRevision;
     try {

@@ -15,15 +15,25 @@ def respond(event_name):
         sys.stdout.write("{}\n")
 
 
+def no_decision(raw):
+    # agy reads {} from PreToolUse as a denial; only empty output leaves the call to its own permissions.
+    try:
+        event_name = json.loads(raw).get("hookEventName")
+    except Exception:
+        return
+    if event_name and event_name != "PreToolUse":
+        sys.stdout.write("{}\n")
+
+
 def main():
     token = os.environ.get("NAW_HOOK_TOKEN")
     sock_path = os.environ.get("NAW_HOOK_SOCKET")
     raw = sys.stdin.buffer.read(2 * 1024 * 1024)
+    if not token or not sock_path:
+        no_decision(raw)
+        return
     message = json.loads(raw) if raw.strip() else {}
     event_name = message.get("hookEventName", "")
-    if not token or not sock_path:
-        respond(event_name)
-        return
     fields = (
         "hookEventName",
         "conversationId",

@@ -18,7 +18,7 @@ function temp(t) {
   return dir;
 }
 // One backend. A wake starts a TURN_MS turn that ends idle with new activity; the rotation request leaves it working.
-function dispatcher(t, clock, sessions, { steward, wake, compactions }) {
+function dispatcher(t, clock, sessions, { steward, wake, compactions, contexts = new Map() }) {
   const dir = temp(t), sends = [], capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY];
   const client = Object.assign(new EventEmitter(), {
     close() {}, refresh: async () => {},
@@ -36,20 +36,20 @@ function dispatcher(t, clock, sessions, { steward, wake, compactions }) {
     },
   });
   const d = new rules.QueueDispatcher({ roomState: new RoomState(dir), dataDir: dir, connect: async () => client, steward: () => steward, stewardWake: wake,
-    now: () => clock.now, settleMs: 8000, tickMs: 3600000, transcriptRoot: path.join(dir, 'none'),
-    compactions: { async sample() { return new Map(Object.entries(compactions)); } } });
+    now: () => clock.now, settleMs: 8000, sampleProcesses: async () => { throw Error('no sample'); }, tickMs: 3600000, transcriptRoot: path.join(dir, 'none'),
+    compactions: { contexts, async sample() { return new Map(Object.entries(compactions)); }, async recheck() {} } });
   t.after(() => d.close());
   return { d, sends };
 }
-function setup(t, { compactions = { butler: 3 } } = {}) {
+function setup(t, { compactions = { butler: 3 }, idle = 0, contexts } = {}) {
   const clock = { now: NOW }, dir = temp(t), records = [];
   const ledger = new ButlerLedger(dir, { now: () => clock.now });
   const wake = new StewardWake(dir, { ledger: () => ledger, selected: () => OLD, now: () => clock.now, record: line => records.push(line) });
   wake.set(true);
-  const sessions = [session(OLD)];
+  const sessions = [session(OLD, { createdAt: NOW - 2 * 3600000, lastActivityAt: NOW - idle * 60000 })];
   let events = 0;
   const event = () => ledger.ingest({ eventId: `synthetic-${++events}`, kind: 'ready', sourceRef: 'synthetic', payload: { text: `synthetic event ${events}` } });
-  return { clock, ledger, wake, records, sessions, event, ...dispatcher(t, clock, sessions, { steward: OLD, wake, compactions }) };
+  return { clock, ledger, wake, records, sessions, event, ...dispatcher(t, clock, sessions, { steward: OLD, wake, compactions, contexts }) };
 }
 // Ten-second steps; a stewardEvent every 30 seconds; turns end on time.
 async function run(f, ms, { events = true } = {}) {
@@ -99,4 +99,26 @@ test('a draft in the butler\'s input still holds both the rotation and the wake'
   f.sessions[0].liveDraft = 'x';
   await run(f, 10 * 60000);
   assert.deepEqual(f.sends, []);
+});
+
+// R221: a butler over the size a quiet rotation needs. Only the 45 minutes make that a reason, so until then it holds no wake.
+const large = minutes => ({ compactions: { butler: 1 }, idle: minutes, contexts: new Map([['butler', { tokens: 190000, at: NOW - minutes * 60000, ttlMs: 3600000 }]]) });
+for (const minutes of [0, 10, 31, 43]) test(`a large butler idle for ${minutes} minutes is woken as before`, async t => {
+  const f = setup(t, large(minutes));
+  await run(f, 60000);
+  const first = f.sends.find(s => s.to === OLD.sessionId);
+  assert.ok(first && !ROTATION.test(first.text) && first.at - NOW < 60000, 'woken within the first minute');
+  assert.equal(f.sends.filter(s => ROTATION.test(s.text)).length, 0);
+});
+
+test('a large butler idle for 45 minutes is rotated when an event comes, and the event goes to its successor once', async t => {
+  const f = setup(t, large(45)), woken = f.wake.state.woken;
+  await run(f, 3 * 60000);
+  assert.deepEqual(f.sends.map(s => ROTATION.test(s.text)), [true]);
+  assert.equal(f.wake.state.woken, woken);
+  const sessions = [session(NEXT, { lastActivityAt: f.clock.now })];
+  const next = { ...f, sessions, ...dispatcher(t, f.clock, sessions, { steward: NEXT, wake: f.wake, compactions: {} }) };
+  await run(next, 3 * 60000, { events: false });
+  assert.deepEqual(next.sends.map(s => [s.to, ROTATION.test(s.text)]), [[NEXT.sessionId, false]]);
+  assert.equal(f.wake.due(), false);
 });

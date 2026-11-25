@@ -126,7 +126,7 @@ test('Main retries reuse the same epoch owner and quit closes it without startin
   assert.equal(created, 1); assert.equal(opened, 1); assert.equal(recovered, 2); assert.equal(context.butlerIngress.roomState.id, 'second');
   context.notificationScreen = { dispose: () => screensDisposed++ };
   context.backgroundNotifications = { dispose: () => notificationsDisposed++ };
-  context.app = { on: (_event, fn) => fn() }; context.queueDispatcher = { close: () => dispatcherClosed++ };
+  context.app = { on: (_event, fn) => fn() }; context.queueDispatcher = { close: () => dispatcherClosed++ }; context.sessionModelChanges = null;
   context.discoveries = { dispose: () => discoveriesClosed++ };
   vm.runInContext(section("app.on('will-quit',", '\n// A session rotation'), context);
   assert.equal(closed, 1); assert.equal(dispatcherClosed, 1); assert.equal(discoveriesClosed, 1); assert.equal(notificationsDisposed, 1); assert.equal(screensDisposed, 1);

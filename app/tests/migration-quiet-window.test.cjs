@@ -42,7 +42,8 @@ const record = dir => JSON.parse(fs.readFileSync(path.join(dir, 'quiet-windows.j
 
 // Minute by minute: turns that are due end, the migration pass runs as main.cjs autoBackendSwitchOnce does (window,
 // then the move NAW chooses), then the real dispatcher's pass sends queue items to whoever it finds ready.
-async function simulate(t, { cordon, minutes = 60, turns = [1, 2, 3, 4], turnMinutes = 4, settings = SETTINGS, human = null, until = null, items = 80 } = {}) {
+async function simulate(t, { cordon, minutes = 60, turns = [1, 2, 3, 4], turnMinutes = 4, settings = SETTINGS, human = null, until = null, items = 80,
+  from = 0, reply = () => 'Done.', each = () => {} } = {}) {
   const dir = directory(t), clock = { now: START }, room = new RoomState(dir), ends = new Map(), dispatched = [], humanAt = new Map(), failed = new Set();
   for (let i = 0; i < items; i++) room.queueAdd(`Synthetic task ${i}`, null);
   // Each member is part way through a turn; they end a minute apart.
@@ -65,23 +66,25 @@ async function simulate(t, { cordon, minutes = 60, turns = [1, 2, 3, 4], turnMin
   const d = new QueueDispatcher({ roomState: room, dataDir: dir, clients: () => client, now: () => clock.now, settleMs: 0, humanQuietMs: 0, broadcast: async () => {},
     sampleProcesses: async () => '', samplePressure: async () => '', ...(quiet ? { quietWindows: quiet } : {}) });
   t.after(() => d.close());
-  const log = { opened: [], closed: [], movedAt: null, dispatched, quiet, room, sessions, clock };
+  const log = { opened: [], closed: [], movedAt: null, dispatched, items: [], quiet, room, sessions, clock };
   for (let m = 0; m <= minutes; m++) {
     for (const s of sessions) if (s.state === 'working' && clock.now >= ends.get(s.id)) {
-      s.state = 'idle'; s.lastActivityAt = clock.now; s.messages.push({ id: `reply-${s.id}-${m}`, role: 'assistant', text: 'Done.', time: clock.now });
+      s.state = 'idle'; s.lastActivityAt = clock.now; s.messages.push({ id: `reply-${s.id}-${m}`, role: 'assistant', text: reply(s.id, m), time: clock.now });
     }
     if (human && human.at === m) humanAt.set(human.id, clock.now);
+    each(m, { sessions, ends, humanAt, clock });
     const options = [option(sessions)];
-    if (quiet) {
+    if (quiet && m >= from) {
       const { opened, closed } = quiet.pass({ options, settings, sessions, humanAt, failed, ...QUIET });
       log.opened.push(...opened.map(w => ({ ...w, minute: m }))); log.closed.push(...closed.map(w => ({ ...w, minute: m })));
     }
-    if (log.movedAt === null && rules.nextBackendMove(options, settings, sessions, humanAt, clock.now, failed, QUIET.quietMs, QUIET.unprovenQuietMs)) {
+    if (log.movedAt === null && m >= from && rules.nextBackendMove(options, settings, sessions, humanAt, clock.now, failed, QUIET.quietMs, QUIET.unprovenQuietMs)) {
       log.movedAt = m;
       if (quiet) log.closed.push({ ...quiet.moved(KEY, 'moved'), minute: m });
       if (until === 'moved') { d.dirty = true; await d.tick(); return log; }
     }
     d.dirty = true; await d.tick();
+    log.items.push(structuredClone(room.value.queue));
     clock.now += MIN;
   }
   return log;
@@ -114,22 +117,119 @@ test('the person at a session in the window still makes the move wait for its qu
   assert.deepEqual(log.dispatched.filter(x => x.at < START + 20 * MIN), []);
 });
 
-test('at the deadline the window closes, work resumes, and none opens again for that backend for two hours', async t => {
-  // One turn never ends within the window.
-  const log = await simulate(t, { cordon: true, minutes: 66, turns: [1, 2, 3, 200], turnMinutes: 4 });
-  assert.ok(Q, 'quiet-windows.cjs');
-  assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['timeout', 60]]);
-  assert.deepEqual(log.dispatched.filter(x => x.at < START + 60 * MIN), [], 'nothing new inside the window');
-  assert.deepEqual(log.dispatched.filter(x => x.at === START + 60 * MIN).map(x => x.id).sort(), ['a', 'b', 'c'], 'items go out again at the deadline');
-  assert.deepEqual(log.opened.map(w => w.minute), [0]);
-  assert.equal(log.movedAt, null);
-  // Still waiting only for its sessions: NAW opens the next window two hours after the timeout, not before.
+// 11-24: five of eleven windows ran to their deadline and did not move; each held its idle sessions for 40 to 60 minutes.
+// After an early close too, the two hours count from the deadline, at minute 60.
+const twoHours = (log, from) => {
   const { quiet, sessions, clock } = log, input = () => ({ options: [option(sessions)], settings: SETTINGS, sessions, humanAt: new Map(), failed: new Set(), ...QUIET });
-  clock.now = START + (60 + 119) * MIN;
+  clock.now = START + (from + 119) * MIN;
   assert.deepEqual(quiet.pass(input()).opened, []);
   assert.equal(new Q.QuietWindows(quiet.directory, { now: () => clock.now, moveWait: rules.moveWait }).pass(input()).opened.length, 0, 'the pause survives a restart');
-  clock.now = START + 180 * MIN;
+  clock.now = START + (from + 120) * MIN;
   assert.equal(quiet.pass(input()).opened.length, 1);
+};
+
+test('a turn still running after the 30 minutes for running turns closes the window, and none opens again for that backend for two hours', async t => {
+  const log = await simulate(t, { cordon: true, minutes: 66, turns: [1, 2, 3, 200] });
+  assert.ok(Q, 'quiet-windows.cjs');
+  assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['still-busy', 30]]);
+  assert.deepEqual(log.dispatched.filter(x => x.at < START + 30 * MIN), [], 'nothing new inside the window');
+  assert.deepEqual(log.dispatched.filter(x => x.at === START + 30 * MIN).map(x => x.id).sort(), ['a', 'b', 'c'], 'items go out again as it closes');
+  assert.deepEqual(log.opened.map(w => w.minute), [0]);
+  assert.equal(log.movedAt, null);
+  twoHours(log, 60);
+});
+
+test('a turn that ends within those 30 minutes still gets its whole quiet time, 10 or 30 minutes', async t => {
+  for (const [end, moved] of [[29, 39], [30, 40]]) {
+    const log = await simulate(t, { cordon: true, minutes: 66, turns: [1, 2, 3, end], until: 'moved' });
+    assert.equal(log.movedAt, moved); assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['moved', moved]]);
+  }
+  // Its background is never reported: the longer rule, up to the end of the window.
+  const log = await simulate(t, { cordon: true, minutes: 66, turns: [1, 2, 3, 29], until: 'moved', each: (m, { sessions }) => { sessions[3].backgroundStale = true; } });
+  assert.equal(log.movedAt, 59); assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['moved', 59]]);
+});
+
+// The person keeps working with d: an input every 8 minutes from the sixth, each answered in 4.
+const personWorks = (m, { sessions, ends, humanAt, clock }) => {
+  if (m < 6 || (m - 6) % 8) return;
+  humanAt.set('d', clock.now); ends.set('d', clock.now + 4 * MIN);
+  Object.assign(sessions[3], { state: 'working', lastActivityAt: clock.now });
+};
+test('the person working with a session in the window closes it: work resumes, none opens again for two hours', async t => {
+  const log = await simulate(t, { cordon: true, minutes: 66, each: personWorks });
+  assert.ok(Q, 'quiet-windows.cjs');
+  assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['person', 6]]);
+  assert.deepEqual(log.dispatched.filter(x => x.at < START + 6 * MIN), [], 'nothing new inside the window');
+  assert.deepEqual(log.dispatched.filter(x => x.at === START + 6 * MIN).map(x => x.id).sort(), ['a', 'b', 'c'], 'items go out again as it closes');
+  assert.deepEqual(log.opened.map(w => w.minute), [0]);
+  assert.equal(log.movedAt, null);
+  twoHours(log, 60);
+});
+
+test('a window closed early keeps its place: no other backend\'s opens before its deadline, unless its backend moved or waits for something else', t => {
+  assert.ok(Q, 'quiet-windows.cjs');
+  for (const [act, opens] of [[() => {}, 60], [f => { f.gone = true; }, 41], [f => { f.mine[1].state = 'disconnected'; }, 41],
+    // Movable now: its place is kept through the pass that moves it.
+    [f => { Object.assign(f.mine[0], { state: 'idle', lastActivityAt: START }); }, 60]]) {
+    const clock = { now: START }, windows = new Q.QuietWindows(directory(t), { now: () => clock.now, moveWait: rules.moveWait });
+    const f = { gone: false, mine: [member('a', { state: 'working' }), member('b')] }, other = [member('c', { state: 'working' })];
+    const pass = () => windows.pass({ options: [...(f.gone ? [] : [option(f.mine)]), { ...option(other), backendKey: 'backends/cccccccccccccccccccc' }],
+      settings: SETTINGS, sessions: [...f.mine, ...other], humanAt: new Map(), failed: new Set(), ...QUIET });
+    assert.deepEqual(pass().opened.map(w => w.scope), [`backend:${KEY}`]);
+    let closed = null, opened = null;
+    for (let m = 1; m <= 70 && opened === null; m++) {
+      clock.now = START + m * MIN;
+      if (m === 41) act(f);
+      const result = pass();
+      if (result.closed.length) closed = [result.closed[0].code, m];
+      if (m >= 30 && m < opens) assert.deepEqual(windows.sessionIds(clock.now), new Map(), 'nobody is held');
+      if (result.opened.length) opened = [result.opened[0].scope, m];
+    }
+    assert.deepEqual(closed, ['still-busy', 30]);
+    assert.deepEqual(opened, ['backend:backends/cccccccccccccccccccc', opens]);
+  }
+});
+
+test('only the person\'s input inside the window, at a session at work, closes it', async t => {
+  // Before it opened (its turn was running when the window opened), and at an idle session while another works.
+  for (const [human, end, moved] of [[{ at: 0, id: 'd' }, 4, 14], [{ at: 5, id: 'a' }, 8, 18]]) {
+    const log = await simulate(t, { cordon: true, minutes: 60, turns: [1, 2, 3, end], human, until: 'moved' });
+    assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['moved', moved]]);
+  }
+});
+
+test('at the deadline the window closes, with the same two-hour pause', async t => {
+  // Quiet again and again for less than its 10 minutes: never at work when the window looks.
+  const log = await simulate(t, { cordon: true, minutes: 66, each: (m, { humanAt, clock }) => { if (m > 4 && m % 8 === 0) humanAt.set('d', clock.now); } });
+  assert.ok(Q, 'quiet-windows.cjs');
+  assert.deepEqual(log.closed.map(w => [w.code, w.minute]), [['timeout', 60]]);
+  assert.deepEqual(log.dispatched.filter(x => x.at < START + 60 * MIN), []);
+  assert.deepEqual(log.dispatched.filter(x => x.at === START + 60 * MIN).map(x => x.id).sort(), ['a', 'b', 'c', 'd']);
+  twoHours(log, 60);
+});
+
+test('what a session in the window finished is settled there with its own reply; its next item waits for the window to close', async t => {
+  const said = { a: 'Fixed.\nREADY lane/synthetic 0123abc', b: '需要你决定：A or B?', c: 'Looked at it.', d: 'Done.' };
+  const log = await simulate(t, { cordon: true, minutes: 20, from: 1, turns: [0, 0, 0, 0], turnMinutes: 3, reply: id => said[id], until: 'moved' });
+  assert.equal(log.opened[0]?.minute, 1); assert.equal(log.movedAt, 13);
+  const first = Object.fromEntries(log.dispatched.filter(x => x.at === START).map(x => [x.id, x.itemId])), at = (m, id) => log.items[m].find(i => i.id === first[id]);
+  assert.deepEqual(Object.keys(first).sort(), ['a', 'b', 'c', 'd']);
+  for (const id of 'abcd') assert.equal(at(2, id).status, 'sent', 'still working');
+  assert.deepEqual('abcd'.split('').map(id => at(3, id).status), ['done', 'waiting', 'done', 'done'], 'settled in the window');
+  assert.deepEqual(at(3, 'a').ready, { branch: 'lane/synthetic', commit: '0123abc' });
+  assert.match(at(3, 'b').reply, /^需要你决定：A or B/u);
+  assert.equal(at(3, 'c').reply, 'Looked at it.');
+  assert.equal(log.items[12].filter(i => i.status === 'sent').length, 0, 'no next item inside the window');
+  assert.ok(log.dispatched.every(x => x.at === START || x.at >= START + 13 * MIN));
+});
+
+test('a session in the window with a draft or background work is not settled there either', async t => {
+  for (const extra of [{ liveDraft: 'half typed' }, { background: 1 }, { backgroundStale: true }]) {
+    const log = await simulate(t, { cordon: true, minutes: 8, from: 1, turns: [0, 0, 0, 0], turnMinutes: 3, each: (m, { sessions }) => { if (m === 2) Object.assign(sessions[0], extra); } });
+    const own = log.dispatched.find(x => x.id === 'a').itemId;
+    assert.equal(log.items[7].find(i => i.id === own).status, 'sent', JSON.stringify(extra));
+    assert.equal(log.items[7].filter(i => i.status === 'done').length, 3);
+  }
 });
 
 test('migration off: no window opens, and an open one closes', async t => {
@@ -208,7 +308,8 @@ test('the butler in a window is held with its own reason, shown to the person in
   const d = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, steward: () => identity, stewardWake: wake, now: () => clock.now,
     settleMs: 8000, tickMs: 3600000, observePersonActions: s => actions.observe(s, []), transcriptRoot: path.join(dir, 'none'), ...(quiet ? { quietWindows: quiet } : {}) });
   t.after(() => d.close());
-  actions.call('operatorAction', ['member', 'grant', {}], 'synthetic-domain');
+  // An ordinary event: the person's own act is told inside the window (steward-wake-person-window.test.cjs).
+  ingress.record({ eventId: 'synthetic:1', sourceRef: 'synthetic:1', kind: 'failure', payload: { spaceId: 'shared', itemId: 'item', reason: 'Synthetic failure' } });
   await d.schedule(); clock.now += 9000; await d.schedule();
   assert.deepEqual(calls.filter(c => c === 'dispatch'), [], 'not woken inside the window');
   assert.equal(wake.blocked?.reason, 'quiet-window');
@@ -282,6 +383,28 @@ test('main.cjs: at the deadline the butler and the secretary are told once, thro
   assert.deepEqual(f.owed, [`${event.payload.text}\nNAW 只通知，不加任务。`]);
   f.skew += MIN; await f.pass();
   assert.deepEqual(f.record().windows, [], 'none again right after'); assert.equal(f.events().length, 1);
+});
+
+test('main.cjs: a window closed early is told once too, with why and when', async t => {
+  for (const [code, why, act] of [
+    ['person', '有人在用里面的会话', f => { f.scope.queueDispatcher = { humanAt: new Map([['a', f.record().windows[0].openedAt + 1]]) }; }],
+    ['still-busy', '开了 30 分钟还有会话在干活或等人回答', f => { f.skew = 30 * MIN; }]]) {
+    const f = wired(t);
+    await f.pass();
+    assert.equal(f.record()?.windows.length, 1, 'a window');
+    act(f); f.skew += 1000;
+    await f.pass();
+    assert.equal(f.record().history.at(-1).code, code); assert.deepEqual(f.record().windows, []);
+    const [event, ...more] = f.events();
+    assert.ok(event, code); assert.deepEqual(more, []);
+    assert.equal(event.payload.reason, `quiet-window-${code}`);
+    const at = new Date(f.record().history.at(-1).closedAt).toISOString().slice(0, 19);
+    assert.ok(event.payload.text.startsWith(`【NAW 版本】后台 bbbbbbb 迁移前的安静窗口提前关了（${at}Z，${why}），还没迁成，卡在：2 个会话里 1 个（Synthetic a）在干活或等人回答，`), event.payload.text);
+    assert.ok(event.payload.text.endsWith(`已恢复派活和自动消息；直到原定截止时间（${new Date(f.record().history.at(-1).deadline).toISOString().slice(0, 19)}Z）后 2 小时，不再为它开窗。`));
+    assert.deepEqual(f.owed, [`${event.payload.text}\nNAW 只通知，不加任务。`]);
+    f.skew += MIN; await f.pass();
+    assert.deepEqual(f.record().windows, []); assert.equal(f.events().length, 1);
+  }
 });
 
 test('main.cjs moves a backend whose sessions are only recoverable instead of leaving it not movable (alpha.290)', async t => {

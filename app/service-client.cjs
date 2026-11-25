@@ -8,6 +8,7 @@ const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = require('./service-lock.cjs');
 
+const dshCopy = require('./dsh-copy.cjs');
 const serviceBinding = require('./service-binding.cjs');
 const { ServiceClient, connectService } = require('./service-connection.cjs');
 async function connect(dataDir, owner, options) {
@@ -64,7 +65,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
   if (expectedBinding && !serviceBinding.runnerAbsent(dataDir)) throw serviceBinding.failure('runner-exit-unconfirmed');
-  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'daemon.cjs', 'adapters.cjs', 'agy-tui.cjs', 'agy_hook.py', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'rotation-handoff.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'space-managers.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
+  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'state-share.cjs', 'daemon.cjs', 'adapters.cjs', 'agy-tui.cjs', 'agy_hook.py', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'rotation-handoff.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'session-model.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'space-managers.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.
@@ -121,6 +122,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     if (ownerMayBeAlive(record, dataDir, 'startup') || !releaseLock(lockFile, record)) throw uiError("error.service.connecting");
   }
   const lock = createLock(lockFile, 'startup', dataDir);
+  let attached = true; // false once this start has let go of the lock: a copy still running then re-reads the layout
   try {
     const layout = readLayout(dataDir), states = new Map();
     const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
@@ -150,41 +152,56 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           ...[directory, where.base, where.root].map(identity)]);
       } catch { return null; }
     };
+    const dshRows = current => current.dshInheritance?.version !== retryVersion ? [] : current.dshInheritance.failures.filter(row => current.entries.includes(row.source) &&
+      (current.entries.includes(row.target) || current.pending === row.target) && !dsh.installed(path.join(dataDir, row.target)));
     const prior = layout.dshInheritance;
-    let failures = prior?.version === retryVersion ? prior.failures.filter(row => layout.entries.includes(row.source) && (layout.entries.includes(row.target) || layout.pending === row.target)) : [];
+    let failures = dshRows(layout);
     const retryable = row => row && row.attempts < DSH_INHERIT_ATTEMPTS && ['deadline', 'filesystem'].includes(row.reason);
+    const setDsh = (current, rows) => {
+      if (rows.length) current.dshInheritance = { version: retryVersion, failures: rows };
+      else delete current.dshInheritance;
+    };
     const saveDsh = (required = false) => {
-      if (failures.length) layout.dshInheritance = { version: retryVersion, failures };
-      else delete layout.dshInheritance;
+      setDsh(layout, failures);
       try { writeLayout(dataDir, layout); }
       catch (error) { if (required) throw error; console.warn('DSH runtime retry state unavailable'); }
     };
     if (prior && (prior.version !== retryVersion || prior.failures.length !== failures.length)) saveDsh();
-    const inheritDsh = async (target, sources) => {
-      for (const source of sources) {
-        const warningKey = JSON.stringify([dataDir, source, target]);
-        const previous = failures.find(row => row.source === source && row.target === target);
-        if (previous && !retryable(previous)) continue;
-        try {
-          const result = await dsh.inheritRuntime(path.join(dataDir, source), path.join(dataDir, target), { cleanStaging: true });
-          targetWarnings.delete(warningKey);
-          if (previous) { failures = failures.filter(row => row !== previous); saveDsh(); }
-          if (result.status !== 'absent') return;
-        } catch (error) {
-          const reason = ['deadline', 'filesystem', 'unqualified', 'target'].includes(error?.reason) ? error.reason : 'unavailable';
-          // A target refusal is retried after repair without charging the source.
-          if (reason !== 'target') {
-            failures = failures.filter(row => row !== previous);
-            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason, ...error?.progress }); saveDsh();
-          }
-          // Only diagnostics are cached; every startup still performs preflight.
-          const state = reason === 'target' ? targetWarningState(target, error) : null;
-          if (!state || targetWarnings.get(warningKey) !== state) console.warn('DSH runtime inheritance skipped:', reason);
-          targetWarnings.delete(warningKey);
-          if (state) { targetWarnings.set(warningKey, state); trimWarnings(); }
-          if (reason !== 'unqualified') return;
-        }
+    const recordDsh = async change => {
+      if (attached) { failures = change(failures); saveDsh(); return; }
+      try { await dshCopy.updateLayout(dataDir, current => setDsh(current, change(dshRows(current)))); }
+      catch { console.warn('DSH runtime retry state unavailable'); }
+    };
+    const inheritDshFrom = async (source, target) => {
+      const current = attached ? layout : readLayout(dataDir), rows = attached ? failures : dshRows(current);
+      if (!attached && ![current.active, current.pending].includes(target)) return 'done';
+      if (!attached && !current.entries.includes(source)) return 'next';
+      const warningKey = JSON.stringify([dataDir, source, target]);
+      const same = row => row.source === source && row.target === target, previous = rows.find(same);
+      if (previous && !retryable(previous)) return 'next';
+      try {
+        const result = await dshCopy.copy(executablePath, path.join(dataDir, source), path.join(dataDir, target));
+        targetWarnings.delete(warningKey);
+        if (result.status === 'absent') return 'next';
+        if (rows.some(row => row.target === target)) await recordDsh(known => known.filter(row => row.target !== target));
+        return 'done';
+      } catch (error) {
+        const reason = ['deadline', 'filesystem', 'unqualified', 'target', 'stopped'].includes(error?.reason) ? error.reason : 'unavailable';
+        // A target refusal, or a copier that ended without a verdict, is tried again without charging the source.
+        if (!['target', 'stopped'].includes(reason)) await recordDsh(known => [...known.filter(row => !same(row)),
+          { source, target, attempts: (previous?.attempts || 0) + 1, reason, ...error?.progress }]);
+        // Only diagnostics are cached; every startup still performs preflight.
+        const state = reason === 'target' ? targetWarningState(target, error) : null;
+        if (!state || targetWarnings.get(warningKey) !== state) console.warn('DSH runtime inheritance skipped:', reason);
+        targetWarnings.delete(warningKey);
+        if (state) { targetWarnings.set(warningKey, state); trimWarnings(); }
+        return reason === 'unqualified' ? 'next' : reason === 'target' ? 'done' : 'later';
       }
+    };
+    const hasDsh = key => fs.existsSync(dsh.paths(path.join(dataDir, key)).root);
+    const inheritDsh = async target => {
+      const sources = [layout.active, ...layout.entries.filter(key => key !== layout.active)].filter(key => key !== target && (hasDsh(key) || hasDsh(target)));
+      if (sources.length) await dshCopy.start(dataDir, sources, source => inheritDshFrom(source, target));
     };
     if (layout.pending || (version && states.get(layout.active).runtimeVersion !== version)) {
       // Reuse a confirmed all-ended slot before adding another service. Its
@@ -198,7 +215,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         // leave a pending slot, but never an unrecorded detached service.
         if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
       }
-      await inheritDsh(key, [layout.active, ...layout.entries.filter(entry => entry !== layout.active && entry !== key)]);
+      await inheritDsh(key);
       let next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
       // Global human choices and slot activation share services.lock. Only a slot new to the layout takes its setting
@@ -224,18 +241,17 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);
-    } else if (!fs.existsSync(dsh.paths(path.join(dataDir, layout.active)).root)) {
-      const sources = layout.entries.filter(key => key !== layout.active && fs.existsSync(dsh.paths(path.join(dataDir, key)).root));
-      await inheritDsh(layout.active, sources);
+    } else if (!hasDsh(layout.active)) {
+      await inheritDsh(layout.active);
     }
-    const runtimeMissing = !fs.existsSync(dsh.paths(path.join(dataDir, layout.active)).root);
+    const runtimeMissing = !hasDsh(layout.active);
     // Retire only truly empty inactive services. Ended sessions, shared replies,
     // orphan drafts and unreadable stores all retain their service and records.
     for (const key of [...layout.entries]) {
       if (key === layout.active || !emptyService(states.get(key)) || !emptyStore(path.join(dataDir, key))) continue;
       // Preserve unattempted sources and the one remaining transient retry.
       const failure = failures.find(row => row.source === key && row.target === layout.active);
-      if (runtimeMissing && fs.existsSync(dsh.paths(path.join(dataDir, key)).root) && (!failure || retryable(failure))) continue;
+      if (runtimeMissing && hasDsh(key) && (!failure || retryable(failure))) continue;
       const client = await connectService(path.join(dataDir, key), 'retire-empty');
       try {
         const current = await client.call('initial');
@@ -251,7 +267,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         if (directory === dataDir && (source === key || target === key)) targetWarnings.delete(slot);
       }
     }
-  } finally { releaseLock(lockFile, lock); }
+  } finally { attached = false; releaseLock(lockFile, lock); }
 }
 function continuationStatus(state, id) {
   const notReady = (key, params) => { const error = uiError(key, params); return { ready: false, reason: error.message, reasonUiMessage: error.uiMessage || null }; };
