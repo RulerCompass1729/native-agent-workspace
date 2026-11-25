@@ -1351,6 +1351,10 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
+    // An agent that ends in the turn that started or resumed it is in no turn-end report, and its notification has
+    // no source (real 2.1.332, 11-25): its start is what makes it known.
+    if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
+      typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;

@@ -1018,6 +1018,88 @@ test('a background task that starts and finishes within one native turn is known
   before = effects(); const child = notify(done('bchild001', 4), 'child');
   assert.equal(child.inputSource, undefined); assert.deepEqual(effects(), [before[0] + 1, before[1] + 1]);
 });
+// A Claude runtime of the fixture that takes hooks as the real one does. Agent notification: the tags and order of a real one.
+async function agentFixture(t) {
+  const { workspace: w, ids } = await fixture(t, 1);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  const s = w.get(ids[0]), pauses = [], pause = w.pause.bind(w);
+  w.pause = (...args) => { pauses.push(args[0]); return pause(...args); };
+  const hook = event => runtime.hook({ session_id: s.nativeId, prompt_id: 'turn', ...event });
+  const done = (id, n, status = 'completed') => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${n}</tool-use-id>\n<output-file>/tmp/synthetic/${id}.output</output-file>\n<status>${status}</status>\n<summary>Agent "synthetic ${n}" finished</summary>\n<note>synthetic</note>\n<result>Synthetic result ${n}</result>\n<usage><total_tokens>1</total_tokens></usage>\n</task-notification>`;
+  const notify = (text, promptId = 'turn') => { hook({ hook_event_name: 'UserPromptSubmit', prompt_id: promptId, prompt: text }); return s.messages.filter(m => m.role === 'user' && m.text === text).at(-1); };
+  const start = (id, extra) => hook({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'general-purpose', ...extra });
+  const end = id => hook({ hook_event_name: 'SubagentStop', agent_id: id, agent_type: 'general-purpose' });
+  const effects = () => [s.controlRevision, s.wakeHumanRevision || 0, pauses.length];
+  const machine = (text, why, promptId) => { const before = effects(), row = notify(text, promptId); assert.deepEqual([row?.name, row?.inputSource], ['后台任务通知', 'task-notification'], why); assert.deepEqual(effects(), before, why); return row; };
+  const person = (text, why, promptId) => { const before = effects(), row = notify(text, promptId); assert.equal(row?.inputSource, undefined, why); assert.deepEqual(effects(), [before[0] + 1, before[1] + 1, before[2] + 1], why); };
+  return { w, s, runtime, hook, done, notify, start, end, effects, machine, person };
+}
+test('an agent that starts and finishes within one native turn is known from its start (Claude 2.1.332, 11-25)', async t => {
+  const { s, runtime, hook, done, start, end, machine, person } = await agentFixture(t);
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Synthetic task' });
+  // No PostToolUse names an agent and no turn end lists it: its start is the only report before its notification.
+  start('a0000000000000001'); end('a0000000000000001');
+  machine(done('a0000000000000001', 1), 'An agent finishing in the turn that started it');
+  person(done('a0000000000000001', 1), 'Its notification again, with no new start', 'again');
+  // SendMessage resumes the same agent: it starts again under the same ID, with a notification of its own.
+  hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'turn2', prompt: 'Synthetic follow-up' });
+  start('a0000000000000001'); end('a0000000000000001');
+  machine(done('a0000000000000001', 2), 'A resumed agent', 'turn2');
+  for (const [id, status] of [['a0000000000000002', 'failed'], ['a0000000000000003', 'killed']]) {
+    start(id); if (status !== 'killed') end(id); // The start alone is enough.
+    machine(done(id, id, status), status, 'turn2');
+  }
+  // Two that finish together arrive in one prompt.
+  start('a0000000000000004'); start('a0000000000000005'); end('a0000000000000004'); end('a0000000000000005');
+  machine(done('a0000000000000004', 4) + '\n' + done('a0000000000000005', 5), 'Two agents in one prompt', 'turn2');
+  start('a0000000000000006');
+  person(done('a0000000000000006', 6) + done('a00000000000000ff', 7), 'Every block must be known', 'turn2');
+  person(done('a00000000000000ff', 7), 'An agent that never started here', 'turn2');
+  // Another session of the team inherits the hooks: its agents are not this session's.
+  start('a0000000000000007', { session_id: 'another-native-session' });
+  person(done('a0000000000000007', 8), 'An agent of another native session', 'turn2');
+  for (const id of ['', 'x'.repeat(65), 'a b', '<x>', undefined, 7]) start(id);
+  assert.ok([...runtime.agentTaskIds].every(id => /^a[0-9a-f]{16}$/.test(id)), 'Only IDs of the task shape are kept');
+  person('a person typing', 'Typed input beside an agent still counts', 'typed');
+  assert.ok(!JSON.stringify(s).includes('agentTaskIds'), 'Known IDs are not stored');
+});
+test('agent starts do not push out the background tasks a session still runs', async t => {
+  const { runtime, hook, done, start, end, machine } = await agentFixture(t);
+  hook({ hook_event_name: 'UserPromptSubmit', prompt: 'Synthetic task' });
+  hook({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'toolu_1', background_task_id: 'bheld0001' });
+  for (let i = 0; i < 500; i++) { const id = 'a' + String(i).padStart(16, '0'); start(id); end(id); }
+  assert.ok(runtime.agentTaskIds.size <= 200, 'Agents that send no notification do not pile up');
+  machine(done('bheld0001', 1), 'A long Bash task behind many agents');
+  machine(done('a' + String(499).padStart(16, '0'), 2), 'The newest agent');
+});
+test('a work item whose session runs an agent in its turn settles done; the person typing in it does not (11-25, 0793f113)', async t => {
+  const { w, s, hook, done, start, end, notify } = await agentFixture(t), rules = require('../queue-dispatch.cjs');
+  // As after a move: the backend started at 0 and its reconnect raised it once, before the item was sent.
+  s.controlRevision++;
+  const send = id => {
+    const item = { id, text: 'synthetic', assignee: s.id, status: 'sent', sentTo: s.id, sentNative: s.nativeId, sentAt: Date.now() - 60000, tag: 'tag-' + id, control: s.controlRevision, createdAt: Date.now() - 90000 };
+    s.messages.push({ id: item.tag, role: 'user', origin: 'naw-dispatch', dispatchItem: id, nativeId: s.nativeId, status: 'submitted', text: 'synthetic', time: item.sentAt });
+    hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'p-' + id, prompt: 'synthetic ' + id, source: 'system' });
+    return item;
+  };
+  const settle = item => {
+    s.messages.push({ id: 'reply-' + item.id, role: 'assistant', nativeId: s.nativeId, status: 'complete', text: 'Synthetic reply', time: Date.now() });
+    const session = { ...w.snapshot().sessions.find(x => x.id === s.id), state: 'idle', pendingTag: null, background: 0, scheduled: 0, backgroundStale: false, roomIds: ['shared'], serviceCapabilities: [rules.CAPABILITY] };
+    const now = Date.now();
+    return rules.planDispatch({ rooms: [{ id: 'shared', sessions: [s.id], queue: [item] }], sessions: [session], wakePolicy: { enabled: true }, idleSince: new Map([[s.id, now - 60000]]), now })
+      .filter(a => a.kind === 'settle').map(a => [a.status, a.reason]);
+  };
+  const agent = send('1');
+  start('a0000000000000001'); end('a0000000000000001'); notify(done('a0000000000000001', 1), 'p-1');
+  assert.deepEqual(settle(agent), [['done', undefined]]);
+  const person = send('2');
+  start('a0000000000000002'); end('a0000000000000002'); notify(done('a0000000000000002', 2), 'p-2'); notify('stop, do it another way', 'p-2b');
+  assert.deepEqual(settle(person), [['waiting', 'person-intervened']]);
+});
 test('typed terminal input marks a possible native draft until a new native process starts', async t => {
   const { workspace: w, ids } = await fixture(t, 1);
   const { Claude } = require('../adapters.cjs');
