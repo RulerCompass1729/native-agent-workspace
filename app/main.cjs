@@ -2778,6 +2778,7 @@ async function boot() {
   register('stewardRotate', async (c, ...args) => {
     const steward = await stewardCaller(c);
     if (!steward || args.length > 1 || args.length === 1 && args[0] !== steward.id) throw uiError('error.rotation.butlerOnly');
+    if (!stewardRecord || stewardRecord.failed || !stewardRecord.recording(backgroundOperation.current())) throw uiError('error.steward.recordUnavailable');
     if (!queueDispatcher) throw uiError('error.rotation.unavailable');
     const row = await queueDispatcher.requestRotation(steward.id, 'steward');
     return row ? { state: row.state, ...(row.gate ? { gate: row.gate } : {}) } : null;

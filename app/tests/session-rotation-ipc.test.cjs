@@ -51,7 +51,9 @@ test('R207: where rotations stand is for the person\'s windows, not in what agen
 const { StewardRole } = require('../steward-role.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
 const os = require('node:os');
-function butlerSetup(t, { sessions, dispatcher, actor }) {
+const { StewardRecord } = require('../steward-record.cjs');
+// The call goes through the real record, as main.cjs's backgroundControl call does.
+function butlerSetup(t, { sessions, dispatcher, actor, stewardRecord, globals = {} }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-rotate-ipc-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const role = new StewardRole(dir);
@@ -63,9 +65,17 @@ function butlerSetup(t, { sessions, dispatcher, actor }) {
     sessionLabels: { labels: new Map() }, roomIds,
   });
   vm.runInContext(source.slice(start, end) + '\nglobalThis.caller = stewardCaller;', context);
-  const f = handlers({ dispatcher, stewardCaller: context.caller });
+  const record = stewardRecord === undefined ? new StewardRecord(dir, { steward: () => role.current(), now: () => 1800000000000 }) : stewardRecord;
+  const f = handlers({ dispatcher, stewardCaller: context.caller, stewardRecord: record, backgroundOperation: { current: () => state.actor }, ...globals });
   const client = { call: async () => ({ sessions }) };
-  return { ...f, role, state, dir, rotate: (...args) => f.registered.get('stewardRotate')({ background: true, client }, ...args) };
+  const unrecorded = (...args) => f.registered.get('stewardRotate')({ background: true, client }, ...args);
+  let calls = 0;
+  const rotate = (...args) => {
+    calls += 1;
+    const sender = state.actor && { ...state.actor, provider: 'claude', name: 'Synthetic butler' };
+    return record.around(sender, { action: 'invoke', method: 'stewardRotate', arguments: args, operation_id: `op-${calls}` }, () => unrecorded(...args));
+  };
+  return { ...f, role, state, dir, record, rotate, unrecorded };
 }
 const OWN = { id: 'butler', nativeId: 'native-butler', name: 'Synthetic butler', state: 'working', roomIds: [], roomId: null };
 const OTHER = { id: 'other', nativeId: 'native-other', name: 'Other', state: 'working', roomIds: [], roomId: null };
@@ -79,7 +89,8 @@ test('R207 甲: the designated butler asks for its own rotation, and only its ow
   assert.deepEqual(JSON.parse(JSON.stringify(await f.rotate())), { state: 'requested', gate: 'not-idle' });
   await f.rotate('butler');
   assert.deepEqual(asked, [['butler', 'steward'], ['butler', 'steward']]);
-  for (const bad of [['other'], ['butler', 'other'], [null], [{ id: 'butler' }], [undefined], ['butler', 'undo'], ['']]) await assert.rejects(f.rotate(...bad), butlerOnly, JSON.stringify(bad));
+  assert.equal(f.record.entries().filter(e => e.method === 'stewardRotate' && e.session.id === 'butler').length, 2, 'each is a step of its record');
+  for (const bad of [['other'], ['butler', 'other'], [null], [{ id: 'butler' }], ['butler', 'undo'], ['']]) await assert.rejects(f.rotate(...bad), butlerOnly, JSON.stringify(bad));
   // Not the butler; the butler of a moment ago; its native session replaced; in a space; archived.
   f.state.actor = { id: 'other', nativeId: 'native-other' };
   await assert.rejects(f.rotate(), butlerOnly); await assert.rejects(f.rotate('other'), butlerOnly); await assert.rejects(f.rotate('butler'), butlerOnly, 'a member cannot rotate the butler');
@@ -100,6 +111,33 @@ test('R207 甲: the designated butler asks for its own rotation, and only its ow
     await assert.rejects(held.rotate(), butlerOnly, JSON.stringify(extra));
   }
   assert.equal(asked.length, 2);
+});
+
+test('R207 甲: asked only as a step written in its record: none, one that takes no lines, or a call it did not write is refused', async t => {
+  const asked = [], dispatcher = { requestRotation: async (...args) => { asked.push(args); return null; } };
+  const unwritten = refusal('error.steward.recordUnavailable');
+  const given = { sessions: [OWN], dispatcher, actor: { id: 'butler', nativeId: 'native-butler' } };
+  const f = butlerSetup(t, given);
+  f.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
+  await assert.rejects(f.unrecorded(), unwritten, 'outside a recorded call');
+  await f.rotate();
+  assert.equal(asked.length, 1);
+  // Designated after its call began: the record wrote no step for it.
+  f.role.set(null);
+  const late = f.record.around({ ...f.state.actor, provider: 'claude', name: 'x' }, { action: 'invoke', method: 'stewardRotate', arguments: [], operation_id: 'late' }, async () => {
+    f.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
+    return f.unrecorded();
+  });
+  await assert.rejects(late, unwritten);
+  // A step of another call's actor is not this one's.
+  await assert.rejects(f.record.calls.run({ id: 'other', nativeId: 'native-other', open: true }, () => f.unrecorded()), unwritten);
+  const missing = butlerSetup(t, { ...given, stewardRecord: null });
+  missing.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
+  await assert.rejects(missing.unrecorded(), unwritten, 'no record at all');
+  f.record.failed = true;
+  await assert.rejects(f.rotate(), unwritten, 'it takes no lines');
+  await assert.rejects(f.record.calls.run({ id: 'butler', nativeId: 'native-butler', open: true }, () => f.unrecorded()), unwritten, 'it failed while the call ran');
+  assert.equal(asked.length, 1, 'nothing is asked for');
 });
 
 test('R207 甲: not a call of the person\'s window, refused while NAW sends nothing, and the butler has no undo', async t => {
@@ -131,7 +169,7 @@ test('R207 甲: a local call the butler finds in the catalog, and each call is a
   const shown = records.view(record, { sessions: [OWN, OTHER] }).entries.filter(e => e.method === 'stewardRotate');
   assert.deepEqual(shown.map(e => e.rotate === true).sort(), [false, true, true], 'one for another session is shown as the command it was');
   const { zh, en } = require('../ui-messages.js').messages || require('../ui-messages.js');
-  for (const key of ['stewardRecord.step.rotateNow', 'error.rotation.butlerOnly', 'error.rotation.personOnly', 'error.rotation.unavailable', 'error.rotation.cannotUndo']) {
+  for (const key of ['stewardRecord.step.rotateNow', 'error.rotation.butlerOnly', 'error.rotation.personFirst', 'error.rotation.personOnly', 'error.rotation.unavailable', 'error.rotation.cannotUndo']) {
     assert.ok(zh[key] && en[key], key);
   }
 });

@@ -226,6 +226,7 @@ function conversation(session) {
   return (session?.messages || []).filter(m => m && (m.role === 'user' || m.role === 'assistant'));
 }
 const personRow = m => m.role === 'user' && !automaticInput(m);
+const personSince = (session, at) => conversation(session).some(m => personRow(m) && Number(m.time) > at);
 function seenRow(session, now) {
   const last = conversation(session).at(-1);
   return { id: validId(last?.id) ? last.id : null, at: now };
@@ -2584,6 +2585,7 @@ function readRotations(file, now, faults = {}) {
   }
   if (data.quarantinedRotations && typeof data.quarantinedRotations === 'object' && !Array.isArray(data.quarantinedRotations)) faults.rejected = { ...data.quarantinedRotations };
   faults.requests = readRequests(data.requests);
+  faults.withdrawals = readRequests(data.withdrawals);
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
@@ -2746,6 +2748,8 @@ class QueueDispatcher {
     this.rejectedRotations = { ...this.rotationRead.rejected };
     // Asked for by hand and not begun: id -> { at, by, nativeId }, kept in the rotations' file (R207).
     this.requests = this.rotationRead.requests || {};
+    // What the person took back, kept until they next act on that session: the butler does not ask for it meanwhile.
+    this.withdrawals = this.rotationRead.withdrawals || {};
     this.requestGates = new Map();
     // When an unsent prompt in its own terminal refused the request (FINISH_RETRY_MS).
     this.requestTried = new Map();
@@ -3189,6 +3193,7 @@ class QueueDispatcher {
     const temp = `${this.file}.${randomUUID()}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ version: 1, rotations: this.rotations,
       ...(Object.keys(this.requests).length ? { requests: this.requests } : {}),
+      ...(Object.keys(this.withdrawals).length ? { withdrawals: this.withdrawals } : {}),
       ...(Object.keys(this.rejectedRotations).length ? { quarantinedRotations: this.rejectedRotations } : {}) }), { mode: 0o600 });
     fs.renameSync(temp, this.file);
   }
@@ -4750,6 +4755,9 @@ class QueueDispatcher {
   async requestRotation(sessionId, by = 'person') {
     const session = await this.requested(sessionId);
     const record = this.rotations[sessionId], now = this.now();
+    if (by === 'steward' && (record?.withdrawn || this.takenBack(session) || this.unusedSuccessor(session))) {
+      throw uiError('error.rotation.personFirst');
+    }
     if (record && !RESTING_PHASES.includes(record.phase) && !waitingOld(record) && record.phase !== 'requested') {
       // Its successor is already taking over.
       if (record.phase === 'waiting-provider') throw uiError('error.rotation.unavailable');
@@ -4769,7 +4777,27 @@ class QueueDispatcher {
     } else {
       return this.rotationRow(sessionId, session, now);
     }
+    if (by === 'person') {
+      delete this.withdrawals[sessionId];
+    }
     return this.requestSaved('asked', sessionId, session, by, now);
+  }
+
+  // 甲: what the person took back stays so until they next act on that session (a message there, or their own click).
+  takenBack(session) {
+    const taken = this.withdrawals[session.id];
+    return Boolean(taken) && !personSince(session, taken.at);
+  }
+
+  // 甲: a new session does not ask because of what its handoff says: the person has written in it first.
+  unusedSuccessor(session) {
+    const rows = conversation(session);
+    const told = rows.findLastIndex(m => typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('rotation-handoff:'));
+    if (told >= 0) {
+      return !rows.slice(told + 1).some(personRow);
+    }
+    const own = this.rotations[session.id];
+    return Boolean(own?.successorOf) && !personSince(session, own.keptAt);
   }
 
   // Before the handoff is written; from then on a successor exists or is being made.
@@ -4788,6 +4816,7 @@ class QueueDispatcher {
     } else {
       throw uiError('error.rotation.cannotUndo');
     }
+    this.withdrawals[sessionId] = { at: now, by, nativeId: session.nativeId || null };
     return this.requestSaved('withdrawn', sessionId, session, by, now);
   }
 
@@ -4857,6 +4886,14 @@ class QueueDispatcher {
       changed = true;
       if (reason !== 'under-way') {
         this.appendLog('dropped', { oldId: id, oldNativeId: request.nativeId, name: session ? this.name(session) : id, roomIds: [] }, { reason, by: request.by });
+      }
+    }
+    for (const [id, taken] of Object.entries(this.withdrawals)) {
+      const session = snapshot.sessions.find(s => s.id === id);
+      const other = session && taken.nativeId && session.nativeId && session.nativeId !== taken.nativeId;
+      if (session && (session.archived || other || personSince(session, taken.at))) {
+        delete this.withdrawals[id];
+        changed = true;
       }
     }
     if (changed) this.save();
