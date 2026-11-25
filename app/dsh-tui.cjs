@@ -120,6 +120,10 @@ function verifyRuntime(dataDir) {
   return where;
 }
 
+// A busy disk slows the copy without stopping it: it ends only when nothing has finished for
+// STALL_MS, or at COPY_LIMIT_MS, which the installer's wait for the new backend has to outlast.
+const STALL_MS = 30000, COPY_LIMIT_MS = 120000;
+
 // Only the immutable runtime crosses backends; each backend keeps its own home and guards.
 async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = false } = {}) {
   const { performance } = require('node:perf_hooks');
@@ -127,8 +131,15 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   if (uid === undefined) return { status: 'unsupported' };
   if (![sourceDataDir, targetDataDir].every(value => typeof value === 'string' && path.isAbsolute(value))) throw uiError('error.dsh.runtimeUnqualified');
   const source = paths(path.resolve(sourceDataDir)), target = paths(path.resolve(targetDataDir));
-  let deadlineStarted = started;
-  const tick = () => { if (performance.now() - deadlineStarted > 30000) throw Error('Runtime inheritance deadline'); };
+  let deadlineStarted = started, progressed = started, limit = STALL_MS, stage = 'cleanup', item = 0;
+  const begin = (allowed = STALL_MS) => { deadlineStarted = progressed = performance.now(); limit = allowed; };
+  const tick = () => {
+    const now = performance.now();
+    if (now - deadlineStarted > limit || now - progressed > STALL_MS) throw Error('Runtime inheritance deadline');
+  };
+  const moved = () => { tick(); progressed = performance.now(); };
+  const step = () => { moved(); item++; };
+  const enter = name => { stage = name; item = 0; };
   const refusal = (message, file, s) => Object.assign(Error(message), { runtimeEntry: [path.relative(targetDataDir, file),
     s.dev, s.ino, s.uid, s.mode, s.nlink, s.size, s.mtimeMs, s.ctimeMs] });
   const directory = file => {
@@ -162,8 +173,8 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
         else if (s.isFile() && s.nlink === 1 && s.size <= 256 * 1024 * 1024) { entry.kind = 'file'; bytes += s.size; }
         else throw refusal('Unsafe runtime entry', file, s);
         if (bytes > 2 * 1024 * 1024 * 1024) throw Error('Runtime byte limit');
-        entries.set(relative, entry);
-        if (count % 128 === 0) { tick(); await new Promise(resolve => setImmediate(resolve)); }
+        entries.set(relative, entry); step();
+        if (count % 128 === 0) await new Promise(resolve => setImmediate(resolve));
       }
     }
     // Resolve links from the inventory, never by following an unchecked path on disk.
@@ -207,15 +218,18 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
         }
       }
     }
-    deadlineStarted = performance.now();
+    begin(); enter('target');
     if (rootState(targetDataDir, target)) { await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' }; }
     checkingTarget = false;
     if (!rootState(sourceDataDir, source)) return { status: 'absent' };
     if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
+    begin(COPY_LIMIT_MS); enter('inventory');
     const inventory = await tree(source.root); verifyRuntime(sourceDataDir); tick();
     staging = await io.mkdtemp(path.join(targetDataDir, '.dsh-tui-inherit-')); stagingIdentity = directory(staging);
     const staged = paths(staging); await io.mkdir(staged.root, { recursive: true, mode: 0o700 });
-    for (const entry of inventory.entries.values()) if (entry.kind === 'dir') await io.mkdir(path.join(staged.root, entry.relative), { mode: 0o700 });
+    enter('directories');
+    for (const entry of inventory.entries.values()) if (entry.kind === 'dir') { await io.mkdir(path.join(staged.root, entry.relative), { mode: 0o700 }); step(); }
+    enter('files');
     const files = [...inventory.entries.values()].filter(entry => entry.kind === 'file'); let cursor = 0, failure;
     await Promise.all(Array.from({ length: Math.min(8, files.length) }, async () => {
       const buffer = Buffer.allocUnsafe(128 * 1024);
@@ -236,10 +250,10 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
               if (!bytesWritten) throw Error('Short runtime write');
               written += bytesWritten;
             }
-            position += bytesRead;
+            position += bytesRead; moved();
           }
           if (!same(entry.stat, await input.stat()) || (await output.stat()).size !== entry.stat.size) throw Error('Runtime copy changed');
-          tick();
+          step();
         } catch (error) { failure ||= error; }
         finally {
           const closed = await Promise.allSettled([input?.close(), output?.close()]);
@@ -248,10 +262,12 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
       }
     }));
     if (failure) throw failure;
-    for (const entry of inventory.entries.values()) if (entry.link !== undefined) await io.symlink(entry.link, path.join(staged.root, entry.relative));
+    enter('links');
+    for (const entry of inventory.entries.values()) if (entry.link !== undefined) { await io.symlink(entry.link, path.join(staged.root, entry.relative)); step(); }
+    enter('verify');
     const copied = await tree(staged.root);
     if (copied.bytes !== inventory.bytes || copied.entries.size !== inventory.entries.size) throw Error('Incomplete runtime copy');
-    verifyRuntime(staging); verifyRuntime(sourceDataDir); tick();
+    verifyRuntime(staging); verifyRuntime(sourceDataDir); tick(); enter('publish');
     await io.mkdir(target.base, { recursive: true, mode: 0o700 }); const parent = directory(target.base);
     // An exclusive empty reservation prevents rename from replacing another install's directory.
     try { await io.mkdir(target.root, { mode: 0o700 }); placeholder = directory(target.root); }
@@ -267,6 +283,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     // Refused before the source was read: the source's qualification is unknown.
     const reason = cause.message === 'Runtime inheritance deadline' ? 'deadline' : checkingTarget ? 'target' : cause.code ? 'filesystem' : 'unqualified';
     throw Object.assign(uiError('error.dsh.runtimeUnqualified'), { code: 'dsh-runtime-inheritance-refused', reason, cause,
+      progress: { stage, item, elapsedMs: Math.round(performance.now() - deadlineStarted) },
       ...(reason === 'target' && cause.runtimeEntry ? { targetEntry: cause.runtimeEntry } : {}) });
   } finally {
     if (placeholder && !published) {
@@ -698,6 +715,8 @@ module.exports = {
   installed,
   packageCopies,
   verifyRuntime,
+  STALL_MS,
+  COPY_LIMIT_MS,
   inheritRuntime,
   prepareHome,
   injectDirectory,

@@ -136,6 +136,53 @@ for (const copyMs of [13000,31000]) test('cleanup and copying have separate dead
  assert.equal(fs.existsSync(old),false);assert.equal(fs.readdirSync(f.target).some(name=>name.startsWith('.dsh-tui-inherit-')),false);tui.verifyRuntime(f.source);
 });
 
+// An injected clock: each operation the fixture slows adds its time here, so nothing waits.
+function slowed(t){
+ const {performance}=require('node:perf_hooks'),now=performance.now.bind(performance);let offset=0;
+ t.mock.method(performance,'now',()=>now()+offset);
+ return ms=>{offset+=ms;};
+}
+const padding=(where,count,bytes=64)=>{for(let i=0;i<count;i++)write(path.join(where.root,'padding-'+String(i).padStart(3,'0')),Buffer.alloc(bytes,i+1));};
+const slowOpen=(t,root,advance,ms)=>{const open=fsp.open;let calls=0;t.mock.method(fsp,'open',async function(file,...args){if(String(file).startsWith(root))advance(typeof ms==='function'?ms(++calls):ms);return Reflect.apply(open,this,[file,...args]);});};
+const nothingPublished=f=>{assert.equal(tui.installed(f.target),false);assert.equal(fs.readdirSync(f.target).some(name=>name.startsWith('.dsh-tui-inherit-')),false);tui.verifyRuntime(f.source);};
+const refusal=async work=>{let error;await assert.rejects(work,e=>{error=e;return true;});assert.equal(error.code,'dsh-runtime-inheritance-refused');return error;};
+
+test('a slow copy that keeps finishing files is not stopped at thirty seconds',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source);padding(s,20);slowOpen(t,s.root,slowed(t),3000);
+ const result=await inherit(f);assert.equal(result.status,'copied');assert.ok(result.elapsedMs>60000&&result.elapsedMs<120000,`${result.elapsedMs}`);
+ const d=tui.paths(f.target);tui.verifyRuntime(f.target);for(const name of fs.readdirSync(s.root).filter(name=>name.startsWith('padding-')))assert.deepEqual(fs.readFileSync(path.join(d.root,name)),fs.readFileSync(path.join(s.root,name)));
+});
+test('one large file read slowly counts every piece read as progress',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source),advance=slowed(t),open=fsp.open,large=path.join(s.root,'large');write(large,Buffer.alloc(4*1024*1024,7));
+ t.mock.method(fsp,'open',async function(file,...args){const handle=await Reflect.apply(open,this,[file,...args]);if(file===large){const read=handle.read.bind(handle);handle.read=async(...rest)=>{advance(2000);return read(...rest);};}return handle;});
+ const result=await inherit(f);assert.equal(result.status,'copied');assert.ok(result.elapsedMs>60000);assert.deepEqual(fs.readFileSync(path.join(tui.paths(f.target).root,'large')),fs.readFileSync(large));
+});
+test('a slow inventory that keeps finding entries is not stopped at thirty seconds',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source),advance=slowed(t),lstat=fs.lstatSync;padding(s,80);
+ t.mock.method(fs,'lstatSync',function(file,...args){if(String(file).startsWith(s.root+path.sep))advance(500);return Reflect.apply(lstat,this,[file,...args]);});
+ const result=await inherit(f);assert.equal(result.status,'copied');assert.ok(result.elapsedMs>40000);tui.verifyRuntime(f.target);
+});
+test('a copy with nothing finished for thirty seconds stops and says where',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source);padding(s,40);slowOpen(t,s.root,slowed(t),call=>call===30?31000:0);
+ const error=await refusal(inherit(f));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'files');
+ assert.ok(error.progress.item>0&&error.progress.item<40,JSON.stringify(error.progress));assert.ok(error.progress.elapsedMs>30000&&error.progress.elapsedMs<60000);nothingPublished(f);
+});
+test('a copy still moving at two minutes stops',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source);padding(s,80);slowOpen(t,s.root,slowed(t),3000);
+ const error=await refusal(inherit(f));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'files');
+ assert.ok(error.progress.item>20&&error.progress.item<80,JSON.stringify(error.progress));assert.ok(error.progress.elapsedMs>120000&&error.progress.elapsedMs<150000);nothingPublished(f);
+});
+test('a refusal other than a deadline also says where it stopped',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source),open=fsp.open;padding(s,40);let calls=0;
+ t.mock.method(fsp,'open',async function(file,...args){if(String(file).startsWith(s.root)&&++calls===30)throw Object.assign(Error('synthetic EIO'),{code:'EIO'});return Reflect.apply(open,this,[file,...args]);});
+ const error=await refusal(inherit(f));assert.equal(error.reason,'filesystem');assert.equal(error.progress.stage,'files');assert.ok(error.progress.item>0);assert.ok(Number.isSafeInteger(error.progress.elapsedMs));nothingPublished(f);
+});
+test('checking a runtime already in place keeps thirty seconds in total',async t=>{
+ qualification(t);const f=fixture(t),d=runtime(f.target),advance=slowed(t),lstat=fs.lstatSync;padding(d,80);
+ t.mock.method(fs,'lstatSync',function(file,...args){if(String(file).startsWith(d.root+path.sep))advance(500);return Reflect.apply(lstat,this,[file,...args]);});
+ const error=await refusal(inherit(f));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'target');tui.verifyRuntime(f.target);
+});
+
 for(const kind of ['writable-file','writable-directory','hardlink'])test('start reports unsafe runtime attributes for '+kind+' without launching or reading a key',async t=>{
  qualification(t);const f=fixture(t),s=runtime(f.source),file=path.join(s.root,'synthetic-file');write(file,'synthetic');
  if(kind==='writable-file')fs.chmodSync(file,0o660);
