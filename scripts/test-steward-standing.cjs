@@ -157,7 +157,10 @@ async function main() {
   const joined = await control('join', [created.value, true]); assert.equal(joined.state, 'complete', JSON.stringify(joined)); assert.equal(joined.approvedBy, 'standing');
   await fixture('backgroundReport', created.value);
   const archived = await control('archiveSession', [created.value]); assert.equal(archived.state, 'complete', JSON.stringify(archived)); assert.equal(archived.approvedBy, 'standing');
-  const s = await page.evaluate(() => workspace.initial()); assert.equal(s.backgroundConfirmations.length, 0);
+  const s = await page.evaluate(() => workspace.initial()), cards = s.backgroundConfirmations;
+  assert.deepEqual(cards.filter(c => c.actionable === true), []);
+  // Settled cards stay listed (background-control.cjs confirmations): only the three declined above may be here.
+  assert.deepEqual(cards.map(c => [c.operationId, c.state]).sort(), [shown, changed, effortOnly].map(r => [r.id, 'cancelled']).sort());
   const lines = s.room.events.filter(e => e.controlAudit?.approvedBy === 'standing');
   assert.equal(lines.length, 4); assert.ok(lines.every(e => e.uiMessage.params.undo));
   const createdLine = lines.find(e => e.controlAudit.operationId === matching.id);
