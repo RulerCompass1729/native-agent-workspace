@@ -35,7 +35,7 @@ function electron() {
   class Window extends EventEmitter {
     constructor(options) { super(); this.options = options; this.webContents = new Contents(); this.destroyed = false; this.shown = 0; this.title = options.title; created.push(this); }
     isDestroyed() { return this.destroyed; }
-    setTitle(title) { this.title = title; }
+    setTitle(title) { if (this.destroyed) throw new TypeError('Object has been destroyed'); this.title = title; }
     getNormalBounds() { return this.bounds; }
     isMinimized() { return false; }
     restore() {}
@@ -162,6 +162,17 @@ test('opening a page makes one isolated window without the workspace bridge', as
   assert.equal(filter('http://127.0.0.1:8001/api'), false);
   assert.equal(filter('http://127.0.0.1:9999/'), true);
   assert.equal(filter('https://example.com/x.js'), true);
+});
+
+test('the window keeps the declared title; a title that arrives after the window is destroyed is ignored', async t => {
+  const { fake, local } = pages(t);
+  await local.open('board');
+  const [win] = fake.created;
+  const retitle = () => { let prevented = false; win.webContents.emit('page-title-updated', { preventDefault: () => { prevented = true; } }, 'From the page'); return prevented; };
+  win.title = 'From the page';
+  assert.equal(retitle(), true); assert.equal(win.title, 'Board');
+  win.destroyed = true; win.title = 'before destroy';
+  assert.equal(retitle(), true); assert.equal(win.title, 'before destroy');
 });
 
 test('other origins cannot be navigated to; new windows go to the system browser', async t => {
