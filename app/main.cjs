@@ -36,7 +36,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
-const { VersionEvents, VersionNotices } = require('./version-events.cjs');
+const { VersionEvents, VersionNotices, RunMark } = require('./version-events.cjs');
 const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
@@ -1636,7 +1636,7 @@ async function autoBackendSwitch() {
     autoSwitchRunning = false;
   }
 }
-let versionEvents = null;
+let versionEvents = null, runMark = null;
 // Migration quiet windows (quiet-windows.cjs), or null when its record could not be opened: then none is opened.
 let quietWindows = null;
 // What this start brought and the backends still on an old version, with what each waits for, told once and again
@@ -1873,7 +1873,7 @@ async function boot() {
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
   // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
   try {
-    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),
+    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(), run: runMark,
       record: event => {
         if (!butlerIngress) throw Error('The butler record is unavailable');
         butlerIngress.record(event);
@@ -3146,7 +3146,15 @@ app.on('activate', focusOrOpen);
 app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background')) focusOrOpen(); });
 if (primary) app.whenReady().then(() => { notificationScreen ||= new (require('./confirmation-notifications.cjs').NotificationScreen)(powerMonitor); });
 if (primary) app.whenReady().then(() => powerMonitor.on('resume', wakeAppMobileResume));
-if (primary) app.whenReady().then(start);
+// How this run ends is recorded from here on (version-events.cjs): before the startup window and boot.
+function beginRun() {
+  try {
+    const directory = app.getPath('userData');
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    runMark ||= new RunMark(directory, { version: app.getVersion() });
+  } catch { /* No mark: the next start says it has no record of this run. */ }
+}
+if (primary) app.whenReady().then(() => { beginRun(); return start(); });
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
   if (tempReminders?.busy) {
@@ -3207,7 +3215,7 @@ app.on('before-quit', event => {
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
   // First: whatever fails below, this run ended on its own path.
-  try { versionEvents?.exitClean(); } catch { /* The next start says it did not end normally. */ }
+  try { runMark?.exitClean(); } catch { /* The next start says it did not end normally. */ }
   discoveries?.dispose();
   backgroundNotifications?.dispose();
   notificationScreen?.dispose();

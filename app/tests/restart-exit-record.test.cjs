@@ -2,7 +2,7 @@
 // 不写成普通重启」): 20:38 the main process died of V8 OOM and 20:39 the record only said 「重启完成 296->296」.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
-const { VersionEvents } = require('../version-events.cjs');
+const { VersionEvents, RunMark } = require('../version-events.cjs');
 
 const OLD = '0.1.0-alpha.296', NEW = '0.1.0-alpha.297';
 const START = Date.UTC(2026, 10, 25, 4, 38, 20);
@@ -11,12 +11,13 @@ function directory(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-const marker = dir => path.join(dir, 'main-running.json');
-// One run of the app: constructed at start, told once a window is up, `exitClean` on the quit path.
+const marker = dir => path.join(dir, 'main-running.json'), exited = dir => path.join(dir, 'main-exited.json');
+// One run of the app: its mark first, VersionEvents later in boot, told once a window is up, `exitClean` on the quit path.
 function run(dir, { version = NEW, at = START } = {}) {
   const events = [], owed = [];
-  const value = new VersionEvents(dir, { version, now: () => at, record: e => events.push(e), owe: text => { owed.push(text); return true; } });
-  return { value, events, owed, observe: () => value.observe([], () => undefined), clean: () => value.exitClean(), last: () => events[events.length - 1], text: () => events[events.length - 1].payload.text };
+  const mark = new RunMark(dir, { version, now: () => at });
+  const value = new VersionEvents(dir, { version, run: mark, now: () => at + 5000, record: e => events.push(e), owe: text => { owed.push(text); return true; } });
+  return { value, mark, events, owed, observe: () => value.observe([], () => undefined), clean: () => mark.exitClean(), last: () => events[events.length - 1], text: () => events[events.length - 1].payload.text };
 }
 // A run that quit on its own path; one that ends without it leaves its marker behind.
 function quits(dir, options) { const r = run(dir, options); r.observe(); r.clean(); return r; }
@@ -26,6 +27,7 @@ test('a normal quit, then a start on the same version: the record says the last 
   const dir = directory(t);
   quits(dir, { at: START });
   assert.equal(fs.existsSync(marker(dir)), false, 'the normal quit leaves no running mark');
+  assert.equal(fs.statSync(exited(dir)).mode & 0o777, 0o600);
   const again = run(dir, { at: START + 60000 }); again.observe();
   assert.equal(again.last().payload.reason, 'version-restarted');
   assert.equal(again.last().kind, 'blocked');
@@ -106,35 +108,81 @@ test('a version without this mark ran since: its run is not called normal or cra
   assert.match(later.text(), /没有上次退出的记录。/u, 'an unmarked run is never called normal');
 });
 
-test('a mark that cannot be read still says abnormal, without inventing a pid; a link is not followed', t => {
-  const dir = directory(t);
-  quits(dir);
-  fs.writeFileSync(marker(dir), '{not json', { mode: 0o600 });
-  const bad = run(dir, { at: START + 60000 }); bad.observe();
-  assert.equal(bad.last().payload.reason, 'version-restarted-after-abnormal-exit');
-  assert.doesNotMatch(bad.text(), /主进程 (?:undefined|null|NaN|\{)/u);
+test('a running mark that cannot be read still says abnormal, without inventing a pid; a link is not followed', t => {
+  for (const content of ['{not json', 'null', JSON.stringify({ format: 1, pid: 'x', at: -1 }), JSON.stringify({ format: 1, pid: 12, at: 8640000000000001 })]) {
+    const dir = directory(t);
+    quits(dir);
+    fs.writeFileSync(marker(dir), content, { mode: 0o600 });
+    const bad = run(dir, { at: START + 60000 }); bad.observe();
+    assert.equal(bad.last().payload.reason, 'version-restarted-after-abnormal-exit', content);
+    assert.doesNotMatch(bad.text(), /主进程 (?:undefined|null|NaN|\{|x)|启动，/u, content);
+  }
   const other = directory(t);
   quits(other);
-  fs.rmSync(marker(other), { force: true });
   fs.symlinkSync('/etc/hosts', marker(other));
   const link = run(other, { at: START + 60000 }); link.observe();
   assert.doesNotMatch(link.text(), /hosts/u, 'a link is not read as the last run');
+  assert.equal(fs.lstatSync(marker(other)).isSymbolicLink(), false, 'replaced, not written through');
 });
 
-test('a mark that could not be written makes the next start say it has no record, not that the last run was normal', t => {
-  if (process.getuid() === 0) return t.skip('root writes anywhere');
+test('an exited mark that cannot be read is no evidence of a normal end', t => {
+  const dir = directory(t);
+  quits(dir);
+  fs.writeFileSync(exited(dir), '{not json', { mode: 0o600 });
+  const next = run(dir, { at: START + 60000 }); next.observe();
+  assert.match(next.text(), /没有上次退出的记录。/u);
+});
+
+test('neither the mark nor the seen record could be written: the next start has no record, whatever ended before', t => {
+  for (const before of [quits, dies]) for (const ends of [quits, dies]) {
+    const dir = directory(t);
+    before(dir, { at: START });
+    // A full disk: existing files can still be removed and renamed, new content cannot be written.
+    const write = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (file, ...rest) => { if (String(file).startsWith(dir)) throw Object.assign(Error('full'), { code: 'ENOSPC' }); return write(file, ...rest); });
+    ends(dir, { at: START + 60000 });
+    t.mock.restoreAll();
+    const next = run(dir, { at: START + 120000 }); next.observe();
+    assert.match(next.text(), /没有上次退出的记录。/u, `${before.name} then ${ends.name}`);
+    assert.equal(next.last().payload.reason, 'version-restarted');
+  }
+});
+
+test('a run that ends before it could tell anything is judged by its own mark', t => {
+  const early = directory(t);
+  quits(early, { at: START });
+  // Died in the startup window or in boot: no VersionEvents, nothing observed.
+  new RunMark(early, { version: NEW, now: () => START + 60000 });
+  const next = run(early, { at: START + 120000 }); next.observe();
+  assert.equal(next.last().payload.reason, 'version-restarted-after-abnormal-exit');
+  assert.match(next.text(), /2026-11-25T04:39:20Z 启动/u);
+  const closed = directory(t);
+  dies(closed, { at: START });
+  // Opened and quit at the startup window.
+  new RunMark(closed, { version: NEW, now: () => START + 60000 }).exitClean();
+  const later = run(closed, { at: START + 120000 }); later.observe();
+  assert.equal(later.last().payload.reason, 'version-restarted');
+  assert.match(later.text(), /上次正常退出。/u, 'the run before it, not the crash before that');
+});
+
+test('an older exited mark that could not be removed does not hide the running one', t => {
   const dir = directory(t);
   quits(dir, { at: START });
-  // version-seen.json from a run that could not leave its mark.
-  const file = path.join(dir, 'version-seen.json');
-  const blocked = run(dir, { at: START + 60000 });
-  // The mark is gone while the run lives, as a full disk would leave it.
-  fs.rmSync(marker(dir), { force: true });
-  blocked.value.marked = false;
-  blocked.observe();
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).marks, undefined);
+  const old = fs.readFileSync(exited(dir));
+  dies(dir, { at: START + 60000 });
+  fs.writeFileSync(exited(dir), old, { mode: 0o600 });
   const next = run(dir, { at: START + 120000 }); next.observe();
-  assert.match(next.text(), /没有上次退出的记录。/u);
+  assert.equal(next.last().payload.reason, 'version-restarted-after-abnormal-exit');
+  assert.equal(fs.existsSync(exited(dir)), false, 'and it goes at the next start');
+});
+
+test('without a mark of its own (main could not leave one) a start says it has no record', t => {
+  const dir = directory(t), events = [];
+  quits(dir);
+  const value = new VersionEvents(dir, { version: NEW, run: null, now: () => START + 60000, record: e => events.push(e), owe: () => true });
+  value.observe([], () => undefined);
+  assert.equal(events[0].payload.reason, 'version-restarted');
+  assert.match(events[0].payload.text, /没有上次退出的记录。/u);
 });
 
 test('another run\'s mark is left alone by a quit: not the same process, or not the same start', t => {
@@ -145,11 +193,13 @@ test('another run\'s mark is left alone by a quit: not the same process, or not 
   assert.equal(fs.existsSync(marker(dir)), true, 'another process');
   other({ at: START - 1 }); mine.clean();
   assert.equal(fs.existsSync(marker(dir)), true, 'an earlier start of this process');
+  assert.equal(fs.existsSync(exited(dir)), false);
   other({}); mine.clean();
   assert.equal(fs.existsSync(marker(dir)), false, 'its own');
+  assert.equal(fs.existsSync(exited(dir)), true);
 });
 
-test('main.cjs: the normal-exit mark is removed on will-quit, even when an earlier disposer throws; before-quit does not', () => {
+test('main.cjs: the mark is renamed on will-quit, even when a disposer throws; before-quit, which can be refused, leaves it', () => {
   const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
   const start = source.indexOf("app.on('will-quit'"), end = source.indexOf('\n});', start);
   assert.ok(start > 0 && end > start);
@@ -158,11 +208,36 @@ test('main.cjs: the normal-exit mark is removed on will-quit, even when an earli
   let cleaned = 0;
   const context = vm.createContext({ app: { on: (name, fn) => { assert.equal(name, 'will-quit'); listeners.push(fn); } },
     discoveries: { dispose() { throw Error('synthetic'); } }, backgroundNotifications: null, notificationScreen: null, queueDispatcher: null,
-    butlerIngress: null, versionEvents: { exitClean() { cleaned++; } } });
+    butlerIngress: null, runMark: { exitClean() { cleaned++; } } });
   vm.runInContext(handler, context);
   assert.equal(listeners.length, 1);
   try { listeners[0](); } catch { /* A disposer threw after the mark was handled. */ }
-  assert.equal(cleaned, 1, 'will-quit clears the running mark first');
+  assert.equal(cleaned, 1, 'will-quit comes first');
   const before = source.slice(source.indexOf("app.on('before-quit'"), start);
   assert.doesNotMatch(before, /exitClean/u, 'a quit that is refused keeps the mark');
+});
+
+test('main.cjs: only the primary instance leaves a mark, before the startup window and boot; a second one never does', async t => {
+  const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+  const start = source.indexOf('function beginRun()'), line = source.indexOf('if (primary) app.whenReady()', start), end = source.indexOf('\n', line);
+  assert.ok(start > 0 && line > start);
+  assert.doesNotMatch(source, /whenReady\(\)\.then\(start\)/u, 'no other way into start at launch');
+  for (const primary of [true, false]) {
+    const dir = path.join(directory(t), 'profile'), order = [];
+    const context = vm.createContext({ primary, fs, RunMark, runMark: null, Promise,
+      app: { getPath: () => dir, getVersion: () => NEW, whenReady: async () => {} }, start: () => { order.push(fs.existsSync(marker(dir)) ? 'marked' : 'unmarked'); } });
+    vm.runInContext(source.slice(start, end), context);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(order, primary ? ['marked'] : []);
+    assert.equal(fs.existsSync(marker(dir)), primary);
+  }
+  // A profile it cannot write to does not stop the start.
+  const order = [];
+  const context = vm.createContext({ primary: true, fs, RunMark, runMark: null, Promise,
+    app: { getPath() { throw Error('synthetic'); }, getVersion: () => NEW, whenReady: async () => {} }, start: () => order.push('started') });
+  vm.runInContext(source.slice(start, end), context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, ['started']);
+  // Its record is the one VersionEvents tells.
+  assert.match(source, /new VersionEvents\(dataDir, \{ version: app\.getVersion\(\), run: runMark,/u);
 });

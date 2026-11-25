@@ -53,7 +53,7 @@ function app(t, { dir, entries, settings = { auto: true, migrate: true }, secret
   const client = { entries: [...entries, current], active: current, control, socket: { destroyed: false },
     snapshot() { return { sessions: this.entries.flatMap(e => e.state.sessions) }; }, sessionState: value => value.state };
   const context = { client, view: { owner: 'synthetic-owner' }, win: { isDestroyed: () => false } };
-  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, butlerIngress: ingress, queueSecretary,
+  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, runMark: events?.RunMark ? new events.RunMark(dir, { version: NEW }) : null, butlerIngress: ingress, queueSecretary,
     stewardRole: { current: () => steward }, app: { getVersion: () => NEW }, dataDir: dir, continuationStatus, uiError,
     roomState: { apply: state => state }, backendSwitch: { ...backendSwitch, readSettings: () => settings }, windows: new Map([[1, context]]),
     backendSwitching: null, autoSwitchFailed: new Set(), queueDispatcher: null, queueRules: rules, runningRelays: () => new Set(),
@@ -130,7 +130,7 @@ test('the butler is woken for the event and the secretary is sent its notice, bo
 
 test('a restart on the same version says 「重启完成」 and does not say 「已装」 again; a first start without a record does', t => {
   const dir = directory(t);
-  const first = app(t, { dir, entries: [] }); first.observe(); first.scope.versionEvents?.exitClean?.();
+  const first = app(t, { dir, entries: [] }); first.observe(); first.scope.runMark?.exitClean();
   assert.equal(first.recorded()[0].payload.reason, 'version-installed');
   assert.match(first.recorded()[0].payload.text, /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 没有记录），/u);
   assert.match(first.recorded()[0].payload.text, /\n后台都已在 0\.1\.0-alpha\.287。$/u);
@@ -143,7 +143,7 @@ test('a restart on the same version says 「重启完成」 and does not say 「
     assert.match(last.payload.text, /^【NAW 版本】重启完成：0\.1\.0-alpha\.287，\d{4}-[\d-]+T[\d:]+Z。上次正常退出。\n后台都已在 0\.1\.0-alpha\.287。$/u);
     assert.doesNotMatch(last.payload.text, /已装/u);
     assert.equal(again.scope.versionEvents?.pending(), false, 'nothing left to watch');
-    again.scope.versionEvents?.exitClean?.();
+    again.scope.runMark?.exitClean();
   }
 });
 

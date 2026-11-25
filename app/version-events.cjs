@@ -7,13 +7,14 @@
 // secretary a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
 // switch, like answer-notices.cjs. NAW adds no queue item and opens no other channel.
 // Each start also says how the last run ended (2026-11-24: a crash read as 「重启完成 296->296」): a run leaves
-// main-running.json and removes it on its own quit path, so one still there is a run that crashed, was killed or lost power.
+// main-running.json at its start and renames it to main-exited.json on its own quit path. Only a mark is evidence: a
+// run that could not leave one is told as having no record, never as normal.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
-const FILE = 'version-seen.json', RUNNING = 'main-running.json', RECORD_MAX = 1024, MAX_BACKENDS = 20, MAX_NAMES = 4, MAX_OWED = 20;
-const RETRY_MS = 60 * 1000, MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FILE = 'version-seen.json', RUNNING = 'main-running.json', EXITED = 'main-exited.json', RECORD_MAX = 1024, MAX_BACKENDS = 20, MAX_NAMES = 4, MAX_OWED = 20;
+const MAX_TIME = 8640000000000000, RETRY_MS = 60 * 1000, MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CONTROL = /[\u0000-\u001f\u007f]/gu;
 const clean = (value, limit) => typeof value === 'string' ? value.replace(CONTROL, ' ').trim().slice(0, limit) : '';
 const token = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -78,19 +79,22 @@ function readReplaced(file, version) {
   const data = readRecord(file, 4096);
   return data && data.version === version && token(data.previous) && data.previous !== version ? data.previous : null;
 }
-// How the last run of this profile ended, as its records say: 'clean', 'abnormal' (with the pid and start of its mark,
-// when they can be read) or 'unrecorded'. A run that announced also wrote its start into the seen record; a newer seen
-// record means a version without the mark ran since, and nothing is known about it.
+// null: no mark there. A mark that cannot be read has neither a pid nor a start.
+function readMark(file) {
+  try { fs.lstatSync(file); } catch { return null; }
+  const data = readRecord(file, RECORD_MAX) || {};
+  const valid = value => Number.isSafeInteger(value) && value > 0 && value <= MAX_TIME;
+  return { pid: valid(data.pid) ? data.pid : null, at: valid(data.at) ? data.at : null };
+}
+// How the last run of this profile ended, as its mark says: 'clean', 'abnormal' (with that run's pid and start, when
+// the mark can be read) or 'unrecorded'. A run that announced wrote its start into the seen record too, so a seen
+// record newer than the mark is a version without marks that ran since: nothing is known about how it ended.
 function lastExit(directory, seen) {
-  const file = path.join(directory, RUNNING);
-  let left = true;
-  try { fs.lstatSync(file); } catch (error) { left = error.code !== 'ENOENT'; }
-  if (!left) return { kind: seen && seen.marks === 1 ? 'clean' : 'unrecorded' };
-  const data = readRecord(file, RECORD_MAX);
-  const pid = Number.isSafeInteger(data?.pid) && data.pid > 0 ? data.pid : null;
-  const at = Number.isSafeInteger(data?.at) && data.at > 0 ? data.at : null;
-  if (at !== null && Number.isSafeInteger(seen?.at) && seen.at > at) return { kind: 'unrecorded' };
-  return { kind: 'abnormal', pid, at };
+  const running = readMark(path.join(directory, RUNNING)), exited = readMark(path.join(directory, EXITED));
+  const mark = running || exited;
+  if (!mark || (mark.at !== null && Number.isSafeInteger(seen?.at) && seen.at > mark.at)) return { kind: 'unrecorded' };
+  if (running) return { kind: 'abnormal', pid: running.pid, at: running.at };
+  return { kind: exited.at === null ? 'unrecorded' : 'clean' };
 }
 function exitText(last) {
   if (last.kind === 'clean') return '上次正常退出。';
@@ -105,27 +109,35 @@ function writeRecord(file, value) {
   fs.renameSync(temp, file);
 }
 
+// This run's mark, left at its start (main.cjs beginRun, before boot reads anything else). Judged first, then both old
+// marks go and this run's is written: a write that fails leaves none, so the next start says it has no record.
+class RunMark {
+  constructor(directory, { version, now = Date.now }) {
+    this.running = path.join(directory, RUNNING); this.exited = path.join(directory, EXITED);
+    this.at = now();
+    this.last = lastExit(directory, readSeen(path.join(directory, FILE)));
+    for (const file of [this.running, this.exited]) try { fs.rmSync(file, { force: true }); } catch { /* Judged again by the next start. */ }
+    try { writeRecord(this.running, { format: 1, pid: process.pid, at: this.at, version }); } catch { /* No mark: no record. */ }
+  }
+  // The normal quit path (main.cjs will-quit): only while the mark is still this run's.
+  exitClean() {
+    const mark = readRecord(this.running, RECORD_MAX);
+    if (mark && mark.pid === process.pid && mark.at === this.at) fs.renameSync(this.running, this.exited);
+  }
+}
+
 class VersionEvents {
   // `record(event)`: into the butler's event record. `owe(text)`: to the secretary; nothing when none is designated.
-  constructor(directory, { version, now = Date.now, record, owe }) {
+  // `run`: this run's mark (RunMark) with how the last one ended, when main left one.
+  constructor(directory, { version, now = Date.now, record, owe, run = null }) {
     this.file = path.join(directory, FILE);
     Object.assign(this, { version, now, record, owe });
-    this.at = now();
-    const seen = readSeen(this.file);
+    // The start this run announced, the same in its mark: a later seen record tells an unmarked run apart (lastExit).
+    this.at = run ? run.at : now();
+    this.last = run ? run.last : { kind: 'unrecorded' };
     // The last version a start announced; 「已装」 once per version, 「重启完成」 on every other start.
-    this.previous = seen?.version || readReplaced(path.join(directory, 'installation.json'), version);
-    this.running = path.join(directory, RUNNING);
-    // Judged before this run leaves its own mark.
-    this.last = lastExit(directory, seen);
-    this.marked = false;
-    try { writeRecord(this.running, { format: 1, pid: process.pid, at: this.at, version }); this.marked = true; }
-    catch { /* Without a mark the next start says it has no record of this run. */ }
+    this.previous = readSeen(this.file)?.version || readReplaced(path.join(directory, 'installation.json'), version);
     this.announced = false; this.watch = new Map(); this.sequence = 0;
-  }
-  // The normal quit path (main.cjs will-quit): the mark goes only if it is still this run's.
-  exitClean() {
-    const left = readRecord(this.running, RECORD_MAX);
-    if (left && left.pid === process.pid && left.at === this.at) fs.rmSync(this.running, { force: true });
   }
   // Something is left to tell: this start, or a backend still on an old version.
   pending() { return !this.announced || this.watch.size > 0; }
@@ -143,7 +155,7 @@ class VersionEvents {
       const reason = installed ? 'version-installed' : 'version-restarted';
       this.emit(this.last.kind === 'abnormal' ? `${reason}-after-abnormal-exit` : reason,
         `【NAW 版本】${head}${exitText(this.last)}\n${behindText(this.version, list)}`, `${this.previous || 'unknown'}->${this.version}`);
-      try { writeRecord(this.file, { format: 1, version: this.version, at: this.at, ...(this.marked ? { marks: 1 } : {}) }); } catch { /* The next start says 「已装」 again. */ }
+      try { writeRecord(this.file, { format: 1, version: this.version, at: this.at }); } catch { /* The next start says 「已装」 again. */ }
       return;
     }
     const current = new Map(list.map(b => [b.key, b])), lines = [];
@@ -238,4 +250,4 @@ class VersionNotices {
   text(notices) { return notices.map(n => n.text).join('\n\n'); }
 }
 
-module.exports = Object.freeze({ VersionEvents, VersionNotices, FILE, WAITS });
+module.exports = Object.freeze({ VersionEvents, VersionNotices, RunMark, FILE, WAITS });
