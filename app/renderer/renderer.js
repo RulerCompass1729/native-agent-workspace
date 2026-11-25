@@ -1748,7 +1748,7 @@ function sessionSendDisabled(s, action, text, changing) {
   return action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !text.trim() || pendingMode?.id === s.id || changing || inputRecoveries.get(s.id)?.text.value));
 }
 function updateSessionComposer(binding, s, column) {
-  if (state.rotationChains?.length || binding.chainNotice) renderSessionHandoff(binding, s);
+  if (state.rotationChains?.length || state.sessionRotations?.[s?.id] || binding.chainNotice) renderSessionHandoff(binding, s);
   const action = soloAction(s, { column, mode: column ? 'chat' : mode });
   const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
   const disabled = sessionSendDisabled(s, action, binding.ui.input.value, binding.changing);
@@ -3738,29 +3738,124 @@ function renderSessionChain() {
   list.replaceChildren(...rows);
   if (focusedId) rows.find(row => row.dataset.sessionId === focusedId)?.querySelector('button')?.focus({ preventScroll: true });
 }
+// 「现在就换」 (R207): what a session's rotation waits for, by the gate NAW gives (queue-dispatch.cjs rotationRow).
+const ROTATION_WAITS = Object.assign(Object.create(null), {
+  'person-quiet': 'person', 'native-goal-active': 'goal', 'background-work': 'background', 'team-running': 'team', 'decisions-stay': 'decisions', 'several-spaces': 'spaces', 'no-slot': 'slot',
+});
+for (const gate of ['sent-item-open', 'send-unconfirmed', 'previous-item', 'took-item', 'settling', 'turn-running']) ROTATION_WAITS[gate] = 'turn';
+for (const gate of ['person-typing', 'terminal-input']) ROTATION_WAITS[gate] = 'draft';
+for (const gate of ['permission-mode', 'collaboration-mode']) ROTATION_WAITS[gate] = 'mode';
+for (const gate of ['model-unknown', 'waiting-model']) ROTATION_WAITS[gate] = 'model';
+for (const gate of ['backend-cannot-carry-settings', 'backend-update-needed']) ROTATION_WAITS[gate] = 'old';
+// Only the person's own step ends these.
+const ROTATION_BLOCKED = ['draft', 'decisions', 'mode', 'model', 'spaces', 'old', 'answer', 'paused', 'automatic-messages-off', 'native-terminal-dialog', 'rotation-control-unresolved'];
+// Asked for, and held by what holds a wake too.
+const ROTATION_HELD = ['automatic-messages-off', 'background-unconfirmed', 'missing', 'native-terminal-dialog', 'paused', 'quiet-window', 'rotation-control-unresolved', 'trust-hold', 'trust-unknown', 'unavailable', 'usage-limit-exceeded', 'waiting-provider'];
+function rotationTime(at) {
+  return new Date(at).toLocaleTimeString(ui.language.getSnapshot().active, { hour: 'numeric', minute: '2-digit' });
+}
+// A session not idle or not free: its turn, what it asks the person, or that it is not there.
+function rotationStateWait(s, at) {
+  if (at === 'approval' || s.approval || s.claudeQuestion || s.nativeInputRequired) return 'answer';
+  if (at === 'error' || at === 'disconnected') return at;
+  return ['idle', 'working', 'starting'].includes(at) ? 'turn' : 'unavailable';
+}
+function rotationWait(row, s) {
+  const own = ['not-idle', 'busy'].includes(row.gate) ? s.state : row.gate.startsWith('state-') ? row.gate.slice(6) : null;
+  const wait = own === null ? ROTATION_WAITS[row.gate] : rotationStateWait(s, own);
+  if (wait === 'person') return { wait, key: 'rotation.wait.person', params: () => ({ time: rotationTime(row.at) }) };
+  if (wait === 'turn') return { wait, key: row.state === 'requested' ? 'rotation.wait.turnAsked' : 'rotation.wait.turn' };
+  if (row.gate === 'terminal-input' && s.provider === 'codex') return { wait, key: 'rotation.wait.terminal' };
+  if (wait === 'unavailable') return { wait, key: 'stewardWake.reason.unavailable' };
+  if (wait) return { wait, key: row.gate === 'collaboration-mode' ? 'notice.rotation.cause.mode' : 'rotation.wait.' + wait };
+  if (row.gate === 'spaces-unreadable') return { wait: 'spaces', key: 'notice.rotation.cause.spaces' };
+  if (row.state !== 'due' && ROTATION_HELD.includes(row.gate)) return { wait: row.gate, key: 'stewardWake.reason.' + row.gate };
+  if (row.state !== 'requested') return null;
+  if (row.gate === 'space-run') return { wait: 'turn', key: 'rotation.wait.turnAsked' };
+  return { wait: row.gate, key: row.gate === 'handoff-request-not-sent' ? 'notice.rotation.cause.handoffRequest' : 'notice.rotation.cause.notReady' };
+}
+// The line and the steps of the row, or null where there is nothing to say.
+function sessionRotationView(s) {
+  const row = s && state.sessionRotations?.[s.id];
+  if (!row || s.archived || typeof api.sessionRotation !== 'function') return null;
+  // While its handoff is written the session's own state says what that turn waits for.
+  const gate = row.gate || (row.state === 'writing' ? 'not-idle' : '');
+  const wait = gate ? rotationWait({ ...row, gate }, s) : null;
+  const line = (key, params) => uiText('rotation.row', { line: uiText(key, params?.()) });
+  if (row.state === 'taking') return { text: () => line(row.butler ? 'rotation.takingButler' : 'rotation.taking'), steps: [] };
+  const steps = [...(wait?.wait === 'old' && backendUpdateAction(s).length ? ['update'] : []), ...(row.undo ? ['undo'] : []), ...(row.now ? ['now'] : [])];
+  if (row.state === 'handed') {
+    const name = () => { const next = state.sessions.find(item => item.id === row.next?.id); return next ? archivedName(next, next.name) : row.next?.name || ''; };
+    return { blocked: ROTATION_BLOCKED.includes(wait?.wait), key: wait?.key, steps, next: row.next?.id || null, nextName: name,
+      text: () => uiText(row.butler ? 'rotation.handedButler' : 'chain.handedTo', { name: name() }) + (wait ? ' · ' + uiText(wait.key, wait.params?.()) : '') };
+  }
+  if (row.state === 'writing' && (!wait || wait.wait === 'turn')) return { text: () => line('rotation.writing'), steps };
+  return wait ? { blocked: ROTATION_BLOCKED.includes(wait.wait), key: wait.key, steps, text: () => line(wait.key, wait.params) } : null;
+}
+async function rotateSession(id, action) {
+  await api.sessionRotation(id, action);
+  updateState(await api.initial()); render();
+}
+function rotationButton(id, step) {
+  const button = step === 'update' ? uiButton('menu.updateThisBackend', () => updateSessionBackend(id), 'small')
+    : uiButton(step === 'undo' ? 'rotation.undo' : 'rotation.now', () => rotateSession(id, step), 'small');
+  button.dataset.rotationStep = step;
+  button.disabled = disconnected;
+  // 撤销 takes the place of 现在就换: the second click of a double-click is not an undo.
+  button.addEventListener('click', event => { if (event.detail > 1) event.stopImmediatePropagation(); }, true);
+  // Nor is Enter still held down from it.
+  button.addEventListener('keydown', event => { if (event.repeat) event.preventDefault(); });
+  return button;
+}
 function renderSessionHandoff(binding, s) {
+  const rotation = sessionRotationView(s);
   const model = s && sessionChainModel(s.id), link = model?.sessions.find(link => link.id === s.id);
-  if (!link?.successors.length) { if (binding.chainNotice) binding.chainNotice.hidden = true; return; }
+  const edges = (link?.successors || []).filter(edge => edge.id !== rotation?.next);
+  if (!edges.length && !rotation) { if (binding.chainNotice) binding.chainNotice.hidden = true; return; }
   if (!binding.chainNotice) {
     binding.chainNotice = node('div', undefined, 'session-chain-notice');
     binding.ui.form.prepend(binding.chainNotice);
   }
   const notice = binding.chainNotice; notice.hidden = false;
-  const signature = JSON.stringify([link.continuedAt, link.successors, model.sessions.map(s => [s.id, s.name, Boolean(s.record), Boolean(s.record?.archived)])]);
+  notice.className = 'session-chain-notice' + (rotation?.blocked ? ' rotation-blocked' : '');
+  const signature = JSON.stringify([link?.continuedAt, edges, model?.sessions.map(s => [s.id, s.name, Boolean(s.record), Boolean(s.record?.archived)]), rotation && [s.id, disconnected, state.sessionRotations[s.id], rotation.key, rotation.steps, rotation.nextName?.()]]);
   if (notice.dataset.signature === signature) return;
   notice.dataset.signature = signature;
-  const text = node('span');
+  // Kept while it lives: read out when its words change, not each time it is made.
+  const text = binding.chainText ||= node('span');
   const successor = id => { const next = model.sessions.find(s => s.id === id); return next ? archivedName(next.record, next.name) : id; };
-  ui.display.computed(text, 'text', () => uiText('chain.handedTo', { name: link.successors.map(edge => successor(edge.id)).join(' / ') }) +
-    (link.continuedAt === null ? '' : ' · ' + uiText('chain.continued', { time: sessionChainTime(link.continuedAt) })));
-  const jumps = link.successors.map(edge => {
+  const handed = () => !edges.length ? '' : uiText('chain.handedTo', { name: edges.map(edge => successor(edge.id)).join(' / ') }) +
+    (link.continuedAt === null ? '' : ' · ' + uiText('chain.continued', { time: sessionChainTime(link.continuedAt) }));
+  ui.display.computed(text, 'text', () => [rotation?.text() || '', handed()].filter(Boolean).join(' · '));
+  if (rotation) text.setAttribute('role', 'status');
+  else text.removeAttribute('role');
+  const steps = (rotation?.steps || []).map(step => rotationButton(s.id, step));
+  const jumps = edges.map(edge => {
     const next = model.sessions.find(s => s.id === edge.id);
     const jump = uiButton('chain.openNext', () => openSessionChainSegment(edge.id), 'small', () => ({ name: successor(edge.id) }));
     jump.disabled = !next?.record; return jump;
   });
+  if (rotation?.next) {
+    const jump = uiButton('chain.openNext', () => openSessionChainSegment(rotation.next), 'small', () => ({ name: rotation.nextName() }));
+    jump.disabled = !state.sessions.some(item => item.id === rotation.next); jumps.unshift(jump);
+  }
   const focused = notice.contains(document.activeElement) ? [...notice.children].indexOf(document.activeElement) : -1;
-  notice.replaceChildren(text, ...jumps);
+  if (notice.children[0] !== text) notice.replaceChildren(text);
+  for (const child of [...notice.children].slice(1)) child.remove();
+  notice.append(...steps, ...jumps);
   if (focused > 0) notice.children[focused]?.focus({ preventScroll: true });
+}
+// Where no input of this session is shown, the same row above its terminal.
+let terminalRotation = null;
+function renderTerminalRotation(s, shown) {
+  const visible = Boolean(shown && sessionRotationView(s));
+  if (!terminalRotation) {
+    if (!visible) return;
+    terminalRotation = { ui: { form: node('div', undefined, 'terminal-rotation') } };
+    $('room-scope').before(terminalRotation.ui.form);
+  }
+  terminalRotation.ui.form.hidden = !visible;
+  if (visible) renderSessionHandoff(terminalRotation, s);
 }
 // 「接自「X」· 共 N 段」 beside a standalone session's title; the first segment has nothing before it and shows none.
 function renderSessionChainChip(s) {
@@ -3804,6 +3899,7 @@ function sessionMenuModel(id, row) {
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
   const chain = sessionChainModel(id);
   if (chain) update.push({ id: 'session-chain', label: uiText('chain.menu', { count: chain.sessions.length }), labelKey: 'chain.menu', labelParams: { count: chain.sessions.length } });
+  update.push(...sessionRotationAction(record));
   const actions = [...update, ...modelAction(record), ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...managerAction(record), ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
@@ -3816,6 +3912,15 @@ function modelAction(record) {
   const pending = state.modelChanges?.find(entry => entry.sessionId === record.id), model = record.model ? ui.displayText(record.model, record.modelUiMessage) : '';
   const [key, params] = pending ? ['menu.changeModelPending', { value: window.nativeWorkspaceModelDialog.valueText(pending, uiText) }] : model ? ['menu.changeModel', { model }] : ['menu.changeModelUnreported', {}];
   return [{ id: 'change-model', label: uiText(key, params), labelKey: key, labelParams: params }];
+}
+// 「现在就换会话」 / 「撤销换会话」 (R207), one item. Neither while its successor takes over, nor for a segment already handed over.
+function sessionRotationAction(record) {
+  if (typeof api.sessionRotation !== 'function' || !record || record.archived || !['claude', 'codex'].includes(record.provider) ||
+      ['ended', 'background', 'error', 'recoverable', 'disconnected'].includes(record.state)) return [];
+  const row = state.sessionRotations?.[record.id];
+  if (row?.undo) return [{ id: 'rotation-undo', label: uiText('menu.rotationUndo'), labelKey: 'menu.rotationUndo' }];
+  if (row ? !row.now : sessionChainModel(record.id)?.sessions.some(link => link.id === record.id && link.successors.length)) return [];
+  return [{ id: 'rotation-now', label: uiText('menu.rotationNow'), labelKey: 'menu.rotationNow' }];
 }
 // A space's project manager is one of its members, and the person's choice alone.
 function managerAction(record) {
@@ -4057,6 +4162,7 @@ function openSessionMenu(id, point, rowKey = id) {
       } else if (action === 'manager-set' || action === 'manager-revoke') attempt(() => chooseManager(managerAction(record)[0]?.roomId, action === 'manager-revoke' ? null : id));
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
       else if (action === 'rotation-release') attempt(() => releaseSessionRotation(record));
+      else if (action === 'rotation-now' || action === 'rotation-undo') attempt(() => rotateSession(id, action === 'rotation-undo' ? 'undo' : 'now'));
       else if (action === 'steward-set') openStewardChooser(id);
       else if (action === 'steward-revoke') attempt(() => revokeSteward(id));
       else if (action === 'steward-change') openStewardChooser();
@@ -4101,6 +4207,7 @@ function openMemberMenu(id, anchor) {
   const close = ui.menu({
     contextElement: anchor,
     items: [{ id: 'detach', label: uiText('menu.detach'), labelKey: 'menu.detach' }, { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' },
+      ...sessionRotationAction(members().find(s => s.id === id)),
       ...managerAction(members().find(s => s.id === id)),
       ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: uiText('menu.terminalHeightAll'), labelKey: 'menu.terminalHeightAll' }] : []),
       ...(reorder && index > 0 ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
@@ -4117,6 +4224,7 @@ function openMemberMenu(id, anchor) {
     onSelect: action => {
       if (key !== memberMenuKey(id)) return toastMessage("toast.memberChanged");
       if (action === 'copy-id') attempt(() => api.copy(id));
+      else if (action === 'rotation-now' || action === 'rotation-undo') attempt(() => rotateSession(id, action === 'rotation-undo' ? 'undo' : 'now'));
       else if (action === 'manager-set' || action === 'manager-revoke') attempt(() => chooseManager(managerAction(members().find(s => s.id === id))[0]?.roomId, action === 'manager-revoke' ? null : id));
       else if (action === 'terminal-height-all') {
         const source = columnTerminalBinding(id); if (!source) return toastMessage('toast.terminalHidden');
@@ -5430,6 +5538,7 @@ function openHeaderMenu(anchor, terminal = false) {
     : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
   // A role's item (`role`) is kept on an archived session, and disabled while disconnected.
   if (rotationTarget.rotationEpisode) actions.push(...rotationReleaseAction(rotationTarget));
+  if (!terminal) actions.push(...sessionRotationAction(rotationTarget).map(item => ({ ...item, role: true })));
   if (!terminal) actions.push(...modelAction(current()).map(item => ({ ...item, role: true })));
   if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, role: true })));
   actions.push(...managerAction(current()).map(item => ({ ...item, role: true })));
@@ -5450,6 +5559,7 @@ function openHeaderMenu(anchor, terminal = false) {
       if (action === 'manager-set' || action === 'manager-revoke') { if (!disconnected) attempt(() => chooseManager(items.find(item => item.id === action).roomId, action === 'manager-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
       else if (action === 'rotation-release') { if (!disconnected) attempt(() => releaseSessionRotation(rotationTarget)); }
+      else if (action === 'rotation-now' || action === 'rotation-undo') { if (!disconnected) attempt(() => rotateSession(rotationTarget.id, action === 'rotation-undo' ? 'undo' : 'now')); }
       else if (action === 'change-model') modelDialog?.open(current().id);
       else if (action === 'steward-set') openStewardChooser(current().id);
       else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }
@@ -6105,6 +6215,8 @@ function render() {
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('native-only', agyTerminalOnly || (inRoom && !memberFocus));
     $('conversation-pane').hidden = agyTerminalOnly || (inRoom && !memberFocus);
+    const columnInput = sessionComposers.get(s?.id);
+    renderTerminalRotation(s, terminalVisible && (terminalLayout === 'maximized' || $('conversation-pane').hidden && !(inRoom && columnInput?.column && columnInput.visible)));
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;

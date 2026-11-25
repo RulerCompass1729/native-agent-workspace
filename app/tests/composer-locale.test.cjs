@@ -21,6 +21,7 @@ class Element {
   append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
   prepend(...children) { for (const child of children) child.parentElement = this; this.children.unshift(...children); }
   replaceChildren(...children) { this.children = []; this.append(...children); }
+  remove() { this.parentElement.children = this.parentElement.children.filter(value => value !== this); this.parentElement = null; }
   before(child) { const siblings = this.parentElement.children; child.parentElement = this.parentElement; siblings.splice(siblings.indexOf(this), 0, child); }
   contains(child) { return child === this || this.children.some(value => value.contains(child)); }
   querySelectorAll(selector) { assert.equal(selector, '[data-naw-i18n-bound]'); return this.children.flatMap(child => [...(child.hasAttribute('data-naw-i18n-bound') ? [child] : []), ...child.querySelectorAll(selector)]); }
@@ -96,6 +97,27 @@ for (const column of [false, true]) test(`an ended rotated segment keeps its han
   assert.equal(f.input.selectionStart, 2); assert.equal(f.input.selectionEnd, 7);
   assert.equal(f.document.activeElement, f.input); assert.equal(f.ui.composing, true);
   assert.deepEqual(f.actorCalls, []);
+});
+
+for (const column of [false, true]) test(`R207: a session that waits to rotate says so above its real ${column ? 'column' : 'solo'} composer, without touching what is typed`, () => {
+  const f = fixture(), node = tag => f.document.createElement(tag);
+  f.record.state = 'idle';
+  f.context.state.sessionRotations = { 'session-A': { state: 'requested', gate: 'person-typing', undo: true } };
+  Object.assign(f.context, { document: f.document, node, api: { sessionRotation() {} }, renderDraftRecovery() {}, activateSoloComposer: () => f.binding,
+    uiButton(key, action, cls, params) { const button = node('button'); f.context.ui.display.text(button, key, params); return button; } });
+  vm.runInContext(renderer.slice(renderer.indexOf('// Only recorded NAW handoffs'), renderer.indexOf('function renderDraftRecovery(')), f.context);
+  vm.runInContext(renderer.slice(renderer.indexOf('function sessionChainTime('), renderer.indexOf('function sessionMenuModel(')), f.context);
+  const paint = () => column ? f.paint(true) : f.context.renderComposer(f.record), typed = [f.input.value, f.input.selectionStart, f.input.selectionEnd];
+  f.input.event('compositionstart'); paint();
+  const notice = f.binding.chainNotice;
+  assert.equal(f.form.children[0], notice);
+  assert.equal(notice.children[0].textContent, '换会话：有没发出的草稿，发出或清空后换'); assert.equal(notice.children[1].textContent, '撤销');
+  f.switch('en');
+  assert.equal(notice.children[0].textContent, 'Rotation: unsent draft; send or clear it first'); assert.equal(notice.children[1].textContent, 'Undo');
+  delete f.context.state.sessionRotations['session-A']; paint();
+  assert.equal(notice.hidden, true);
+  assert.deepEqual([f.input.value, f.input.selectionStart, f.input.selectionEnd], typed);
+  assert.equal(f.document.activeElement, f.input); assert.equal(f.ui.composing, true); assert.deepEqual(f.actorCalls, []);
 });
 
 test('moving from a column to solo clears the earlier recipient aria binding and keeps the same input', () => {

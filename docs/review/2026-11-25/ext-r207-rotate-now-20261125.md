@@ -1,0 +1,25 @@
+## Rotating a session by hand (lane/ext-r207-rotate-now-20261125)
+
+The person asked for a "rotate now" choice (R207): rotations only came due by size, memory, compaction or context, and then waited for quiet.
+
+Backend. `requestRotation` and `withdrawRotation` in `app/queue-dispatch.cjs`, reached from the person's window only (`sessionRotation` in `app/main.cjs`, not among what agents can call). A request starts the rotation there already is, without the size check and the quiet wait; what a rotation never cuts still holds it (the running turn, background commands, teammates, an unsent draft, decisions that cannot be carried, settings that cannot be carried, the one slot). The person's click and what they type afterwards do not stop it: their messages go to the successor as the supplement there already is. Undo works until the handoff is written. One already handed over is finished with its own successor, never with another. Each request, undo and dropped request is a line of `rotation-log.jsonl` (`asked`, `withdrawn`, `dropped`); a request not begun is kept in `rotations.json` (`requests`). No timer, no polling, no second path.
+
+`rotationRows` says where each rotation stands, for the person's windows only (`sessionRotations` in the state). It is computed in the pass that runs anyway, and reads no extra snapshot.
+
+The butler's own call (a commit by itself; the person's word for this one). `stewardRotate` in `app/main.cjs`: the designated butler, outside every space, asks for its own rotation, by the check its other calls pass (`stewardCaller`). Any other caller and any other target are refused, and it has no undo. Each call is a step of its record; the rotation log says `by: steward`. Its request is dropped when it is no longer the butler before it began.
+
+Windows. 「现在就换会话」 / 「撤销换会话」 is one item of the session's three menus (the list row's, the title bar's, a member's), for Claude and Codex sessions. The row is the handoff notice there already was (`renderSessionHandoff`), above the composer: what the rotation waits for, with 现在就换, 撤销 or 前往 beside it; above the terminal where that session shows no input. What only the person can end is in red. A gate with no words of its own uses the wakes' words when asked for, and shows no row when it only came due. The second click of a double-click is ignored, since 撤销 takes the place of 现在就换. Not seen in a real window yet: the GUI slot was taken.
+
+After the independent review of 8186248a:
+
+- The person's stop. Esc, an interrupt, or taking the session over from another window while the handoff is being written (`noteStop`, kept as `record.stopped`) ends that rotation when the turn ends: the episode is released, nothing is marked failed, nothing rests, and it is not asked for again. Looks, keys and messages do not stop it. A handoff turn interrupted where no window saw it (a phone, the native CLI) is read from its turn row. Only during the handoff turn: once it is written, Esc and takeover are as before.
+- A Codex terminal. Keys typed there and not followed by a message of the person's hold a rotation asked for by hand (`terminal-input`), across a restart (`typed` in rotations.json, at most one write each 5 seconds while they type), until a message follows or the native process is new. Keys that are no prompt (arrows, a dialog answered, a slash command, a prompt typed and then deleted) hold it too: NAW reads the times, never the text. Esc and Ctrl-C alone do not. A rotation that came due by itself is as it was: its quiet wait is the only guard.
+- The butler. What the person took back or stopped is kept (`withdrawals`) and refuses the butler's own request until they write in that session or click themselves. A session that has just taken over is refused until the person has written in it. `stewardRotate` runs only as a step its record wrote; with no record it is refused.
+- The row. Each gate has its own words, by the session's state where the gate is only "not idle": waiting for the person's reply, an error, disconnected, a goal running. Red only where nobody but the person can end it.
+- A request or withdrawal that cannot be saved is taken back in memory too. Enter held down does not press the 撤销 that takes the place of 现在就换.
+
+Known, not changed: a request does not expire and shows only on its session; a session designated butler after its request began gets the hand-asked handoff text without the butler's part (`solo` before `duty`); the butler's request on one already handed over by itself removes its quiet wait, as the person's click does, with no undo there.
+
+Installing: f42d9765 must not be installed without 8186248a. With f42d9765 alone the butler can ask while the person has no row, menu item or undo.
+
+Undo: drop this lane's commits. Before starting an older NAW on the same data, undo what is asked for and let any handoff being written end: its first save drops `requests`, `withdrawals` and `typed`, and it does not know `withdrawn` or `stopped`, so a rotation undone or stopped while its handoff is being written would go on there. The three new events it ignores.

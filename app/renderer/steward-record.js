@@ -51,6 +51,7 @@
       if (entry.method === 'stewardPatrol' && entry.patrol === 'check') return ['stewardRecord.step.wakeCheck', {}];
       if (entry.method === 'stewardPatrol' && entry.patrol === null) return ['stewardRecord.step.patrolOff', {}];
       if (entry.method === 'stewardPatrol' && Number.isSafeInteger(entry.patrol)) return ['stewardRecord.step.patrolSet', { minutes: entry.patrol }];
+      if (entry.method === 'stewardRotate' && entry.rotate) return ['stewardRecord.step.rotateNow', {}];
       if (entry.method === 'stewardEvents') return ['stewardRecord.step.events', {}];
       // A read of another session's conversation: whom, and how far when NAW knows it.
       if (entry.read) {

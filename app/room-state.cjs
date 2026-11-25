@@ -1003,7 +1003,7 @@ class RoomState {
     if (rotationReason !== undefined && (!rotationReason || Object.keys(rotationReason).sort().join() !== 'reason,sessionId' ||
         !orderId(rotationReason.sessionId) || typeof rotationReason.reason !== 'string' || !/^[A-Za-z0-9:._-]{1,160}$/.test(rotationReason.reason))) throw Error('Invalid rotation reason');
     if (receiptId !== undefined && (typeof receiptId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receiptId))) throw Error('Invalid rotation receipt');
-    const keys = { requested: 'notice.rotation.requested', waiting: 'notice.rotation.waiting', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', deferred: 'notice.rotation.deferred', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
+    const keys = { requested: 'notice.rotation.requested', waiting: 'notice.rotation.waiting', done: 'notice.rotation.done', archived: 'notice.rotation.archived', oldKept: 'notice.rotation.oldKept', failed: 'notice.rotation.failed', deferred: 'notice.rotation.deferred', withdrawn: 'notice.rotation.withdrawn', needsTrust: 'notice.rotation.needsTrust', trustTimedOut: 'notice.rotation.trustTimedOut', trustTimeoutUnconfirmed: 'notice.rotation.trustTimeoutUnconfirmed', trustCleanupUnconfirmed: 'notice.rotation.trustCleanupUnconfirmed', trustStateInvalid: 'notice.rotation.trustStateInvalid', trustStateUnknown: 'notice.rotation.trustStateUnknown' };
     let recorded = 0;
     for (const id of ids) {
       try {
@@ -1013,7 +1013,7 @@ class RoomState {
         continue;
       }
       if (receiptId && this.metadata(id).events.some(event => event.kind === 'rotation' && event.rotationReceipt === receiptId)) { recorded++; continue; }
-      const params = phase === 'trustStateUnknown' ? {} : phase === 'deferred' ? { name: oldName } : { name: oldName, detail: detail || '' };
+      const params = phase === 'trustStateUnknown' ? {} : ['deferred', 'withdrawn'].includes(phase) ? { name: oldName } : { name: oldName, detail: detail || '' };
       const notice = uiNotice(keys[phase], params);
       const cause = detailMessage && displayMessage(detailMessage, 'notice.', params.detail);
       if (cause) notice.uiMessage = displayMessage({ ...notice.uiMessage, cause, causeParam: 'detail' }, 'notice.', notice.text) || notice.uiMessage;
