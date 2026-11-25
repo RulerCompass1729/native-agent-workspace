@@ -3217,6 +3217,14 @@ class NativeHost {
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
           return;
         }
+        if (event.agyMcpListed === true) {
+          const runtime = this.agyMcpTargets.get(event.token);
+          if (runtime && runtime.record?.provider === 'agy' && !runtime.stopped && runtime.terminal?.alive) {
+            runtime.noteMcpListed?.();
+          }
+          socket.end();
+          return;
+        }
         if (event.agyWorkspaceMessage === true) {
           // Same-OS-account TUI boundary (accepted 2026-11-24): defense-in-depth MCP token + PreToolUse proof; not equivalent to Claude rootLease / Codex app-server.
           socket.removeAllListeners('data');

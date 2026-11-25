@@ -368,6 +368,8 @@ test('Finding 2: real NativeHost + claude-message-tool.cjs --agy enforces separa
 
   const listed = await rpcCall(rt.mcpToken, 'tools/list', {});
   assert.deepEqual(listed.result.tools.map(tool => tool.name), ['workspace_message']);
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(rt.mcpServerListed, true, 'tools/list notifies NativeHost via authenticated mcpToken');
 
   // Start a live turn.
   rt.hook({ hookEventName: 'PreInvocation', conversationId: realId, invocationNum: 1, initialNumSteps: 1 });
@@ -829,7 +831,9 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   const ws = new Workspace(host, dir);
   t.after(async () => { await ws.close(); });
 
-  // Happy path: auth footer -> /mcp -> ✓ naw_workspace Tools: workspace_message -> Esc -> empty prompt -> ready.
+  // Happy path: Backspace at empty pre-auth prompt (296-r3 #2) does NOT abort pending warmup;
+  // auth footer -> /mcp -> scrolled/partial old listing without mcpServerListed stays blocked (296-r3 #1)
+  // -> authenticated noteMcpListed() + active /mcp overlay -> Esc -> empty prompt -> ready.
   const id1 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
   const rt1 = ws.runtimes.get(id1), term1 = terms[0];
   term1.emit('started', 71717);
@@ -839,41 +843,22 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.addressedSendAvailable, false);
   assert.equal(term1.writes.length, 0, 'waits for model footer before opening /mcp');
 
+  // 296-r3 #2: Backspace on empty pre-auth composer is a no-op and must NOT abort pending warmup.
+  ws.input(id1, '\x7f', 'owner-1');
+  assert.equal(rt1.mcpWarmPhase, 'pending', 'empty-prompt Backspace preserves pending MCP warmup');
+
   await paint(term1, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt1.mcpWarmPhase, 'opening');
-  assert.deepEqual(term1.writes, ['/mcp\r']);
+  assert.equal(term1.writes.at(-1), '/mcp\r');
   assert.equal(rt1.chatAvailable, false);
+  const writesAfterOpen = term1.writes.length;
 
   // Unrelated healthy server + failed naw_workspace must NOT satisfy warmup.
   await paint(term1, [rule, '> ', rule, 'MCP Servers', '  ✓ other_server  Tools: foo', '  ✗ naw_workspace  Error', 'esc Exit'], 1);
   assert.equal(rt1.mcpWarmPhase, 'opening');
-  assert.equal(term1.writes.length, 1);
+  assert.equal(term1.writes.length, writesAfterOpen);
 
-  // 296-r1 #2: An old MCP listing scrolled ABOVE the active empty composer must NOT certify warmup or trigger Escape.
-  await paint(term1, [
-    'MCP Servers',
-    '>  ✓ naw_workspace  Tools: workspace_message',
-    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
-    rule,
-    '> ',
-    rule,
-    '? for shortcuts    auto · Gemini 4 Neon · high',
-  ], 4);
-  assert.equal(rt1.mcpWarmPhase, 'opening', 'scrolled-up prior MCP listing above empty composer never certifies warmup');
-  assert.equal(rt1.addressedSendAvailable, false);
-  assert.equal(term1.writes.length, 1);
-
-  // 296-r2 #2: Partial redraw that erases the composer rules while leaving the old MCP listing above MUST NOT certify warmup either.
-  await paint(term1, [
-    'MCP Servers',
-    '>  ✓ naw_workspace  Tools: workspace_message',
-    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
-  ], 0);
-  assert.equal(rt1.mcpWarmPhase, 'opening', 'partial redraw without composer box above MCP Servers never certifies warmup');
-  assert.equal(rt1.addressedSendAvailable, false);
-  assert.equal(term1.writes.length, 1);
-
-  // Real active /mcp overlay BELOW the composer rule with ✓ naw_workspace + workspace_message + esc Exit closes /mcp via Esc.
+  // 296-r1/r2/r3 #1: Even an old listing WITH two rules above it CANNOT certify warmup without a real authenticated tools/list callback (mcpServerListed)!
   await paint(term1, [
     rule,
     '> ',
@@ -882,6 +867,12 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
     '>  ✓ naw_workspace  Tools: workspace_message',
     'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
   ], 4);
+  assert.equal(rt1.mcpWarmPhase, 'opening', 'fake or scrolled-up listing with rules never certifies warmup before authenticated tools/list');
+  assert.equal(rt1.addressedSendAvailable, false);
+  assert.equal(term1.writes.length, writesAfterOpen);
+
+  // Authenticated tools/list callback from claude-message-tool.cjs --agy certifies naw_workspace on this session and closes /mcp via Esc!
+  rt1.noteMcpListed();
   assert.equal(rt1.mcpWarmPhase, 'closing');
   assert.equal(term1.writes.at(-1), '\x1b');
   assert.equal(rt1.chatAvailable, false);

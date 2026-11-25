@@ -283,6 +283,7 @@ class AgyTui extends EventEmitter {
     this.lastHumanInputAt = -Infinity;
     this.humanInputTimer = null;
     this.mcpWarmPhase = 'idle'; // 'idle' | 'pending' | 'opening' | 'closing' | 'ready' | 'failed' | 'aborted'
+    this.mcpServerListed = false;
     this.mcpWarmTimer = null;
     this.mcpAuthTimer = null;
     this.mcpCalls = new Map();
@@ -331,9 +332,24 @@ class AgyTui extends EventEmitter {
     }, this.mcpWarmTimeoutMs);
     this.mcpWarmTimer.unref?.();
   }
+  noteMcpListed() {
+    if (this.stopped || !this.terminal?.alive) return;
+    this.mcpServerListed = true;
+    if (this.mcpWarmPhase === 'pending') {
+      this.clearMcpWarmTimers();
+      this.mcpWarmPhase = 'ready';
+    }
+    if (this.terminal.screen) this.syncScreenState(this.terminal.screen);
+    else this.syncCapabilities();
+  }
   advanceMcpWarmup(screen, state) {
     if (!this.needsMcpWarmup()) return;
     if (this.mcpWarmPhase === 'pending') {
+      if (this.mcpServerListed) {
+        this.clearMcpWarmTimers();
+        this.mcpWarmPhase = 'ready';
+        return;
+      }
       if (state !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
       if (screenShowsModelFooter(screen)) {
         this.startMcpWarmup();
@@ -345,7 +361,8 @@ class AgyTui extends EventEmitter {
         this.mcpAuthTimer.unref?.();
       }
     } else if (this.mcpWarmPhase === 'opening') {
-      if (state !== 'empty' && screenShowsNawMcpReady(screen)) {
+      // Require authenticated tools/list callback from this session's MCP server plus an active /mcp overlay.
+      if (this.mcpServerListed && state !== 'empty' && screenShowsNawMcpReady(screen)) {
         this.mcpWarmPhase = 'closing';
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
       }
@@ -367,16 +384,17 @@ class AgyTui extends EventEmitter {
     this.lastHumanInputAt = this.now();
     const screen = this.terminal?.screen;
     const state = screen ? editorState(screen) : 'unknown';
+    const isEmptyNoop = this.humanInputState === 'none' && screen && state === 'empty' && typeof data === 'string' && EMPTY_NOOP_INPUT.test(data);
     const isTrustKey = this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' &&
       ((!this.trustConfirmSent && (TRUST_NAV_KEYS.test(data) || TRUST_CONFIRM_KEYS.test(data))) || /^[\r\n]+$/.test(data));
-    if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing' || (this.mcpWarmPhase === 'pending' && !isTrustKey)) {
+    if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing' || (this.mcpWarmPhase === 'pending' && !isTrustKey && !isEmptyNoop)) {
       this.clearMcpWarmTimers();
       this.mcpWarmPhase = 'aborted';
     }
     // Raw-PTY fail-closed boundary (accepted 2026-11-24): only an already-visible draft stays in 'editing';
     // typing on 'empty' or 'unknown' enters 'unseen' until a draft or turn is observed (sub-chunk coalesced
     // type+erase stays conservatively blocked rather than risking submission of an un-echoed draft).
-    if (this.humanInputState === 'none' && screen && state === 'empty' && typeof data === 'string' && EMPTY_NOOP_INPUT.test(data)) {
+    if (isEmptyNoop) {
       this.humanInputState = 'none';
     } else if (this.humanInputState !== 'unseen' && screen && state === 'draft') {
       this.humanInputState = 'editing';
@@ -411,7 +429,7 @@ class AgyTui extends EventEmitter {
   syncCapabilities() {
     const warming = this.mcpWarmBusy();
     const canSend = Boolean(!this.stopped && this.terminal?.alive && this.host.hookSocket && this.promptReady && !this.trustPromptActive && !warming);
-    const canAddress = Boolean(!this.stopped && this.terminal?.alive && this.bridgeDir && (!this.needsMcpWarmup() || this.mcpWarmPhase === 'ready'));
+    const canAddress = Boolean(!this.stopped && this.terminal?.alive && this.bridgeDir && (!this.needsMcpWarmup() || (this.mcpServerListed && !warming)));
     if (canSend !== this.chatAvailable || canAddress !== this.addressedSendAvailable) {
       this.chatAvailable = canSend;
       this.addressedSendAvailable = canAddress;
@@ -487,6 +505,7 @@ class AgyTui extends EventEmitter {
     this.trustPromptActive = false;
     this.trustConfirmSent = false;
     this.clearMcpWarmTimers();
+    this.mcpServerListed = false;
     this.mcpWarmPhase = this.needsMcpWarmup() ? 'pending' : 'idle';
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
@@ -509,6 +528,7 @@ class AgyTui extends EventEmitter {
       if (this.terminal !== terminal) return;
       this.clearHumanInputTimer();
       this.clearMcpWarmTimers();
+      this.mcpServerListed = false;
       this.mcpWarmPhase = 'idle';
       this.clearTokens();
       this.cleanupBridge();
@@ -769,6 +789,7 @@ class AgyTui extends EventEmitter {
     this.stopped = true;
     this.clearHumanInputTimer();
     this.clearMcpWarmTimers();
+    this.mcpServerListed = false;
     this.mcpWarmPhase = 'idle';
     this.promptReady = false;
     this.trustPromptActive = false;

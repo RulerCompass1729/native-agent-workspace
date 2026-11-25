@@ -41,6 +41,16 @@ function stageNative(identity, args) {
 function stageAgy(args) {
   return stagePayload({ token: process.env.NAW_MESSAGE_TOKEN, agyWorkspaceMessage: true, arguments: args });
 }
+function notifyAgyListed() {
+  const sock = process.env.NAW_MESSAGE_SOCKET, token = process.env.NAW_MESSAGE_TOKEN;
+  if (!sock || !token) return;
+  try {
+    const socket = net.connect(sock);
+    socket.setTimeout(1500, () => socket.destroy());
+    socket.once('error', () => socket.destroy());
+    socket.once('connect', () => { socket.end(JSON.stringify({ token, agyMcpListed: true }) + '\n'); });
+  } catch {}
+}
 async function main() {
   const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
   const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
@@ -48,8 +58,11 @@ async function main() {
   transport.onRequest(async (method, params) => {
     if (method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'workspace', version: '1' } };
     if (method === 'ping') return {};
-    if (method === 'tools/list') return { tools: (isAgy ? [tool] : [tool, background.tool, ...(isCodex ? [] : operator.tools)]).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
-      annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
+    if (method === 'tools/list') {
+      if (isAgy) notifyAgyListed();
+      return { tools: (isAgy ? [tool] : [tool, background.tool, ...(isCodex ? [] : operator.tools)]).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
+        annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
+    }
     if (method !== 'tools/call') throw Error('Unsupported workspace tool request');
     if (!isAgy && params.name === background.tool.name) {
       const args = background.validate(params.arguments);
