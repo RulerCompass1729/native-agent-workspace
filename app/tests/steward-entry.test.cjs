@@ -366,7 +366,7 @@ test('every sentence exists in both languages, and the words say what the design
     'steward.choose.resend', 'steward.duty.label', 'steward.duty.default', 'steward.duty.header', 'steward.duty.notSent', 'error.steward.dutyInvalid', 'error.steward.dutyBusy',
     // A new session as the butler (M82), made from the chooser.
     'steward.new.title', 'steward.new.name', 'steward.new.folder', 'steward.new.outside', 'steward.new.codex', 'steward.new.model', 'steward.new.effort', 'steward.new.handoff', 'steward.new.handoffDefault', 'steward.new.duty',
-    'steward.new.note', 'steward.new.confirm', 'steward.new.making', 'steward.new.closed', 'error.steward.newFailed', 'error.steward.newNotReady', 'error.steward.handoffInvalid',
+    'steward.new.note', 'steward.new.confirm', 'steward.new.making', 'steward.new.closed', 'error.steward.newRefused', 'error.steward.newFailed', 'error.steward.newNotReady', 'error.steward.newDisconnected', 'error.steward.handoffInvalid',
     // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
     // Batch 4: what the butler does to a queue says so.
     'notice.queue.addedBySteward', 'notice.queue.cancelledBySteward', 'notice.queue.resolvedBySteward', 'queue.creator.steward', 'queue.status.cancelledBySteward', 'queue.status.doneBySteward',

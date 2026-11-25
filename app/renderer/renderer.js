@@ -3732,28 +3732,37 @@ function stewardCandidates() {
 // Whether the person has the permission to organize on for the butler they have; null until it is read.
 let stewardChoice = '', stewardStandingOn = false;
 // A new session as the butler (the person, 2026-11-21): the chooser's last row, made by the ordinary create call, outside
-// every space. `stewardMade` is the one this opening made; `stewardMaking`, one is being made; `stewardReplaces`, the butler there was.
-const STEWARD_NEW = 'new', STEWARD_NEW_READY_MS = 60_000;
-let stewardMade = '', stewardMaking = false, stewardReplaces = '';
+// every space. `stewardMade` is the one this opening made; `stewardReplaces`, the butler there was; `stewardBusy`, the
+// opening whose confirmed choice is being carried out.
+const STEWARD_NEW = 'new', STEWARD_NEW_READY_MS = 60_000, STEWARD_TEXT_MAX = 3200;
+let stewardMade = '', stewardReplaces = '', stewardBusy = null;
+// As validDuty in steward-role.cjs: known before a session is made for a text that cannot be sent.
+const stewardTextValid = value => value.trim().length > 0 && new TextEncoder().encode(JSON.stringify(value)).length <= STEWARD_TEXT_MAX && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value);
+const stewardReady = record => Boolean(record?.nativeId) && !record.nativeContextPending && !record.nativeStartupPrompt && record.state === 'idle';
 const stewardNewOffered = () => typeof api.create === 'function' && ['createSettingsV1', 'createSkipPermissions'].every(name => state.capabilities?.includes(name));
 const stewardNewChosen = () => stewardChoice === STEWARD_NEW || Boolean(stewardMade) && stewardChoice === stewardMade;
+// The session made here replaces the butler only once it can take a message, also when the person clicks again.
+const stewardConfirmable = () => Boolean(stewardChoice) && !disconnected && stewardStandingOn !== null && !currentDialogTicket(stewardBusy) &&
+  !(stewardMade && stewardChoice === stewardMade && state.steward?.sessionId !== stewardMade && !stewardReady(state.sessions.find(s => s.id === stewardMade)));
 function stewardNewRow() {
-  const row = node('label', undefined, 'steward-pick'), radio = node('input'), text = node('span'), name = node('strong'), note = node('small'), mark = node('span', '＋', 'steward-new-mark'), folder = stewardRecord()?.cwd;
-  radio.type = 'radio'; radio.name = 'steward-choice'; radio.value = STEWARD_NEW; radio.disabled = disconnected || stewardMaking; radio.checked = stewardChoice === STEWARD_NEW;
+  const row = node('label', undefined, 'steward-pick steward-new-pick'), radio = node('input'), text = node('span'), name = node('strong'), note = node('small'), mark = node('span', '＋', 'steward-new-mark'), folder = stewardRecord()?.cwd;
+  radio.type = 'radio'; radio.name = 'steward-choice'; radio.value = STEWARD_NEW; radio.disabled = disconnected || currentDialogTicket(stewardBusy); radio.checked = stewardChoice === STEWARD_NEW;
   radio.onchange = () => { stewardChoice = STEWARD_NEW; renderStewardChooser(); };
   mark.setAttribute('aria-hidden', 'true'); ui.display.text(name, 'steward.new.title');
   if (folder) ui.display.computed(note, 'text', () => uiText('steward.new.folder', { folder })); else ui.display.text(note, 'steward.new.outside');
   text.append(name, note); row.append(radio, mark, text); return row;
 }
 function renderStewardChooser() {
-  const list = $('steward-list'), candidates = stewardCandidates(), offered = stewardNewOffered(), box = $('steward-dialog');
+  const list = $('steward-list'), candidates = stewardCandidates(), offered = stewardNewOffered(), box = $('steward-dialog'), busy = currentDialogTicket(stewardBusy);
   // A row that comes in above (the new session, right after it failed) must not push the reason and the buttons away.
   const atEnd = !$('steward-error').hidden && box.scrollHeight - box.scrollTop - box.clientHeight < 2;
-  if (stewardChoice === STEWARD_NEW ? !offered : !candidates.some(item => item.record.id === stewardChoice && !item.reason)) stewardChoice = '';
+  // The session made here stays chosen while it starts; it cannot be confirmed before it is ready.
+  const starting = item => item.reason === 'unusable' && item.record.id === stewardMade && !item.current;
+  if (stewardChoice === STEWARD_NEW ? !offered : !candidates.some(item => item.record.id === stewardChoice && (!item.reason || starting(item)))) stewardChoice = '';
   const held = document.activeElement?.name === 'steward-choice' ? document.activeElement.value : '';
   list.replaceChildren(...[...candidates.map(({ record, space, reason, current }) => {
     const row = node('label', undefined, 'steward-pick' + (reason ? ' unavailable' : '')), radio = node('input'), text = node('span'), name = node('strong', record.name), note = node('small');
-    radio.type = 'radio'; radio.name = 'steward-choice'; radio.value = record.id; radio.disabled = Boolean(reason) || disconnected || stewardMaking; radio.checked = record.id === stewardChoice;
+    radio.type = 'radio'; radio.name = 'steward-choice'; radio.value = record.id; radio.disabled = Boolean(reason) || disconnected || busy; radio.checked = record.id === stewardChoice;
     radio.onchange = () => { stewardChoice = record.id; renderStewardChooser(); };
     if (reason === 'inSpace') ui.display.computed(note, 'text', () => uiText('steward.choose.inSpace', { space: space ? spaceName(space) : '' }));
     else if (reason) ui.display.text(note, 'steward.choose.unusable');
@@ -3776,8 +3785,10 @@ function renderStewardChooser() {
   $('steward-handoff').hidden = $('steward-handoff-label').hidden = !fresh || !stewardReplaces;
   $('steward-new-note').hidden = !fresh || again || !stewardReplaces;
   ui.display.text($('steward-duty-label'), stewardChoice === STEWARD_NEW ? 'steward.new.duty' : 'steward.duty.label');
-  $('steward-confirm').disabled = disconnected || !stewardChoice || stewardStandingOn === null || stewardMaking;
-  ui.display.text($('steward-confirm'), stewardMaking ? 'steward.new.making' : again ? 'steward.choose.resend' : stewardChoice === STEWARD_NEW ? 'steward.new.confirm' : 'steward.choose.confirm');
+  // What is being carried out was read when it was confirmed.
+  for (const id of ['steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep']) $(id).disabled = busy;
+  $('steward-confirm').disabled = !stewardConfirmable();
+  ui.display.text($('steward-confirm'), busy && fresh && !again ? 'steward.new.making' : again ? 'steward.choose.resend' : stewardChoice === STEWARD_NEW ? 'steward.new.confirm' : 'steward.choose.confirm');
   if (atEnd) box.scrollTop = box.scrollHeight;
 }
 // From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen.
@@ -3799,48 +3810,57 @@ function openStewardChooser(chosen = null) {
     if (currentDialogTicket(ticket)) { stewardStandingOn = on; renderStewardChooser(); }
   });
   // From its first line, wherever the box was scrolled the last time the dialog was open.
-  $('steward-duty').scrollTop = $('steward-handoff').scrollTop = 0;
-  ([...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled) || $('steward-cancel')).focus({ preventScroll: true });
+  $('steward-duty').scrollTop = $('steward-handoff').scrollTop = $('steward-list').scrollTop = 0;
+  const first = [...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled);
+  (first || $('steward-cancel')).focus({ preventScroll: true }); first?.closest('label').scrollIntoView({ block: 'nearest' });
+  // The dialog itself too: it opens at its heading, also after the last visit ended at its buttons.
+  $('steward-dialog').scrollTop = 0;
 }
 // Made, but designated only once it can take a message: until then the butler stays who it is. Null when the person has
 // closed the dialog meanwhile.
 async function makeSteward(ticket) {
   const butler = stewardRecord(), model = $('steward-new-model').value, effort = $('steward-new-effort').value, skipPermissions = $('steward-new-skip').checked || undefined;
   const settings = { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
-  stewardMaking = true; $('steward-error').hidden = true; renderStewardChooser();
-  try {
-    let place = butler?.cwd ? { cwd: butler.cwd } : null;
-    if (!place) {
-      const folder = (await api.createDefaults())?.directory;
-      place = folder ? { cwd: folder } : state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string'
-        ? { cwd: `${state.newWorkspaceRoot}/${crypto.randomUUID()}`, newDirectory: true } : { cwd: state.defaultWorkspace };
+  let place = butler?.cwd ? { cwd: butler.cwd } : null, id;
+  if (!place) {
+    const folder = (await api.createDefaults())?.directory;
+    place = folder ? { cwd: folder } : state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string'
+      ? { cwd: `${state.newWorkspaceRoot}/${crypto.randomUUID()}`, newDirectory: true } : { cwd: state.defaultWorkspace };
+  }
+  if (!currentDialogTicket(ticket)) return null;
+  const now = new Date(), name = uiText('steward.new.name', { date: now.toLocaleDateString('en-CA').slice(5) + ' ' + now.toTimeString().slice(0, 5) });
+  try { id = await api.create({ provider: 'claude', ...place, name, view: 'chat', skipPermissions, ...(Object.keys(settings).length ? { settings } : {}) }); }
+  catch (error) { throw uiError('error.steward.newRefused', { reason: ui.errorText(error) }); }
+  if (currentDialogTicket(ticket)) stewardMade = stewardChoice = id;
+  updateState(await api.initial()); render();
+  for (const deadline = Date.now() + STEWARD_NEW_READY_MS; ;) {
+    if (!currentDialogTicket(ticket)) { toastMessage('steward.new.closed'); return null; }
+    const record = state.sessions.find(s => s.id === id);
+    if (!record || record.archived || ['ended', 'background', 'error', 'recoverable'].includes(record.state)) {
+      stewardMade = ''; stewardChoice = STEWARD_NEW; throw uiError('error.steward.newFailed');
     }
-    if (!currentDialogTicket(ticket)) return null;
-    const id = await api.create({ provider: 'claude', ...place, name: uiText('steward.new.name', { date: new Date().toLocaleDateString('en-CA').slice(5) }), view: 'chat', skipPermissions, ...(Object.keys(settings).length ? { settings } : {}) });
-    if (currentDialogTicket(ticket)) stewardMade = stewardChoice = id;
-    updateState(await api.initial()); render();
-    for (const deadline = Date.now() + STEWARD_NEW_READY_MS; ;) {
-      if (!currentDialogTicket(ticket)) { toastMessage('steward.new.closed'); return null; }
-      const record = state.sessions.find(s => s.id === id);
-      if (!record || record.archived || ['ended', 'background', 'error', 'recoverable'].includes(record.state)) throw uiError('error.steward.newFailed');
-      if (record.nativeId && !record.nativeContextPending && !record.nativeStartupPrompt && record.state === 'idle') return id;
-      if (disconnected || Date.now() > deadline) throw uiError('error.steward.newNotReady');
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-  } finally { stewardMaking = false; if ($('steward-dialog').open) renderStewardChooser(); }
+    if (stewardReady(record)) return id;
+    if (disconnected) throw uiError('error.steward.newDisconnected');
+    if (Date.now() > deadline) throw uiError('error.steward.newNotReady');
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
 }
 // It stands above the buttons, below everything the dialog may have to scroll.
 function showStewardError() { $('steward-error').hidden = false; renderStewardChooser(); $('steward-dialog').scrollTop = $('steward-dialog').scrollHeight; }
 async function confirmSteward() {
   let id = stewardChoice; const ticket = dialogTickets.get($('steward-dialog'));
-  if (!id || disconnected || stewardStandingOn === null || stewardMaking) return;
-  $('steward-confirm').disabled = true;
+  if (!stewardConfirmable()) return;
   const standing = $('steward-standing').hidden ? null : $('steward-standing-keep').checked;
   // The default text unchanged is kept as "the default", so it follows the person's language.
   const text = $('steward-duty').value, duty = text === uiText('steward.duty.default') ? null : text;
   const handoff = stewardNewChosen() && stewardReplaces && $('steward-handoff').value.trim() || null;
+  stewardBusy = ticket; $('steward-error').hidden = true; renderStewardChooser();
   try {
-    if (id === STEWARD_NEW) { id = await makeSteward(ticket); if (!id) return; }
+    if (id === STEWARD_NEW) {
+      if (!stewardTextValid(text)) throw uiError('error.steward.dutyInvalid');
+      if (handoff && !stewardTextValid(handoff)) throw uiError('error.steward.handoffInvalid');
+      id = await makeSteward(ticket); if (!id) return;
+    }
     const result = await api.steward(id, duty, standing, handoff);
     updateState(await api.initial());
     const lost = result?.standingLost ? standing === false ? 'standing.notOff' : 'standing.notKept' : '';
@@ -3859,6 +3879,8 @@ async function confirmSteward() {
   } catch (error) {
     if (!currentDialogTicket(ticket)) throw error;
     ui.showError($('steward-error'), error); showStewardError();
+  } finally {
+    if (stewardBusy === ticket) { stewardBusy = null; if ($('steward-dialog').open) renderStewardChooser(); }
   }
 }
 // The integrator is one session outside every space (B6). Designating is offered only where it can
