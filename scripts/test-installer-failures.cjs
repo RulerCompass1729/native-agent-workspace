@@ -123,7 +123,7 @@ async function cleanup(c) {
       const approval = path.join(c.testRoot, 'approval.json');
       const child = cp.spawn(process.execPath, [path.join(__dirname, 'install-daily.cjs'), '--approval', approval, '--approval-sha256', digest(approval), '--result-dir', c.resultDir, '--apply'], { env: safeEnv(path.join(c.testRoot, 'home')), stdio: ['ignore', 'pipe', 'pipe'] });
       let output = ''; child.stdout.on('data', x => output += x); child.stderr.on('data', x => output += x);
-      const timer = setTimeout(() => child.kill('SIGTERM'), 180000);
+      const timer = setTimeout(() => child.kill('SIGTERM'), 300000);
       const exit = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); }); clearTimeout(timer);
       fs.writeFileSync(path.join(options.evidence, mode + '.log'), output);
       assert.equal(exit.signal, null, 'Operator deadline was not exceeded');

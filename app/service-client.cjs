@@ -175,7 +175,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           // A target refusal is retried after repair without charging the source.
           if (reason !== 'target') {
             failures = failures.filter(row => row !== previous);
-            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
+            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason, ...error?.progress }); saveDsh();
           }
           // Only diagnostics are cached; every startup still performs preflight.
           const state = reason === 'target' ? targetWarningState(target, error) : null;
