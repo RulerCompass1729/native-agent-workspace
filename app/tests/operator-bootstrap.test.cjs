@@ -83,25 +83,66 @@ test('pending backend activation refuses global changes before the first write',
   assert.equal(writes, 0); assert.equal(client.snapshot().operatorPolicy.enabled, false);
   assert.equal(fs.existsSync(path.join(root, 'services.lock')), false);
 });
-// Turning a slot off revokes its creation grants (operator-control settings), so reuse must not do it without a confirmed choice.
-async function reuse(t, others) {
-  const root = await fixture(t);
-  const set = async (key, enabled) => { const c = await connectService(path.join(root, key), 'test'); try { await c.call('operatorAction', null, 'enabled', enabled); } finally { c.close(); } };
-  // A slot that holds a session is kept on its own version; an empty one would be upgraded in place.
-  const slot = async (digit, version) => {
-    const key = 'backends/' + digit.repeat(20), dir = path.join(root, key);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(dir, 'workspace.json'), JSON.stringify({ sessions: [{ id: 'retained-' + digit, nativeId: 'synthetic-' + digit, provider: 'claude', state: 'working', name: 'Synthetic ' + digit, messages: [] }], room: { messages: [] }, drafts: {} }), { mode: 0o600 });
-    require('../service-layout.cjs').writeLayout(root, { ...readLayout(root), pending: key });
-    process.env.NAW_APP_VERSION = version; await ensureService(root, process.execPath);
-    assert.equal(readLayout(root).active, key); return key;
-  };
-  const reused = await slot('1', 'synthetic-next'), third = await slot('2', 'synthetic-third');
-  await set(reused, true); await set('.', others[0]); await set(third, others[1]);
+// Turning a slot off revokes its creation grants (operator-control settings). "Off" may be only a new slot's default,
+// so activating a slot the person already uses never writes it.
+const DOMAIN = 'retained-grant';
+const reusedStore = (root, key, state) => {
+  const dir = path.join(root, key), sessions = [{ id: 'reused', nativeId: 'synthetic-reused', provider: 'claude', state, name: 'Synthetic reused', messages: [] }];
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dir, 'workspace.json'), JSON.stringify({ sessions, room: { messages: [] }, drafts: {} }), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'operator-records.json'), JSON.stringify({ version: 1, sequence: 1, enabled: true, sessions: { reused: { enabled: true, nativeId: 'synthetic-reused', enabledAt: 1 } },
+    domains: { [DOMAIN]: { id: DOMAIN, initiators: [{ id: 'reused', nativeId: 'synthetic-reused' }], providers: ['claude'], directories: [root], permission: 'default', model: null, daily: 1, concurrent: 1, expiresAt: Date.now() + 3600000, createdAt: 1 } },
+    requests: {}, dispatches: {}, actions: {}, reports: {}, calls: {}, audit: [] }), { mode: 0o600 });
+};
+async function policyOf(root, key) {
+  const client = await connectService(path.join(root, key), 'test');
+  try { return (await client.call('initial')).operatorPolicy; } finally { client.close(); }
+}
+async function enable(root, key, enabled) {
+  const client = await connectService(path.join(root, key), 'test');
+  try { await client.call('operatorAction', null, 'enabled', enabled); } finally { client.close(); }
+}
+const unchanged = policy => {
+  assert.equal(policy.error, null); assert.equal(policy.enabled, true); assert.equal(policy.sessions.reused.enabled, true);
+  assert.equal(policy.domains.length, 1); assert.equal(policy.domains[0].id, DOMAIN); assert.equal(policy.domains[0].revokedAt, undefined);
+};
+test('an ordinary update that reuses an ended slot keeps its choice and its grant while the active backend is off by default', async t => {
+  const root = await fixture(t), key = 'backends/' + '1'.repeat(20);
+  reusedStore(root, key, 'ended');
+  require('../service-layout.cjs').writeLayout(root, { ...readLayout(root), entries: ['.', key] });
+  process.env.NAW_APP_VERSION = 'synthetic-old'; await ensureService(root, process.execPath);
+  assert.equal(readLayout(root).active, '.'); unchanged(await policyOf(root, key));
+  assert.equal((await policyOf(root, '.')).enabled, false);
+  process.env.NAW_APP_VERSION = 'synthetic-next'; await ensureService(root, process.execPath);
+  assert.equal(readLayout(root).active, key, 'the update reuses the ended slot');
+  unchanged(await policyOf(root, key)); assert.equal((await policyOf(root, '.')).enabled, false);
+});
+for (const others of [[false, false], [true, false], [true, true]]) test('an older app that reuses its own slot changes nothing in it, others ' + others.join('/'), async t => {
+  const root = await fixture(t), write = key => require('../service-layout.cjs').writeLayout(root, { ...readLayout(root), pending: key });
+  const reused = 'backends/' + '1'.repeat(20), third = 'backends/' + '2'.repeat(20);
+  reusedStore(root, reused, 'working'); write(reused);
+  process.env.NAW_APP_VERSION = 'synthetic-next'; await ensureService(root, process.execPath);
+  assert.equal(readLayout(root).active, reused);
+  const dir = path.join(root, third); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dir, 'workspace.json'), JSON.stringify({ sessions: [{ id: 'third', nativeId: 'synthetic-third', provider: 'claude', state: 'working', name: 'Synthetic third', messages: [] }], room: { messages: [] }, drafts: {} }), { mode: 0o600 });
+  write(third); process.env.NAW_APP_VERSION = 'synthetic-third'; await ensureService(root, process.execPath);
+  assert.equal(readLayout(root).active, third);
+  await enable(root, reused, true); await enable(root, '.', others[0]); await enable(root, third, others[1]);
   process.env.NAW_APP_VERSION = 'synthetic-next'; await ensureService(root, process.execPath);
   assert.equal(readLayout(root).active, reused, 'the older app reuses its own slot');
-  const client = await connectService(path.join(root, reused), 'test');
-  try { return (await client.call('initial')).operatorPolicy.enabled; } finally { client.close(); }
-}
-test('a reused backend keeps its setting while the others disagree', async t => { assert.equal(await reuse(t, [true, false]), true); });
-test('a reused backend follows a choice every other backend confirms as off', async t => { assert.equal(await reuse(t, [false, false]), false); });
+  assert.equal((await policyOf(root, reused)).enabled, true);
+  assert.deepEqual([(await policyOf(root, '.')).enabled, (await policyOf(root, third)).enabled], others);
+});
+for (const second of [true, false]) test('a pending slot left on by a failed activation is on only while every other backend is, second ' + second, async t => {
+  const root = await fixture(t), other = 'backends/' + '1'.repeat(20), key = 'backends/' + '2'.repeat(20);
+  await enable(root, '.', true);
+  reusedStore(root, other, 'working');
+  require('../service-layout.cjs').writeLayout(root, { ...readLayout(root), entries: ['.', other] });
+  await ensureService(root, process.execPath); await enable(root, other, second);
+  fs.mkdirSync(path.join(root, key), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(root, key, 'operator-records.json'), JSON.stringify({ version: 1, sequence: 1, enabled: true, sessions: {}, domains: {}, requests: {}, dispatches: {}, actions: {}, reports: {}, calls: {}, audit: [] }), { mode: 0o600 });
+  require('../service-layout.cjs').writeLayout(root, { ...readLayout(root), pending: key });
+  process.env.NAW_APP_VERSION = 'synthetic-next'; await ensureService(root, process.execPath);
+  assert.equal(readLayout(root).active, key); assert.equal((await policyOf(root, key)).enabled, second);
+  assert.equal((await policyOf(root, '.')).enabled, true); assert.equal((await policyOf(root, other)).enabled, second);
+});

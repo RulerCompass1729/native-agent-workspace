@@ -201,13 +201,12 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       await inheritDsh(key, [layout.active, ...layout.entries.filter(entry => entry !== layout.active && entry !== key)]);
       let next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
-      // Global human choices and slot activation share services.lock. Only a choice every other backend confirms is
-      // inherited: turning a slot off also revokes its creation grants, so a mixed or unknown state writes nothing.
-      if (next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
-        const others = [...states].filter(([entry]) => entry !== key);
-        const all = value => others.length > 0 && others.every(([, state]) => state.capabilities?.includes('operatorControl1a') &&
-          state.operatorPolicy?.enabled === value && !state.operatorPolicy.error);
-        const enabled = all(true) && !states.has(key) ? true : all(false) ? false : next.operatorPolicy?.enabled;
+      // Global human choices and slot activation share services.lock. Only a slot new to the layout takes its setting
+      // here, on if every other backend is on. A slot in use keeps its own: off may be only another slot's default, and
+      // writing it would revoke this slot's creation grants without asking.
+      if (!states.has(key) && next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
+        const enabled = states.size > 0 && [...states.values()].every(state => state.capabilities?.includes('operatorControl1a') &&
+          state.operatorPolicy?.enabled === true && !state.operatorPolicy.error);
         if (next.operatorPolicy?.enabled !== enabled) {
           const client = await connectService(path.join(dataDir, key), 'upgrade');
           try {
