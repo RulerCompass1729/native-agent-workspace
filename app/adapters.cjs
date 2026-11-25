@@ -3044,7 +3044,7 @@ class Codex extends EventEmitter {
     if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
-  async reconnect() {
+  async reconnect({ keepTurn = false } = {}) {
     const transportOnly = Boolean(this.transportDisconnected);
     if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw uiError("error.nativeConnectionStateChanged");
     const lifecycle = ++this.lifecycleRevision;
@@ -3054,7 +3054,7 @@ class Codex extends EventEmitter {
     // Re-subscribe to the owned thread. Omit every configuration override except a profile's
     // model catalog (codexResumeParams): thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
-    const running = this.turnId;
+    const running = keepTurn ? this.turnId : null;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
     this.rememberHistoryWatermarks();
@@ -3103,13 +3103,15 @@ class Codex extends EventEmitter {
     }
     await this.keepRunningTurn(running, rpc, current);
   }
-  // The turn that ran when the connection dropped is this connection's too only when native says that it is the
-  // thread's latest turn and still in progress; without that answer it stays unknown, as before.
+  // For the window that kept control (keepTurn): the turn that ran when the connection dropped is this connection's too
+  // only when native says that it is the thread's latest turn and still in progress; otherwise unknown, as before.
   async keepRunningTurn(turnId, rpc, current) {
     if (!turnId || !verifiedCodexProtocol(rpc) || !current()) return;
-    let page;
-    try { page = await rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }); }
-    catch { return; }
+    let page, timer;
+    try {
+      page = await Promise.race([new Promise(resolve => { timer = setTimeout(resolve, 3000); }),
+        rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' })]);
+    } catch { return; } finally { clearTimeout(timer); }
     const latest = page?.data?.[0];
     if (!current() || this.turnId || this.textEndedTurns.has(turnId) || latest?.id !== turnId || latest.status !== 'inProgress') return;
     this.turnId = turnId; this.turn(turnId).liveStarted = true;

@@ -1549,13 +1549,13 @@ test('between ordinary sessions, a delivered answer still clears nothing', async
 // the wheel or a focus report. Esc, Ctrl-C, interrupt, takeover, stop, the switch, pause-all and identity changes withdraw.
 const outcome = row => [row?.wake.status, row?.wake.cancellation?.code];
 const staged = call => Promise.resolve().then(call).then(result => result.status, error => error.uiMessage?.key || error.message);
-for (const order of ['registered first', 'reconnect first']) test(`a reconnect by the same owner keeps the running turn's message (${order})`, async t => {
+for (const order of ['registered before it, the loss itself left out', 'registered after it']) test(`a reconnect by the same owner keeps the running turn's message (${order})`, async t => {
   const f = await fixture(t), s = f.source.get(f.a);
-  if (order === 'registered first') assert.equal(await staged(() => f.call('Before the reconnect.', 'before')), 'staged');
+  if (order !== 'registered after it') assert.equal(await staged(() => f.call('Before the reconnect.', 'before')), 'staged');
   s.state = 'disconnected'; f.ra.reconnect = async () => { f.ra.emit('state', 'working'); };
   await f.source.resume(f.a, 'source-owner');
   assert.deepEqual([s.owner, f.ra.turnId], ['source-owner', 'turn-one'], 'the same owner and the same native turn');
-  if (order === 'reconnect first') assert.equal(await staged(() => f.call('After the reconnect.', 'after')), 'staged');
+  if (order === 'registered after it') assert.equal(await staged(() => f.call('After the reconnect.', 'after')), 'staged');
   await f.finish();
   assert.deepEqual([f.writes.length, ...outcome(s.messages.find(m => m.wake))], [1, 'submitted', undefined]);
 });
@@ -1614,7 +1614,7 @@ const reattach = (f, turns, during) => {
   f.ra.host = { rpc: { nativeVersion: '0.167.0', call: async (method, params) => {
     if (method === 'thread/resume') return { thread: { id: nativeId, status: { type: 'active', activeFlags: [] } }, model: 'synthetic' };
     if (method === 'thread/items/list') return { data: [] };
-    if (method === 'thread/turns/list') { asked.push(params); if (params.limit === 1) { during?.(); if (turns instanceof Error) throw turns; return { data: turns }; } return { data: [] }; }
+    if (method === 'thread/turns/list') { asked.push(params); if (params.limit === 1) { during?.(); if (turns instanceof Error) throw turns; return { data: await turns }; } return { data: [] }; }
     if (method === 'thread/goal/get') return { goal: null };
     throw Error('Unexpected method ' + method);
   } }, codexTargets: new Map(), codexProcess: { pid: process.pid }, reconnectCodex: async () => {} };
@@ -1642,13 +1642,27 @@ test('a message registered before the connection is lost is withdrawn by the los
   await f.source.resume(f.a, 'source-owner'); await native.end('turn-one');
   assert.deepEqual([f.writes.length, row.wake.status], [0, 'cancelled']);
 });
-for (const owner of ['another-window', 'source-owner']) test(`a real reconnect ${owner === 'source-owner' ? 'with all handoffs paused before it' : 'by another window'} keeps the turn but not its messages`, async t => {
+test('a real reconnect with all handoffs paused before it keeps the turn but not its messages', async t => {
   const f = await fixture(t, 'codex', true, true), native = reattach(f, [{ id: 'turn-one', status: 'inProgress' }]);
-  if (owner === 'source-owner') f.source.pauseAll('stop');
-  await f.source.resume(f.a, owner);
+  f.source.pauseAll('stop');
+  await f.source.resume(f.a, 'source-owner');
   assert.equal(f.ra.turnId, 'turn-one');
-  assert.equal(await staged(() => f.call('After.', 'after')), owner === 'source-owner' ? 'error.wake.revokedByPause' : 'error.wake.revokedByReconnect');
+  assert.equal(await staged(() => f.call('After.', 'after')), 'error.wake.revokedByPause');
   await native.end('turn-one'); assert.equal(f.writes.length, 0);
+});
+for (const [name, reconnect] of [['another window', f => f.source.resume(f.a, 'another-window')],
+  ['another agent', f => require('../background-operation.cjs').run(otherAgent, () => f.source.resume(f.a, 'source-owner'))]]) test(`a real reconnect by ${name} leaves the turn unknown, as before`, async t => {
+  const f = await fixture(t, 'codex', true, true), native = reattach(f, [{ id: 'turn-one', status: 'inProgress' }]), ends = [];
+  f.ra.on('nativeTurnEnd', info => ends.push(info.turnId));
+  await reconnect(f);
+  assert.deepEqual([native.asked.filter(p => p.limit === 1).length, f.ra.turnId], [0, null]);
+  await native.end('turn-one'); assert.deepEqual([f.writes.length, ends], [0, []]);
+});
+test('a native question that gets no answer holds the reconnect for three seconds at most', async t => {
+  const f = await fixture(t, 'codex', true, true), started = performance.now();
+  reattach(f, new Promise(() => {}));
+  await f.source.resume(f.a, 'source-owner');
+  assert.equal(f.ra.turnId, null); assert.ok(performance.now() - started < 10000);
 });
 for (const [name, turns, during] of [
   ['names a later turn', [{ id: 'turn-two', status: 'inProgress' }]],

@@ -132,11 +132,11 @@ function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailur
 // 2026-11-14 (the person, 2026-11-23 and 24). Count the exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover,
 // stop, membership or permission changes. Runtime-only: reopening never replays a wake.
 const inputChanges = new WeakMap();
-function messageInput(w, s, { control = 0, peer = 0, connection = 0 }) {
-  const prior = inputChanges.get(s) || { control: 0, peer: 0, connection: 0, agentControl: 0, agentPeer: 0 };
-  const agent = Boolean(backgroundOperation.current());
+// byAgent is said by the caller: an event's ambient background operation may be an older one its connection was opened in.
+function messageInput(w, s, { control = 0, peer = 0, connection = 0, byAgent = false }) {
+  const prior = inputChanges.get(s) || { control: 0, peer: 0, connection: 0, agentControl: 0 };
   inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer, connection: prior.connection + connection,
-    agentControl: prior.agentControl + (agent ? control : 0), agentPeer: prior.agentPeer + (agent ? peer : 0) });
+    agentControl: prior.agentControl + (byAgent ? control : 0) });
 }
 // The same window reconnected to the same turn, still running (workspace.cjs resume): its own two changes are counted.
 function reconnected(w, s) {
@@ -156,8 +156,8 @@ function sourceIdentity(w, s) {
 }
 // What a control call of the session rests on (scoped-outbox-runtime.cjs): another agent's background queue or steer still ends it.
 function callerIdentity(w, s) {
-  const proof = sourceIdentity(w, s), input = inputChanges.get(s);
-  if (input) { proof.controlRevision += input.agentControl; proof.peerRevision += input.agentPeer; }
+  const proof = { ...sourceIdentity(w, s), connectionRevision: s.connectionRevision ?? null }, input = inputChanges.get(s);
+  if (input) proof.controlRevision += input.agentControl;
   return proof;
 }
 function humanProof(w, s) {

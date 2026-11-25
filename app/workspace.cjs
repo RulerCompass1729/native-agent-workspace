@@ -1718,7 +1718,7 @@ class Workspace extends EventEmitter {
       if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
       // Private input still ends the old public reply scope; the session's wake permission survives.
       if (!shared) s.controlRevision++;
-      if (!shared) wake.messageInput(this, s, { control: 1, peer: 1 });
+      if (!shared) wake.messageInput(this, s, { control: 1, peer: 1, byAgent: Boolean(backgroundOperation.current()) });
       else wake.cause(s, 'input', true);
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
@@ -1804,7 +1804,7 @@ class Workspace extends EventEmitter {
     if (mobile) { mobile.human(); wake.messageInput(this, s, { control: 1, peer: 1 }); }
     else {
       if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
-      if (!shared) wake.messageInput(this, s, { control: 1 });
+      if (!shared) wake.messageInput(this, s, { control: 1, byAgent: Boolean(backgroundOperation.current()) });
       else wake.cause(s, 'input');
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
@@ -2379,7 +2379,7 @@ class Workspace extends EventEmitter {
       s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
       this.pause('重新连接原会话；之前的交接不会自动继续。', undefined, false, uiActivity('notice.run.reconnecting')[1]); this.changed();
       try {
-        await retained.reconnect();
+        await retained.reconnect({ keepTurn: Boolean(turn) });
         // The same window, native session and running turn: only the connection was replaced, so the turn keeps its messages.
         if (turn && retained.turnId === turn && s.owner === owner && generation === s.connectionRevision) wake.reconnected(this, s);
       }
