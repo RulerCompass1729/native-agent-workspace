@@ -2458,7 +2458,7 @@ async function boot() {
   register('steward', async (c, id, duty = null, standing = null) => {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
-    let record = null, standingLost = false;
+    let record = null, standingLost = false, reached = null;
     if (id === null) stewardRole.set(null);
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {
@@ -2470,6 +2470,7 @@ async function boot() {
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
       const carry = stewardStanding?.carry(c);
+      reached = stewardWake?.reached() ?? null;
       // The same butler again keeps it: the designation may have named it only through the rotation log.
       let again = false;
       try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
@@ -2482,8 +2483,9 @@ async function boot() {
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
-    // revoking, the same session again included, turns it off, until the person or that butler turns it on.
-    try { stewardWake?.set(false); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
+    // revoking, the same session again included, turns it off, until the person or that butler turns it on. Turned on
+    // after a designation, it goes on from where it stood; after a revocation, from what is recorded then.
+    try { stewardWake?.redesignated(reached); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
     await broadcastRoom();
     if (id === null) return null;
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
