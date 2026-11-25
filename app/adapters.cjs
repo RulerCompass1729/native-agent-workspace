@@ -649,7 +649,7 @@ class Claude extends EventEmitter {
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'PreCompact', 'SessionEnd']) {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
     // A question may be answered in the chat view before the native dialog opens.
@@ -666,17 +666,19 @@ class Claude extends EventEmitter {
       peekaboo: computerUseMcpServer() } });
     // Resume re-reads defaults: keep this session's model and reported effort.
     // A new session starts in bypass only when the person chose it at creation;
-    // later launches follow what the session last reported.
+    // later launches follow what the session last reported, and what it was left in since.
     // A session NAW's rotation created starts with the old session's model, effort and mode.
     const model = record.requestedSettings?.model || record.model;
     const resumeModel = typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/.test(model) ? model : null;
+    const mode = record.recovering ? sessionModel.resumeMode(record) : null;
+    if (record.nativePermissionMode === 'bypassPermissions' && mode) record.nativePermissionMode = mode;
     const posture = !record.recovering ? [
       ...(record.skipPermissions ? ['--permission-mode', 'bypassPermissions']
         : record.requestedSettings?.permissionMode ? ['--permission-mode', record.requestedSettings.permissionMode]
           : record.operatorCreation?.permission === 'default' ? ['--permission-mode', 'default'] : []),
       ...(record.requestedSettings?.model ? ['--model', record.requestedSettings.model] : []),
       ...(record.requestedSettings?.effort ? ['--effort', record.requestedSettings.effort] : [])] : [
-      ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
+      ...(mode ? ['--permission-mode', mode] : []),
       ...(resumeModel ? ['--model', resumeModel] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
     // A picker branch opens the native session picker once and forks the chosen
@@ -1360,6 +1362,8 @@ class Claude extends EventEmitter {
     if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
       typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
+    if (event.hook_event_name === 'PreCompact') { this.submission?.compaction?.(true); return; }
+    if (['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure'].includes(event.hook_event_name)) this.submission?.compaction?.(false);
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;
     // Only an authenticated root settings event selects the journal. The

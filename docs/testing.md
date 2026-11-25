@@ -22,13 +22,14 @@ nor swept.
 
 Before any directory goes, the command ends what the run left running, also when it
 was stopped (SIGTERM, SIGINT) and its tests never reached their own cleanup: a process
-with no owner any more (its parent is 1) that carries the run's own random directory
-in its command or environment, and whatever that process started. Each is named
-(`PROCESS LEAK`) and the command's status is unchanged; one that could not be ended
-fails it. A finished run waits ten seconds for such a process to end by itself, a
-stopped one a second. A process that carries a protected profile is named and left to
-`test-scratch`. Nothing is found by its name, and no environment is printed. A command
-that is killed outright (SIGKILL) ends nothing.
+with no owner any more (its parent is 1) whose environment carries the run's own random
+directory (`PWD` and `OLDPWD` aside), or, for node and Electron, whose command does; and
+whatever that process started. The environment of a system program cannot be read, so one
+left without an owner stays. Each is named (`PROCESS LEAK`) and the command's status is
+unchanged; one that could not be ended fails it. A finished run waits ten seconds for
+such a process to end by itself, a stopped one a second. A process that carries a
+protected profile is named and left to `test-scratch`. Nothing is found by its name, and no environment is printed. A command
+that is killed outright (SIGKILL) or with its terminal (SIGHUP) ends nothing.
 
 The final check runs before fallback removal: an uncovered producer leaving a
 new `naw-*` directory makes the command fail and prints its prefix. The command

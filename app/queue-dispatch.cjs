@@ -271,6 +271,7 @@ const CREATE_SETTINGS_CAPABILITY = 'createSettingsV1';
 const CREATE_PROFILE_CAPABILITY = 'createSettingsProfileV1';
 // What a new session can be started with; must match workspace.cjs (a test compares them).
 const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+const BYPASS = 'bypassPermissions';
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
@@ -721,6 +722,7 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
       (m.status === 'failed' || m.status === 'interrupted') &&
       (failedReplies.has(m.turnId) || !m.inputTag || m.inputTag === tag));
   return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
+    ...(messages[index]?.status === 'unconfirmed' ? { unconfirmed: true } : {}),
     ...(failedReplies.size && !recovered ? { failedTurnIds: [...failedReplies] } : {}) };
 }
 
@@ -946,6 +948,11 @@ function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
   return null;
 }
 
+// The mode Claude reports as 'default' is asked for as 'manual'; not asked for, it starts in the person's own default.
+function launchMode(reported) {
+  return reported === 'default' ? 'manual' : reported;
+}
+
 // What a successor must start with to continue like the old session: its model, effort,
 // permission mode and view. { reason } when a new session could not match it.
 function carrySettings(session) {
@@ -967,8 +974,8 @@ function carrySettings(session) {
     if (CLAUDE_EFFORTS.includes(session.nativeEffort)) {
       settings.effort = session.nativeEffort;
     }
-    const mode = session.nativePermissionMode;
-    if (mode && mode !== 'default') {
+    const mode = launchMode(session.nativePermissionMode);
+    if (mode) {
       if (!CLAUDE_PERMISSION_MODES.includes(mode)) {
         return { reason: 'permission-mode' };
       }
@@ -1023,7 +1030,7 @@ function settingsMismatch(carry, fresh, modelProvider = null) {
     return 'model-provider';
   }
   if (fresh.provider === 'claude') {
-    if (carry.permissionMode && fresh.nativePermissionMode && fresh.nativePermissionMode !== carry.permissionMode) {
+    if (carry.permissionMode && fresh.nativePermissionMode && launchMode(fresh.nativePermissionMode) !== carry.permissionMode) {
       return 'permission-mode';
     }
     if (carry.effort && fresh.nativeEffort && fresh.nativeEffort !== carry.effort) {
@@ -1437,6 +1444,9 @@ function planDispatch(input) {
         status = 'waiting';
         const quota = codexQuotaBlock(member);
         reason = quota && reply.failedTurnIds.includes(quota.turnId) ? 'usage-limit-exceeded' : 'native-turn-failed';
+      } else if (reply.unconfirmed && !reply.last.trim()) {
+        status = 'failed';
+        reason = 'send-unconfirmed';
       } else if (!reply.last.trim()) {
         status = 'waiting';
         reason = 'no-reply';
@@ -4031,7 +4041,12 @@ class QueueDispatcher {
     }
     const call = control ? entry.client.call('dispatch', session.id, text, session.nativeId, itemId, control)
       : entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
-    const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
+    let result;
+    try { result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout'); }
+    catch (error) {
+      if (errorKey(error) === 'error.confirmationTimeout') result = await this.heldTag(session, itemId);
+      if (!result) throw error;
+    }
     this.idleSince.delete(session.id);
     if (typeof result === 'string') {
       return result;
@@ -4040,6 +4055,15 @@ class QueueDispatcher {
       return result.tag;
     }
     throw Error('NAW did not receive a delivery tag');
+  }
+
+  // The call's own limit passed while the backend still waits for native (a member compacting its context,
+  // claude-submit.cjs): its row for this very send, not yet settled, is what the item follows from here.
+  async heldTag(session, itemId) {
+    try { await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout'); } catch { return null; }
+    const now = this.view().snapshot.sessions.find(s => s.id === session.id);
+    const row = now?.pendingTag && now.nativeId === session.nativeId && (now.messages || []).find(m => m?.id === now.pendingTag);
+    return row && row.dispatchItem === itemId && ['awaiting-native', 'submitted'].includes(row.status) ? row.id : null;
   }
 
   async dispatch(action, waits = null) {
@@ -4113,6 +4137,20 @@ class QueueDispatcher {
       return false;
     }
     return !(reply && reply.humanAfter);
+  }
+
+  // The handoff turn reports the mode the person left the session in: its successor has bypass only if it still has.
+  leaveBypass(record, old) {
+    if (record.provider !== 'claude') {
+      return;
+    }
+    const mode = launchMode(old.nativePermissionMode), carried = record.carry?.permissionMode;
+    if (mode !== BYPASS && CLAUDE_PERMISSION_MODES.includes(mode) && (carried === BYPASS || record.skipPermissions && !carried)) {
+      record.carry = { ...record.carry, permissionMode: mode };
+    }
+    if (![undefined, BYPASS].includes(record.carry?.permissionMode)) {
+      record.skipPermissions = false;
+    }
   }
 
   // Before an old session typed into since its process started ends, keep what its live terminal
@@ -4875,6 +4913,7 @@ class QueueDispatcher {
         throw Error('handoff-missing');
       }
       await this.completeEpisode(oldId, record);
+      this.leaveBypass(record, old);
       record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
       record.seen = seenRow(old, now);
       record.phase = 'creating';

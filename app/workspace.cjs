@@ -2340,9 +2340,6 @@ class Workspace extends EventEmitter {
       if (!stopped) throw key === 'error.backendSwitchSessionChanged' || sameStop(now(), expected) ? error : uiError('error.modelChange.unconfirmed');
     }
     if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw uiError('error.modelChange.unconfirmed');
-    // Native comes back in the mode it was left in, except bypass, which the resume asks for: not when it was left for another.
-    const left = sessionModel.claudeTranscript(s)?.permissionMode;
-    if (s.nativePermissionMode === 'bypassPermissions' && sessionModel.CLAUDE_MODES.includes(left)) s.nativePermissionMode = left;
     sessionModel.applyClaude(s, wanted); this.changed(); this.persist();
     try { await this.resume(id, s.owner, true); } catch { throw uiError('error.modelChange.stopped'); }
     return wanted;

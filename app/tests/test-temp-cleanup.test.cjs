@@ -216,6 +216,16 @@ for (const signal of ['SIGTERM', 'SIGINT']) test(`a run stopped by ${signal} end
   assert.doesNotMatch(f.output(), /NAW_TEST_TEMP_JOURNAL=/, 'no environment is printed');
   for (const child of others) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited; }
 });
+test('a program the run did not start is left, though its command names the run\'s directory', { timeout: 60000 }, async t => {
+  const f = start(t, leaving('await new Promise(() => setInterval(() => {}, 1000));')), { pids, directory } = await f.started(), left = f.own(pids);
+  const log = path.join(directory, 'log'); fs.writeFileSync(log, '');
+  // Nobody's: the shell that started it has ended.
+  const shell = spawnSync('/bin/sh', ['-c', '/usr/bin/tail -f "$0" >/dev/null 2>&1 & echo $!', log], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+  const kept = f.own([Number(shell.stdout)]);
+  f.run.kill('SIGTERM'); await f.exited;
+  assert.deepEqual(gone(left), [true, true, true], f.output());
+  assert.deepEqual(gone(kept), [false], f.output());
+});
 test('a finished run ends what a passing test left, and says so', { timeout: 60000 }, async t => {
   const f = start(t, leaving('')), { pids } = await f.started(), left = f.own(pids), { code } = await f.exited;
   assert.deepEqual(gone(left), [true, true, true], f.output());
