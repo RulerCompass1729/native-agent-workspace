@@ -195,7 +195,7 @@ test(`actual main input wrapper preserves own pending-approval protection withou
   assert.ok(start > 0 && end > start);
   const state = { wakePolicy: { enabled: true }, sessions: f.context.client.snapshot().sessions.map(s => ({ ...s, ...(s.id === target && pending ? { approval: { requestId: 'native-question' } } : {}) })) };
   Object.assign(f.context.client, { refresh: async () => {}, snapshot: () => state, call: async method => { assert.equal(method, 'initial'); return state; }, entries: [{ state: { ...state, capabilities: [operation.CAPABILITY] } }] });
-  const scope = { applicationHandlers: handlers, backgroundOperation: operation, ipcMain: { handle() {} },
+  const scope = { applicationHandlers: handlers, backgroundOperation: operation, ipcMain: { handle() {} }, assertManagerDelivery() {},
     showDialog: (context, kind, options) => require('../background-control.cjs').dialog(context, kind, JSON.parse(JSON.stringify(options))),
     displayText: key => ({ 'common.cancel': 'Cancel', 'background.confirm': 'Confirm' })[key] || key };
   vm.createContext(scope); vm.runInContext(source.slice(start, end), scope);

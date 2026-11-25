@@ -18,7 +18,7 @@ function fixture(t, extra = {}) {
   const handlers = new Map(), broadcasts = [];
   const context = vm.createContext({
     applicationHandlers: handlers, backgroundOperation, uiError, roomIds, integratorRole: role, roomState: room,
-    ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); }, ...extra,
+    ipcMain: { handle() {} }, assertManagerDelivery() {}, broadcastRoom: async () => { broadcasts.push(role.selected); }, ...extra,
   });
   const wrapper = source.indexOf('function register(name, handler) {');
   vm.runInContext(source.slice(wrapper, source.indexOf('async function replaceBackendSockets', wrapper)), context);
