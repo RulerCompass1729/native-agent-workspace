@@ -18,6 +18,7 @@ function fixture(message) {
   // The grant form lists the person's spaces (renderer.js allSpaces and spaceName); the attempt wrapper and the desktop call are recorded.
   allSpaces:()=>rooms,spaceName:room=>room.untouched?uiText('space.defaultName'):room.name,attempt:run=>{context.pending=run();},updateState:next=>{context.state=next;},api:{initial:async()=>context.state,operatorAction:async(...args)=>{calls.push(args);return 'domain-id';}}});
  vm.runInContext(renderer.slice(renderer.indexOf('const uiNode ='),renderer.indexOf('const states =')),context);
+ vm.runInContext(renderer.slice(renderer.indexOf('function providerName('),renderer.indexOf('async function moveSidebarSession(')),context);
  vm.runInContext(renderer.slice(renderer.indexOf('function renderOperatorQuota('),renderer.indexOf('const roomMenuKey =')),context);
  context.entry=entry;context.message={time:Date.now(),operator:message}; context.state.sessions[0].messages=[context.message]; vm.runInContext('renderOperatorControls(entry,message,{inbox:true})',context);
  const walk=el=>el.children.flatMap(child=>[child,...walk(child)]);
