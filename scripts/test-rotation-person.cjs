@@ -454,6 +454,9 @@ async function fill(id, read = 180000) {
 const stewardSlot = () => page.locator('#steward-slot .session-row').evaluateAll(rows => rows.map(row => row.dataset.sessionRow));
 
 async function teardown() {
+  try { await stopAll(); } finally { releaseSlot(); } // A signal ends the process without 'exit'.
+}
+async function stopAll() {
   if (dispatcher) { dispatcher.close(); await dispatcher.pending?.catch(() => {}); }
   own?.client.close();
   if (app) await app.close().catch(() => {});
