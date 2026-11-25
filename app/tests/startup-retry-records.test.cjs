@@ -80,3 +80,82 @@ test('records that could not be read are read again by a retried start, for whoe
     assert.deepEqual(h.held(), [true, true], name);
   }
 });
+
+// As the app was seen to start on 11-25: everything up to the window worked, the window's page did not become ready in time.
+test('a start that fails at its window, retried, leaves the dispatcher and the window the same records', async t => {
+  const order = ['roomState = new RoomState(dataDir);', 'await startQueueDispatcher();', 'dsh = await startDsh(', 'await openWindow(view);'].map(step => main.indexOf(step));
+  assert.ok(order[0] > 0 && order.every((at, index) => !index || at > order[index - 1]), 'boot() comes to the window last');
+  const h = app(t), shown = [], hosts = [];
+  const window = () => ({ isDestroyed: () => false, destroy() {}, loadFile: async () => {}, webContents: { send: (_channel, status) => shown.push(status.kind) } });
+  Object.assign(h.sandbox, { starting: false, quitting: false, localeHostGeneration: 0, startupWindow: null, startupFile: '', dsh: null, pendingReveal: null, backgroundControl: null,
+    backendSwitchTimer: {}, uiLocale: { startupCode() {} }, displayText: key => key, startupMessage: error => error.message, displayLanguage() {}, updateApplicationMenu() {},
+    readStartupLocale: async () => {}, resumeAppMobileOnBoot: async () => {}, createWindow: window,
+    startDsh: async () => { const host = { stopped: false, stop() { this.stopped = true; } }; hosts.push(host); return host; },
+    openWindow: async () => { if (hosts.length === 1) throw Error('UI did not become ready'); } });
+  vm.runInContext(section('async function start()', '// The page handled') +
+    'async function boot() { openRecords(); await startQueueDispatcher(); dsh = await startDsh(); await openWindow(); }', h.sandbox);
+  await h.sandbox.start();
+  assert.deepEqual([shown.at(-1), hosts.map(host => host.stopped)], ['failed', [true]]);
+  const space = h.sandbox.roomState.create('Space');
+  h.sandbox.roomState.queueAdd('before', 'member', space);
+  await h.sandbox.start();
+  assert.deepEqual([hosts.length, h.started.length], [2, 1], 'a second UI host and the one dispatcher');
+  const added = h.sandbox.roomState.queueAdd('after', 'member', space), dispatcher = h.started[0].roomState;
+  assert.ok(dispatcher.metadata(space).queue.some(item => item.id === added), 'the dispatcher plans what the window added');
+  dispatcher.queueMarkSent(space, dispatcher.metadata(space).queue[0].id, 'member', 'Member', Date.now(), false, null, []);
+  assert.deepEqual(h.saved(), [[['before', 'sent'], ['after', 'queued']]]);
+});
+
+// What is in both files: the spaces and their items, the shared space's items, its switch and its archived sessions.
+const contents = records => [records.spaces.rooms.map(room => [room.name, room.queue?.map(item => item.text)]),
+  records.value.queue?.map(item => item.text), records.value.notesToQueue, records.value.archivedSessions];
+test('a file the person put in place before the retry counts, whatever was read before', async t => {
+  for (const before of ['missing', 'readable']) for (const name of ['collaboration-spaces.json', 'room-state.json']) {
+    const h = app(t), what = `${name}, ${before} at the first start`, file = path.join(h.dataDir, name);
+    const keep = new RoomState(h.dataDir), space = keep.create('Space');
+    keep.queueAdd('kept', 'member', space); keep.queueAdd('kept', 'member', 'shared');
+    const expected = contents(keep), good = fs.readFileSync(file);
+    if (before === 'missing') fs.unlinkSync(file);
+    else {
+      const current = new RoomState(h.dataDir);
+      if (name === 'room-state.json') {
+        current.update({ archivedSessions: ['ended'], notesToQueue: true, notesToQueueSince: 1 });
+        current.queueAdd('newer', 'member', 'shared');
+      } else {
+        current.create('Newer'); current.queueAdd('newer', 'member', space);
+      }
+    }
+    const first = await h.boot();
+    assert.notDeepEqual(contents(first), expected, what);
+    assert.deepEqual([first.warning, first.spacesWarning], ['', ''], what);
+    fs.writeFileSync(file, good, { mode: 0o600 });
+    const retried = await h.boot();
+    assert.deepEqual(contents(retried), expected, what);
+    assert.deepEqual(contents(h.started[0].roomState), expected, what + ': the dispatcher has it');
+    retried.create('Added'); retried.queueAdd('added', 'member', 'shared');
+    const saved = new RoomState(h.dataDir);
+    assert.deepEqual(contents(saved), [[...expected[0], ['Added', undefined]], ['kept', 'added'], ...expected.slice(2)], what + ': and the next change keeps it');
+    assert.deepEqual(h.held(), [true, true], what);
+  }
+});
+
+test('a file that went missing or cannot be read by the retry changes nothing that is held, and is not written over', async t => {
+  for (const [name, warning, id] of [['collaboration-spaces.json', 'spacesWarning'], ['room-state.json', 'warning', 'shared']]) {
+    const h = app(t), file = path.join(h.dataDir, name), first = await h.boot(), space = first.create('Space');
+    first.queueAdd('kept', 'member', space); first.queueAdd('kept', 'member', 'shared');
+    const expected = contents(first), good = fs.readFileSync(file);
+    fs.writeFileSync(file, '{', { mode: 0o600 });
+    const damaged = await h.boot();
+    assert.ok(damaged[warning], name);
+    assert.deepEqual(contents(damaged), expected, name);
+    assert.throws(() => damaged.queueAdd('refused', 'member', id || space));
+    assert.equal(fs.readFileSync(file, 'utf8'), '{');
+    fs.writeFileSync(file, good);
+    assert.equal((await h.boot())[warning], '', name);
+    fs.unlinkSync(file);
+    const missing = await h.boot();
+    assert.deepEqual([missing[warning], contents(missing)], ['', expected], name);
+    missing.queueAdd('added', 'member', id || space);
+    assert.deepEqual(new RoomState(h.dataDir).metadata(id || space).queue.map(item => item.text), ['kept', 'added'], name);
+  }
+});

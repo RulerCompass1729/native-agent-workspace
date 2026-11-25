@@ -16,6 +16,7 @@ const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 10
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const contentEvents = events => events.filter(e => !(e.kind === 'control-audit' && e.controlAudit));
 const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], restorePlacements: {}, memberOrder: [], files: [] });
+const initialShared = () => ({ ...initialRoom('共同工作'), archivedSessions: [], sessionArchives: {} });
 const roomGate = id => id === DEFAULT_ROOM_ID ? 'room' : `room:${id}`;
 const mergeSignature = value => createHash('sha256').update(JSON.stringify({ name: value.name, notes: value.notes,
   files: value.files, events: contentEvents(value.events).map(e => e.id), memberOrder: value.memberOrder })).digest('hex');
@@ -173,7 +174,7 @@ class RoomState {
   constructor(directory) {
     this.file = path.join(directory, 'room-state.json');
     this.spacesFile = path.join(directory, 'collaboration-spaces.json');
-    this.value = { ...initialRoom('共同工作'), archivedSessions: [], sessionArchives: {} };
+    this.value = initialShared();
     this.spaces = { version: 1, rooms: [] };
     this.spacesWarning = '';
     this.warning = '';
@@ -191,7 +192,7 @@ class RoomState {
       if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('Unsafe file');
       const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       // A damaged display preference must never block native input or sharing.
-      this.value = { ...this.value, ...validateRoom(data) };
+      this.value = { ...initialShared(), ...validateRoom(data) };
     } catch (error) { if (error.code !== 'ENOENT') setWarning(this, 'warning', 'error.warning.roomRead'); }
   }
   readSpaces() {
@@ -203,10 +204,12 @@ class RoomState {
       this.spaces = { version: 1, rooms: data.rooms.map(r => ({ ...validateRoom(r), id: r.id })) };
     } catch (error) { if (error.code !== 'ENOENT') setWarning(this, 'spacesWarning', 'error.warning.otherRoomDataRead'); }
   }
-  // In the same copy, since others hold it (a retried start).
+  // In the same copy, since others hold it (a retried start). A file the person put in place before the retry counts,
+  // whatever was read before. A missing one changes nothing: it is written with the next change.
   readAgain() {
-    if (this.warning) { this.warning = ''; delete this.warningUiMessage; this.readRoom(); }
-    if (this.spacesWarning) { this.spacesWarning = ''; delete this.spacesWarningUiMessage; this.readSpaces(); }
+    this.warning = this.spacesWarning = '';
+    delete this.warningUiMessage; delete this.spacesWarningUiMessage;
+    this.readRoom(); this.readSpaces();
   }
   metadata(id = DEFAULT_ROOM_ID) {
     if (!roomId(id)) throw uiError("error.main.invalidSpace");
