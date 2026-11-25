@@ -318,7 +318,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
   assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
-  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n[^\n]*\n[^\n]*standingLost = true;\n    \}\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n[^\n]*\n[^\n]*standingLost = [^\n]*\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs', 'session-wake.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }
@@ -428,6 +428,9 @@ test('the same butler again keeps it, also when the rotation log had made it the
   await f.call('outside'); assert.deepEqual([s.on(), s.read().revision], [true, same], 'nothing written');
   fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('done', OUTSIDE, OTHER) + '\n', { mode: 0o600 });
   assert.equal(s.on(), true, 'the successor has it');
+  const write = s.value.write; s.value.write = () => { throw Error('synthetic'); };
+  assert.deepEqual([(await f.call('other')).standingLost, s.on()], [true, false], 'not asked, had it, and it could not be kept: said');
+  s.value.write = write; f.role.set(OUTSIDE); assert.equal(s.on(), true);
   await f.call('other'); assert.deepEqual([s.read().designation, s.on()], [OTHER, true], 'the duty statement sent again does not take it away');
   for (const id of ['member', 'ended', 'missing']) await assert.rejects(f.call(id, null, true));
   assert.deepEqual([s.read().designation, s.on()], [OTHER, true]);
@@ -456,6 +459,11 @@ test('an agent cannot carry it, and a permission that cannot be saved is said wh
   f.context.refuseSubmit = Object.assign(Error('x'), { uiMessage: { key: 'error.steward.dutyBusy' } });
   const both = await f.call('other', null, true); assert.deepEqual([both.standingLost, both.duty.state], [true, 'not-sent']);
   await f.call('outside'); const left = await f.call('other', null, false); assert.deepEqual([left.standingLost, s.on(), s.read().on], [true, false, true], 'taken back but not saved: said, since the previous one would have it again');
+  // A save that failed after it took place: the permission is on, so nothing is said to be lost.
+  const late = fixture(t), l = standing(late); await late.call('outside'); l.turn(true); const write = l.value.write;
+  l.value.write = function (next) { write.call(this, next); throw Error('synthetic'); };
+  assert.equal(Object.hasOwn(await late.call('other', null, true), 'standingLost'), false); assert.equal(l.on(), true);
+  assert.equal((await late.call('outside', null, false)).standingLost, true);
   // Turned off elsewhere while the dialog was open: nothing is carried, and that is said; not asked, nothing is said.
   const g = fixture(t), off = standing(g); await g.call('outside'); off.turn(true); off.turn(false);
   assert.equal((await g.call('other', null, true)).standingLost, true); assert.equal(off.on(), false);
