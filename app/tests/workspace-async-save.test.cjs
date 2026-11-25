@@ -265,6 +265,9 @@ for (const name of ['workspace.json', 'room-records.json']) {
     ['missing', file => fs.rmSync(file)],
     ['replaced', file => { fs.writeFileSync(`${file}.other`, '{}'); fs.renameSync(`${file}.other`, file); }],
     ['overwritten', file => fs.writeFileSync(file, '{}')],
+    ['rewritten at the same size and time', file => { const { size, atime, mtime } = fs.statSync(file); fs.writeFileSync(file, ' '.repeat(size)); fs.utimesSync(file, atime, mtime); }],
+    ['made readable to others', file => fs.chmodSync(file, 0o644)],
+    ['a link to the file saved', file => { fs.renameSync(file, `${file}.moved`); fs.symlinkSync(`${file}.moved`, file); }],
   ]) test(`an unchanged store is written again when ${name} is ${what}`, async t => {
     const f = fixture(t, { rooms: true });
     f.w.drafts.set('mark', 'A'); f.w.rooms.get('second').name = 'A'; f.w.persist();
@@ -272,8 +275,23 @@ for (const name of ['workspace.json', 'room-records.json']) {
     f.w.persistLater(); await pass(f, 2);
     assert.equal(f.disk('workspace.json').drafts.mark, 'A');
     assert.equal(f.disk('room-records.json').rooms[0].name, 'A');
+    const left = fs.lstatSync(path.join(f.directory, name)); assert.equal(left.isFile(), true); assert.equal(left.mode & 0o777, 0o600);
   });
 }
+
+test('removing the last session is a change', async t => {
+  const f = fixture(t), row = id => ({ id, provider: 'claude', state: 'idle', messages: [], usage: {} });
+  f.w.sessions.set('s', row('s')); f.w.sessions.set('u', row('u')); f.w.persist();
+  f.w.sessions.delete('u'); f.w.persistLater(); await pass(f, 1);
+  assert.deepEqual(f.disk('workspace.json').sessions.map(s => s.id), ['s']);
+});
+
+test('persist() and close() write what is already on disk', async t => {
+  const f = fixture(t), file = path.join(f.directory, 'workspace.json'); const ino = () => fs.statSync(file).ino;
+  f.w.drafts.set('mark', 'A'); f.w.persist();
+  let before = ino(); assert.equal(f.w.persist(), true); assert.notEqual(ino(), before);
+  before = ino(); f.w.close(); assert.notEqual(ino(), before);
+});
 
 test('a replacement persist() saved is not taken for the state of the session', async t => {
   const f = fixture(t);

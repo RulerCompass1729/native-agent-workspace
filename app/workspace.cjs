@@ -384,6 +384,7 @@ class Workspace extends EventEmitter {
     const rooms = this.rooms.size > 1 ? JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }) : null;
     const state = [restJson, rooms, ...parts.flat()];
     if (skip && this.unchanged(state)) return null;
+    this.saved = null; // the strings of the last save are not kept beside the new ones
     const sessions = parts.map(([json, messages]) => spliceSaved(json, messages));
     const workspace = (!sessions.includes(null) && spliceSaved(restJson, `[${sessions.join(',')}]`)) ||
       JSON.stringify({ ...rest, sessions: records.map(([, s]) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null })) });
@@ -400,8 +401,8 @@ class Workspace extends EventEmitter {
   markSaved(state) { this.saved = { state, files: this.savedFiles(state) }; }
   savedFiles([, rooms]) {
     return ['workspace.json', ...(rooms === null ? [] : ['room-records.json'])].map(name => {
-      const stat = fs.statSync(path.join(this.dataDir, name), { throwIfNoEntry: false });
-      return stat ? `${stat.ino}:${stat.size}:${stat.mtimeMs}` : 'missing';
+      const stat = fs.lstatSync(path.join(this.dataDir, name), { throwIfNoEntry: false });
+      return stat ? `${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` : 'missing';
     }).join(' ');
   }
   // The JSON of a session's saved messages, kept with the change counters it was taken at. It is used again only
@@ -427,7 +428,7 @@ class Workspace extends EventEmitter {
       const snapshot = this.storeSnapshot(replacement);
       fs.writeFileSync(temp, snapshot.workspace, { mode: 0o600 });
       // Numbered before the rename: a rename that fails after it took place still keeps an older checkpoint out.
-      this.renamedSeq = snapshot.seq; this.saved = null; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
+      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
       if (snapshot.rooms !== null) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
         fs.writeFileSync(pending, snapshot.rooms, { mode: 0o600 });
@@ -454,7 +455,7 @@ class Workspace extends EventEmitter {
       // Check and rename in one turn of the event loop, so a persist() cannot land between them. After close
       // nothing is renamed: close() saved last, and another daemon may already own the directory.
       if (snapshot.seq < this.renamedSeq || this.closed) return fs.promises.rm(temp, { force: true });
-      this.renamedSeq = snapshot.seq; this.saved = null; fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
+      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
       if (snapshot.rooms === null) return this.markSaved(snapshot.state);
       await fs.promises.writeFile(pending, snapshot.rooms, { mode: 0o600 });
       // Room records pair with the workspace file of the same snapshot.
