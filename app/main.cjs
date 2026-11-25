@@ -1698,13 +1698,13 @@ function migrateUnprovenQuietMs() {
   }
   return queueRules.MIGRATE_UNPROVEN_QUIET_MS;
 }
-// One pass over the quiet windows by the move's own inputs; a timeout is told as the version events are.
+// One pass over the quiet windows by the move's own inputs; one that ended without its move is told as the version events are.
 function passQuietWindows(input) {
   if (!quietWindows) return;
   let result;
   try { result = quietWindows.pass(input); } catch { return; }
   for (const window of result.closed) {
-    if (window.code !== 'timeout') continue;
+    if (!['timeout', 'person', 'still-busy'].includes(window.code)) continue;
     // Who still holds the move, by the same rule, so the line names them.
     let held = null;
     try {
@@ -1712,7 +1712,7 @@ function passQuietWindows(input) {
       const wait = option && queueRules.moveWait(option, input.settings, input.sessions, input.humanAt, Date.now(), input.failed, input.quietMs, input.unprovenQuietMs);
       if (wait) held = { sessions: option.sessions || [], wait };
     } catch { held = null; }
-    try { versionEvents?.quietWindowTimedOut(window, held); } catch { /* Kept in its record. */ }
+    try { versionEvents?.quietWindowEnded(window, held); } catch { /* Kept in its record. */ }
   }
 }
 function quietWindowMoved(key, code) {

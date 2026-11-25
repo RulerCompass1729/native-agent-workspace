@@ -75,6 +75,19 @@ function fixture(t, sessions = [butler()], options = {}) {
 // Turned on by the person, patrol every `minutes`; idle from `idle` minutes ago.
 function on(env, minutes = 30) { env.wake.set(true); env.wake.setPatrol(minutes); }
 
+test('a migration quiet window: no patrol is due inside it, so none is shown as held; the idle time counts once it closes', async t => {
+  const env = fixture(t, [butler(), member('m1', { state: 'working' })]);
+  on(env, 30);
+  env.dispatcher.quietWindows = { sessionIds: () => new Map([['butler', 'synthetic-window']]) };
+  env.dispatcher.view();
+  assert.equal(env.dispatcher.idleSince.get('butler'), NOW, 'idle in the window');
+  for (const minutes of [31, 45]) { env.clock.now = NOW + minutes * MIN; await env.dispatcher.wakeSteward(env.dispatcher.view(), []); }
+  assert.deepEqual(env.patrols(), []); assert.equal(env.wake.blocked, null);
+  env.dispatcher.quietWindows = null;
+  await env.dispatcher.wakeSteward(env.dispatcher.view(), []);
+  assert.equal(env.patrols().length, 1);
+});
+
 test('open work and 30 idle minutes with no event: one patrol, its line written before the send, counts only', async t => {
   const env = fixture(t, [butler(), member('m1', { state: 'working' }), member('m2', { state: 'idle', approval: { id: 'synthetic-approval' } }),
     member('m3', { state: 'idle' }), member('m4', { state: 'working', archived: true })]);

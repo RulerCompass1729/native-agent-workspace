@@ -3137,7 +3137,8 @@ class QueueDispatcher {
         ['open', 'complete'].includes(session.rotationEpisode?.state) && session.rotationEpisode.nativeId === session.nativeId &&
         session.rotationEpisode.epoch === ownRequest.episodeEpoch
         ? { ...session, rotationEpisode: null } : session;
-      if (sessionReady(timingSession, snapshot.wakePolicy).ready) {
+      // A quiet window keeps new work out (sessionReady); what its sessions finished is still settled.
+      if (['', 'quiet-window'].includes(sessionReady(timingSession, snapshot.wakePolicy).reason)) {
         if (!this.idleSince.has(session.id)) {
           this.idleSince.set(session.id, now);
         }
@@ -3388,7 +3389,7 @@ class QueueDispatcher {
   // any space not archived (waiting on the person does not count); a hash over their ids and states only; and how long
   // the butler has been idle. Counts and the hash leave this function, no name or text.
   openWork(current) {
-    const butler = this.stewardSession(current.snapshot.sessions)?.session?.id ?? null, parts = [];
+    const own = this.stewardSession(current.snapshot.sessions)?.session, butler = own?.id ?? null, parts = [];
     let sessions = 0, items = 0;
     for (const s of current.snapshot.sessions || []) {
       if (!s || s.archived || s.id === butler) continue;
@@ -3398,7 +3399,8 @@ class QueueDispatcher {
       if (!room || room.archived || !Array.isArray(room.queue)) continue;
       for (const item of room.queue) if (['queued', 'sent'].includes(item.status)) { items++; parts.push(`i\t${item.id}\t${item.status}`); }
     }
-    const since = butler === null ? undefined : this.idleSince.get(butler);
+    // A quiet window keeps a patrol out: none is due there.
+    const since = butler === null || own.quietWindow ? undefined : this.idleSince.get(butler);
     return { sessions, items, hash: createHash('sha256').update(parts.sort().join('\n')).digest('hex'),
       idleMs: Number.isFinite(since) ? current.now - since : NaN };
   }
