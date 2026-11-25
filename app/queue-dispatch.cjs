@@ -4558,8 +4558,8 @@ class QueueDispatcher {
         throw Error('handoff-missing');
       }
       await this.completeEpisode(oldId, record);
-      record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
       this.leaveBypass(record, old);
+      record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
       record.phase = 'creating';
       record.creatingAt = now;
       this.save();
