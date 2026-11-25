@@ -680,7 +680,7 @@ function queueDone(w, spec) {
   if (!s || !steward || typeof spec.nativeId !== 'string' || !spec.nativeId || s.nativeId !== spec.nativeId) return false;
   const before = s.wakeBudget;
   if (!clearSenderStreak(s, steward.sessionId, steward.nativeId)) return false;
-  try { durable(w); } catch (error) { s.wakeBudget = before; w.edited?.(s); throw error; }
+  try { durable(w); } catch (error) { s.wakeBudget = before; throw error; }
   return true;
 }
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }

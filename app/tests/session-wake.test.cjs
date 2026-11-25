@@ -215,6 +215,7 @@ test('a refused wake says why: waiting, turned off, or just sent one (wake propo
     ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
     ['queued', f => { f.rb.pendingQueue = 'tag'; }, '收件方已有一条输入在投递或排队。', 'The recipient already has input being delivered or queued.'],
     ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 1 } } }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 8 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 8 in a row.'],
+    ['limit', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now() - 120000, humanRevision: s.wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 8 } } }; }, '已达到连续 8 次自动消息上限；请真人核对原会话后再继续。', 'The limit of 8 consecutive automatic messages was reached. A person must check the original session before continuing.'],
   ];
   for (const [label, set, zh, en] of cases) {
     for (const when of ['registering', 'delivering']) {
