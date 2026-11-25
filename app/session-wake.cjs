@@ -381,6 +381,8 @@ async function stageOnce(w, s, r, native, args) {
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
   // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
   if (intent.quietWindow || waits) intent.saidHeld = true;
+  // The call answers that it is saved: if it does not go out after that, main tells the butler whose it is (butler-ingress.cjs).
+  if (intent.status === 'staged') intent.told = true;
   const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
   // In the same save as this answer: a backend that ends after it never tells the same loss twice.
   for (const { wake: told } of lost) told.senderTold = true;
@@ -388,7 +390,7 @@ async function stageOnce(w, s, r, native, args) {
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { for (const { wake: told } of lost) delete told.senderTold; intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  try { durable(w); } catch (e) { for (const { wake: told } of lost) delete told.senderTold; intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; delete intent.told; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
@@ -478,7 +480,7 @@ function transfer(w, row, readdress = false) {
     if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
-      intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+      intent.status = result.status; if (result.status !== 'submitted') intent.settledAt = Date.now(); row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
       // It took one: the others held here for it wait out its new minute instead of being refused for it first.
       if (result.status === 'submitted') {
         for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);

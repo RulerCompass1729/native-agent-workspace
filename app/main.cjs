@@ -1032,7 +1032,8 @@ function bindClient(context) {
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
-    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [] }); }
+    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [],
+      wasButler: (id, nativeId, at) => stewardRecord?.heldRole(id, nativeId, at) }); }
     catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }
@@ -2457,6 +2458,9 @@ async function boot() {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
     let record = null;
+    // Who held the role until now is written before the person's choice replaces it: a rotation's successor that made no
+    // call since would otherwise be missing, and with it what it sent (StewardRecord.heldRole).
+    try { stewardRecord?.sync(stewardOf()); } catch { /* As below. */ }
     if (id === null) stewardRole.set(null);
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {

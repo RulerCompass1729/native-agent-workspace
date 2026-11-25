@@ -23,8 +23,9 @@ function keyCode(key) {
   const code = last.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase());
   return isCode(code) ? code : 'unknown';
 }
-// A sender's row of an automatic message that did not go out: refused, withdrawn, or its one attempt failed.
-function undeliveredRow(row) {
+// A sender's row of an automatic message that did not go out: refused, withdrawn, or its one attempt failed. Of the
+// butler's `own`, also one whose arrival NAW could not confirm.
+function undeliveredRow(row, own = false) {
   const intent = row?.wake;
   if (row?.origin !== 'agent-wake-intent' || typeof row.id !== 'string' || !row.id || !intent || typeof intent.recipientId !== 'string') return null;
   // When it failed, not when it was staged: a row staged before main restarted can fail after. A backend without
@@ -36,7 +37,14 @@ function undeliveredRow(row) {
     return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? at };
   }
   if (intent.status === 'unconfirmed' && row.uiMessage?.key === 'error.wake.deliveryUnconfirmed') return { outcome: 'unconfirmed', code: 'delivery-failed', at };
+  if (own && intent.status === 'unconfirmed') return { outcome: 'unconfirmed', code: keyCode(row.uiMessage?.key), at };
   return null;
+}
+// Whether the sender's call was told it is saved. A backend from before that mark (session-wake.cjs `told`) tells only
+// the one it refused at once and the one it could not save from the rest.
+function toldSaved({ wake: intent, uiMessage }) {
+  return intent.told === true || Number.isSafeInteger(intent.heldAt) || Boolean(intent.busyHold || intent.quietWindow) ||
+    intent.status !== 'not-sent' && uiMessage?.key !== 'notice.wake.saveFailed';
 }
 const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
 const exactFields = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
@@ -314,19 +322,26 @@ class ButlerIngress {
   // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
   // Only failures since this intake started: the history before it is not announced again.
   // `formerly(id)`: the sessions the butler continued from (done rotations); one to those is the current butler's too.
-  // Of the butler's own messages, only one its call was told is held, or held since (session-wake.cjs): memberId is its recipient.
-  observeWakeUndelivered(sessions = [], { steward, formerly } = {}) {
+  // Of the butler's own messages, any its call was told is saved: memberId is its recipient, itemId the message. Own is
+  // also what a session sent while it held the role, by the role record (`wasButler(id, nativeId, at)`): a butler the
+  // person replaced directly is on no rotation chain, and its backend can withdraw one while main is not running.
+  observeWakeUndelivered(sessions = [], { steward, formerly, wasButler } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
     let earlier = []; try { earlier = formerly?.(current.sessionId) || []; } catch { /* The current session alone. */ }
     const butler = new Set([current.sessionId, ...(Array.isArray(earlier) ? earlier : []).filter(id => typeof id === 'string' && id)]);
+    const held = (id, { nativeId, time }) => { try { return wasButler?.(id, nativeId, time) === true; } catch { return false; } };
     for (const s of Array.isArray(sessions) ? sessions : []) {
       if (typeof s?.id !== 'string' || !s.id) continue;
       const own = butler.has(s.id);
       for (const row of Array.isArray(s.messages) ? s.messages : []) {
-        const failed = undeliveredRow(row);
+        const failed = undeliveredRow(row, true);
         if (!failed || row.wake.senderId !== s.id) continue;
-        if (own ? Number.isSafeInteger(row.wake.heldAt) || row.wake.busyHold : butler.has(row.wake.recipientId)) this.undeliveredWake(s.id, row.id, failed, own ? row.wake.recipientId : undefined);
+        const { recipientId } = row.wake;
+        if (!own && butler.has(recipientId)) { if (undeliveredRow(row)) this.undeliveredWake(s.id, row.id, failed); continue; }
+        if (!toldSaved(row)) continue;
+        const inRole = held(s.id, row.wake);
+        if (own || inRole) this.undeliveredWake(s.id, row.id, failed, { recipientId, since: inRole && row.wake.told === true ? 0 : this.humanSince });
       }
       if (!own) for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
         if (!butler.has(entry?.recipientId)) continue;
@@ -335,12 +350,12 @@ class ButlerIngress {
       }
     }
   }
-  undeliveredWake(senderId, id, { outcome, code, at }, recipientId) {
-    if (typeof id !== 'string' || !id || !Number.isSafeInteger(at) || at < this.humanSince) return false;
+  undeliveredWake(senderId, id, { outcome, code, at }, { recipientId, since = this.humanSince } = {}) {
+    if (typeof id !== 'string' || !id || !Number.isSafeInteger(at) || at < since) return false;
     const eventId = `wake-undelivered:${hash([senderId, id])}`, memberId = recipientId || senderId;
     if (this.undeliveredWakes.has(eventId)) return false;
     this.record({ eventId, sourceRef: `wake-undelivered:${memberId}`, kind: 'blocked',
-      payload: { memberId, reason: recipientId ? 'own-message-undelivered' : 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
+      payload: { memberId, ...(recipientId ? { itemId: id } : {}), reason: recipientId ? 'own-message-undelivered' : 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
     this.undeliveredWakes.add(eventId);
     return true;
   }

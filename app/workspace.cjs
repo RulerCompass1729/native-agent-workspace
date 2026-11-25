@@ -209,7 +209,7 @@ class Workspace extends EventEmitter {
       }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
-        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
+        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.wake.settledAt = Date.now(); message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
         // Held, so never sent: reopening does not offer it again.
         if (message.wake?.status === 'held') { message.wake.status = 'cancelled'; message.wake.settledAt = Date.now(); message.text = `NAW 后台重开过；存着的自动消息没有补送。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldRestored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
       }

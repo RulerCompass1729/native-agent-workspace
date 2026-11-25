@@ -196,6 +196,12 @@ class StewardRecord {
     }
     return out;
   }
+  // Whether that native session held the role at `at`, by the role lines alone. Asked on every state, worked out again
+  // only when the lines change.
+  heldRole(id, nativeId, at) {
+    if (this.kept?.lines !== this.lines || this.kept.count !== this.lines.length) this.kept = { lines: this.lines, count: this.lines.length, periods: this.periods() };
+    return this.kept.periods.some(({ session, from, to }) => session.id === id && session.nativeId === nativeId && at >= from && (to === null || at < to));
+  }
   // Deleting exported blocks: only which steps they held stays, without what was asked.
   deleteBlocks(names) {
     if (this.failed) throw Error('The butler record is unavailable');
