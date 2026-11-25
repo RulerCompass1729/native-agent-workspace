@@ -21,9 +21,9 @@ or start paid model runs as a side effect of editing documents.
 ## Task-led collaboration
 
 - Every agent keeps its full implementation and verification capabilities. Roles
-  such as secretary, researcher, tester and integrator describe the current work,
-  not permanent limits. The queue-secretary role neither adds nor removes native
-  tools; a V12 default secretary keeps its default tool limits. Within existing
+  such as project manager, researcher, tester and integrator describe the current
+  work, not permanent limits. The project-manager role neither adds nor removes
+  native tools; a V12 default secretary keeps its default tool limits. Within existing
   authorization, any agent may claim a
   ready, unowned complete user outcome without waiting for a new dispatch,
   except as a member of a space whose NAW queue the person uses (automatic
@@ -31,16 +31,17 @@ or start paid model runs as a side effect of editing documents.
   member) and on what the person asks it directly; another agent may ask it only
   about its current item (questions, reviews, handoffs), and the asking agent
   leaves new tasks for the person. New tasks enter the queue only through the
-  person, the one person-designated secretary, or the person-designated butler
-  (大管家). The secretary and the butler may queue only the person's own
-  requests; other agents cannot add items. Cancelling and marking items complete
+  person, the person-designated project manager of that space (项目经理, its own
+  space's queue only), or the person-designated butler (大管家). The butler queues
+  only the person's own requests; a project manager, those and the steps of work
+  the person gave its space; other agents cannot add items. Cancelling and marking items complete
   are for the person and the butler; NAW records which of them did it. Neither
   claims board tasks itself (the person, 2026-11-08:
   agents claiming the same task by themselves). A session is such a member once
-  a 【NAW 派活】 has reached it, or once the person or the secretary says so
-  through NAW. The secretary and the designated integrator stay outside queue
-  spaces, since their work starts on its own; if one of them receives a
-  【NAW 派活】, it replies 「需要你决定：」 asking the person to move it.
+  a 【NAW 派活】 has reached it, or once the person or that space's project manager
+  says so through NAW. The designated integrator stays outside queue spaces, since
+  its work starts on its own; if it receives a 【NAW 派活】, it replies 「需要你决定：」
+  asking the person to move it. A project manager is a member of its space.
 - Keep one owner responsible for each outcome through reproduction, necessary
   implementation, relevant checks and usable delivery. A helper may claim and
   finish an independent dependency; the outcome owner keeps responsibility for
@@ -67,34 +68,31 @@ or start paid model runs as a side effect of editing documents.
   an explicit saved handoff. Use the committed canonical main checkout's
   `scripts/integrator-lock.cjs run`, not an older lane/release copy, with a current
   authorized task/handoff reference in `--delegation`; it is a reference to
-  existing authority, not a request for new secretary approval. Do not hold the
+  existing authority, not a request for new approval. Do not hold the
   Root integration lock across model turns, dependency/reviewer waits, isolated
   implementation, tests or builds. Prepare a clean committed release worktree,
   release the shared-write lease, then build/check it independently. Reacquire
   only for the next necessary shared mutation or authorized daily activation.
   Keep other named resource locks only for their actual conflicting operation.
   Never steal a live/unknown lease or infer permission from elapsed time.
-- The secretary finds ownerless actionable blockers, delivers necessary context
-  and verifies actual receipt/progress; it does not approve each normal claim and
+- Each space's project manager finds that space's ownerless actionable blockers,
+  delivers necessary context and verifies actual receipt/progress; it does not approve each normal claim and
   may itself own an authorized complete task in an isolated worktree. Do not
   treat idle/working labels as task eligibility or accomplishment. Measure useful
   work left waiting, time to a usable result, and avoidable handoffs/rework from
   existing records instead of creating polling/model activity to look busy.
-- For queue intake, the person designates one secretary session through its
-  existing session menu and can replace or revoke it. This role grants only
-  queue addition, not execution tools, model calls, or other queue controls;
-  the separately metered native-session, consent and cost conditions in
-  product V12 remain in force. To place the person's request, use only NAW
-  records already available to the secretary: spaces, members and queues, not
-  other sessions' private conversations. Choose a space whose recorded work
-  clearly matches the request, normally omit the assignee and let NAW select
-  an idle member. Use the existing `workspace_control` command catalog:
-  invoke `spaceAction` with `[roomId, "queueAdd", [text, null]]`. If the space
-  or request is unclear, ask the person in the
-  secretary's own conversation before adding it. Do not route new work from
-  another agent. A secretary's role follows a single unambiguous handoff only
-  when its rotation log says `event=done`; `kept` and branching successors do
-  not transfer the role. No automatic heartbeat or routing model is added.
+- For each space the person designates at most one project manager, a member of
+  it, through the member's or the space's menu, and can replace or revoke it; a new
+  space arranges one by default, which the person can leave out. The role grants
+  only queue addition in that space, not execution tools, model calls, or other
+  queue controls; what it reads through NAW is that space, not other sessions'
+  private conversations, and agents' messages from other spaces are refused. It
+  invokes `spaceAction` with `[roomId, "queueAdd", [text, null]]`, normally omits
+  the assignee and lets NAW select an idle member, never itself or another project
+  manager. If a request is unclear or belongs to another space, it asks the person
+  in its own conversation. The role follows a single unambiguous handoff only when
+  its rotation log says `event=done`; `kept` and branching successors do not
+  transfer it. No automatic heartbeat or routing model is added.
 - NAW-owned collaboration tools and provider-native execution tools remain
   separate. Task ownership does not grant native session control, permission,
   model/budget changes, publication, spending or access to another user's draft.
@@ -230,7 +228,7 @@ or start paid model runs as a side effect of editing documents.
   records the delivery in the space; an item without commits has no such
   line. The line only reports a delivery: it does not merge, install or ask
   for anything. When the person
-  starts using a queue in a space, they or the secretary tell its members once,
+  starts using a queue in a space, they or its project manager tell its members once,
   through NAW, to end any background wait. An idle member does not see the
   board, so a board entry does not reach it: work meant for an idle member goes
   to it through the queue (see Task-led collaboration for who may add items).
@@ -238,7 +236,7 @@ or start paid model runs as a side effect of editing documents.
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
   that exits on a specific event: a newer READY entry in a lane log (for the
-  main session, also a new secretary note that names it), a reviewer or test
+  main session, also a new board note that names it), a reviewer or test
   finishing, or a fixed wait while a hard-gate question is pending with the
   person. Do not use `/loop` or timed polling prompts for this. Ask the person
   as the next item describes and keep working meanwhile. If nothing on the
@@ -251,8 +249,8 @@ or start paid model runs as a side effect of editing documents.
   uploading, publishing, or messages to other people; spending money;
   connecting to the real DeepSeek service; deleting data or anything else
   irreversible; switches only the person may use (the automatic-messages
-  switch, automatic migration, authorizations, designating the secretary,
-  integrator or butler); loosening permissions or confirmation gates; ending
+  switch, automatic migration, authorizations, designating a project manager,
+  the integrator or the butler); loosening permissions or confirmation gates; ending
   sessions or backends, exposing this machine, or quitting or restarting the
   daily NAW other than for an installation; the person's own financial or
   career decisions, including proposals made for them; a conflict with the
@@ -261,7 +259,7 @@ or start paid model runs as a side effect of editing documents.
   person's list. First do any part of the current item that does not depend
   on it. Then a queue member ends its turn with a final message whose first
   line is that question (NAW marks the item 等你决定 and sends the member its
-  next item). An agent outside a queue (the integrator, the secretary, an
+  next item). An agent outside a queue (the integrator, an
   agent on a task board), Claude or Codex, keeps working within existing
   authorization or leaves one background command that waits for this answer,
   and does not end the turn idle. Other questions also wait for the person's
