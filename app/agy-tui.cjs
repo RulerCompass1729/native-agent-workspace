@@ -328,7 +328,14 @@ class AgyTui extends EventEmitter {
     if (this.mcpWarmPhase !== 'pending' || this.stopped || !this.terminal?.alive || !this.terminal.screen) return;
     if (editorState(this.terminal.screen) !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
     this.clearMcpWarmTimers();
-    this.mcpWarmPreCounts = countMcpLines(screenLines(this.terminal.screen)?.lines);
+    const preCounts = countMcpLines(screenLines(this.terminal.screen)?.lines);
+    // Only auto-open /mcp on a clean pre-warmup viewport (no pre-existing MCP listing that could ambiguate overlay detection).
+    if (preCounts.heading > 0 || preCounts.ready > 0 || preCounts.exit > 0) {
+      this.mcpWarmPhase = 'failed';
+      this.syncCapabilities();
+      return;
+    }
+    this.mcpWarmPreCounts = preCounts;
     this.mcpWarmPhase = 'opening';
     this.syncCapabilities();
     // agy TUI skips plugin MCP loading before keyring auth finishes; opening /mcp once after auth
