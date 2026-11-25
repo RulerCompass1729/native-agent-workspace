@@ -70,3 +70,31 @@ tests fail, the addition reaches nobody and the rotation is logged failed.
 
 A limit: with a rotation log that cannot be read, a member's waiting rotation now waits too, where it went by what was in
 memory before. Independent review of this delta: pending, with the integration reviewer who raised the finding.
+
+## The recipient before the stop (finding B2, part b, 2026-11-25)
+
+Before it stops the old session, `finishRotation` reads the backends twice, before the old session leaves its spaces and
+after. Both reads were judged for the old session only. A recipient that became another native session in between was left
+with nothing, and the old one was stopped.
+
+Change. Each of the two looks also asks whether the session that holds the handoff (`handoffHolder`, by the rule of part a) is
+still there as the one that was confirmed: in view, not archived, not gone, with the same native identity. If not, the old session
+is not stopped and the rotation waits at `successor-unavailable`, or `identity-ambiguous` when the chain is no longer certain. The next
+pass does what it did before: a recipient that is another session now has no handoff (`successor-gone`, the old one is back in its
+spaces and due again), one that is only out of view is waited for and finished to. The rule holds for the first finish as well as for the one
+after an addition. Part a, what is told to whom, the designation and the old session's own checks are unchanged; no timer, read or
+model call is added.
+
+| What the recipient is in a look | Old session | Next |
+|---|---|---|
+| Another native session, or archived | Not stopped | `successor-gone`; back in its spaces |
+| No native identity, ended or out of view for a moment | Not stopped | Waits, finished when it is back as it was |
+| Replaced by one that is not certain | Not stopped | Waits at `identity-ambiguous` |
+| Itself | Stopped, as before | Done |
+
+Checked without a model: red first, 27 of 28 new tests failed on db6802e0 by assertion (no type error); the 28th pins what was right
+(the case out of view was added after: 36 tests). On this lane queue-dispatch, steward-entry and queue-secretary 522/522 before that
+case, the 136 other files that name the dispatcher, rotation or the butler 3,122/3,122. Merged into 43bd89bf (alpha.300, no
+conflict) the same three files 543/543. Nothing skipped. 10 mutations, all killed. The full suite was not run.
+
+A limit: a recipient that changes after the last look, while the stop itself is on its way, is not seen. Independent review: pending.

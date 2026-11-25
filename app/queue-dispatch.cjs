@@ -4956,6 +4956,14 @@ class QueueDispatcher {
     return Boolean(steward && ![oldId, record.newId, holder?.id].includes(steward.sessionId));
   }
 
+  // Whether the newest state still shows the session that holds the handoff, as the one it was confirmed by.
+  recipientGate(record) {
+    const holder = this.handoffHolder(record);
+    if (!holder) return 'identity-ambiguous';
+    const fresh = this.view().snapshot.sessions.find(s => s.id === holder.id);
+    return !fresh || fresh.archived || SUCCESSOR_GONE_STATES.includes(fresh.state) || fresh.nativeId !== holder.nativeId ? 'successor-unavailable' : '';
+  }
+
   // For the designated butler: whether the change, once logged, moves the designation to the session that holds the
   // handoff now and nowhere else.
   designationFollows(oldId, record) {
@@ -5215,7 +5223,7 @@ class QueueDispatcher {
       }
       // Fresh state before anything changes: a session used meanwhile keeps its spaces and process.
       const judged = seenRow(old, now), seen = {};
-      const moved = async () => await this.touchedSince(oldId, old, seen) ? 'changed-before-stop' : seen.latest && rowsSince(seen.latest, judged).length ? 'new-content' : '';
+      const moved = async () => await this.touchedSince(oldId, old, seen) ? 'changed-before-stop' : seen.latest && rowsSince(seen.latest, judged).length ? 'new-content' : this.recipientGate(record);
       const before = await moved();
       if (before) return before;
       for (const roomId of record.roomIds) {

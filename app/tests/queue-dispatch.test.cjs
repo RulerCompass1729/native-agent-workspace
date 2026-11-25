@@ -6028,6 +6028,63 @@ test('R206: a successor whose native session was never recorded is not told', as
   assert.equal(f.tells().length, 0); assert.equal(f.asks().length, 0); assert.equal(f.stopped('a'), false); assert.equal(gatesOf(f).at(-1), 'identity-ambiguous');
 });
 
+// The looks finishRotation takes before it stops the old session: the first before it leaves its spaces, the last after.
+function atLook(f, which, change) {
+  const touched = f.dispatcher.touchedSince.bind(f.dispatcher), refresh = f.client.refresh.bind(f.client); let looks = 0, armed = false;
+  f.looks = () => looks;
+  f.dispatcher.touchedSince = async (...args) => { looks += 1; armed = looks === which; return touched(...args); };
+  f.client.refresh = async () => { const value = await refresh(); if (armed) { armed = false; change(); } return value; };
+}
+const BECOMES = {
+  'another native session': s => { s.nativeId = 'native-other'; },
+  'a session with no native identity': s => { s.nativeId = null; },
+  'an ended session': s => { s.state = 'ended'; },
+  'a session out of view': (s, f) => { f.client.state.sessions = f.client.state.sessions.filter(x => x !== s); },
+};
+for (const [what, change] of Object.entries(BECOMES)) for (const when of ['its handoff', 'what was added']) for (const butler of [true, false]) for (const which of [1, 2])
+test(`R206: a successor that becomes ${what} in look ${which}, once ${when} is confirmed, leaves the old ${butler ? 'butler' : 'member'} running`, async t => {
+  const f = await handedOver(t, { butler }), home = butler ? [] : ['shared'];
+  if (when === 'what was added') {
+    f.person(); await f.pass(); await f.pass(1); await f.pass(31); f.client.reply('a', '补。'); await f.pass();
+    assert.equal(f.tells().length, 1); f.client.reply(f.newId, '并进来了。');
+  }
+  const successor = f.session(f.newId), was = { nativeId: successor.nativeId, state: successor.state };
+  atLook(f, which, () => change(successor, f));
+  await f.pass();
+  assert.equal(f.looks(), which); assert.equal(f.stopped('a'), false, 'the old session is not stopped'); assert.notEqual(f.session('a').state, 'ended');
+  assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'successor-unavailable'); assert.deepEqual(f.old.roomIds, which === 1 ? home : []);
+  if (butler) { assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1); }
+  if (what !== 'another native session') {
+    Object.assign(successor, was); if (!f.session(f.newId)) f.client.state.sessions.push(successor);
+    await f.pass(2); finished(f); assert.equal(f.tells().length, when === 'what was added' ? 1 : 0, 'and told nothing more');
+    return;
+  }
+  await f.pass(1);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.equal(f.stopped('a'), false); assert.deepEqual(f.old.roomIds, home, 'back in its spaces');
+  assert.equal(f.client.sends('native-other').length, 0); if (butler) assert.equal(f.role.current().sessionId, 'a');
+});
+
+for (const [what, change] of [
+  ['becomes another native session', f => { f.session('n2').nativeId = 'native-other'; }],
+  ['is put away', f => { f.room.update({ archivedSessions: ['n2'] }); }],
+  ['is itself replaced by one that is not certain', f => { for (const id of ['n3', 'n4']) f.dispatcher.appendLog('done', { ...ONWARD(f), oldId: 'n2', oldNativeId: 'native-n2', newId: id, newNativeId: `native-${id}` }); }],
+])
+test(`R206: the one that replaced the successor ${what} in the last look: the old session is not stopped`, async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); f.client.reply('n2', '收到。');
+  atLook(f, 2, () => change(f)); await f.pass();
+  assert.equal(f.looks(), 2); assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []);
+  assert.equal(gatesOf(f).at(-1), what.includes('not certain') ? 'identity-ambiguous' : 'successor-unavailable');
+  await f.pass(2); assert.equal(f.stopped('a'), false);
+  assert.deepEqual(eventsOf(f), what.includes('not certain') ? [] : ['failed']);
+});
+
+test('R206: a successor that stays itself through both looks has the old session ended, as before', async t => {
+  for (const butler of [true, false]) {
+    const f = await handedOver(t, { butler }); atLook(f, 2, () => {}); await f.pass(); assert.equal(f.looks(), 2); assert.equal(f.stopped('a'), true); finished(f);
+  }
+});
+
 test('R206: who replaced the successor is read from the whole log, not from its last thousand lines', async t => {
   const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1); replaced(f);
   for (let i = 0; i < 1001; i += 1) f.dispatcher.appendLog('requested', { oldId: `o${i}`, oldNativeId: `native-o${i}`, name: 'x', roomIds: [] });
