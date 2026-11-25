@@ -257,6 +257,7 @@ async function build() {
       'startup.js',
       'state-delta.cjs',
       'state-push.cjs',
+      'state-share.cjs',
       'steward-record.cjs',
       'steward-role.cjs',
       'steward-standing.cjs',
