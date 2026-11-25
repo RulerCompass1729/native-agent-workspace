@@ -16,10 +16,11 @@ Tests:
 - Unit, red on `60e5f40c`: 28 pass, 7 fail; after: 82/82. After the review notes: 187/187 for the affected files, and 1035 for the mobile, locale, batch and timer files with one failure in a test fixture (it wrote every computed attribute into the text), fixed before the 187.
 - Real Electron window, isolated profile, synthetic sessions: `test-batch-confirmation.cjs` 0/3 on `60e5f40c`, 3/3 after (the script's checks depend on each other, so the unit red is the precise one); `test-session-timers.cjs` 4/4.
 - Real phone page with a virtual passkey: `test-phone-batch.cjs` 36/36; red once for the missing text and once for a target name left in it after the first answer. One earlier run stopped on its existing one-second countdown assertion and was not counted.
+- Whole suite on `6a752cca`, all 623 files in six parts: 10352/10352, no skips.
 - Trial merges with the 296 and 297 heads and the lanes waiting for 298 have no conflicts.
 
 Review: one read-only session, three rounds. Round 1 (`2c2e3ed1`) PASS-WITH-NOTES, nothing blocking: phone page without the consequence, button without its own accessible name, English wording that lost "confirm", a missing-summary guard; all fixed. Round 2 PASS-WITH-NOTES: the target name left on the phone after the first answer; fixed. Round 3 PASS.
 
-Not verified: the whole suite on the final commit in one run; the phone page with the real dialog text; jumping from a split pane other than the main conversation; a real VoiceOver reading. `test-archive-confirmation.cjs` and `test-consent-cards.cjs` fail the same way on `60e5f40c` and here, so they give no coverage. The tool row above a card still reads 「调用 stop」.
+Not verified: the phone page with the real dialog text; jumping from a split pane other than the main conversation; a real VoiceOver reading. `test-archive-confirmation.cjs` and `test-consent-cards.cjs` fail the same way on `60e5f40c` and here, so they give no coverage. The tool row above a card still reads 「调用 stop」.
 
 Undo: remove `stop` from `METHODS` and the `stop` lines in `confirmation-batch.js`, and `folded` with `renderMergedCard` in `renderer.js`.
