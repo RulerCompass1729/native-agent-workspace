@@ -104,8 +104,9 @@ class StewardWake {
     this.file = path.join(directory, FILE);
     Object.assign(this, { ledger, selected, record, now, gapMs, changed });
     this.blocked = null;
-    // In memory: how the last attempt failed, or null.
-    this.failure = null;
+    // In memory: how the last attempt failed, or null; and whether the person's answer on the butler's own card waits, as
+    // the dispatcher's pass found (wakeSteward).
+    this.failure = null; this.clicked = false;
     // In memory only: a restart allows the butler REFUSAL_WAKES more.
     this.refusalWakes = 0;
     // In memory: the open work's hash and the interval of the last patrol sent, and whether one is wanted this pass.
@@ -171,8 +172,8 @@ class StewardWake {
     blocked.reason = cause;
     blocked.deadline = Number.isSafeInteger(deadline) && deadline > 0 ? deadline : null;
   }
-  // `click`: the person's answer on its own card waits, so what holds it is said at once, but for its turn.
-  skip(reason, deadline = null, click = false) {
+  // While the person's answer on its own card waits, what holds it is said at once, but for its turn.
+  skip(reason, deadline = null) {
     // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
     if (this.blocked?.step) return;
     if (!this.pending()) { this.clearBlocked(); return; }
@@ -181,7 +182,7 @@ class StewardWake {
     const blocked = this.blocked, previous = blocked.reason;
     this.reasonNow(blocked, reason, now, deadline);
     const card = blocked.card;
-    blocked.card = click && !TURN_REASONS.includes(blocked.reason);
+    blocked.card = this.clicked && !TURN_REASONS.includes(blocked.reason);
     // The refusal limit is said at once: no later pass would clear it by itself.
     const stalled = now - blocked.since >= STALL_MS || blocked.reason === 'control-refused-limit';
     if (!stalled && !blocked.card) {
@@ -331,16 +332,16 @@ class StewardWake {
   // One wake of `session`, the butler as the dispatcher names it now (after a rotation, the successor the role followed
   // to; the switch holds for the person's designation, which a rotation keeps), found ready and settled (condition 2 is
   // the dispatcher's), whose model is `model`. `send(text, itemId)` is the dispatcher's own send of a NAW message and gives its delivery
-  // tag; `click` when the person answered its card. Gives what was done, or null when nothing was.
-  async wake(session, model, send, click = false) {
-    const now = this.now(), skip = reason => this.skip(reason, null, click);
+  // tag. Gives what was done, or null when nothing was.
+  async wake(session, model, send) {
+    const now = this.now();
     if (!this.due()) { this.clearBlocked(); return null; }
-    if (!this.rested(now) && (!click || this.failure)) { skip(click ? this.failure : 'cooldown'); return null; }
-    if (typeof model !== 'string' || !model) { skip('model-unknown'); return null; }
-    if (/deepseek/iu.test(model)) { skip('model-excluded'); return null; }
+    if (!this.rested(now) && (!this.clicked || this.failure)) { this.skip(this.clicked ? this.failure : 'cooldown'); return null; }
+    if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
+    if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
     const latest = this.latest(), position = from(latest, this.state.woken), id = randomUUID();
     const refusals = this.refusalsOnly(latest);
-    if (refusals && this.refusalWakes >= REFUSAL_WAKES) { skip('control-refused-limit'); return null; }
+    if (refusals && this.refusalWakes >= REFUSAL_WAKES) { this.skip('control-refused-limit'); return null; }
     try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
     catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
     let tag = null, outcome;
@@ -352,15 +353,15 @@ class StewardWake {
       // wake names it again rather than skipping what it would have announced.
       outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
     }
-    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     const next = { ...this.state, at: now, woken: outcome.state === 'sent' ? latest : this.state.woken };
     try { this.write(next); } catch { /* Failed: no further wake until it is set again. */ }
     try {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a wake without an outcome. */ }
+    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     if (outcome.state === 'sent') { this.clearBlocked(); if (refusals) this.refusalWakes++; }
-    else skip(this.failure);
+    else this.skip(this.failure);
     return { state: outcome.state, position, through: latest };
   }
   // One patrol of `session`, checked by the dispatcher as for a wake, after patrolDue gave `minutes` for `work`.
@@ -381,12 +382,12 @@ class StewardWake {
     } catch (error) {
       outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
     }
-    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     try { this.write({ ...this.state, at: now }); } catch { /* Failed: no further message until it is set again. */ }
     try {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a patrol without an outcome. */ }
+    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     if (outcome.state === 'sent') { this.patrolLast = { hash: work.hash, minutes }; this.patrolWanted = false; this.clearBlocked(); }
     else this.skip(this.failure);
     return { state: outcome.state, minutes };

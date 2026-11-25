@@ -180,7 +180,7 @@ test('the phone is not alarmed before ten minutes, and its alarm keeps its form 
   f.click(); await f.run(9 * MIN);
   assert.equal(f.phone(), null); assert.ok(f.desk());
   await f.run(2 * MIN);
-  assert.equal(f.phone()?.reason, 'person-typing');
+  assert.equal(f.phone()?.reason, 'person-typing'); assert.equal(f.phone().card, undefined); assert.equal(f.wake.view({ held: true }).blocked.card, undefined);
   const health = healthSummary(f.wake.view(), require('../steward-wake.cjs').BLOCK_REASONS);
   assert.equal(health.available, true); assert.equal(health.alerts.length, 1);
   assert.doesNotMatch(JSON.stringify(health), /card/u);
@@ -249,6 +249,10 @@ test('every other gate still holds a click, and says so at once', async t => {
     assert.deepEqual(f.blockedLines(), [reason], name);
     await f.run(2 * MIN); assert.deepEqual(f.sent, [], name);
   }
+  const unread = fixture(t);
+  await unread.run(MIN); unread.client.refresh = async () => { throw Error('SYNTHETIC PRIVATE REFRESH ERROR'); };
+  unread.click(); await unread.run(9 * SEC);
+  assert.deepEqual([unread.desk()?.reason, unread.desk()?.card], ['source-unavailable', true]); assert.deepEqual(unread.blockedLines(), ['source-unavailable']);
   const busy = fixture(t);
   await busy.run(MIN); busy.butler.approval = { id: 'a' }; busy.click(); await busy.run(MIN);
   assert.deepEqual(busy.sent, []); assert.equal(busy.desk(), null, 'its own question on screen says it');
@@ -314,6 +318,17 @@ test('a click that changes no session is looked at within a tick, confirmed or c
     f.click('card-1', decision); const at = f.clock.now;
     await f.run(6 * SEC);
     soon(f, at, 3 * SEC);
+  }
+});
+
+test('where no idle clock runs, the eight seconds after its turn end with the next tick', async t => {
+  for (const extra of [{ windows: [quietWindow()] }, { butler: { background: 1 } }]) for (let offset = 0; offset < 30; offset += 10) {
+    const f = fixture(t, extra);
+    await f.run(2 * MIN + offset * SEC);
+    f.butler.lastActivityAt = f.clock.now; f.click(); const at = f.clock.now;
+    await f.run(15 * SEC);
+    soon(f, at, 8 * SEC + 3 * SEC); assert.ok(f.wakes()[0].at - at >= 8 * SEC);
+    assert.deepEqual(f.blockedLines(), [], 'those seconds are its turn, not a hold to show'); assert.equal(f.shown(), 0);
   }
 });
 

@@ -13,7 +13,7 @@ It no longer waits for the two minutes after the person used the butler, the qui
 
 ## Checks
 
-On the unchanged code (the earlier quiet-window change included) 18 of the 25 new tests fail, the four cases the person's request named among them; the seven that pass assert what must not change. Five tests of the earlier change that clicked the butler's card where they meant any act of the person's now use another act. Mutation and related-suite results are in the lane's evidence. No model was called and the daily app was not touched.
+On the unchanged code (the earlier quiet-window change included) 18 of the first 25 new tests fail, the four cases the person's request named among them; the seven that pass assert what must not change. Five tests of the earlier change that clicked the butler's card where they meant any act of the person's now use another act. Mutation and related-suite results are in the lane's evidence. No model was called and the daily app was not touched.
 
 ## Known limits
 

@@ -3367,7 +3367,7 @@ class QueueDispatcher {
   // before its compaction rotation, so it waits for the rotation, which the successor's wake follows.
   async wakeSteward(current, holding, quietPending) {
     const event = this.stewardWake.due(), click = event && this.cardClicked();
-    this.clickHeld = click ? 'held' : undefined;
+    this.clickHeld = click ? 'held' : undefined; this.stewardWake.clicked = click;
     try {
       // The butler's own handoff holds every wake, the patrol's included, until the person's step.
       const own = this.ownHandoffStep(current.snapshot.sessions);
@@ -3379,7 +3379,7 @@ class QueueDispatcher {
       const steward = this.stewardOutside(current.snapshot.sessions);
       const skip = reason => {
         if (click) this.clickHeld = reason;
-        this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined, click);
+        this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined);
       };
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
       const listed = current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
@@ -3402,11 +3402,11 @@ class QueueDispatcher {
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
       const send = (text, itemId) => this.send(fresh.session, text, itemId);
-      if (!event) await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
-      else if ((await this.stewardWake.wake(fresh.session, model, send, click))?.state === 'sent') this.clickHeld = undefined;
+      if (event) await this.stewardWake.wake(fresh.session, model, send);
+      else await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
     } catch (error) {
       // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
-      this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable', undefined, click);
+      this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable');
     }
   }
 
