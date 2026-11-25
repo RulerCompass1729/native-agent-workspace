@@ -50,6 +50,8 @@ function check(value) {
       token(value.session.id) && token(value.session.nativeId) && ['minutes', 'sessions', 'items'].every(k => Number.isSafeInteger(value[k]) && value[k] >= 0)
     // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake); the butler's own calls are steps.
     : value?.kind === 'wakeSwitch' ? exact(value, ['kind', 'at', 'on']) && value.on === false
+    // The person switched the permission to organize (main.cjs stewardStanding); the butler's own switches are steps.
+    : value?.kind === 'standingSwitch' ? exact(value, ['kind', 'at', 'on']) && typeof value.on === 'boolean'
     : value?.kind === 'wakeBlocked' ? exact(value, ['kind', 'at', 'since', 'reason']) && Number.isSafeInteger(value.since) && value.since >= 0 && value.since <= value.at && BLOCK_REASONS.includes(value.reason)
     : false;
   if (!ok) throw Error('Invalid steward record line');
@@ -108,6 +110,7 @@ class StewardRecord {
   // The person turned NAW's wake of the butler off in their window (main.cjs stewardWake), as the board asked on
   // 2026-11-13 11:18:30: 「用户在窗里点掉开关也记一行「你关掉了事件唤醒」」.
   wakeOff() { this.append({ kind: 'wakeSwitch', on: false }); }
+  standingSwitch(on) { this.append({ kind: 'standingSwitch', on }); }
   // When the butler is not the one the record last named: a rotation handed the role on, or the record started with
   // a butler already designated (or the record could not be told at the time).
   sync(current) {
@@ -163,7 +166,7 @@ class StewardRecord {
     for (const value of this.lines) if (value.kind === 'outcome') outcomes.set(value.step, value);
     return this.lines.filter(value => value.kind !== 'outcome').map(value => {
       if (value.kind === 'role') return { at: value.at, kind: 'role', event: value.event, session: value.session };
-      if (value.kind === 'wakeSwitch') return { at: value.at, kind: 'wakeSwitch', on: value.on };
+      if (['wakeSwitch', 'standingSwitch'].includes(value.kind)) return { at: value.at, kind: value.kind, on: value.on };
       if (value.kind === 'wakeBlocked') return { ...value };
       if (value.kind === 'wake') {
         const outcome = outcomes.get(value.id) || null;
@@ -258,7 +261,7 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     if (entry.kind === 'wake') return { at: entry.at, kind: 'wake', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id), state: entry.state, error: cut(entry.error), recorded: entry.recorded };
     if (entry.kind === 'patrol') return { at: entry.at, kind: 'patrol', target: entry.session ? nameOf(entry.session.id) || entry.session.id.slice(0, 8) : null, ...archived(entry.session?.id),
       minutes: entry.minutes, sessions: entry.sessions, items: entry.items, state: entry.state, error: cut(entry.error), recorded: entry.recorded };
-    if (entry.kind === 'wakeSwitch') return { at: entry.at, kind: 'wakeSwitch', on: entry.on };
+    if (['wakeSwitch', 'standingSwitch'].includes(entry.kind)) return { at: entry.at, kind: entry.kind, on: entry.on };
     if (entry.kind === 'wakeBlocked') return { at: entry.at, kind: 'wakeBlocked', reason: entry.reason, since: entry.since, minutes: Math.floor((entry.at - entry.since) / 60000) };
     let args = null; try { args = entry.arguments === null ? null : JSON.parse(entry.arguments); } catch { args = null; }
     const out = { at: entry.at, kind: entry.action === 'snapshot' ? 'snapshot' : 'invoke', method: entry.method, state: entry.state, reason: entry.reason, error: cut(entry.error), duplicate: entry.duplicate, recorded: entry.recorded };
@@ -268,6 +271,8 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
     } else if (entry.method === 'stewardWake' && Array.isArray(args)) {
       // The butler's own call on NAW's switch for waking it: turned on, turned off, or only looked at how it stands.
       out.wake = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
+    } else if (entry.method === 'stewardStanding' && Array.isArray(args)) {
+      out.standing = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
     } else if (entry.method === 'stewardPatrol' && Array.isArray(args)) {
       // The butler's own call on the patrol interval: set, turned off, or looked at.
       out.patrol = args.length === 0 ? 'check' : args.length === 1 && [null, 15, 30, 60].includes(args[0]) ? args[0] : undefined;

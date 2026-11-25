@@ -197,7 +197,8 @@ function confirmationSnapshot(client, snapshot = client.snapshot()) {
     client.entries?.some(e => e.closed || e.closing || e.client?.socket?.destroyed)) };
 }
 function appRecordsStatus(snapshot = null, suppliedTemp = null) {
-  const records = recordReminders.status(dataDir, Date.now(), { unavailable: {
+  let standing = []; try { standing = stewardStanding?.switches() ?? []; } catch { /* The other reminders are shown. */ }
+  const records = recordReminders.status(dataDir, Date.now(), { standing, unavailable: {
     ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
     ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
   } });
@@ -1535,7 +1536,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardStanding', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -2512,7 +2513,7 @@ async function boot() {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
     if (id !== null && handoff !== null && !validDuty(handoff)) throw uiError('error.steward.handoffInvalid');
-    let record = null, standingLost = false, reached = null;
+    let record = null, standingLost = false, reached = null, takenBack = false;
     // Who held the role until now is written just before the person's choice replaces it: a rotation's successor that made
     // no call since would otherwise be missing, and with it what it sent (StewardRecord.heldRole).
     const recordHolder = () => { try { stewardRecord?.sync(stewardOf()); } catch { /* As below. */ } };
@@ -2526,7 +2527,7 @@ async function boot() {
       let spaces;
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
-      const carry = stewardStanding?.carry(c);
+      const carry = stewardStanding?.carry(c, standing);
       reached = stewardWake?.reached() ?? null;
       // The same butler again keeps it: the designation may have named it only through the rotation log.
       let again = false;
@@ -2534,12 +2535,14 @@ async function boot() {
       recordHolder();
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
       const keep = typeof standing === 'boolean' ? standing : again || null;
-      let unsaved = false; if (carry && keep !== null) try { carry(keep); } catch { unsaved = true; }
+      let unsaved = false; if (carry && keep !== null) try { takenBack = carry(keep) === true; } catch { unsaved = true; }
       // Said by what holds now: a save that failed may have taken place, and a line left on may have been turned off elsewhere.
       standingLost = keep ? Boolean(carry || standing) && !stewardStanding?.view().on : unsaved;
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
+    // Taken back in this dialog is the person's off, as in their window.
+    if (takenBack) try { stewardRecord?.standingSwitch(false); } catch { /* As above. */ }
     // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
     // revoking, the same session again included, turns it off, until the person or that butler turns it on. A
     // designation made while it was on keeps where it stood for then; a revocation keeps nothing.
@@ -2574,13 +2577,28 @@ async function boot() {
       return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } }, ...(standingLost ? { standingLost } : {}) };
     }
   });
+  // The person's permission to organize (steward-standing.cjs): the person in their window, or the designated butler
+  // through NAW (stewardCaller; R234, the person, 2026-11-25: 「这个应该大管家自己可以点」), only as a step of its record.
+  // No argument only says how it stands. The person's off is not the butler's to undo.
   register('stewardStanding', async (c, on) => {
-    if (!isCurrentHumanContext(c)) throw uiError('error.steward.personOnly');
-    const value = on === undefined ? stewardStanding.view() : stewardStanding.set(c, on);
-    if (on !== undefined) await broadcastRoom();
+    if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw uiError('error.steward.standingOnly');
+    if (on !== undefined && typeof on !== 'boolean') throw uiError('error.steward.standingInvalid');
+    if (on === undefined) return stewardStanding.view();
+    let value;
+    if (!c.background) {
+      value = stewardStanding.set(c, on);
+      // A line that cannot be written does not keep the person's switch from working.
+      try { stewardRecord?.standingSwitch(on); } catch { /* The record shows that a line could not be written. */ }
+    } else {
+      const actor = backgroundOperation.current();
+      if (!stewardRecord?.recording(actor)) throw uiError('error.steward.recordUnavailable');
+      try { value = stewardStanding.setByButler(actor, on); }
+      catch (error) { throw uiError(error?.code === 'STEWARD_STANDING_PERSON_OFF' ? 'error.steward.standingPersonOff' : 'error.steward.standingUnavailable'); }
+    }
+    recordsChanged(true);
+    await broadcastRoom();
     return value;
   });
-  applicationHandlers.delete('stewardStanding');
   // Patrol while idle (steward-wake.cjs patrol): the same two callers as the wake switch
   // (stewardWake below), which it needs on. null, 15, 30 or 60 minutes; no argument only says how it stands.
   register('stewardPatrol', async (c, ...args) => {

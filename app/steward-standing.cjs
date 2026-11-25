@@ -1,9 +1,10 @@
 // Person-owned permission for reversible local organization. No native controls,
 // reads, file operations or external actions are covered by this policy.
+// The designated butler may switch it too, but once the person turned it off only the person turns it on (R234).
 const fs = require('node:fs'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { roomIds } = require('./collaboration-spaces.cjs');
-const HOUR = 3600000, LIMIT = 30;
+const HOUR = 3600000, LIMIT = 30, SWITCHES = 15;
 const CREATION_OBSERVATION_MAX_AGE_MS = 60000;
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
 const localAction = command => {
@@ -51,6 +52,13 @@ function creationCovered(options, peers, now = Date.now()) {
       : options.provider === 'claude' && mode && mode === p.nativePermissionMode && options.newDirectory !== true &&
         typeof options.cwd === 'string' && typeof p.cwd === 'string' && path.resolve(options.cwd) === path.resolve(p.cwd)));
 }
+// What a file that is not there reads as: nobody switched it, and nobody turned it off.
+const NOBODY = Object.freeze({ by: 'nobody' });
+// Who switched it last ({ by, at }). Tied to the revision: a NAW that does not write it leaves nothing that still holds.
+const switched = s => ['person', 'butler'].includes(s.source?.by) && Number.isSafeInteger(s.source.at) && s.source.revision === s.revision ? s.source : null;
+const personOff = s => !s.on && s.source !== NOBODY && switched(s)?.by !== 'butler';
+const switchRows = s => (Array.isArray(s.switches) ? s.switches : []).filter(x => x && typeof x.on === 'boolean' && ['person', 'butler'].includes(x.by) &&
+  Number.isSafeInteger(x.at) && Number.isSafeInteger(x.revision)).map(({ revision, on, by, at }) => ({ revision, on, by, at })).slice(-SWITCHES);
 // Everything the permission requires of one action, given the permission state s. Not exported: only authorized()
 // passes the state as read, and fallback() only the designation the person has now.
 function covered(policy, s, actor, command, state, roomId) {
@@ -76,7 +84,7 @@ class StewardStanding {
             v.used.some(x => !Number.isSafeInteger(x.at) || typeof x.id !== 'string') || v.on && (!v.designation?.sessionId || !v.designation?.nativeId)) throw Error('Invalid standing permission');
         return v;
       } finally { fs.closeSync(fd); }
-    } catch (e) { if (e.code === 'ENOENT') return { version: 1, on: false, revision: 0, designation: null, used: [] }; throw e; }
+    } catch (e) { if (e.code === 'ENOENT') return { version: 1, on: false, revision: 0, designation: null, used: [], source: NOBODY }; throw e; }
   }
   write(value) {
     const temp = this.file + '.' + randomUUID() + '.tmp'; let fd;
@@ -92,7 +100,8 @@ class StewardStanding {
       const s = this.read(), on = s.on && same(s.designation, this.role.selected);
       // With nobody designated there is no one to turn it on for again.
       const other = s.on && !on && Boolean(this.role.selected);
-      return { on, limit: LIMIT, unavailable: false, ...(other ? { reason: 'other-designation' } : {}) };
+      const by = on === s.on ? switched(s) : null;
+      return { on, limit: LIMIT, unavailable: false, ...(other ? { reason: 'other-designation' } : {}), ...(by?.by === 'butler' ? { by: 'butler', at: by.at } : {}) };
     } catch { return { on: false, limit: LIMIT, unavailable: true }; }
   }
   // Why the current butler's action asks instead: it would be covered, within the hourly limit, had the permission
@@ -107,22 +116,40 @@ class StewardStanding {
       return 'standing-other-designation';
     } catch { return null; }
   }
+  // The last switches, oldest first, for the bell. Kept with the state they made: a switch cannot be without its line.
+  switches() { try { return switchRows(this.read()); } catch { return []; } }
+  change(s, on, by) {
+    const at = this.now(), revision = s.revision + 1;
+    this.write({ ...s, on, designation: this.role.selected, revision, source: { by, at, revision }, switches: [...switchRows(s), { revision, on, by, at }].slice(-SWITCHES) });
+  }
   set(context, on) {
     if (!this.person(context) || typeof on !== 'boolean') throw Error('Only the current person window can change standing permission');
     const current = this.role.current();
     if (on && !current) throw Error('Choose a butler first');
+    this.change(this.read(), on, 'person');
+    return this.view();
+  }
+  // The butler's own switch (main.cjs stewardStanding, after stewardCaller). It is for the person's designation, as the
+  // person's is. What already stands is left as it is: who turned it on, the person's off, and grants in use.
+  setByButler(actor, on) {
+    if (typeof on !== 'boolean' || !same(this.role.current(), { sessionId: actor?.id, nativeId: actor?.nativeId })) throw Error('Only the current butler can change standing permission here');
     const s = this.read();
-    this.write({ ...s, on, designation: this.role.selected, revision: s.revision + 1 });
+    if (on && personOff(s)) throw Object.assign(Error('The person turned standing permission off'), { code: 'STEWARD_STANDING_PERSON_OFF' });
+    if (s.on !== on || on && !same(s.designation, this.role.selected)) this.change(s, on, 'butler');
     return this.view();
   }
   // The person designates another butler (main.cjs steward): asked before the designation moves, null unless they have
-  // it on for the butler being replaced. The step returned, after it moved, puts it on for the new one, or turns it off.
-  carry(context) {
-    if (!this.person(context) || !this.view().on) return null;
+  // it on for the butler being replaced, or were asked and took it back (`standing` false: the butler may have turned it
+  // off since, which is not the person's off). The step returned, after it moved, puts it on for the new one, or turns
+  // it off; true when that was the person's off.
+  carry(context, standing = null) {
+    if (!this.person(context) || standing !== false && !this.view().on) return null;
     return keep => {
       const s = this.read();
-      if (!s.on || keep && same(s.designation, this.role.selected)) return;
-      this.write({ ...s, on: keep, designation: this.role.selected, revision: s.revision + 1 });
+      if (!keep) { if (personOff(s)) return; this.change(s, false, 'person'); return true; }
+      if (!s.on || same(s.designation, this.role.selected)) return;
+      const by = switched(s), revision = s.revision + 1;
+      this.write({ ...s, designation: this.role.selected, revision, ...(by ? { source: { ...by, revision } } : {}) });
     };
   }
   authorized(actor, command, state, roomId) {
