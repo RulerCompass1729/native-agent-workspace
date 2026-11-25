@@ -55,7 +55,7 @@ function creationCovered(options, peers, now = Date.now()) {
 // What a file that is not there reads as: nobody switched it, and nobody turned it off.
 const NOBODY = Object.freeze({ by: 'nobody' });
 // Who switched it last ({ by, at }). Tied to the revision: a NAW that does not write it leaves nothing that still holds.
-const switched = s => ['person', 'butler'].includes(s.source?.by) && Number.isSafeInteger(s.source.at) && s.source.revision === s.revision ? s.source : null;
+const switched = s => Number.isSafeInteger(s.source?.at) && s.source.revision === s.revision ? s.source : null;
 const personOff = s => !s.on && s.source !== NOBODY && switched(s)?.by !== 'butler';
 const switchRows = s => (Array.isArray(s.switches) ? s.switches : []).filter(x => x && typeof x.on === 'boolean' && ['person', 'butler'].includes(x.by) &&
   Number.isSafeInteger(x.at) && Number.isSafeInteger(x.revision)).map(({ revision, on, by, at }) => ({ revision, on, by, at })).slice(-SWITCHES);

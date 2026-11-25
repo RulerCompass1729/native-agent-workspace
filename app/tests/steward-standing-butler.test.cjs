@@ -148,9 +148,16 @@ test('a file from before: off without who turned it off counts as the person\'s;
   // The daily file on 2026-11-25: on, for the butler before the one designated now.
   write({ on: true, designation: as(OTHER) });
   assert.equal(f.policy.view().reason, 'other-designation');
+  // On by the butler before: it reads off, and that is nobody's switch.
+  write({ on: true, designation: as(OTHER), source: { by: 'butler', at: 1, revision: 4 } });
+  assert.deepEqual(f.policy.view(), { on: false, limit: 30, unavailable: false, reason: 'other-designation' });
+  write({ on: true, designation: as(OTHER) });
   assert.deepEqual((await f.agent(BUTLER, true)).value, { on: true, limit: 30, unavailable: false, by: 'butler', at: f.at });
   assert.deepEqual(f.read().designation, as(BUTLER));
   fs.unlinkSync(f.file);
+  // The policy checks who it is for itself too, whoever calls it.
+  for (const actor of [NEXT, OTHER, { ...BUTLER, nativeId: 'native-elsewhere' }, null]) assert.throws(() => f.policy.setByButler(actor, true), /current butler/);
+  assert.equal(fs.existsSync(f.file), false);
   assert.equal((await f.agent(BUTLER, true)).value.on, true);
   fs.writeFileSync(f.file, '{', { mode: 0o600 });
   refused(await f.agent(BUTLER, true), 'error.steward.standingUnavailable');
