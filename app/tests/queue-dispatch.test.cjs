@@ -1134,6 +1134,33 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   assert.match(work[1][2], /next task/);
 });
 
+test('a handoff asked for before a migration quiet window is taken inside it; none is asked for inside one', async t => {
+  const old = () => member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' });
+  const held = new Map([['a', 'synthetic-window']]);
+  const inside = dispatcherSetup(t, [old()]);
+  inside.room.queueAdd('next task', 'a');
+  inside.dispatcher.quietWindows = { sessionIds: () => held };
+  await inside.dispatcher.start();
+  await inside.dispatcher.schedule(); await inside.dispatcher.schedule();
+  assert.deepEqual(inside.client.sends('a'), [], 'neither the item nor a handoff request');
+  const { room, client, dispatcher } = dispatcherSetup(t, [old()]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /【NAW 换会话】/);
+  dispatcher.quietWindows = { sessionIds: () => held };
+  client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1]?.id;
+  assert.ok(newId, 'the successor is made'); assert.equal(room.value.queue[0].assignee, newId);
+  await dispatcher.schedule();
+  assert.match(client.sends(newId)[0][2], /交接：在 feature 分支 abc123/);
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  assert.equal(client.sends('a').length, 1);
+});
+
 test('an open decision goes with the session: the successor is told it whole, the row answers the successor, and what it is sent next is marked', async t => {
   // 11-23, the person: 「要不要改成把没答的决定带给继任会话，答复跟着换会话链走？要」.
   const asked = '需要你决定：要不要删旧分支？\n\nA：删。B：留。推荐 A，因为它已经合进 main。' + '补充'.repeat(150);

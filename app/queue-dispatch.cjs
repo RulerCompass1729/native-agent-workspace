@@ -3286,7 +3286,8 @@ class QueueDispatcher {
         ['open', 'complete'].includes(session.rotationEpisode?.state) && session.rotationEpisode.nativeId === session.nativeId &&
         session.rotationEpisode.epoch === ownRequest.episodeEpoch
         ? { ...session, rotationEpisode: null } : session;
-      if (sessionReady(timingSession, snapshot.wakePolicy).ready) {
+      // A quiet window keeps new work out (sessionReady); what its sessions finished is still settled.
+      if (['', 'quiet-window'].includes(sessionReady(timingSession, snapshot.wakePolicy).reason)) {
         if (!this.idleSince.has(session.id)) {
           this.idleSince.set(session.id, now);
         }
@@ -3518,10 +3519,11 @@ class QueueDispatcher {
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
       // The person's own act is told past a quiet window (R200), and their answer on its own card (R209) also past its
       // background work, the two minutes after they used it and the quiet a rotation waits for. The turn it starts makes
-      // a move or rotation wait for its quiet again; a window's deadline stays. Where no idle clock runs, its last
-      // activity counts.
+      // a move or rotation wait for its quiet again; a window's deadline stays, and it may close before. In a window its
+      // last activity counts (the idle clock there misses a turn no pass saw), and where no idle clock runs. Anything else
+      // waits for the window without reading the backends.
       const as = click ? pastClick : event && listed.quietWindow && this.stewardWake.personActed() ? pastWindow : null, butler = as ? as(listed) : listed;
-      const idle = this.idleSince.has(steward.sessionId) ? settled(steward.sessionId, this.idleSince, current.now, this.settleMs)
+      const idle = this.idleSince.has(steward.sessionId) && !listed.quietWindow ? settled(steward.sessionId, this.idleSince, current.now, this.settleMs)
         : Boolean(as) && sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs);
       if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
@@ -3547,7 +3549,7 @@ class QueueDispatcher {
   // any space not archived (waiting on the person does not count); a hash over their ids and states only; and how long
   // the butler has been idle. Counts and the hash leave this function, no name or text.
   openWork(current) {
-    const butler = this.stewardSession(current.snapshot.sessions)?.session?.id ?? null, parts = [];
+    const own = this.stewardSession(current.snapshot.sessions)?.session, butler = own?.id ?? null, parts = [];
     let sessions = 0, items = 0;
     for (const s of current.snapshot.sessions || []) {
       if (!s || s.archived || s.id === butler) continue;
@@ -3557,7 +3559,8 @@ class QueueDispatcher {
       if (!room || room.archived || !Array.isArray(room.queue)) continue;
       for (const item of room.queue) if (['queued', 'sent'].includes(item.status)) { items++; parts.push(`i\t${item.id}\t${item.status}`); }
     }
-    const since = butler === null ? undefined : this.idleSince.get(butler);
+    // A quiet window keeps a patrol out: none is due there.
+    const since = butler === null || own.quietWindow ? undefined : this.idleSince.get(butler);
     return { sessions, items, hash: createHash('sha256').update(parts.sort().join('\n')).digest('hex'),
       idleMs: Number.isFinite(since) ? current.now - since : NaN };
   }
@@ -3590,7 +3593,7 @@ class QueueDispatcher {
       if (this.closed) return;
       try {
         const session = current.snapshot.sessions.find(s => s.id === target.sessionId);
-        if (!session || session.nativeId !== target.nativeId || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
+        if (!session || session.nativeId !== target.nativeId || session.quietWindow || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
         if (engaged.has(session.id) || Array.isArray(holding) && holding.includes(session.id)) continue;
         const fresh = await this.freshReady(session.id, quietMs);
         if (!fresh || fresh.session.nativeId !== target.nativeId) continue;

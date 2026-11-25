@@ -84,6 +84,17 @@ async function fixture(t, provider, session = agent(provider)) {
   return { clock, client, rooms, controller, dispatcher, contexts, ask, answer, receipt, pass, elapse, told, wired };
 }
 
+test('an answer owed to an agent in a migration quiet window asks the backends for nothing until the window closes', async t => {
+  const f = await fixture(t, 'claude'), refresh = f.client.refresh.bind(f.client); let reads = 0;
+  f.client.refresh = async (...args) => { reads += 1; return refresh(...args); };
+  f.dispatcher.quietWindows = { sessionIds: () => new Map([['agent', 'synthetic-window']]) };
+  await f.ask('op-a'); await f.answer('op-a', 1);
+  for (let i = 0; i < 10; i += 1) { f.dispatcher.dirty = true; await f.elapse(3000); }
+  assert.deepEqual(f.told(), []); assert.equal(reads, 0);
+  f.dispatcher.quietWindows = null; f.dispatcher.dirty = true; await f.elapse(12000);
+  assert.equal(f.told().length, 1);
+});
+
 for (const provider of ['claude', 'codex']) {
   test(`${provider}: a card confirmed and one cancelled reach the agent that asked as one message, after its turn has ended`, async t => {
     const f = await fixture(t, provider, agent(provider, { state: 'working' }));
