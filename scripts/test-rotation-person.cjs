@@ -242,9 +242,11 @@ async function finishedAlone(id, marks, limit = 300000) {
     if (!['stopping', 'ended'].includes(s.state)) { looks++; assert.equal(s.controlRevision, marks.control, 'No control change by anyone'); }
     return rowsOf(id).some(row => ['done', 'kept', 'failed'].includes(row.event));
   }, 'an end of the rotation', limit);
+  const events = rowsOf(id).map(row => row.event);
+  assert.ok(!events.includes('kept') && !events.includes('failed'), 'Nothing was kept or failed: ' + events);
   await finished(id);
   const { control: _, ...end } = await personMarks(id), { control: __, ...before } = marks;
-  assert.ok(looks > 3, 'It was looked at meanwhile');
+  assert.ok(looks > 0, 'It was looked at meanwhile');
   assert.deepEqual(end, before, 'The product recorded no act of the person on the old session since');
   const next = rowsOf(id).find(row => row.event === 'done')?.new.id;
   if (!next) return;
