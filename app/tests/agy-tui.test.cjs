@@ -81,13 +81,13 @@ test('prepareBridge writes separate MCP token + PreToolUse/PostToolUse matchers;
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8')), { name: 'naw' });
   const hooks = JSON.parse(fs.readFileSync(path.join(pluginDir, 'hooks.json'), 'utf8'));
   assert.deepEqual(Object.keys(hooks['naw-lifecycle']), ['SessionStart', 'PreInvocation', 'PostInvocation', 'PreToolUse', 'PostToolUse', 'Stop']);
-  assert.equal(hooks['naw-lifecycle'].PreToolUse[0].matcher, '^.*workspace_message$');
-  assert.equal(hooks['naw-lifecycle'].PostToolUse[0].matcher, '^.*workspace_message$');
+  assert.equal(hooks['naw-lifecycle'].PreToolUse[0].matcher, '^(?:call_mcp_tool|.*workspace_message)$');
+  assert.equal(hooks['naw-lifecycle'].PostToolUse[0].matcher, '^(?:call_mcp_tool|.*workspace_message)$');
   const mcp = JSON.parse(fs.readFileSync(path.join(pluginDir, 'mcp_config.json'), 'utf8'));
   assert.equal(mcp.mcpServers.workspace.env.NAW_MESSAGE_TOKEN, 'mcp-tok-abc');
   assert.ok(mcp.mcpServers.workspace.args.includes('--agy'));
 
-  // Transcript must resolve inside brainRoot/<nativeId>/ and end with transcript.jsonl; symlinks to other sessions fail.
+  // Transcript must resolve inside brainRoot/<nativeId>/ and end with transcript.jsonl or transcript_full.jsonl; symlinks to other sessions fail.
   const brainRoot = path.join(dir, 'brain');
   const ownId = randomUUID(), otherId = randomUUID();
   const ownLogs = path.join(brainRoot, ownId, '.system_generated', 'logs');
@@ -95,12 +95,14 @@ test('prepareBridge writes separate MCP token + PreToolUse/PostToolUse matchers;
   fs.mkdirSync(ownLogs, { recursive: true });
   fs.mkdirSync(otherLogs, { recursive: true });
   const ownTranscript = path.join(ownLogs, 'transcript.jsonl');
+  const ownFullTranscript = path.join(ownLogs, 'transcript_full.jsonl');
   const otherTranscript = path.join(otherLogs, 'transcript.jsonl');
   fs.writeFileSync(ownTranscript, [
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 3, content: 'old turn reply' }),
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 10, content: 'calling tool', tool_calls: [{ name: 'read_file' }] }),
     JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 12, content: 'done\nREADY lane/test 1234567' }),
   ].join('\n') + '\n');
+  fs.writeFileSync(ownFullTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 14, content: 'NAW_AGY_SMOKE_OK' }) + '\n');
   fs.writeFileSync(otherTranscript, JSON.stringify({ type: 'PLANNER_RESPONSE', step_index: 12, content: 'OTHER SESSION SECRET' }) + '\n');
 
   // Symlinked parent directory escaping to another conversation must be rejected.
@@ -109,9 +111,11 @@ test('prepareBridge writes separate MCP token + PreToolUse/PostToolUse matchers;
   const escapedPath = path.join(evilParent, 'transcript.jsonl');
 
   assert.ok(resolveSessionTranscript(ownTranscript, ownId, brainRoot));
+  assert.ok(resolveSessionTranscript(ownFullTranscript, ownId, brainRoot));
   assert.equal(resolveSessionTranscript(otherTranscript, ownId, brainRoot), null);
   assert.equal(resolveSessionTranscript(escapedPath, ownId, brainRoot), null);
   assert.equal(readFinalReply(ownTranscript, 10, ownId, brainRoot), 'done\nREADY lane/test 1234567');
+  assert.equal(readFinalReply(ownFullTranscript, 10, ownId, brainRoot), 'NAW_AGY_SMOKE_OK');
   assert.equal(readFinalReply(ownTranscript, 13, ownId, brainRoot), '', 'never returns an earlier turn reply');
   assert.equal(readFinalReply(otherTranscript, 0, ownId, brainRoot), '', 'never reads another session transcript');
   assert.equal(readFinalReply(escapedPath, 0, ownId, brainRoot), '', 'never follows symlinked parent to another session');
@@ -548,6 +552,7 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
       return new AgyTui(record, host, {
         sendTimeoutMs: 500,
         humanInputQuietMs: 500,
+        warmMcp: false,
         now: () => clock,
         Terminal: class extends XtermTerminal {
           constructor(argv, cwd, env) { super(argv, cwd, env); activeTerm = this; }
@@ -782,6 +787,103 @@ test('R2 #4 (r3 #1/#2): xterm editorState blocks un-echoed keystroke race, stale
   rt.hook({ hookEventName: 'PreInvocation', conversationId: initialConvId, invocationNum: 1, initialNumSteps: 1 });
   await sendOk;
   assert.equal(record.state, 'working');
+  assert.equal(record.messages.at(-1).status, 'submitted', 'PreInvocation marks user input submitted');
+});
+
+test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores unrelated servers, and handles timeout/abort', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-agy-warm-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const rule = '─'.repeat(80);
+  const paint = async (term, lines, cursorRow = lines.findIndex(l => l.startsWith('>'))) => {
+    const move = cursorRow >= 0 ? `\x1b[${cursorRow + 1};3H` : '';
+    const payload = '\x1b[2J\x1b[H' + lines.join('\r\n') + move;
+    await new Promise(resolve => term.screen.write(payload, resolve));
+    term.emit('data', { data: payload });
+  };
+  class XtermTerminal extends SyntheticTerminal {
+    constructor(argv, cwd, env) {
+      super(argv, cwd, env);
+      this.screen = new HeadlessTerminal({ cols: 100, rows: 30, allowProposedApi: true });
+    }
+  }
+  const terms = [];
+  const host = {
+    privateDir: dir,
+    binaries: { agy: '/synthetic/bin/agy', python: '/synthetic/bin/python3' },
+    hookSocket: path.join(dir, 'hooks.sock'),
+    hookTargets: new Map(),
+    agyMcpTargets: new Map(),
+    create(record) {
+      return new AgyTui(record, host, {
+        sendTimeoutMs: 500,
+        humanInputQuietMs: 0,
+        mcpAuthWaitMs: 60000,
+        mcpWarmTimeoutMs: 60,
+        Terminal: class extends XtermTerminal {
+          constructor(argv, cwd, env) { super(argv, cwd, env); terms.push(this); }
+        },
+      });
+    },
+    close() {},
+  };
+  const ws = new Workspace(host, dir);
+  t.after(async () => { await ws.close(); });
+
+  // Happy path: auth footer -> /mcp -> ✓ naw_workspace Tools: workspace_message -> Esc -> empty prompt -> ready.
+  const id1 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const rt1 = ws.runtimes.get(id1), term1 = terms[0];
+  term1.emit('started', 71717);
+  await paint(term1, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts']);
+  assert.equal(rt1.mcpWarmPhase, 'pending');
+  assert.equal(rt1.chatAvailable, false);
+  assert.equal(rt1.addressedSendAvailable, false);
+  assert.equal(term1.writes.length, 0, 'waits for model footer before opening /mcp');
+
+  await paint(term1, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt1.mcpWarmPhase, 'opening');
+  assert.deepEqual(term1.writes, ['/mcp\r']);
+  assert.equal(rt1.chatAvailable, false);
+
+  // Unrelated healthy server + failed naw_workspace must NOT satisfy warmup.
+  await paint(term1, ['MCP Servers', '  ✓ other_server  Tools: foo', '  ✗ naw_workspace  Error'], 1);
+  assert.equal(rt1.mcpWarmPhase, 'opening');
+  assert.equal(term1.writes.length, 1);
+
+  // Connected naw_workspace with workspace_message closes /mcp via Esc.
+  await paint(term1, ['MCP Servers', '>  ✓ naw_workspace  Tools: workspace_message', 'esc Exit'], 1);
+  assert.equal(rt1.mcpWarmPhase, 'closing');
+  assert.equal(term1.writes.at(-1), '\x1b');
+  assert.equal(rt1.chatAvailable, false);
+
+  // Overlay dismissed -> empty prompt -> chatAvailable & addressedSendAvailable both true.
+  await paint(term1, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt1.mcpWarmPhase, 'ready');
+  assert.equal(rt1.chatAvailable, true);
+  assert.equal(rt1.addressedSendAvailable, true);
+
+  // Timeout path: sends Esc once, marks failed, keeps addressedSendAvailable=false while allowing chat after overlay closes.
+  const id2 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const rt2 = ws.runtimes.get(id2), term2 = terms[1];
+  term2.emit('started', 71718);
+  await paint(term2, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt2.mcpWarmPhase, 'opening');
+  await new Promise(r => setTimeout(r, 90));
+  assert.equal(rt2.mcpWarmPhase, 'failed');
+  assert.equal(term2.writes.at(-1), '\x1b');
+  await paint(term2, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt2.chatAvailable, true);
+  assert.equal(rt2.addressedSendAvailable, false);
+  assert.equal(term2.writes.filter(w => w === '/mcp\r').length, 1, 'never loops /mcp after failure');
+
+  // Human input during opening aborts warmup cleanly without sending Esc over user keystrokes.
+  const id3 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const rt3 = ws.runtimes.get(id3), term3 = terms[2];
+  term3.emit('started', 71719);
+  await paint(term3, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt3.mcpWarmPhase, 'opening');
+  ws.input(id3, 'x', 'owner-1');
+  assert.equal(rt3.mcpWarmPhase, 'aborted');
+  assert.equal(rt3.addressedSendAvailable, false);
 });
 
 test('unhooked agy session clears temporary identity on exit and reload', async t => {
@@ -879,17 +981,34 @@ test('agy_hook.py is a no-op outside NAW and forwards metadata + hashed PreToolU
   t.after(() => server.close());
 
   const convId = randomUUID();
-  const preOut = execFileSync(python, [script], {
+  // Real agy 1.5.16 lazy MCP call_mcp_tool payload for naw_workspace/workspace_message.
+  const preLazyOut = execFileSync(python, [script], {
     input: JSON.stringify({
       hookEventName: 'PreToolUse',
       conversationId: convId,
-      toolCall: { id: 'toolu_77', name: 'naw_workspace__workspace_message', args: { recipient_id: 'peer-9', message: 'SECRET_MSG' } },
+      toolCall: {
+        id: 'call_896205',
+        name: 'call_mcp_tool',
+        args: { ServerName: 'naw_workspace', ToolName: 'workspace_message', Arguments: { recipient_id: 'peer-9', message: 'SECRET_MSG' } },
+      },
       lastUserInput: 'SECRET_PROMPT_BODY',
     }),
     encoding: 'utf8',
     env: { ...envClean, NAW_HOOK_TOKEN: 'hook-secret', NAW_HOOK_SOCKET: sock },
   });
-  assert.deepEqual(JSON.parse(preOut), { decision: 'allow' });
+  assert.deepEqual(JSON.parse(preLazyOut), { decision: 'allow' });
+
+  // Unrelated call_mcp_tool server is a pass-through ({}) and sends nothing to NAW_HOOK_SOCKET.
+  const preOtherOut = execFileSync(python, [script], {
+    input: JSON.stringify({
+      hookEventName: 'PreToolUse',
+      conversationId: convId,
+      toolCall: { id: 'call_other', name: 'call_mcp_tool', args: { ServerName: 'other_mcp', ToolName: 'foo', Arguments: {} } },
+    }),
+    encoding: 'utf8',
+    env: { ...envClean, NAW_HOOK_TOKEN: 'hook-secret', NAW_HOOK_SOCKET: sock },
+  });
+  assert.deepEqual(JSON.parse(preOtherOut), {});
 
   const stopOut = execFileSync(python, [script], {
     input: JSON.stringify({
@@ -914,8 +1033,8 @@ test('agy_hook.py is a no-op outside NAW and forwards metadata + hashed PreToolU
   assert.deepEqual(received[0], {
     hookEventName: 'PreToolUse',
     conversationId: convId,
-    toolCallId: 'toolu_77',
-    toolName: 'naw_workspace__workspace_message',
+    toolCallId: 'call_896205',
+    toolName: 'workspace_message',
     recipientId: 'peer-9',
     messageHash: sha256('SECRET_MSG'),
     token: 'hook-secret',

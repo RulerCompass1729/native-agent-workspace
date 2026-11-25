@@ -41,18 +41,36 @@ def main():
     if event_name in ("PreToolUse", "PostToolUse"):
         tool_call = message.get("toolCall") or {}
         tool_name = tool_call.get("name") or ""
-        if not tool_name.endswith("workspace_message"):
+        raw_args = tool_call.get("args") or {}
+        if not isinstance(raw_args, dict):
+            raw_args = {}
+        is_workspace_msg = False
+        call_args = raw_args
+        if tool_name == "call_mcp_tool":
+            srv = raw_args.get("ServerName") or raw_args.get("server_name") or ""
+            tname = raw_args.get("ToolName") or raw_args.get("tool_name") or ""
+            if srv == "naw_workspace" and tname == "workspace_message":
+                is_workspace_msg = True
+                nested = raw_args.get("Arguments") if "Arguments" in raw_args else raw_args.get("arguments")
+                if isinstance(nested, str):
+                    try:
+                        nested = json.loads(nested)
+                    except Exception:
+                        nested = {}
+                call_args = nested if isinstance(nested, dict) else {}
+        elif tool_name.endswith("workspace_message"):
+            is_workspace_msg = True
+        if not is_workspace_msg:
             respond("")
             return
         if isinstance(tool_call.get("id"), str):
             event["toolCallId"] = tool_call["id"]
-        event["toolName"] = tool_name
+        event["toolName"] = "workspace_message"
         if event_name == "PreToolUse":
-            args = tool_call.get("args") or {}
-            if isinstance(args.get("recipient_id"), str):
-                event["recipientId"] = args["recipient_id"]
-            if isinstance(args.get("message"), str):
-                event["messageHash"] = hashlib.sha256(args["message"].encode("utf-8")).hexdigest()
+            if isinstance(call_args.get("recipient_id"), str):
+                event["recipientId"] = call_args["recipient_id"]
+            if isinstance(call_args.get("message"), str):
+                event["messageHash"] = hashlib.sha256(call_args["message"].encode("utf-8")).hexdigest()
     event["token"] = token
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(1)

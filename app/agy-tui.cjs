@@ -16,9 +16,12 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_SEND_TIMEOUT_MS = 15000;
 const DEFAULT_HUMAN_INPUT_QUIET_MS = 500;
+const DEFAULT_MCP_AUTH_WAIT_MS = 3000;
+const DEFAULT_MCP_WARM_TIMEOUT_MS = 8000;
 const MCP_PROOF_WAIT_MS = 2500;
 const DEFAULT_BRAIN_ROOT = path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
-const WORKSPACE_MESSAGE_MATCHER = '^.*workspace_message$';
+const WORKSPACE_MESSAGE_MATCHER = '^(?:call_mcp_tool|.*workspace_message)$';
+const TRANSCRIPT_BASENAMES = new Set(['transcript.jsonl', 'transcript_full.jsonl']);
 const RULE_LINE = /^[─━═]{10,}$/;
 const EMPTY_PROMPT_LINE = /^[>❯](?:\s*|\s+(?:Auto mode|Plan mode|Accept edits|Ask before edits|Default mode|Bypass permissions)\b.*\(shift\+tab to cycle\))$/;
 // Keys that cannot insert text or recall history into an already-empty composer.
@@ -43,16 +46,45 @@ function stripAnsi(raw) {
   return String(raw || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ' ');
 }
 
-function editorState(screen) {
+function screenLines(screen) {
   const buf = screen?.buffer?.active;
   const rows = Number.isInteger(screen?.rows) ? screen.rows : 0;
-  if (!buf || rows <= 0 || typeof buf.getLine !== 'function') return 'unknown';
+  if (!buf || rows <= 0 || typeof buf.getLine !== 'function') return null;
   const baseY = Number.isInteger(buf.baseY) ? buf.baseY : 0;
   const lines = [];
   for (let y = baseY; y < baseY + rows; y++) {
-    const line = buf.getLine(y)?.translateToString(true) ?? '';
+    lines.push(buf.getLine(y)?.translateToString(true) ?? '');
+  }
+  return { buf, lines };
+}
+
+function screenShowsModelFooter(screen) {
+  const view = screenLines(screen);
+  if (!view) return false;
+  for (let i = view.lines.length - 1; i >= 0; i--) {
+    const line = view.lines[i];
+    if (line.includes('? for shortcuts')) return line.includes('·');
+  }
+  return false;
+}
+
+function screenShowsNawMcpReady(screen) {
+  const view = screenLines(screen);
+  if (!view) return false;
+  let inMcp = false;
+  for (const line of view.lines) {
+    if (line.includes('MCP Servers')) inMcp = true;
+    if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) return true;
+  }
+  return false;
+}
+
+function editorState(screen) {
+  const view = screenLines(screen);
+  if (!view) return 'unknown';
+  const { buf, lines } = view;
+  for (const line of lines) {
     if (line.includes('Do you trust the contents of this project?')) return 'blocked';
-    lines.push(line);
   }
   const cursorY = Number.isInteger(buf.cursorY) ? buf.cursorY : -1;
   let statusIdx = -1;
@@ -145,7 +177,7 @@ function resolveSessionTranscript(transcriptPath, nativeId, brainRoot = DEFAULT_
     const realRoot = fs.realpathSync(brainRoot);
     const sessionRoot = path.join(realRoot, nativeId);
     const realFile = fs.realpathSync(transcriptPath);
-    if (!realFile.startsWith(sessionRoot + path.sep) || path.basename(realFile) !== 'transcript.jsonl') return null;
+    if (!realFile.startsWith(sessionRoot + path.sep) || !TRANSCRIPT_BASENAMES.has(path.basename(realFile))) return null;
     const stat = fs.lstatSync(realFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_TRANSCRIPT_BYTES) return null;
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) return null;
@@ -204,13 +236,25 @@ function launchSpec({ record, binary, bridgeDir = null, hookToken = null, hookSo
 
 class AgyTui extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
-  constructor(record, host, { Terminal, sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS, humanInputQuietMs = DEFAULT_HUMAN_INPUT_QUIET_MS, now = () => Date.now(), brainRoot = DEFAULT_BRAIN_ROOT } = {}) {
+  constructor(record, host, {
+    Terminal,
+    sendTimeoutMs = DEFAULT_SEND_TIMEOUT_MS,
+    humanInputQuietMs = DEFAULT_HUMAN_INPUT_QUIET_MS,
+    mcpAuthWaitMs = DEFAULT_MCP_AUTH_WAIT_MS,
+    mcpWarmTimeoutMs = DEFAULT_MCP_WARM_TIMEOUT_MS,
+    warmMcp = true,
+    now = () => Date.now(),
+    brainRoot = DEFAULT_BRAIN_ROOT,
+  } = {}) {
     super();
     this.record = record;
     this.host = host;
     this.Terminal = Terminal;
     this.sendTimeoutMs = sendTimeoutMs;
     this.humanInputQuietMs = humanInputQuietMs;
+    this.mcpAuthWaitMs = mcpAuthWaitMs;
+    this.mcpWarmTimeoutMs = mcpWarmTimeoutMs;
+    this.warmMcp = warmMcp;
     this.now = now;
     this.brainRoot = brainRoot;
     this.terminal = null;
@@ -226,6 +270,9 @@ class AgyTui extends EventEmitter {
     this.trustConfirmSent = false;
     this.lastHumanInputAt = -Infinity;
     this.humanInputTimer = null;
+    this.mcpWarmPhase = 'idle'; // 'idle' | 'pending' | 'opening' | 'closing' | 'ready' | 'failed' | 'aborted'
+    this.mcpWarmTimer = null;
+    this.mcpAuthTimer = null;
     this.mcpCalls = new Map();
     // Separate per-session secrets: hookToken is in the child env; mcpToken is written only to mcp_config.json.
     this.token = randomBytes(32).toString('hex');
@@ -233,6 +280,69 @@ class AgyTui extends EventEmitter {
   }
   clearHumanInputTimer() {
     if (this.humanInputTimer) { clearTimeout(this.humanInputTimer); this.humanInputTimer = null; }
+  }
+  clearMcpWarmTimers() {
+    if (this.mcpWarmTimer) { clearTimeout(this.mcpWarmTimer); this.mcpWarmTimer = null; }
+    if (this.mcpAuthTimer) { clearTimeout(this.mcpAuthTimer); this.mcpAuthTimer = null; }
+  }
+  needsMcpWarmup() {
+    return Boolean(this.warmMcp && this.bridgeDir && this.terminal?.screen);
+  }
+  mcpWarmBusy() {
+    return this.mcpWarmPhase === 'pending' || this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing';
+  }
+  startMcpWarmup() {
+    if (this.mcpWarmPhase !== 'pending' || this.stopped || !this.terminal?.alive || !this.terminal.screen) return;
+    if (editorState(this.terminal.screen) !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
+    this.clearMcpWarmTimers();
+    this.mcpWarmPhase = 'opening';
+    this.syncCapabilities();
+    // agy TUI skips plugin MCP loading before keyring auth finishes; opening /mcp once after auth
+    // initializes naw_workspace so workspace_message is registered in the model's call_mcp_tool schema.
+    try {
+      this.terminal.input('/mcp\r');
+    } catch {
+      this.mcpWarmPhase = 'failed';
+      this.syncCapabilities();
+      return;
+    }
+    this.mcpWarmTimer = setTimeout(() => {
+      this.mcpWarmTimer = null;
+      if (this.mcpWarmPhase !== 'opening' && this.mcpWarmPhase !== 'closing') return;
+      const shouldEsc = this.mcpWarmPhase === 'opening' && this.terminal?.alive;
+      this.mcpWarmPhase = 'failed';
+      if (shouldEsc) {
+        try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
+      }
+      if (!this.stopped && this.terminal?.alive && this.terminal.screen) this.syncScreenState(this.terminal.screen);
+      else this.syncCapabilities();
+    }, this.mcpWarmTimeoutMs);
+    this.mcpWarmTimer.unref?.();
+  }
+  advanceMcpWarmup(screen, state) {
+    if (!this.needsMcpWarmup()) return;
+    if (this.mcpWarmPhase === 'pending') {
+      if (state !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
+      if (screenShowsModelFooter(screen)) {
+        this.startMcpWarmup();
+      } else if (!this.mcpAuthTimer) {
+        this.mcpAuthTimer = setTimeout(() => {
+          this.mcpAuthTimer = null;
+          if (this.mcpWarmPhase === 'pending') this.startMcpWarmup();
+        }, this.mcpAuthWaitMs);
+        this.mcpAuthTimer.unref?.();
+      }
+    } else if (this.mcpWarmPhase === 'opening') {
+      if (screenShowsNawMcpReady(screen)) {
+        this.mcpWarmPhase = 'closing';
+        try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
+      }
+    } else if (this.mcpWarmPhase === 'closing') {
+      if (state === 'empty') {
+        this.clearMcpWarmTimers();
+        this.mcpWarmPhase = 'ready';
+      }
+    }
   }
   humanInputSettling() {
     return this.lastHumanInputAt >= 0 && (this.now() - this.lastHumanInputAt) < this.humanInputQuietMs;
@@ -243,6 +353,10 @@ class AgyTui extends EventEmitter {
   }
   noteHumanTerminalInput(data = '') {
     this.lastHumanInputAt = this.now();
+    if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing') {
+      this.clearMcpWarmTimers();
+      this.mcpWarmPhase = 'aborted';
+    }
     const screen = this.terminal?.screen;
     const state = screen ? editorState(screen) : 'unknown';
     // Raw-PTY fail-closed boundary (accepted 2026-11-24): only an already-visible draft stays in 'editing';
@@ -284,8 +398,9 @@ class AgyTui extends EventEmitter {
     this.host.agyMcpTargets?.delete(this.mcpToken);
   }
   syncCapabilities() {
-    const canSend = Boolean(!this.stopped && this.terminal?.alive && this.host.hookSocket && this.promptReady && !this.trustPromptActive);
-    const canAddress = Boolean(!this.stopped && this.terminal?.alive && this.bridgeDir);
+    const warming = this.mcpWarmBusy();
+    const canSend = Boolean(!this.stopped && this.terminal?.alive && this.host.hookSocket && this.promptReady && !this.trustPromptActive && !warming);
+    const canAddress = Boolean(!this.stopped && this.terminal?.alive && this.bridgeDir && (!this.needsMcpWarmup() || this.mcpWarmPhase === 'ready'));
     if (canSend !== this.chatAvailable || canAddress !== this.addressedSendAvailable) {
       this.chatAvailable = canSend;
       this.addressedSendAvailable = canAddress;
@@ -336,8 +451,9 @@ class AgyTui extends EventEmitter {
     const state = editorState(screen);
     if (state === 'draft' && this.humanInputState === 'unseen') this.humanInputState = 'editing';
     if (state === 'empty' && this.humanInputState === 'editing' && !this.humanInputSettling()) this.humanInputState = 'none';
+    this.advanceMcpWarmup(screen, state);
     this.trustPromptActive = state === 'blocked';
-    this.promptReady = state === 'empty' && !this.humanInputUnconfirmed();
+    this.promptReady = state === 'empty' && !this.humanInputUnconfirmed() && !this.mcpWarmBusy();
     this.syncCapabilities();
   }
   observeTerminalText(text) {
@@ -359,6 +475,8 @@ class AgyTui extends EventEmitter {
     this.promptReady = false;
     this.trustPromptActive = false;
     this.trustConfirmSent = false;
+    this.clearMcpWarmTimers();
+    this.mcpWarmPhase = this.needsMcpWarmup() ? 'pending' : 'idle';
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
@@ -379,6 +497,8 @@ class AgyTui extends EventEmitter {
     terminal.on('closed', result => {
       if (this.terminal !== terminal) return;
       this.clearHumanInputTimer();
+      this.clearMcpWarmTimers();
+      this.mcpWarmPhase = 'idle';
       this.clearTokens();
       this.cleanupBridge();
       this.promptReady = false;
@@ -404,7 +524,7 @@ class AgyTui extends EventEmitter {
   }
   send(text, tag, guard = () => true) {
     const screen = this.terminal?.screen;
-    const promptBlocked = this.humanInputUnconfirmed() || (screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true);
+    const promptBlocked = this.mcpWarmBusy() || this.humanInputUnconfirmed() || (screen ? editorState(screen) !== 'empty' : this.record.terminalInputPending === true);
     if (this.stopped || !this.terminal?.alive || !this.chatAvailable || !this.promptReady || this.trustPromptActive ||
       promptBlocked || this.pendingSend || this.liveTurn) {
       return Promise.reject(Object.assign(uiError('error.nativeSendUnavailable'), { notSent: true }));
@@ -544,7 +664,7 @@ class AgyTui extends EventEmitter {
           minStep: Number.isInteger(event.initialNumSteps) ? event.initialNumSteps : 0,
           transcriptPath: resolveSessionTranscript(event.transcriptPath, nativeId, this.brainRoot),
         };
-        if (pending) this.emit('accepted', pending.tag);
+        if (pending) this.emit('submitted', pending.tag);
         if (nativeId) this.emit('nativeTurnStart', { nativeId, turnId });
         if (pending && nativeId) this.emit('replyBound', { tag: pending.tag, nativeId, turnId });
         this.emit('state', 'working');
@@ -632,6 +752,8 @@ class AgyTui extends EventEmitter {
   async stop() {
     this.stopped = true;
     this.clearHumanInputTimer();
+    this.clearMcpWarmTimers();
+    this.mcpWarmPhase = 'idle';
     this.promptReady = false;
     this.trustPromptActive = false;
     this.chatAvailable = false;
