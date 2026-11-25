@@ -248,6 +248,15 @@ test('a revoked guard at hold time or at dispatch proves not sent', async t => {
   channel.result({ id: 'two', status: 'blocked' });
   await assert.rejects(atDispatch, error => error.notSent === true);
 });
+test('native input that came first is told apart from every other refusal (R238)', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  for (const [message, first] of [[{ status: 'blocked', reason: 'input-changed' }, true], [{ status: 'blocked', reason: 'native-rejection' }, undefined],
+    [{ status: 'blocked' }, undefined], [{ status: 'draft', reason: 'input-changed' }, undefined], [{ status: 'unknown', reason: 'input-changed' }, undefined]]) {
+    poll(channel); const pending = channel.request('x', 'one', () => true, true);
+    channel.result({ id: 'one', ...message });
+    await assert.rejects(pending, error => error.inputChanged === first && error.notSent === (message.status !== 'unknown'), JSON.stringify(message));
+  }
+});
 test('a listener that comes back without settling its held message proves it was never sent; an authorized one stays uncertain', async t => {
   const channel = new SubmissionChannel(20); t.after(() => channel.close());
   poll(channel); const held = channel.request('held', 'gone', () => true, true, true);

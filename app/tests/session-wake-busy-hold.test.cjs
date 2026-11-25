@@ -163,7 +163,8 @@ const withdrawn = {
   'the recipient\'s own switch off': f => { wake.setPolicy(f.target, f.b, false); },
   'pausing all handoffs here': f => { f.source.pauseAll('你暂停了后续交接'); },
   'pausing all handoffs on the recipient\'s backend': f => { f.target.pauseAll('你暂停了后续交接'); },
-  'the person typing into the recipient': f => { f.rb.emit('nativeInput', 'The person types into the recipient', { id: 'recipient-native' }); },
+  'Esc in the recipient\'s terminal': f => { f.target.get(f.b).view = 'terminal'; f.rb.terminal = { alive: true, input() {} }; f.target.input(f.b, '\x1b', f.target.get(f.b).owner); },
+  'Ctrl-C in the recipient\'s terminal': f => { f.target.get(f.b).view = 'terminal'; f.rb.terminal = { alive: true, input() {} }; f.target.input(f.b, '\x03', f.target.get(f.b).owner); },
   'another window taking the recipient over': f => { f.target.claim(f.b, 'another-window'); },
   'another native session in the recipient\'s place': f => { f.target.get(f.b).nativeId = 'native-someone-else'; },
   'the recipient\'s backend restarting': f => { const s = f.target.get(f.b); s.connectionRevision = (s.connectionRevision || 0) + 1; },
@@ -342,7 +343,7 @@ test('the sender is told of a held message that did not go out, once, with its n
 const beforeHeld = {
   'the sender\'s turn is interrupted': f => f.end(f.source, f.a, 'interrupted'),
   'the sender is taken over': async f => { f.source.claim(f.a, 'another-window'); await f.end(); f.source.claim(f.a, 'source-owner'); },
-  'the person types into the recipient': async f => { f.rb.emit('nativeInput', 'The person types.', { id: 'recipient-input' }); await f.end(); },
+  'the person presses Esc in the recipient': async f => { f.target.get(f.b).view = 'terminal'; f.rb.terminal = { alive: true, input() {} }; f.target.input(f.b, '\x1b', f.target.get(f.b).owner); await f.end(); },
   'handoffs are paused': async f => { f.source.pauseAll('你暂停了后续交接'); await f.end(); },
   'eight in a row': async f => { f.target.get(f.b).wakeBudget = { version: 2, lastAt: 0, humanRevision: f.target.get(f.b).wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 8 } } }; await f.end(); },
   'its turn outlasts the two hours': async f => { f.advance(120 * MIN); await f.end(); },

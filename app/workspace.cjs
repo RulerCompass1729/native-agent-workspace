@@ -274,7 +274,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, wakeInput: { ...wake.arrivals(s) }, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -1045,7 +1045,7 @@ class Workspace extends EventEmitter {
       const taskIds = onlyBlocks ? blocks.map(block => /<task-id>\s*([A-Za-z0-9_-]{1,64})\s*<\/task-id>/.exec(block)?.[1]) : [];
       // `naw-peer`: a Claude Code cross-session message, tagged by NAW's mod from the engine's origin (T-137).
       // Not the person: no wake.human, pause or controlRevision. Its submission still sends the mod's
-      // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
+      // control:input boundary (nativeControlBoundary above), ordinary input for wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && taskKept(id));
       return {blocks,onlyBlocks,taskIds,reported,machine:sourced||reported,inputSource:sourced?item.source:reported?'task-notification':null};
@@ -1623,7 +1623,7 @@ class Workspace extends EventEmitter {
     const dispatchAllowed = () => { try { return s.nativeId === nativeId && (episode ? s.rotationEpisode === episode && episode.state === 'open' :
       !rotationBlocked(s) && rotationEpoch(s) === inputEpoch) && !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
     if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
-    if (mobile) { mobile.human(); wake.cause(s, 'input'); }
+    if (mobile) { mobile.human(); wake.cause(s, 'input'); wake.recipientInput(s, { control: 1, peer: 1 }); }
     else if (dispatch) {
       if ((this.drafts.get(id) || '').trim()) throw uiError("error.queue.personTyping");
       if (!dispatchAllowed()) throw uiError("error.backgroundMessagesDisabled");
@@ -1645,7 +1645,8 @@ class Workspace extends EventEmitter {
     const roomId = route?.roomId || forward?.roomId || 'shared', room = this.roomFor(roomId);
     const control = s.controlRevision; const member = spaces.membershipRevision(s, roomId); const connection = s.connectionRevision;
     const own = !route && !forward && !dispatch && !wakeTicket && !recovery && !mobile && !backgroundOperation.current();
-    const sameControl = own ? this.ownControl(s) : () => s.controlRevision === control;
+    // A wake's ticket compares the control its registration named, without the ordinary input since (session-wake.cjs).
+    const sameControl = own ? this.ownControl(s) : wakeTicket ? () => wakeTicket.valid(wakeTicket.tag) : () => s.controlRevision === control;
     let terminalDialogBlocked = false;
     const guard = () => {
       this.expireRun(route);
@@ -1975,7 +1976,7 @@ class Workspace extends EventEmitter {
       if (!backgroundOperation.current()) {
         this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1);
         // Text, paste and editing keep the session's wake permission; native Esc/Ctrl-C still withdraw it.
-        if (!interrupt) wake.messageInput(this, s, { control: 1 });
+        if (!interrupt) wake.messageInput(this, s, { control: 1, recipient: !wake.interrupts(data) });
       }
       if (interrupt || backgroundOperation.current()) wake.cause(s, interrupt ? 'interrupt' : 'input');
       s.terminalInputPending = true;
@@ -2005,9 +2006,10 @@ class Workspace extends EventEmitter {
     this.pause('达到本轮 10 分钟期限。', run, false, uiActivity('notice.run.deadline')[1]); return true;
   }
   // The person's explicit pause of all follow-up handoffs also withdraws every staged
-  // workspace message. Input, takeover or interruption in one session is narrower:
-  // it changes that session's control/peer revision, which both the sender and the
-  // receiver proof of a wake carry, so only wakes involving that session are voided.
+  // workspace message. Takeover or interruption in one session is narrower: it changes
+  // that session's control/peer revision, which both the sender and the receiver proof
+  // of a wake carry, so only wakes involving that session are voided. Ordinary input
+  // voids neither (session-wake.cjs messageInput).
   pauseAll(reason, uiMessage, cause = 'pause') { wake.revoke(this, cause); this.pause(reason, undefined, false, uiMessage); }
   goalContinuationCancel(scopeId, sessionId) {
     try { this.goalContinuation?.invalidate(scopeId, sessionId); }
