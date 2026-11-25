@@ -3206,6 +3206,8 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
+  // First: whatever fails below, this run ended on its own path.
+  try { versionEvents?.exitClean(); } catch { /* The next start says it did not end normally. */ }
   discoveries?.dispose();
   backgroundNotifications?.dispose();
   notificationScreen?.dispose();
