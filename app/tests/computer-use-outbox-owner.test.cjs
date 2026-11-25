@@ -193,7 +193,7 @@ test('direct native outbox rechecks global off and native goal before native wri
 test('direct native outbox shares existing cooldown and streak admission', async t => {
   for (const budget of [
     { version: 2, lastAt: Date.now(), humanRevision: 0, senders: { sender: { id: 'earlier', streak: 1 } } },
-    { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 3 } } },
+    { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 8 } } },
   ]) {
     const f = fixture(t); f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: budget });
     await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === ('wake-limited'));
@@ -206,7 +206,7 @@ test('a backend with canonical wake accounting cannot fall back to a stale direc
     const f = fixture(t);
     f.bridge.records.push({ sessionId: 'recipient', nativeId: 'recipient-native', agentWakeBudget: { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 1 } } } });
     if (policy === 'capability') f.entry.state.capabilities = ['agentWakeV1'];
-    else f.records[1].wakeBudget = { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 3 } } };
+    else f.records[1].wakeBudget = { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 8 } } };
     await assert.rejects(bindOriginalOutbox(f.deps, f.identity, f.args), error => classifyOutboxFailure(error).failureReason === 'wake-policy-unavailable');
     assert.equal(f.bridge.records.length, 1);
   }

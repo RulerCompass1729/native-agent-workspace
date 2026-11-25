@@ -8,7 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const backgroundOperation = require('./background-operation.cjs');
-const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', COOLDOWN = 60000, MAX_STREAK = 3;
+const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', QUEUE_DONE = 'agentWakeQueueDoneV1', COOLDOWN = 60000, MAX_STREAK = 8;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
 function safeFile(file) {
@@ -197,7 +197,7 @@ function notSent(error, hold) {
 }
 // Option A (board 11-12 21:2x, the person 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」.
 // A message the designated butler refuses only for its 60-second limit is kept by its sender's backend and offered
-// again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (three in
+// again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (eight in
 // a row, waiting, switched off, a changed identity), and the limit of every other recipient, stay as before: not sent,
 // not retried. Each offer is a full delivery attempt again, so the person acting on the recipient, stopping or taking over
 // the sender, or pausing all handoffs still ends it. The recipient's backend says so, with the time its limit opens.
@@ -691,6 +691,16 @@ function answeredButler(w, intent) {
   const s = w.sessions.get(intent.senderId);
   if (s && stillButler(w, intent)) clearSenderStreak(s, intent.recipientId, intent.targetProof.nativeId);
 }
+// Main's dispatcher calls this once for an item the butler queued that it recorded as done (queue-dispatch.cjs settle):
+// it clears the run of the session that is the butler now, as answeredButler does. Every other run stays.
+function queueDone(w, spec) {
+  const s = w.sessions.get(spec?.sessionId), steward = stewardNow(w);
+  if (!s || !steward || typeof spec.nativeId !== 'string' || !spec.nativeId || s.nativeId !== spec.nativeId) return false;
+  const before = s.wakeBudget;
+  if (!clearSenderStreak(s, steward.sessionId, steward.nativeId)) return false;
+  try { durable(w); } catch (error) { s.wakeBudget = before; throw error; }
+  return true;
+}
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }
 async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
   if (s.provider !== 'codex') return null;
@@ -814,4 +824,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, QUEUE_DONE, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, queueDone, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

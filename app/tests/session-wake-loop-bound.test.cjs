@@ -1,4 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const wake = require('../session-wake.cjs');
 
 // Gate for the automatic-message cap (2026-11-15). The cap exists to stop agents from
@@ -11,17 +12,17 @@ const wake = require('../session-wake.cjs');
 // attempt is not delivered; the schedule keeps going, because an agent woken by other work
 // (a queue item) can still try again.
 //
-// Bound: each directed pair receives at most 3 automatic messages between person checks of
-// its recipient (3 is the person's "3 in a row"; it is written here, not read from the
+// Bound: each directed pair receives at most 8 automatic messages between person checks of
+// its recipient (8 is the person's "每件最多 8 条", 2026-11-25; it is written here, not read from the
 // module, so raising the constant fails this test). A schedule over k pairs then delivers at
-// most 3k messages and refuses every attempt after that; with n agents, at most 3·n·(n−1),
+// most 8k messages and refuses every attempt after that; with n agents, at most 8·n·(n−1),
 // whoever they choose to message. Counting per recipient only (the old rule) also meets this
 // bound; counting only an unbroken run from one sender does not, because any other sender in
 // between restarts it.
 //
 // The budget's edge key is the authenticated sender native id. A changed workspace sender id
 // therefore stays on the same edge, and workspace_message and outbox share it.
-const PER_PAIR = 3;
+const PER_PAIR = 8;
 const OUTBOX = { id: 'outbox', key: 'A' };
 
 function clock(t) {
@@ -86,9 +87,9 @@ test('three different agents each report once to one session, and the first repo
 test('a changed workspace sender id stays on the same native-session edge', t => {
   const tick = clock(t), sessions = {};
   const sender = id => ({ id, key: 'native-A' });
-  const results = [sender('A-one'), sender('A-two'), sender('A-three'), sender('A-four')]
+  const results = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'].map(name => sender(`A-${name}`))
     .map((from, i) => { tick(); return attempt(sessions, from, 'B', `changed-${i}`); });
-  assert.deepEqual(results, [true, true, true, false]);
+  assert.deepEqual(results, [...Array(PER_PAIR).fill(true), false]);
 });
 
 test('an empty sender id fails closed and reserves no edge budget', t => {
@@ -100,10 +101,10 @@ test('an empty sender id fails closed and reserves no edge budget', t => {
 
 // 2026-11-23 (the person approved the butler's recommendation): a member's message the designated butler took clears
 // the butler's run to that member. The member's own run to the butler is cleared only by the person, so the pair stays
-// finite: at most 3 from the member, and at most 3 before and 3 after each of those from the butler.
+// finite: at most 8 from the member, and at most 8 before and 8 after each of those from the butler.
 for (const [name, pattern] of [
   ['the butler and a member answer each other', [['B', 'M'], ['M', 'B']]],
-  ['the butler sends three, the member answers once', [['B', 'M'], ['B', 'M'], ['B', 'M'], ['M', 'B']]],
+  ['the butler sends eight, the member answers once', [...Array(8).fill(['B', 'M']), ['M', 'B']]],
 ]) {
   test(`with no person input, the loop stops: ${name}`, t => {
     const tick = clock(t), sessions = {}, delivered = { 'B->M': 0, 'M->B': 0 };
@@ -124,3 +125,69 @@ for (const [name, pattern] of [
     assert.deepEqual(lastRound, pattern.map(() => false), 'after the bound, every further attempt is refused');
   });
 }
+
+// R232 (2026-11-25): an item the butler queued for a member, once NAW records it as done, clears the butler's run to
+// that member, once an item, and no other run. k items allow the butler at most 8×(k+1) messages to it, whenever they are
+// done; with the member's own messages to it, at most 8, also clearing the run, at most 8×(k+1+8).
+function items(t, sessions) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-bound-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(directory, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: 'B', nativeId: 'B' } }), { mode: 0o600 });
+  return member => {
+    for (const [id, s] of Object.entries(sessions)) s.nativeId = id;
+    wake.queueDone({ dataDir: directory, sessions: new Map(Object.entries(sessions)), changed() {}, persist() {} }, { sessionId: member, nativeId: member });
+  };
+}
+for (const [name, at] of [
+  ['no item is done', []],
+  ['one item is done before the butler writes', [0]],
+  ['one item is done after the limit', [30]],
+  ['four items are done far apart', [5, 20, 40, 60]],
+  ['three items are done at the same moment', [12, 12, 12]],
+  ['an item is done after every message, until there are none', [1, 2, 3, 4, 5, 6]],
+]) {
+  test(`with no person input, the butler's messages to a member stop: ${name}`, t => {
+    const tick = clock(t), sessions = { M: { wakeHumanRevision: 0 } }, itemDone = items(t, sessions), k = at.length, delivered = { B: 0, A: 0 }, last = [];
+    for (let step = 0; step < 140; step++) {
+      for (const done of at) if (done === step) itemDone('M');
+      for (const from of ['B', 'A']) { tick(); const ok = attempt(sessions, from, 'M', `k${from}${step}`); if (ok) delivered[from]++; last.push(ok); }
+    }
+    t.diagnostic(`items ${k}, B->M ${delivered.B}, A->M ${delivered.A} of 140 attempts each`);
+    assert.ok(delivered.B <= PER_PAIR * (k + 1), `${delivered.B} delivered for ${k} items; at most ${PER_PAIR * (k + 1)}`);
+    assert.equal(delivered.A, PER_PAIR, 'another sender to the same member stays at eight, whatever is done');
+    assert.deepEqual(last.slice(-20), Array(20).fill(false), 'after the last item, every further attempt is refused');
+  });
+}
+test('with no person input, the butler and a member that also answers stop: items done and replies together', t => {
+  const tick = clock(t), sessions = { M: { wakeHumanRevision: 0 }, B: { wakeHumanRevision: 0 } }, itemDone = items(t, sessions), done = [4, 60, 150], k = done.length;
+  const delivered = { 'B->M': 0, 'M->B': 0 }, last = [];
+  for (let step = 0; step < 400; step++) {
+    if (done.includes(step)) itemDone('M');
+    tick(); const out = attempt(sessions, 'B', 'M', `c${step}`);
+    tick(); const back = step % 9 === 8 && attempt(sessions, 'M', 'B', `r${step}`);
+    if (out) delivered['B->M']++;
+    if (back) { delivered['M->B']++; wake.clearSenderStreak(sessions.M, 'B'); }
+    last.push(out, back);
+  }
+  t.diagnostic(`items ${k}, B->M ${delivered['B->M']}, M->B ${delivered['M->B']}`);
+  assert.equal(delivered['M->B'], PER_PAIR, 'an item done gives the member no more messages to the butler');
+  assert.ok(delivered['B->M'] <= PER_PAIR * (k + 1 + PER_PAIR), `${delivered['B->M']} delivered; at most ${PER_PAIR * (k + 1 + PER_PAIR)}`);
+  assert.deepEqual(last.slice(-40), Array(40).fill(false), 'after the last item and the last reply, every further attempt is refused');
+});
+test('items done by a member restart no other direction: each stays at eight', t => {
+  const tick = clock(t), sessions = { M: { wakeHumanRevision: 0 }, A: { wakeHumanRevision: 0 }, B: { wakeHumanRevision: 0 } }, itemDone = items(t, sessions);
+  const other = [['M', 'B'], ['A', 'M'], ['M', 'A'], ['A', 'B'], ['B', 'A']], delivered = new Map();
+  for (let step = 0; step < 60; step++) {
+    for (const [from, to] of other) { tick(); if (attempt(sessions, from, to, `o${from}${to}${step}`)) delivered.set(`${from}->${to}`, (delivered.get(`${from}->${to}`) || 0) + 1); }
+    itemDone('M');
+  }
+  assert.deepEqual([...delivered], other.map(([from, to]) => [`${from}->${to}`, PER_PAIR]));
+});
+test('a message on its way when the run is cleared stays allowed, and the next ones count from it', t => {
+  const tick = clock(t), M = { wakeHumanRevision: 0 }, ids = n => Array.from({ length: n }, (_, i) => `m${i + 1}`);
+  for (const id of ids(8)) { tick(); assert.equal(wake.budgetAllows(M, id, 'B'), true); wake.reserveBudget(M, id, 'B'); }
+  wake.clearSenderStreak(M, 'B');
+  assert.equal(wake.budgetAllows(M, 'm8', 'B'), true, 'the one under way');
+  assert.equal(wake.budgetAllows(M, 'm9', 'B'), false, 'within the minute');
+  const next = ids(9).map(id => { tick(); const ok = wake.budgetAllows(M, `n-${id}`, 'B'); if (ok) wake.reserveBudget(M, `n-${id}`, 'B'); return ok; });
+  assert.deepEqual(next, [...Array(8).fill(true), false]);
+});

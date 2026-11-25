@@ -277,7 +277,7 @@ test('a patrol not known to have arrived is recorded so and tried again on a lat
 
 // The streak budget (session-wake.cjs MAX_STREAK) bounds agent-to-agent wakes; NAW's own send, a queue item's path,
 // is not one of them, so a butler whose senders reached three still gets the patrol.
-test('a butler session whose sender streak is three still receives the patrol', async t => {
+test('a butler session whose sender streak is at the limit still receives the patrol', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-steward-patrol-ws-'));
   const sent = [];
   const host = { binaries: {}, close() {}, create(record) {

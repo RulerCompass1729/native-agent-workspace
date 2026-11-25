@@ -71,21 +71,21 @@ async function fixture(t, { designate = true, receiveFails = false } = {}) {
 }
 const payload = (f, outcome, at) => ({ memberId: f.a, reason: 'wake-undelivered', outcome, title: new Date(at).toISOString() });
 
-test('the fourth message in a row to the butler is refused for the limit: one event, without the message; the limit is unchanged', async t => {
+test('the ninth message in a row to the butler is refused for the limit: one event, without the message; the limit is unchanged', async t => {
   const f = await fixture(t);
-  for (const [i, id] of ['one', 'two', 'three'].entries()) { if (i) f.advance(60001); f.ra.emit('state', 'idle'); await f.turn(id, `Task ${id}.`); f.reply(); }
-  assert.equal(f.writes.length, 3);
+  for (const [i, id] of ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'].entries()) { if (i) f.advance(60001); f.ra.emit('state', 'idle'); await f.turn(id, `Task ${id}.`); f.reply(); }
+  assert.equal(f.writes.length, 8);
   f.observe();
   assert.deepEqual(f.events(), [], 'delivered messages are no event: delivery wakes the butler already');
-  f.advance(60001); await f.turn('four', 'Secret task four.');
+  f.advance(60001); await f.turn('nine', 'Secret task nine.');
   const row = f.rows().at(-1);
-  assert.equal(row.wake.status, 'not-sent'); assert.match(row.text, /连续 3 次/);
+  assert.equal(row.wake.status, 'not-sent'); assert.match(row.text, /连续 8 次/);
   f.observe();
   assert.deepEqual(f.events().map(e => [e.kind, e.sourceRef, e.payload]), [['blocked', `wake-undelivered:${f.a}`, payload(f, 'not-sent:consecutive-limit', row.wake.time)]]);
-  assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret task four'), 'never the message');
-  assert.deepEqual([wake.MAX_STREAK, wake.COOLDOWN], [3, 60000]);
+  assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret task nine'), 'never the message');
+  assert.deepEqual([wake.MAX_STREAK, wake.COOLDOWN], [8, 60000]);
   wake.retryHeld(f.source); await settle();
-  assert.equal(f.writes.length, 3, 'nothing is sent again'); assert.equal(f.source.wakeHoldTimer, null);
+  assert.equal(f.writes.length, 8, 'nothing is sent again'); assert.equal(f.source.wakeHoldTimer, null);
 });
 
 test('a message refused before it was registered (the turn lost its authority, or already sent one) is an event with its code', async t => {

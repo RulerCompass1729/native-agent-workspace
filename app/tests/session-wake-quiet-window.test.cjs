@@ -143,11 +143,11 @@ test('at most 32 held on one backend: the 33rd is not sent and says so; after th
   assert.equal(f.rows().filter(r => r.wake.status === 'held').length, 32); assert.equal(f.rows().at(-1).wake.status, 'not-sent');
   assert.equal(f.writes.length, 0);
   f.close();
-  for (let i = 0; i < 3; i++) { f.advance(MIN); await f.retry(); assert.equal(f.writes.length, i + 1, `sent ${i + 1}`); f.reply(); }
+  for (let i = 0; i < 8; i++) { f.advance(MIN); await f.retry(); assert.equal(f.writes.length, i + 1, `sent ${i + 1}`); f.reply(); }
   f.advance(MIN); await f.retry();
-  const fourth = f.rows()[3];
-  assert.equal(fourth.wake.status, 'not-sent', 'three in a row from one sender: the fourth is refused as before'); assert.match(fourth.text, /连续 3 次/);
-  assert.equal(f.writes.length, 3);
+  const ninth = f.rows()[8];
+  assert.equal(ninth.wake.status, 'not-sent', 'eight in a row from one sender: the ninth is refused as before'); assert.match(ninth.text, /连续 8 次/);
+  assert.equal(f.writes.length, 8);
 });
 
 test('the person still ends a held one: pausing handoffs at once, Esc in the sender at its next look; typing into the sender leaves it (3c)', async t => {
