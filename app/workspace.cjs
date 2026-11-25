@@ -92,6 +92,7 @@ const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 const { readCodexProfile, PROFILE_PATTERN: CODEX_PROFILE_PATTERN } = require('./codex-profile.cjs');
+const sessionModel = require('./session-model.cjs');
 // Who made the model a session runs (vendor) and which native program runs it (shell), for the
 // interface to tell DeepSeek-through-Codex from Codex. A Codex vendor is the model provider
 // Codex reports for the thread (or, before that, the one its profile names); null until known.
@@ -2202,6 +2203,7 @@ class Workspace extends EventEmitter {
   // `scope` 'participant' (participantMaintenanceStopV1): a rotation ends this one session, so its stop pauses
   // only the relays, grants and continuations this session is in; another space's relay keeps running. Without
   // it (the backend switch, which ends every session) the stop pauses all of them, as before.
+  // `requireAuto` 'typed': proven idle apart from text perhaps typed in the native terminal, which the caller saved.
   maintenanceStop(id, expected, requireAuto = false, scope = null) {
     const { sessionPlan, sameStop } = require('./backend-switch.cjs');
     const s = this.get(id), runtime = this.runtime(id);
@@ -2211,7 +2213,8 @@ class Workspace extends EventEmitter {
       for (const room of this.rooms.values()) if (room.run?.status === 'running') for (const member of room.run.ids || []) running.add(member);
       const current = { ...s, draftRevision: this.draftRevisions.get(id) || 0,
         activeTurnId: runtime.turnId, pendingQueue: runtime.pendingQueue, pendingSteer: runtime.pendingSteer,
-        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest };
+        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest,
+        ...(requireAuto === 'typed' ? { terminalInputPending: false } : {}) };
       const plan = sessionPlan(current, current.state, running);
       if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
           !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2287,6 +2290,44 @@ class Workspace extends EventEmitter {
     if (result?.stopped !== true || this.sessions.get(id) !== s || !sameStop(current(), result.stoppedState) ||
         !['ended', 'recoverable', 'disconnected'].includes(s.state)) throw uiError('error.workspace.nativeEndUnconfirmed');
     return { state: s.state };
+  }
+  modelChangeable(id) {
+    const s = this.get(id);
+    if (!['claude', 'codex'].includes(s.provider) || otherVendor(s) || s.requestedSettings?.profile) throw uiError('error.modelChange.unsupported');
+    if (!s.nativeId || s.nativeContextPending || s.recovering || this.stops.has(id) || !['idle', 'working', 'approval'].includes(s.state)) throw uiError('error.modelChange.unavailable');
+    return s;
+  }
+  async modelChoices(id) {
+    const s = this.modelChangeable(id);
+    if (s.provider === 'claude') return sessionModel.claudeChoices(s);
+    const nativeId = s.nativeId, models = await this.runtime(id).models();
+    if (this.sessions.get(id) !== s || s.nativeId !== nativeId) throw uiError('error.modelChange.changed');
+    return { provider: 'codex', current: sessionModel.current(s), nativeDefault: false, models };
+  }
+  // `expected`: for Claude the exact idle session to stop and resume (a sessionPlan stop proof), for Codex its
+  // native identity. The window that had the session keeps it.
+  async changeModel(id, value, expected, requireAuto = true) {
+    const s = this.modelChangeable(id), nativeId = expected?.nativeId;
+    const changed = () => uiError('error.modelChange.changed');
+    if (typeof nativeId !== 'string' || s.nativeId !== nativeId || this.storageWarning) throw changed();
+    if (s.provider === 'codex') return this.runtime(id).changeModel(value, () => {
+      if (this.closed || this.sessions.get(id) !== s || s.nativeId !== nativeId || this.modelChangeable(id) !== s) throw changed();
+    });
+    const wanted = sessionModel.claudeValue(value);
+    if (![true, 'typed'].includes(requireAuto)) throw changed();
+    const { sameStop, endedByThisStop } = require('./backend-switch.cjs');
+    const now = () => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0 });
+    let stopped;
+    try { stopped = (await this.maintenanceStop(id, expected, requireAuto, 'participant')).stoppedState; }
+    catch (error) {
+      // A Claude terminal that ends itself during the stop (see endedByThisStop).
+      if (error?.uiMessage?.key === 'error.backendSwitchDisconnectUnconfirmed') stopped = await endedByThisStop({ call: async () => ({ sessions: [now()] }) }, expected, 10000);
+      if (!stopped) throw error;
+    }
+    if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw changed();
+    sessionModel.applyClaude(s, wanted); this.changed(); this.persist();
+    await this.resume(id, s.owner);
+    return wanted;
   }
   maintenanceResume(id, expected, owner) {
     const { sameStop } = require('./backend-switch.cjs'), s = this.get(id);

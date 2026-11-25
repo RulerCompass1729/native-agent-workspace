@@ -141,7 +141,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // 4. Its menus: change and revoke are offered on it; reordering and spaces are not. On another session,
   //    "make it the butler" stands above the secretary's item; a space member is not offered it.
   await page.locator('#session-header-more').click(); let items = await menuItems(); await shot('zh-1280-butler-menu'); await closeMenu();
-  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its record, change and revoke');
+  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its model, its record, change and revoke');
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); items = await menuItems(); await closeMenu();
   for (const key of ['menu.stewardChange', 'menu.stewardRevoke', 'menu.rename', 'menu.archiveSession']) assert.ok(items.includes(say(key)), key);
   for (const text of [say('menu.moveUp'), say('menu.moveDown'), say('menu.stewardSet'), say('menu.joinSpace', { name: '网站改版' })]) assert.equal(items.includes(text), false, text);

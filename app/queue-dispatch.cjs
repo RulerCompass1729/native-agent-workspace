@@ -891,7 +891,8 @@ function carrySettings(session) {
     }
   } else {
     const native = session.nativeSettings || {};
-    if (native.mode) {
+    // Native names its ordinary mode once the model has been changed in the thread.
+    if (native.mode && native.mode !== 'default') {
       return { reason: 'collaboration-mode' };
     }
     if (typeof native.effort === 'string' && CODEX_EFFORT_PATTERN.test(native.effort)) {
@@ -1233,6 +1234,8 @@ function planDispatch(input) {
   // Sessions the caller says are engaged in something else of NAW's own (B6: the session an open
   // integration handoff was sent to) start out busy: no queued item, no rotation.
   for (const id of Array.isArray(input.engaged) ? input.engaged : []) hold(id, 'integration');
+  // The person is changing this session's model: it is about to be stopped and resumed.
+  for (const id of Array.isArray(input.modelChanges) ? input.modelChanges : []) hold(id, 'model-change');
   for (const id of input.heldSessions || []) hold(id, 'trust-hold');
   if (input.quarantineUnknown) for (const session of sessions) hold(session.id, 'trust-unknown');
   let rotationSlots = MAX_ACTIVE_ROTATIONS;
@@ -2441,6 +2444,8 @@ class QueueDispatcher {
     this.connect = options.connect;
     this.labels = options.labels || new Map();
     this.creationDefaults = options.creationDefaults || (() => ({}));
+    // The sessions whose model the person is changing (model-change.cjs): no new item or rotation meanwhile.
+    this.modelChanges = options.modelChanges || (() => []);
     // Native first-directory trust must be qualified before unattended moves.
     this.migrateDirectories = options.migrateDirectories === true;
     // Trust must not bypass the existing ten-minute startup readiness budget.
@@ -3308,6 +3313,7 @@ class QueueDispatcher {
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
       ...this.trustAdmission(),
       engaged,
+      modelChanges: this.modelChanges(),
       outside: steward ? [steward.sessionId] : [],
       butler,
     });
@@ -4832,6 +4838,7 @@ module.exports = {
   newItem,
   trimQueue,
   sessionReady,
+  engagedSessions,
   queueVacancies,
   planDispatch,
   rotationCauseKey,

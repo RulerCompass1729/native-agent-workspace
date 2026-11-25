@@ -556,6 +556,18 @@ test('a session the caller names as engaged gets no queued item and is not rotat
   }
 });
 
+test('a session whose model the person is changing gets no new item and is not rotated; what it holds is still settled', () => {
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  assert.deepEqual(plan(rooms, [member('a'), member('b')], { modelChanges: ['a'] }), [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'b' }]);
+  assert.deepEqual(plan(rooms, [member('a')], { modelChanges: ['a'] }), []);
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [item('1', { assignee: 'a' })] }], [member('a'), member('b')], { modelChanges: ['a'] }), []);
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages() });
+  for (const queue of [[item('1')], []]) assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue }], [old], { modelChanges: ['a'] }), []);
+  const replied = member('a', { messages: [{ id: 't1', role: 'user', text: 'task', origin: 'naw-dispatch', time: NOW - 30000 }, { id: 'r1', role: 'assistant', text: 'Done.', time: NOW - 20000 }] });
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [sentItem()] }], [replied], { modelChanges: ['a'] }).map(action => [action.kind, action.status]), [['settle', 'done']]);
+  for (const modelChanges of [undefined, null, [], 'a', { a: true }]) assert.equal(plan(rooms, [member('a')], { modelChanges }).length, 1, JSON.stringify(modelChanges));
+});
+
 test('B2/B6: integration and trust holds are both busy while an unrelated member still gets work', () => {
   const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
   const sessions = ['integrator', 'successor', 'healthy'].map(id => member(id));
@@ -929,6 +941,19 @@ test('the dispatcher sends through the backend dispatch input, waits for the rep
   assert.equal(room.value.queue[0].status, 'done');
   assert.equal(client.sends().length, 2);
   assert.match(client.sends()[1][2], /second task/);
+});
+
+test('the dispatcher sends nothing to a session whose model the person is changing, and its item once that is settled', async t => {
+  let changing = ['a'];
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a')], { modelChanges: () => changing });
+  room.queueAdd('first task', null);
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 0);
+  changing = [];
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(client.sends().length, 1);
 });
 
 // Queue item 6897c6e3, part 1: a member took the work from the board while the same item was queued for it (four
@@ -2212,6 +2237,10 @@ test('a successor carries the old model, effort, permission mode and view; what 
   assert.deepEqual(rules.carrySettings(unspecified), { settings: { model: 'gpt-6.1-sol', effort: 'ultra' }, view: 'terminal' }, 'a missing view still defaults Codex to terminal');
   const planning = member('c', { provider: 'codex', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'plan' } });
   assert.deepEqual(rules.carrySettings(planning), { reason: 'collaboration-mode' });
+  // After a model change the thread reports its ordinary mode by name; nothing else is let through by it.
+  const ordinary = member('c', { provider: 'codex', model: 'gpt-6.1-sol', nativeSettings: { model: 'gpt-6.1-sol', effort: 'high', mode: 'default' } });
+  assert.deepEqual(rules.carrySettings(ordinary), { settings: { model: 'gpt-6.1-sol', effort: 'high' }, view: 'terminal' });
+  for (const mode of ['plan', 'Default', 'pair_programming', 'x']) assert.deepEqual(rules.carrySettings({ ...ordinary, nativeSettings: { ...ordinary.nativeSettings, mode } }), { reason: 'collaboration-mode' }, mode);
   const twoSpaces = member('a', { roomIds: ['shared', '308f55b3-ec97-467c-a2b8-1ecc47562029'] });
   assert.deepEqual(rules.carrySettings(twoSpaces), { reason: 'several-spaces' });
   // DeepSeek through Codex: the successor starts from the same Codex profile, and must run the same vendor.

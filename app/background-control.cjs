@@ -38,7 +38,7 @@ const refusalRetry = () => ({ retryWithNewOperationId: true, retryHint: REFUSAL_
 const admissionReasons = new Set(['confirmation-limit', 'originating-session-unavailable']);
 // Fixed branch names only: backend errors can contain another session's text or paths.
 const validOriginCheck = value => typeof value === 'string' && /^(?:(?:admission|confirmation)-(?:roster|missing|native-id|archived|context-pending)|confirmation-(?:refresh|native-call|closed|fingerprint))$/.test(value);
-const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable']);
+const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable', 'model-change-unavailable']);
 const summarizedReasons = new Set([...admissionReasons, 'another-operation-running', 'explicit-paths-required', ...preconditionReasons]);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };
@@ -115,6 +115,8 @@ const parameters = {
   runtimeLocation: ['program: claude|codex|python3', 'reset: boolean?'], clearSharedHistory: [],
   draft: ['sessionId', 'text'], retainDraftRecovery: ['sessionId', 'text'], discardDraftRecovery: ['sessionId', 'text'],
   backendSwitchSettings: ['auto: boolean?'], switchBackend: ['expected option from connectionUpdates'], continueConnection: ['sessionId', 'expected continuation option'],
+  modelChoices: ['sessionId; the models and efforts it can change to, what it runs now, and a change still waiting'],
+  changeModel: ['sessionId', '{model, effort}: both named, or null for the native default (Claude only); values from modelChoices. The person confirms each one, your own session included. Never type /model into a terminal instead. Only this session changes, not the person\'s defaults. Returns {status}: applied (Codex, from its next turn), pending (Claude: stopped and resumed with its history as soon as it is idle and nobody is using it; a running teammate or background task refuses it) or refused with the reason'],
   resume: ['sessionId'], forget: ['sessionId'], stop: ['sessionId'], openExternal: ['http(s) URL; background returns the URL without opening the desktop browser'],
   openMessageFile: ['source: {kind,sessionId,messageId,nativeId,cwd,roomId?}', 'local path', '{line}?'],
   readingState: ['positions', 'panorama?'], viewState: ['{selected,mode,spaceId?,roomViews?,terminalLayout?,terminalDisplay?,...}; independent agent view only'],

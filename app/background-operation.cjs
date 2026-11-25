@@ -121,6 +121,8 @@ function maintenanceAction(method, args = [], actor) {
   // WorkspaceClient.pause stops routing across backends even when passed an ID;
   // that ID only scopes manual-input invalidation, not the affected sessions.
   if (method === 'pause') return method;
+  // Also for the asking session itself: the card is how the person decides what a session costs.
+  if (method === 'changeModel') return method;
   if (actor && ['interrupt', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'rename'].includes(method) && args[0] !== actor.id) return method;
   if (method === 'join') return args[1] === false ? 'leaveRoom' : 'joinRoom';
   if (method === 'spaceAction') {
@@ -148,7 +150,7 @@ function maintenanceTargets(command, actor, snapshot, client) {
     if (scope !== 'target') return null;
     add(sessions, args[0]);
   }
-  else if (['terminalSnapshot', 'resize', 'answer', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'openLocalFile'].includes(method)) add(sessions, args[0]);
+  else if (['terminalSnapshot', 'resize', 'answer', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent', 'openLocalFile', 'changeModel'].includes(method)) add(sessions, args[0]);
   else if (method === 'runtimeLocation' || method === 'saveLocalFile') { /* Only the actor is an existing session target. */ }
   else if (method === 'openMessageFile') { add(sessions, args[0]?.sessionId); add(rooms, args[0]?.kind === 'room' ? args[0].roomId || 'shared' : args[0]?.roomId); }
   else if (method === 'spaceFiles') add(rooms, args[0]);
@@ -222,6 +224,11 @@ function operationSummary(command, actor, names = {}) {
     if (args[1] === 'join') put('target', session(Array.isArray(args[2]) ? args[2][0] : undefined));
     if (args[1] === 'rename') put('name', shown(Array.isArray(args[2]) ? args[2][0] : undefined));
   } else if (method === 'rename') { put('target', session(args[0])); put('name', shown(args[1])); }
+  else if (method === 'changeModel') {
+    put('target', session(args[0]));
+    const shownValue = value => value === null ? null : shown(value);
+    put('model', shownValue(args[1]?.model)); put('effort', shownValue(args[1]?.effort));
+  }
   else if (method === 'runtimeLocation') put('program', ['claude', 'codex', 'python3'].includes(args[0]) ? args[0] : undefined);
   else if (action === 'readConversation') put('target', session(conversationTarget(method, args, actor)));
   else if (typeof args[0] === 'string') put('target', session(args[0]));

@@ -16,6 +16,7 @@ const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.c
 const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
+const sessionModel = require('./session-model.cjs');
 const codexQualification = require('./codex-qualification.cjs');
 const claudeModCheck = require('./claude-mod-check.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
@@ -272,6 +273,8 @@ function createTerminalSerializeAddon() {
 }
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Codex: how many tenths of a second its report of changed settings may take.
+const SETTINGS_REPORT_TRIES = 50;
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 const dshTui = require('./dsh-tui.cjs');
@@ -3001,6 +3004,40 @@ class Codex extends EventEmitter {
   async interrupt() {
     if (!this.turnId) throw uiError("error.nativeTurnUnconfirmedInterrupt");
     await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
+  }
+  // Only where the thread is loaded on the owned server.
+  modelRpc() {
+    const rpc = this.host.rpc;
+    if (!rpc || !this.record.nativeId || this.stopped || this.closed || this.transportDisconnected || this.backendExitConfirmed) throw uiError('error.modelChange.unavailable');
+    return rpc;
+  }
+  async models() {
+    const rpc = this.modelRpc(), rows = [];
+    for (let cursor = null, page = 0; page < 20; page++) {
+      const result = await rpc.call('model/list', { limit: 100, ...(cursor ? { cursor } : {}) });
+      if (!Array.isArray(result?.data)) throw uiError('error.modelChange.unavailable');
+      rows.push(...result.data);
+      cursor = result.nextCursor;
+      if (cursor == null) return sessionModel.codexModels(rows);
+      if (typeof cursor !== 'string') break;
+    }
+    throw uiError('error.modelChange.unavailable');
+  }
+  // From the next turn on. `guard` runs after native listed its models, right before the change. No version is
+  // asked for: native either refuses the request or reports the settings it took, and only that report counts.
+  async changeModel(value, guard) {
+    const { model, effort } = sessionModel.codexValue(value, await this.models());
+    const rpc = this.modelRpc(), threadId = this.record.nativeId;
+    guard();
+    const taken = () => this.nativeSettings?.nativeId === threadId && this.nativeSettings.model === model && this.nativeSettings.effort === effort;
+    try { await rpc.call('thread/settings/update', { threadId, model, effort }); }
+    catch (error) {
+      if (['error.nativeRequestTimeout', 'error.nativeDisconnectedNoReplay'].includes(error?.uiMessage?.key)) throw uiError('error.modelChange.unconfirmed');
+      throw error;
+    }
+    for (let n = 0; n < SETTINGS_REPORT_TRIES && !taken(); n++) await delay(100);
+    if (!taken()) throw uiError('error.modelChange.unconfirmed');
+    return { model, effort };
   }
   async openTerminal(guard = () => true) {
     if (!guard()) throw uiError("error.terminalOwnerChanged");

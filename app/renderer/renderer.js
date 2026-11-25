@@ -199,7 +199,7 @@ if (window.nativeWorkspaceRegularPopup && $('discoveries-button') && api.discove
   discoveriesView = window.nativeWorkspaceRegularPopup.bind({ host: $('discoveries-root'), button: $('discoveries-button'), badge: $('discoveries-badge'), document, api, text: uiText, subscribe: fn => ui.language.subscribe(fn) });
 }
 // 「大管家的记录」, opened from the butler's own menu.
-let stewardSteps = null;
+let stewardSteps = null, modelDialog = null;
 try { stewardSteps = window.nativeWorkspaceStewardRecord.bind({ dialog: $('steward-record-dialog'), document, api, text: (key, params) => uiText(key, params), display: ui.display,
   usageLines: (provider, usage, language) => window.nativeWorkspaceUsage.usageLines(provider, usage, language), language: () => ui.language.getSnapshot().active }); }
 catch (error) { console.error(error); }
@@ -2878,6 +2878,7 @@ function backgroundSummaryText(summary, compact = false) {
   const parts = [summary.name ? uiText('background.card.named', { action, name: summary.name }) : action];
   if (summary.target) parts.push(uiText('background.card.session', { name: summary.target }));
   if (summary.room) parts.push(uiText('background.card.room', { name: summary.room }));
+  if (summary.action === 'changeModel') parts.push(uiText('background.card.changeTo', { value: window.nativeWorkspaceModelDialog.valueText({ model: summary.model ?? null, effort: summary.effort ?? null }, uiText) }));
   if (summary.provider) parts.push(providerName(summary.provider));
   if (summary.program) parts.push(summary.program);
   if (summary.folder) parts.push(uiText('background.card.folder', { name: summary.folder }));
@@ -3789,9 +3790,18 @@ function sessionMenuModel(id, row) {
   const secretaryKey = state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   const secretary = typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === id || record.nativeId && !record.archived)
     ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey }] : [];
-  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...modelAction(record), ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
+}
+// Changing the model of one session (N5): where its backend can, on a session that runs.
+function modelAction(record) {
+  if (typeof api.changeModel !== 'function' || !record?.nativeId || record.archived || ['ended', 'background', 'error', 'recoverable', 'disconnected'].includes(record.state) ||
+      !(record.serviceCapabilities || state.capabilities || []).includes('sessionModelV1') ||
+      !(record.provider === 'claude' || record.provider === 'codex' && [undefined, null, 'openai'].includes(record.vendor))) return [];
+  const pending = state.modelChanges?.find(entry => entry.sessionId === record.id), model = record.model ? ui.displayText(record.model, record.modelUiMessage) : '';
+  const [key, params] = pending ? ['menu.changeModelPending', { value: window.nativeWorkspaceModelDialog.valueText(pending, uiText) }] : model ? ['menu.changeModel', { model }] : ['menu.changeModelUnreported', {}];
+  return [{ id: 'change-model', label: uiText(key, params), labelKey: key, labelParams: params }];
 }
 async function chooseQueueSecretary(id) {
   await api.queueSecretary(id);
@@ -4027,6 +4037,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
       else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && (domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id))) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
       else if (action === 'update-backend') attempt(() => updateSessionBackend(id));
+      else if (action === 'change-model') modelDialog?.open(id);
       else if (action === 'up' || action === 'down') attempt(() => group ? moveRoomMember(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down', group) : moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down'));
       else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId));
       else if (action === 'rename') openRename(id, row.more);
@@ -5388,6 +5399,7 @@ function openHeaderMenu(anchor, terminal = false) {
     : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
   // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
   if (rotationTarget.rotationEpisode) actions.push(...rotationReleaseAction(rotationTarget));
+  if (!terminal) actions.push(...modelAction(current()).map(item => ({ ...item, secretary: true })));
   if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));
   const secretaryKey = state.queueSecretary?.sessionId === current().id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   if (typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === current().id || current().nativeId && !current().archived)) actions.push({
@@ -5411,6 +5423,7 @@ function openHeaderMenu(anchor, terminal = false) {
       if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') { if (!disconnected) attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
       else if (action === 'rotation-release') { if (!disconnected) attempt(() => releaseSessionRotation(rotationTarget)); }
+      else if (action === 'change-model') modelDialog?.open(current().id);
       else if (action === 'steward-set') openStewardChooser(current().id);
       else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }
       else if (action === 'steward-change') openStewardChooser();
@@ -6690,6 +6703,7 @@ const disposers = [
     disconnected = false; updateState(next); render();
   }),
   api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
+  api.onModelChanged(notice => modelNotice(notice)),
   api.onNew(() => openCreate()),
   api.onSwitchMode(next => {
     if (!['chat', 'terminal'].includes(next) || document.querySelector('dialog:modal')) return;
@@ -8210,6 +8224,15 @@ $('retry-save').onclick = () => attempt(async () => {
 });
 $('search-button').onclick = () => openSearch();
 $('steward-empty').onclick = () => openStewardChooser();
+function modelRecord(id) { return state?.sessions?.find(s => s.id === id); }
+function modelNotice(notice) {
+  toast(''); ui.display.computed($('toast-text'), 'text', () => window.nativeWorkspaceModelDialog.noticeText(notice, modelRecord(notice.sessionId), uiText, ui.displayText));
+}
+modelDialog = window.nativeWorkspaceModelDialog.bind({ $, document, api, text: uiText, display: ui.display,
+  openDialog: openTransientDialog, currentTicket: currentDialogTicket, session: modelRecord, offline: () => Boolean(disconnected),
+  pending: id => state?.modelChanges?.find(entry => entry.sessionId === id) || null, notify: modelNotice, showError: ui.showError });
+disposers.push(...[api.onState, api.onDisconnected, api.onReconnected].map(on => on(() => modelDialog.refresh())));
+$('model-confirm').onclick = () => attempt(() => modelDialog.confirm()); $('model-withdraw').onclick = () => attempt(() => modelDialog.withdraw());
 $('steward-cancel').onclick = () => $('steward-dialog').close();
 $('steward-confirm').onclick = () => attempt(confirmSteward); $('steward-new-skip').onchange = () => renderStewardChooser();
 $('steward-dialog').addEventListener('close', () => { if ($('steward-dialog').open) return; stewardChoice = ''; $('steward-list').replaceChildren(); $('steward-error').hidden = true; });

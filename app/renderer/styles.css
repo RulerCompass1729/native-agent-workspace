@@ -1270,6 +1270,20 @@ dialog.steward-dialog label.steward-standing[hidden]{display:none}
 dialog.steward-dialog .steward-standing input{all:revert;flex:none;margin:0;width:15px;height:15px}
 dialog.steward-dialog .steward-standing span{margin:0}
 /* End butler the person talks to. */
+/* Changing the model of one session. */
+dialog.model-dialog{max-height:calc(100vh - 32px);overflow:auto;overscroll-behavior:contain}
+.model-dialog h2{overflow-wrap:anywhere}
+.model-list{max-height:46vh;overflow:auto}
+dialog.model-dialog label.model-pick{display:flex;align-items:center;gap:10px;margin:0;padding:7px 4px}
+dialog.model-dialog .model-pick input{all:revert;flex:none;margin:0;width:15px;height:15px}
+.model-pick span{min-width:0;overflow-wrap:anywhere}
+.model-effort{display:flex;align-items:center;gap:10px;margin:10px 0 14px}
+.model-effort[hidden]{display:none}
+dialog.model-dialog .model-effort label{margin:0}
+.model-dialog p{margin:8px 0 0}
+.model-dialog p.model-pending{color:inherit}
+dialog.model-dialog #model-error{color:var(--dsw-alias-state-danger-label,#a03525);overflow-wrap:anywhere}
+/* End changing the model of one session. */
 /* Butler read log: one dialog, opened from the butler entry. */
 .butler-reads { width: min(820px, calc(100vw - 48px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
 .butler-reads:not([open]) { display: none; }
