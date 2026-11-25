@@ -1024,7 +1024,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method);
+    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method, args[1]);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -1176,6 +1176,7 @@ async function startQueueDispatcher() {
       countCompactions: true,
       // Not yet built: it throws, and the dispatcher tries again on its next pass.
       rotationStalled: stall => butlerIngress.rotationStalled(stall),
+      errorStalled: stall => butlerIngress.errorStalled(stall),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
