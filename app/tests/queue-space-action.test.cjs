@@ -289,6 +289,29 @@ test('the former secretary becomes the manager of its space once its session is 
   assert.equal(events().length, 1);
   assert.equal(new RoomState(f.dir).value.events.filter(event => event.kind === 'manager').length, 1, 'the record is kept');
 });
+test('a former secretary that left its space for a stop that did not go through is decided once its rotation ends', async t => {
+  const f = fixture(t), secretary = { sessionId: 'manager', nativeId: 'native-manager' };
+  let handingOver = true;
+  const { context } = registered({ roomState: f.room, spaceManagers: f.managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map() },
+    queueDispatcher: { schedule() {}, handingOver: (id, roomId) => handingOver && id === 'manager' && roomId === 'shared' } });
+  const look = async record => {
+    vm.runInContext('retireSecretaryAt = 0', context);
+    await context.retireSecretary({ sessions: record ? [record] : [], rooms: [{ id: 'shared' }] });
+  };
+  await look({ ...f.record, roomIds: [] });
+  assert.equal(f.managers.secretaryRetired, null, 'out of its space only for now');
+  // Still in its space while its successor has the handoff: it keeps the role as any manager does.
+  await look(f.record);
+  assert.deepEqual(f.managers.current('shared'), secretary);
+
+  const left = fixture(t);
+  handingOver = false;
+  const second = registered({ roomState: left.room, spaceManagers: left.managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map() },
+    queueDispatcher: { schedule() {}, handingOver: () => handingOver } });
+  await second.context.retireSecretary({ sessions: [{ ...left.record, roomIds: [] }], rooms: [{ id: 'shared' }] });
+  assert.equal(left.managers.current('shared'), null);
+  assert.ok(left.managers.secretaryRetired, 'in no space and not handing over');
+});
 test('a space record that cannot be written does not undo the role, nor the former secretary\'s', async t => {
   const f = fixture(t), person = { client: f.c.client }, secretary = { sessionId: 'manager', nativeId: 'native-manager' };
   f.room.noteManager = () => { throw Error('full'); };

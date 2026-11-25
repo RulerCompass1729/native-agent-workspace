@@ -939,8 +939,11 @@ async function retireSecretary(snapshot) {
   if (!spaceManagers || spaceManagers.failed || spaceManagers.secretaryRetired || Date.now() < retireSecretaryAt) return;
   retireSecretaryAt = Date.now() + 10000;
   await roomState.serial(async () => {
-    const state = roomState.apply(snapshot);
-    const result = spaceManagers.retireSecretary(queueSecretary.current(), state.sessions, state.rooms);
+    const state = roomState.apply(snapshot), secretary = queueSecretary.current();
+    const record = state.sessions.find(s => s.id === secretary?.sessionId);
+    // It left a space for a stop that did not go through: its rotation puts it back or names its successor.
+    if (record && state.rooms.some(room => !isMember(record, room.id) && queueDispatcher?.handingOver(record.id, room.id))) return;
+    const result = spaceManagers.retireSecretary(secretary, state.sessions, state.rooms);
     if (result.roomId) try {
       roomState.noteManager(result.roomId, 'notice.room.managerFromSecretary', { name: sessionLabels.labels.get(result.sessionId) || result.name }, result.sessionId);
     } catch { /* The role is the record. */ }
