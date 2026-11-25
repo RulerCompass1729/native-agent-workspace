@@ -87,7 +87,7 @@ async function updateLayout(dataDir, change) {
 // A live owner is the copier of a window that is just ending, or of another one: its result is worth waiting for.
 async function lockTarget(target) {
   const file = path.join(target, LOCK_FILE);
-  for (let tries = 0; tries < 1800; tries++) {
+  for (let tries = 0; tries < 3700; tries++) { // past the longest one: 30 minutes clearing, 30 copying
     const left = readLock(file);
     if (left === undefined || left && !ownerMayBeAlive(left, target, LOCK_KIND) && releaseLock(file, left)) {
       try { return createLock(file, LOCK_KIND, target); }

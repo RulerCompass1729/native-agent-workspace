@@ -188,13 +188,14 @@ test('the last checks of a copied runtime each count as progress',async t=>{
  t.mock.method(fs,'readFileSync',function(file,...args){if(String(file).endsWith(staged))advance(20000);return Reflect.apply(read,this,[file,...args]);});
  const result=await inherit(f);assert.equal(result.status,'copied');assert.ok(result.elapsedMs>=60000);
 });
-for(const [name,stall] of [['that keeps moving is not stopped at thirty seconds',0],['that stops moving for thirty seconds is stopped',31000]])test('clearing an interrupted copy '+name,async t=>{
+for(const [name,step,stall] of [['that keeps moving is not stopped at thirty seconds',500,0],['that stops moving for thirty seconds is stopped',500,31000],['that is still moving at thirty minutes is stopped',5000,5000]])test('clearing an interrupted copy '+name,async t=>{
  qualification(t);const f=fixture(t);runtime(f.source);const old=['a','b'].map(()=>fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'))),advance=slowed(t),lstat=fs.lstatSync,rm=fsp.rm;let calls=0;
- for(const dir of old)for(let i=0;i<40;i++)write(path.join(dir,'dsh-tui/runtime/partial-'+i),'interrupted');
- t.mock.method(fs,'lstatSync',function(file,...args){if(old.some(dir=>String(file).startsWith(dir+path.sep)))advance(stall&&++calls===40?stall:500);return Reflect.apply(lstat,this,[file,...args]);});
+ for(const dir of old)for(let i=0;i<250;i++)write(path.join(dir,'dsh-tui/runtime/partial-'+i),'interrupted');
+ t.mock.method(fs,'lstatSync',function(file,...args){if(old.some(dir=>String(file).startsWith(dir+path.sep)))advance(stall&&++calls===40?stall:step);return Reflect.apply(lstat,this,[file,...args]);});
  t.mock.method(fsp,'rm',async function(file,...args){if(old.includes(file))advance(40000);return Reflect.apply(rm,this,[file,...args]);});
  if(!stall){assert.equal((await tui.inheritRuntime(f.source,f.target,{cleanStaging:true})).status,'copied');assert.ok(old.every(dir=>!fs.existsSync(dir)));tui.verifyRuntime(f.target);return;}
  const error=await refusal(tui.inheritRuntime(f.source,f.target,{cleanStaging:true}));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'cleanup');assert.equal(tui.installed(f.target),false);
+ if(step>500)assert.ok(error.progress.elapsedMs>1800000&&error.progress.elapsedMs<1860000,JSON.stringify(error.progress));
 });
 test('publication leaves no turn in which the process could end between the reservation and the rename',async t=>{
  qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target),mkdir=fs.mkdirSync,rename=fs.renameSync;let turns=null,published=0;

@@ -63,10 +63,12 @@ GUI waiting remains bounded to 20 seconds and backend activation to 210 seconds:
 process of its own makes (`app/dsh-copy.cjs`). At 120 seconds startup goes on
 without DSH and the copy continues: it stops after 30 seconds in which nothing
 finished, or after 30 minutes. A copy that failed is tried again after ten minutes
-from the next source, at most twice per run. It ends with NAW, and the next start
-clears its half directory. The wait ends as soon as the new backend is active, so
-an install can be verified before DSH is there; the post-install check then reports
-the missing runtime until the copy is done. Other platform commands keep their 60-second bound. An archive timeout still preserves the old copy and reports cleanup
+from the next source, at most twice per run. It ends with NAW; the next copy into
+the same backend clears its half directory, and an update before that leaves it
+there. The wait ends as soon as the new backend is active, so an install can be
+verified before DSH is there; the post-install check then reports the missing
+runtime until the copy is done, and refuses once if `services.json` changes while
+it reads. Other platform commands keep their 60-second bound. An archive timeout still preserves the old copy and reports cleanup
 failure, never partial deletion. A targeted `lsof` check
 before archiving and again before removal refuses a bundle still in use, including
 a mapped backend executable, or one whose use cannot be determined. If archive/removal fails,
