@@ -208,7 +208,7 @@ async function main() {
       }
       case 'pause':
         if (!scoped || (peerRunner.run?.roomId || 'shared') === roomId) await peerRunner.pause();
-        // Only the person's explicit pause (and a backend upgrade) withdraws every staged wake;
+        // Only the person's explicit pause (and an older app's startup) withdraws every staged wake;
         // the implicit pause before ordinary input to another session does not.
         if (!scoped) return args[0]?.withdrawWakes === true ? workspace.pauseAll('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', uiNotice('notice.run.humanPaused').uiMessage, args[0]?.cause === 'upgrade' ? 'upgrade' : 'pause') : workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', undefined, false, uiNotice('notice.run.humanPaused').uiMessage);
         return workspace.pauseRoom(roomId, '你暂停了这个空间的后续交接；已接收的原生工作保留。', uiNotice('notice.run.humanSpacePaused').uiMessage);

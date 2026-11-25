@@ -237,7 +237,8 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       }
       for (const old of layout.entries) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
-        try { await client.call('pause', { withdrawWakes: true, cause: 'upgrade' }); } finally { client.close(); }
+        // Collaboration runs stop here. Messages on their way and what a running turn may send are the sessions' own.
+        try { await client.call('pause'); } finally { client.close(); }
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);

@@ -1,6 +1,6 @@
 // Real daemon and Unix socket, synthetic NativeHost, no model: what a daily install does to an old backend while its
 // sessions work. The old GUI quits (its connection closes without leaving), the new GUI's startup pauses the old
-// backend and withdraws its staged wakes (service-client.cjs), then the new GUI connects again.
+// backend's collaboration runs (service-client.cjs), then the new GUI connects again.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { fork } = require('node:child_process'), { once } = require('node:events');
@@ -50,7 +50,7 @@ test('a turn in progress, an approval and a draft survive the GUI quit and the u
   // The old GUI quits; the new one pauses the old backend first, then connects.
   gui.close(); await delay(200);
   const upgrade = await open('upgrade');
-  await upgrade.call('pause', { withdrawWakes: true }); upgrade.close();
+  await upgrade.call('pause'); upgrade.close();
   const reopened = await open('person-window');
   const after = await reopened.call('initial');
   const kept = find(after, worker), asking = find(after, asker);

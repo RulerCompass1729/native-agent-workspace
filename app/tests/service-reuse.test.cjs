@@ -169,7 +169,7 @@ test('a live legacy socket survives an update, current service boot and repeated
     assert.equal(snapshot.servicePid, pid); assert.equal(snapshot.diagnostics.dispatches, 0);
     assert.ok(calls.every(method => ['initial', 'pause'].includes(method)));
     assert.equal(calls.filter(method => method === 'pause').length, 1);
-    assert.deepEqual(pauses, [[{ withdrawWakes: true, cause: 'upgrade' }]], 'the old backend learns it is an upgrade, not the person');
+    assert.deepEqual(pauses, [[]], 'the old backend stops its collaboration runs and keeps messages on their way');
     await assert.rejects(c.call('shutdown'), /先结束/);
   } finally {
     c?.close();
