@@ -45,8 +45,8 @@ function undeliveredRow(row, own = false) {
 // Whether the sender's call was told it is saved. A backend from before that mark (session-wake.cjs `told`) tells only
 // the one it refused at once and the one it could not save from the rest.
 function toldSaved({ wake: intent, uiMessage }) {
-  return intent.told === true || Number.isSafeInteger(intent.heldAt) || Boolean(intent.busyHold || intent.quietWindow) ||
-    intent.status !== 'not-sent' && uiMessage?.key !== 'notice.wake.saveFailed';
+  if (uiMessage?.key === 'notice.wake.saveFailed') return false;
+  return intent.told === true || Number.isSafeInteger(intent.heldAt) || Boolean(intent.busyHold || intent.quietWindow) || intent.status !== 'not-sent';
 }
 const sourceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\s\u0000-\u001f\u007f]/u.test(value);
 const exactFields = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&

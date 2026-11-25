@@ -296,12 +296,15 @@ test('refused when it was called: the call said so, no event', async t => {
   const off = await f.begin('off', 'Secret one.'); await off.finish(); assert.equal(off.result.status, 'not-sent');
   f.target.get(f.b).wakeDisabled = false; f.advance(1000);
   const self = await f.begin('self', 'Secret two.', { to: f.a }); assert.ok(self.result.error); await self.finish();
-  f.advance(1000); const persist = f.source.persist.bind(f.source);
-  f.source.persist = () => { f.source.storageWarning = 'Synthetic'; };
-  const unsaved = await f.begin('unsaved', 'Secret three.');
-  f.source.persist = persist; f.source.storageWarning = null; await unsaved.finish();
-  assert.ok(unsaved.result.error, 'could not be saved');
-  assert.deepEqual(f.rows().map(m => [m.wake.status, m.wake.told]), [['not-sent', undefined], ['unconfirmed', undefined]]);
+  const persist = f.source.persist.bind(f.source);
+  // Also one for a recipient in a quiet window, or at work.
+  for (const set of [() => {}, () => quiet(f), () => { fs.rmSync(path.join(f.root, 'quiet-windows.json')); f.busy(); }]) {
+    f.advance(1000); set(); f.source.persist = () => { f.source.storageWarning = 'Synthetic'; };
+    const unsaved = await f.begin('unsaved-' + f.now(), 'Secret three.');
+    f.source.persist = persist; f.source.storageWarning = null; await unsaved.finish();
+    assert.ok(unsaved.result.error, 'could not be saved');
+  }
+  assert.deepEqual(f.rows().map(m => [m.wake.status, m.wake.told, Boolean(m.wake.quietWindow)]), [['not-sent', undefined, false], ['unconfirmed', undefined, false], ['unconfirmed', undefined, true], ['unconfirmed', undefined, false]]);
   f.observe(); assert.deepEqual(f.events(), []);
 });
 
@@ -339,7 +342,7 @@ test('rows of a backend from before the mark: withdrawn, held or lost are record
   assert.deepEqual(f.events(later).map(e => e.payload.itemId), ['w', 'h', 'q', 'b', 'l'], 'sent in the role, withdrawn before this intake: without the mark, not announced');
 });
 
-// The person's stop, a takeover and a gap were one code, and the butler could not tell which it may send again.
+// A gap, a takeover in a space and a stop for maintenance or a handoff were one code.
 const withdrawals = {
   'observation-gap': f => f.source.runtimes.get(f.a).emit('nativeBlock', { kind: 'gap' }),
   'human-control': f => f.source.claim(f.a, 'another-window', 'chat', 'shared'),
