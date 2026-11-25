@@ -122,3 +122,19 @@ test('a large butler idle for 45 minutes is rotated when an event comes, and the
   assert.deepEqual(next.sends.map(s => [s.to, ROTATION.test(s.text)]), [[NEXT.sessionId, false]]);
   assert.equal(f.wake.due(), false);
 });
+
+test('R207: the butler asked for by hand and waiting only for the slot is not woken first; not asked for, it is', async t => {
+  for (const asked of [false, true]) {
+    const f = setup(t, { compactions: {}, idle: 1 });
+    f.sessions.push(session({ sessionId: 'm', nativeId: 'native-m' }, { lastActivityAt: NOW - 60000 }));
+    await run(f, 20000, { events: false });
+    await f.d.requestRotation('m');
+    await run(f, 20000, { events: false });
+    assert.equal(f.d.rotations.m.phase, 'requested');
+    if (asked) await f.d.requestRotation(OLD.sessionId);
+    f.event();
+    await run(f, 60000, { events: false });
+    assert.equal(f.sends.filter(s => s.to === OLD.sessionId).length, asked ? 0 : 1, String(asked));
+    if (asked) assert.equal(f.d.rotationRows[OLD.sessionId].gate, 'no-slot');
+  }
+});

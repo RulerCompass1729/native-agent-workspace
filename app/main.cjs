@@ -1099,7 +1099,7 @@ function displayState(snapshot, context, read = null, toPage = false) {
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
-    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
+    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [], sessionRotations: queueDispatcher?.rotationRows || {} }),
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
 }
@@ -2763,6 +2763,16 @@ async function boot() {
     return result;
   });
   register('preflight', () => preflight());
+  // 「现在就换」 and 「撤销」 (R207): the person in their own window; no agent's call reaches this one.
+  register('sessionRotation', async (c, sessionId, action) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.rotation.personOnly');
+    if (typeof sessionId !== 'string' || !['now', 'undo'].includes(action)) throw uiError('error.rotation.unavailable');
+    if (!queueDispatcher) throw uiError('error.rotation.unavailable');
+    if (action === 'now') await queueDispatcher.requestRotation(sessionId, 'person');
+    else await queueDispatcher.withdrawRotation(sessionId, 'person');
+    await broadcastRoom();
+  });
+  applicationHandlers.delete('sessionRotation');
   register('modelChoices', (c, id) => modelChanges().choices(id));
   register('changeModel', async (c, id, value, nativeId) => {
     if (!c.background) return modelChanges().request(id, value, nativeId);
