@@ -21,7 +21,7 @@ const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
-const { omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
+const { leaveRecords, omitHidden, reportShown, validShown } = require('./shown-sessions.cjs');
 const { searchRecords } = require('./renderer/local-search.js');
 const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
 const { createLocalPages } = require('./local-pages.cjs');
@@ -36,7 +36,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
-const { VersionEvents, VersionNotices } = require('./version-events.cjs');
+const { VersionEvents, VersionNotices, RunMark } = require('./version-events.cjs');
 const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
@@ -169,6 +169,12 @@ if (testParent > 1) {
 }
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
+// How this run ends is recorded from here on (version-events.cjs), as early as this run is known to be the only one.
+let runMark = null;
+if (primary) try {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true, mode: 0o700 });
+  runMark = new RunMark(app.getPath('userData'), { version: app.getVersion() });
+} catch { /* Without a mark of its own this run is told by what is left there, if anything. */ }
 const windows = new Map();
 const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
@@ -969,7 +975,7 @@ function pushState(context, display) {
   }
   if (context.statePush) {
     // Made again if it has to wait: it then includes what was sent to the page meanwhile (a new session name).
-    context.statePush.push(display, () => displayState(context.client.snapshot(), context));
+    context.statePush.push(display, () => displayState(context.client.snapshot(), context, null, true));
     return;
   }
   context.win.webContents.send('workspace:state', omitHidden(display, context.shown), 0);
@@ -1025,7 +1031,7 @@ function bindClient(context) {
   const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed() && !context.background) {
     observePersonActions(data);
-    const display = displayState(data, context);
+    const display = displayState(data, context, null, true);
     pushState(context, display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
   // B6 E4: what the backend marks as stuck, and a native version NAW has not verified, are recorded in the session's spaces. Records only.
@@ -1050,7 +1056,8 @@ function bindClient(context) {
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) reconnectClosed(context, client).catch(() => { if (context.client === client) noticeDisconnected(context); }); });
 }
-function displayState(snapshot, context, read = null) {
+function displayState(snapshot, context, read = null, toPage = false) {
+  // toPage: goes to the page through omitHidden or reportShown, which make the rows left out here as they are needed.
   if (context?.client) snapshot = confirmationSnapshot(context.client, snapshot);
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
@@ -1060,12 +1067,18 @@ function displayState(snapshot, context, read = null) {
       .map(message => ({ sessionId: s.id, nativeId: s.nativeId, message })));
   const backgroundConfirmations = context?.background ? [] : backgroundControl?.confirmations(display, snapshot) || [];
   if (!context?.background && context?.win) {
-    const key = JSON.stringify(backgroundConfirmations.map(confirmationInbox.confirmationSummary));
+    const key = backgroundConfirmations.map(confirmationInbox.summaryText).join('\n');
     if (key !== confirmationProjectionKeys.get(context.win)) { confirmationProjectionKeys.set(context.win, key); recordsChanged(true); }
   }
-  if (backgroundControl) for (const s of display.sessions) {
-    const rows = backgroundControl.rows(s.id, context?.background ? null : display, { expire: context?.background === true });
-    if (rows.length) s.messages = [...s.messages, ...rows].sort((a, b) => a.time - b.time);
+  const control = backgroundControl, withRecords = s => {
+    const rows = control.rows(s.id, context?.background ? null : display, { expire: context?.background === true });
+    return rows.length ? [...s.messages, ...rows].sort((a, b) => a.time - b.time) : s.messages;
+  };
+  let times = null;
+  const timesOf = id => (times ||= control.recordTimes()).get(id);
+  if (control) for (const s of display.sessions) {
+    if (toPage && !context.background) leaveRecords(s, { times: () => timesOf(s.id), messages: () => withRecords(s) });
+    else s.messages = withRecords(s);
     if (context?.background) {
       s.liveDraft = ''; s.draft = '';
     }
@@ -1212,7 +1225,7 @@ async function broadcastRoom() {
     // A background window has no page: do not fetch and build a state that would be dropped.
     if (context.background || context.win.isDestroyed() || context.client.socket.destroyed) return;
     const snapshot = await context.client.call('initial');
-    pushState(context, displayState(snapshot, context));
+    pushState(context, displayState(snapshot, context, null, true));
   }));
 }
 function broadcastName(id, name) {
@@ -1543,7 +1556,7 @@ async function replaceBackendSockets(key) {
   for (const { context, client, state } of replacements) {
     context.client.replaceService(key, client, state);
     if (!context.client.socket.destroyed && !context.win.isDestroyed() && !context.background) {
-      const refreshed = displayState(await context.client.refresh(), context);
+      const refreshed = displayState(await context.client.refresh(), context, null, true);
       // This complete state is newer than any snapshot still waiting behind the bound.
       context.statePush?.discardWaiting();
       sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));
@@ -1564,7 +1577,7 @@ function reconnectClosed(context, client) {
     },
     restored: (target, restored, keys) => {
       if (target.background || target.win.isDestroyed()) return;
-      const display = displayState(restored.snapshot(), target);
+      const display = displayState(restored.snapshot(), target, null, true);
       target.statePush?.discardWaiting();
       const sessions = restored.entries.filter(e => keys.includes(e.key)).flatMap(e => e.state.sessions.map(s => s.id));
       sendToPage(target, 'workspace:reconnected', omitHidden(display, target.shown), sessions);
@@ -1874,7 +1887,7 @@ async function boot() {
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
   // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
   try {
-    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),
+    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(), run: runMark,
       record: event => {
         if (!butlerIngress) throw Error('The butler record is unavailable');
         butlerIngress.record(event);
@@ -2459,10 +2472,14 @@ async function boot() {
   // that session is listed and where the window lands at start, and which calls main.cjs takes as the butler's
   // (stewardCaller). Designating also sends the duty statement (`duty`: the person's own text, or null for the
   // default of their language) into the session as the person's message (the activation checklist, item 6).
-  register('steward', async (c, id, duty = null) => {
+  // `standing`: whether the person left the permission to organize (steward-standing.cjs) on for the new butler, asked
+  // only while it is on for the one they have; null when they were not asked. `handoff`: what the person says to a
+  // session taking over, sent in front of the duty statement this once; it is not part of the statement that is kept.
+  register('steward', async (c, id, duty = null, standing = null, handoff = null) => {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
-    let record = null;
+    if (id !== null && handoff !== null && !validDuty(handoff)) throw uiError('error.steward.handoffInvalid');
+    let record = null, standingLost = false, reached = null;
     // Who held the role until now is written before the person's choice replaces it: a rotation's successor that made no
     // call since would otherwise be missing, and with it what it sent (StewardRecord.heldRole).
     try { stewardRecord?.sync(stewardOf()); } catch { /* As below. */ }
@@ -2476,19 +2493,29 @@ async function boot() {
       let spaces;
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
+      const carry = stewardStanding?.carry(c);
+      reached = stewardWake?.reached() ?? null;
+      // The same butler again keeps it: the designation may have named it only through the rotation log.
+      let again = false;
+      try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
+      const keep = typeof standing === 'boolean' ? standing : again || null;
+      let unsaved = false; if (carry && keep !== null) try { carry(keep); } catch { unsaved = true; }
+      // Said by what holds now: a save that failed may have taken place, and a line left on may have been turned off elsewhere.
+      standingLost = keep ? Boolean(carry || standing) && !stewardStanding?.view().on : unsaved;
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
-    // revoking, the same session again included, turns it off, until the person or that butler turns it on.
-    try { stewardWake?.set(false); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
+    // revoking, the same session again included, turns it off, until the person or that butler turns it on. A
+    // designation made while it was on keeps where it stood for then; a revocation keeps nothing.
+    try { stewardWake?.redesignated(reached); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
     await broadcastRoom();
     if (id === null) return null;
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
     // turn. It is a prompt, not a permission, and handed over is not received: the message keeps its own state in the
     // butler's conversation. A refusal leaves the designation as it is and says why.
-    const text = stewardDutyText();
+    const text = (handoff === null ? '' : handoff.trim() + '\n\n') + stewardDutyText();
     try {
       const method = record.state === 'working' && record.provider === 'claude' ? 'queue' : record.state === 'idle' ? 'send' : null;
       if (!method) throw uiError('error.steward.dutyBusy');
@@ -2506,17 +2533,18 @@ async function boot() {
         look();
       });
       else await sending;
-      return { duty: { state: method === 'queue' ? 'queued' : 'sent' } };
+      return { duty: { state: method === 'queue' ? 'queued' : 'sent' }, ...(standingLost ? { standingLost } : {}) };
     } catch (error) {
       // Shown as a thrown error would be (the IPC reply's own step): the person's language, the same fallback.
       const message = String(error?.message ?? ''), uiMessage = message ? uiLocale.displayMessage(error?.uiMessage) : uiError('error.main.operationIncomplete').uiMessage;
-      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
+      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } }, ...(standingLost ? { standingLost } : {}) };
     }
   });
   register('stewardStanding', async (c, on) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.steward.personOnly');
     const value = on === undefined ? stewardStanding.view() : stewardStanding.set(c, on);
-    await broadcastRoom(); return value;
+    if (on !== undefined) await broadcastRoom();
+    return value;
   });
   applicationHandlers.delete('stewardStanding');
   // Patrol while idle (steward-wake.cjs patrol): the same two callers as the wake switch
@@ -2553,6 +2581,11 @@ async function boot() {
     try { state = on === undefined ? stewardWake.view({ held: c.background === true }) : stewardWake.set(on); }
     catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
     if (wasOn && !state.on) try { stewardRecord?.wakeOff(); } catch { /* The record shows that a line could not be written. */ }
+    // The butler's own read also lists the open migration quiet windows and what waits behind each; null: not known.
+    if (c.background && on === undefined) {
+      let open = null; try { open = quietWindows ? quietWindows.holding([roomState.value, ...roomState.spaces.rooms], roomState.queueWaits) : null; } catch { open = null; }
+      state = { ...state, quietWindows: open };
+    }
     return state;
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
@@ -2890,7 +2923,7 @@ async function boot() {
       if (!conversationReaderAllowed(request.actor) || c.view.selected !== id || !expected || !target || target.nativeId !== expected.nativeId) throw uiError('error.background.conversationChanged');
       read = { sessionId: id, nativeId: target.nativeId };
     }
-    const display = displayState(snapshot, c, read);
+    const display = displayState(snapshot, c, read, true);
     if (!c.background) notifyCapacity(display, c.win);
     const result = { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
     return c.background ? backgroundOperation.conversationSnapshot(result, c.actor, read, c.view.selected, conversationAccess(c.actor, snapshot)) : omitHidden(result, c.shown);
@@ -2898,7 +2931,7 @@ async function boot() {
   // The sessions whose messages the page shows. The reply holds the messages of the ones it did not have.
   register('shownSessions', (c, ids) => {
     if (c.background || !validShown(ids)) throw uiError("error.main.invalidViewState");
-    const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c));
+    const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c, null, true));
     c.shown = report.shown;
     return { messages: report.messages };
   });
@@ -3205,6 +3238,8 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
+  // First: whatever fails below, this run ended on its own path.
+  try { runMark?.exitClean(); } catch { /* The next start says it did not end normally. */ }
   discoveries?.dispose();
   backgroundNotifications?.dispose();
   notificationScreen?.dispose();

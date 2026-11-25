@@ -521,16 +521,21 @@ test('main: each backend state is judged with the role record, and the butler a 
   linked.emit('state', { sessions: [{ id: 'between', nativeId: between.nativeId, messages: [synthetic(f, between, 'member', 'early', { time: f.now() - 60000 }), synthetic(f, between, 'member', 'of-between', { settledAt: 1 })] }] });
   assert.deepEqual(reported(f).slice(1).map(r => r[0]), ['of-between'], 'also lost before this intake, told it was saved');
   // The person's designation.
-  const handler = main.slice(main.indexOf("  register('steward', async (c, id, duty = null) => {"), main.indexOf("  register('stewardEvents', async (c, position = null) => {"));
+  const start = main.indexOf("  register('steward', async ");
+  const end = main.indexOf("  register('stewardStanding',", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = main.slice(start, end);
   for (const next of [null, 'next']) {
     const steps = [], handlers = new Map();
     vm.runInNewContext(handler, { applicationHandlers: new Map(), register: (name, run) => handlers.set(name, run), uiError: key => Error(key), validDuty: () => true, midRotation: () => false, roomIds: () => [],
-      roomState: { serial: run => run(), apply: value => value }, broadcastRoom: async () => {}, stewardDutyText: () => 'duty', submit: async () => {}, stewardWake: { set() {} },
+      roomState: { serial: run => run(), apply: value => value }, broadcastRoom: async () => {}, stewardDutyText: () => 'duty', submit: async () => {}, stewardWake: null, stewardStanding: null,
       stewardOf: () => ({ sessionId: 'rotated', nativeId: 'native-rotated' }),
       stewardRecord: { sync: value => steps.push(['sync', value.sessionId]), designated: value => steps.push(['designated', value?.sessionId ?? null]) },
       stewardRole: { selected: null, set(value) { steps.push(['set', value?.sessionId ?? null]); this.selected = value; } } });
-    const person = { background: false, client: { call: async () => ({ sessions: [{ id: 'next', nativeId: 'native-next', state: 'ended-later', provider: 'codex' }] }), snapshot: () => ({ sessions: [] }) } };
-    try { await handlers.get('steward')(person, next); } catch { /* The duty text has no session to go to here. */ }
+    const person = { background: false, client: { call: async () => ({ sessions: [{ id: 'next', nativeId: 'native-next', state: 'idle', provider: 'codex' }] }), snapshot: () => ({ sessions: [] }) } };
+    const result = await handlers.get('steward')(person, next);
+    if (next === null) assert.equal(result, null);
+    else assert.equal(result.duty.state, 'sent');
     assert.deepEqual(steps, [['sync', 'rotated'], ['set', next], ['designated', next]]);
   }
 });

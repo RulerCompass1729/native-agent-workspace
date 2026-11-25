@@ -2,7 +2,8 @@
 // A quiet window before a migration (the PM's 11-23 brief, approved by the butler): when the person's migration
 // setting is on and an old backend waits only for its sessions to stop and stay quiet, NAW stops starting new work
 // there for a bounded time, so the running turns can end and the existing quiet rule can be met. The dispatcher
-// sends that backend's sessions no new item or NAW message (queue-dispatch.cjs sessionReady 'quiet-window'); a
+// sends that backend's sessions no new item or NAW message (queue-dispatch.cjs sessionReady 'quiet-window'), except
+// the butler's wake for the person's own act (wakeSteward); a
 // backend on this code holds the automatic messages its sessions send there (session-wake.cjs). Nothing running is
 // interrupted and the quiet rule itself is unchanged. The window closes when the move is made or failed, when the
 // setting is turned off, when the backend stops waiting only for quiet, or at its deadline; after a timeout NAW
@@ -88,6 +89,23 @@ class QuietWindows {
     const ids = new Map();
     for (const window of this.windows) if (now < window.deadline) for (const id of window.sessions) ids.set(id, window.id);
     return ids;
+  }
+  windowOf(sessionId, now = this.now()) {
+    return this.windows.find(w => now < w.deadline && w.sessions.includes(sessionId)) || null;
+  }
+  // For the butler (main.cjs stewardWake): each window open now and how many queued items it holds, from what the
+  // dispatcher's last pass found for each item's members (`waits`, queue-dispatch.cjs planDispatch): the window alone
+  // keeps it from one of them, or all of them are in it. One whose assignee left its space waits for that instead.
+  holding(rooms, waits, now = this.now()) {
+    const items = (rooms || []).filter(room => room && !room.archived).flatMap(room => (room.queue || []).filter(item => item.status === 'queued'));
+    return this.windows.filter(w => now < w.deadline).map(w => {
+      const inside = id => w.sessions.includes(id);
+      const queued = items.filter(item => {
+        const list = waits?.get(item.id) || (item.assignee ? [{ sessionId: item.assignee }] : []);
+        return list.some(e => e.reason === 'quiet-window' && inside(e.sessionId)) || list.length > 0 && list.every(e => e.reason !== 'not-member' && inside(e.sessionId));
+      });
+      return { backend: keyOf(w.scope), openedAt: w.openedAt, deadline: w.deadline, sessions: [...w.sessions], queued: queued.length };
+    });
   }
   cooling(scope, now = this.now()) {
     return this.history.some(h => h.scope === scope && COOLING.includes(h.code) && now - h.closedAt < REOPEN_MS);
