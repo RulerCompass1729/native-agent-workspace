@@ -117,6 +117,8 @@ const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 const BACKEND_UPDATING_KEYS = new Set(['error.client.connectionUpdatingNoInput', 'error.client.connectionChangedNoReplay',
   'error.client.spacePauseUnconfirmed']);
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
+// Once delivered, its first turn has this long, approvals included. 125 recorded first turns: median 0.6 minutes, longest 13.3.
+const HANDOFF_TURN_MS = 30 * 60 * 1000;
 // The old session waits at most this long for running collaborations before it is kept instead.
 const STOP_WAIT_MS = 30 * 60 * 1000;
 const FAILED_ROTATION_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
@@ -252,6 +254,11 @@ function failedHandoffPending(record) {
   const c = record?.failureCleanup;
   return Boolean(c && (c.log === 'pending' || c.os === 'pending' || c.release !== 'done' || ['pending', 'started'].includes(c.stop.state) ||
     Object.values(c.rooms).some(r => r.queue !== 'done' || r.notice !== 'done' || r.leave === 'pending')));
+}
+// Native has the handoff message. Kept on the record: a pass that cannot see the successor must not undo it.
+function handoffDelivered(session, tag) {
+  const input = firstHandoff.handoffInput(session, tag);
+  return Boolean(input && (!input.nativeId || input.nativeId === session.nativeId) && (input.status === 'submitted' || input.turnId));
 }
 function quarantinedSuccessor(record) {
   return trustFailure(record) && !cleanupComplete(record) || Boolean(record?.failureCleanup && ['pending', 'started'].includes(record.failureCleanup.stop.state));
@@ -4601,7 +4608,14 @@ class QueueDispatcher {
         const outcome = firstHandoff.outcome(fresh, record.handoffTag);
         if (outcome === 'failed') throw Error('successor-turn-failed');
         if (outcome !== 'complete') {
-          if (now - (record.handedAt || now) > HANDOFF_ACCEPT_MS) throw Error('handoff-unconfirmed');
+          if (record.handoffDelivered !== true && handoffDelivered(fresh, record.handoffTag)) {
+            record.handoffDelivered = true;
+            // An error here would stop the successor without the guards of a failed handoff; the next write has it.
+            try { this.save(); } catch {}
+          }
+          // Its process is known to be gone: it finishes no turn. Disconnected or out of view, it may still be running.
+          const running = record.handoffDelivered === true && !['ended', 'background', 'recoverable'].includes(fresh?.state);
+          if (now - (record.handedAt || now) > (running ? HANDOFF_TURN_MS : HANDOFF_ACCEPT_MS)) throw Error('handoff-unconfirmed');
           return;
         }
       }
@@ -4610,6 +4624,7 @@ class QueueDispatcher {
       if (mismatch && mismatch !== 'pending') {
         throw Error(`settings-differ:${mismatch}`);
       }
+      if (!record.handoffConfirmed) record.confirmedAt = now;
       record.handoffConfirmed = true;
       if (fresh && fresh.nativeId) {
         record.newNativeId = fresh.nativeId;
@@ -4643,7 +4658,7 @@ class QueueDispatcher {
         }
       }
       const live = old && !['ended', 'background'].includes(old.state);
-      const waitedTooLong = now - (record.handedAt || now) > STOP_WAIT_MS;
+      const waitedTooLong = now - (record.confirmedAt || record.handedAt || now) > STOP_WAIT_MS;
       if ((live && collaborating || updating) && !waitedTooLong) {
         return;
       }
