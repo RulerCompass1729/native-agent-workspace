@@ -1,6 +1,7 @@
 // A simulated person for an isolated test instance of NAW: real key and mouse events through the hidden test window's
 // own input path (Playwright keyboard/mouse, which send CDP Input events), never a product call. Production code never
-// imports this module; nothing here can reach the installed app or its data (assertIsolated).
+// imports this module. A person exists only for an app that passed both checks (simulatedPerson): this repository's own
+// Electron, unpackaged, on a private test folder, every window hidden. It takes the app, never a page.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { openSession } = require('./space-membership.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -28,16 +29,21 @@ function touchesDaily(target) {
   }
   return false;
 }
-// Before anything starts: a fresh private folder of the test's own, and the repository's Electron, never an installed app.
-function assertIsolated({ profile, executable, code, env = process.env }) {
-  if (env.NAW_DATA_DIR) throw Error(touchesDaily(env.NAW_DATA_DIR) ? 'Refused: NAW_DATA_DIR is the daily data folder' : 'Refused: NAW_DATA_DIR is set; the harness makes its own');
-  if (env.NAW_APP_EXECUTABLE) throw Error('Refused: NAW_APP_EXECUTABLE names an app; the harness drives only the source tree');
-  if (!profile) return;
+// A private folder made by this test, not the daily data folder by any spelling.
+function assertPrivate(profile) {
+  if (typeof profile !== 'string' || !path.isAbsolute(profile)) throw Error('Refused: no test profile');
   if (touchesDaily(profile)) throw Error('Refused: the profile is in the daily data folder');
   const real = fs.realpathSync(profile), info = fs.lstatSync(real);
   const parents = [os.tmpdir(), '/tmp'].map(value => fs.realpathSync(value));
   if (!parents.includes(path.dirname(path.dirname(real))) || !path.basename(path.dirname(real)).startsWith('naw-person-') ||
       info.uid !== process.getuid() || info.mode & 0o077) throw Error('Refused: the profile is not this test\'s private folder');
+}
+// Before anything starts: a fresh private folder of the test's own, and the repository's Electron, never an installed app.
+function assertIsolated({ profile, executable, code, env = process.env }) {
+  if (env.NAW_DATA_DIR) throw Error(touchesDaily(env.NAW_DATA_DIR) ? 'Refused: NAW_DATA_DIR is the daily data folder' : 'Refused: NAW_DATA_DIR is set; the harness makes its own');
+  if (env.NAW_APP_EXECUTABLE) throw Error('Refused: NAW_APP_EXECUTABLE names an app; the harness drives only the source tree');
+  if (!profile) return;
+  assertPrivate(profile);
   const electron = fs.realpathSync(executable), modules = fs.realpathSync(path.join(code, 'node_modules', 'electron'));
   if (!electron.startsWith(modules + path.sep) || /\/Applications\//.test(electron)) throw Error('Refused: not the repository\'s own Electron');
 }
@@ -51,8 +57,11 @@ async function assertHidden(app, profile) {
   return seen;
 }
 
+const CHECKED = Symbol('checked');
 class SimulatedPerson {
-  constructor(page, { snapshot, log = () => {} }) {
+  constructor(checked, page, options) {
+    if (checked !== CHECKED) throw Error('Refused: simulatedPerson(app, profile) makes it');
+    const { snapshot, log = () => {} } = options;
     this.page = page;
     this.snapshot = snapshot;
     this.log = log;
@@ -111,4 +120,11 @@ class SimulatedPerson {
   }
   async idle(ms) { this.note('idle', { ms }); await delay(ms); }
 }
-module.exports = { SimulatedPerson, assertIsolated, assertHidden, touchesDaily };
+// The only way to one: the running app itself is checked, and the page is the one it opened.
+async function simulatedPerson(app, profile, options) {
+  assertPrivate(profile);
+  const seen = await assertHidden(app, profile);
+  assertIsolated({ profile, executable: seen.exe, code: path.resolve(__dirname, '../..'), env: {} });
+  return new SimulatedPerson(CHECKED, await app.firstWindow(), options);
+}
+module.exports = { simulatedPerson, assertIsolated, assertPrivate, assertHidden, touchesDaily };

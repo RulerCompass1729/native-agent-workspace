@@ -1,5 +1,6 @@
 // Session rotation with a simulated person (R206, R211, R221): the real hidden desktop app, the real daemon and the real
-// Claude CLI against fixed local replies (sandboxed to loopback, no provider, no key). The person's keys and clicks go
+// Claude CLI against fixed local replies (every start of it, --version included, sandboxed to loopback with no key;
+// Codex and any other provider's CLI are stubs that must never be called). The person's keys and clicks go
 // through the hidden window's own input path (fixtures/simulated-person.cjs). Quiet times are shortened with the
 // dispatcher's own constructor options (fixtures/rotation-clock.cjs); no gate is removed.
 // Usage: node scripts/test-rotation-person.cjs <scenario> [--code <other checkout>] [--no-window]
@@ -9,8 +10,8 @@
 // Prints the raw rotation log rows and PASS or FAIL; exits non-zero on failure. Takes the GUI test slot itself (75: taken).
 const scratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process');
-const { SimulatedPerson, assertIsolated, assertHidden } = require('./fixtures/simulated-person.cjs');
+const { randomUUID } = require('node:crypto'), { execFileSync, spawnSync } = require('node:child_process');
+const { simulatedPerson, assertIsolated, assertHidden } = require('./fixtures/simulated-person.cjs');
 const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
@@ -25,9 +26,15 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), started = D
 const say = (...parts) => console.log(((Date.now() - started) / 1000).toFixed(1).padStart(6), ...parts);
 
 assertIsolated({});
+// Nothing of a running NAW is inherited, here or by what starts here: its outbox descriptor names the daily app. Kept:
+// where test-scratch.cjs leaves the evidence. Its receipts go to a registry of this test's own, not the daily folder's.
+const evidence = process.env.NAW_EVIDENCE_DIR;
+for (const key of Object.keys(process.env)) if (key.startsWith('NAW_')) delete process.env[key];
+if (evidence) process.env.NAW_EVIDENCE_DIR = evidence;
 const electron = require(path.join(code, 'node_modules', 'electron'));
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
+process.env.NAW_TEMP_REGISTRY_DIR = path.join(path.dirname(common), '.local/person-sim-temp-registry');
 function takeSlot() {
   const busy = execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').filter(line => /scripts\/(package-mac|package-dmg|install-daily)\.cjs|\.local\/evidence\/release-[\w-]+\/(scratch\.noindex|pkg|preflight\.noindex)\//.test(line));
   if (busy.length) { console.error('A package or install is running; nothing started.'); process.exit(75); }
@@ -94,12 +101,12 @@ class Model {
   }
 }
 
-const base = scratch.directory(path.join(os.tmpdir(), 'naw-person-'));
+const base = fs.realpathSync(scratch.directory(path.join(os.tmpdir(), 'naw-person-')));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude'), home = path.join(base, 'home');
-for (const dir of [profile, cwd, config, home]) fs.mkdirSync(dir, { mode: 0o700 });
+const stubs = path.join(base, 'stubs'), stubCalls = path.join(base, 'stub-calls.log');
+for (const dir of [profile, cwd, config, home, stubs]) fs.mkdirSync(dir, { mode: 0o700 });
 const errors = [], model = new Model();
 let fixture, child, client, app, page, person, dispatcher, own;
-const evidence = process.env.NAW_EVIDENCE_DIR;
 
 async function until(check, label, limit = 90000) {
   const from = Date.now();
@@ -115,20 +122,24 @@ const dispatchRecord = id => { try { return JSON.parse(fs.readFileSync(path.join
 
 async function start({ options = {}, env = {} } = {}) {
   const modules = path.join(code, 'app', 'claude-loopback.cjs'), loopback = require(modules);
-  const binary = fs.realpathSync(process.env.NAW_CLAUDE_BIN || path.join(os.userInfo().homedir, '.local/bin/claude'));
-  const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim().split(' ')[0];
+  const binary = fs.realpathSync(path.join(os.userInfo().homedir, '.local/bin/claude'));
   fixture = loopback.create({ directory: base, provider: 'claude', respond: (req, res, body) => model.respond(req, res, body) });
   await fixture.start(); await fixture.preflight();
   const shim = path.join(base, 'claude-local');
   fixture.wrapper(binary, { file: shim, env: { CLAUDE_CONFIG_DIR: config, DISABLE_AUTO_COMPACT: '1' } });
+  const version = execFileSync(shim, ['--version'], { encoding: 'utf8', timeout: 30000, env: { PATH: '/usr/bin:/bin', HOME: home } }).trim().split(' ')[0];
+  assert.match(version, /^\d+\.\d+\.\d+$/, 'The Claude CLI');
+  for (const name of ['claude', 'codex', 'dsh', 'opencode', 'gemini', 'kimi'])
+    fs.writeFileSync(path.join(stubs, name), `#!/bin/sh\necho "${name} $*" >> '${stubCalls}'\nexit 97\n`, { mode: 0o700 });
+  assert.equal(spawnSync(path.join(stubs, 'codex'), ['--version']).status, 97);
+  assert.equal(fs.readFileSync(stubCalls, 'utf8'), 'codex --version\n', 'A stub that is started says so'); fs.rmSync(stubCalls);
   const trusted = {}; for (const dir of [cwd, fs.realpathSync(cwd)]) for (const name of [dir, dir + '-sessions']) trusted[name] = { hasTrustDialogAccepted: true };
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, autoCompactEnabled: false, customApiKeyResponses: { approved: [loopback.FIXTURE_KEY], rejected: [] }, theme: 'dark', projects: trusted }), { mode: 0o600 });
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ model: 'claude-opus-5-5', effortLevel: 'high', permissions: { allow: ['mcp__native_workspace__workspace_control'] } }), { mode: 0o600 });
-  fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
+  fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim, codex: path.join(stubs, 'codex') }), { mode: 0o600 });
   assertIsolated({ profile, executable: electron, code });
-  // Nothing of a running NAW is inherited: its outbox descriptor would lead a test session's calls to the daily app.
   const outer = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_')));
-  const shared = { ...outer, CLAUDE_CONFIG_DIR: config, CODEX_HOME: path.join(base, 'codex'), NAW_WORKSPACE: cwd, NAW_TEST_APP_ROOT: code, NAW_TEST_CLAUDE_VERSION: version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json') };
+  const shared = { ...outer, PATH: stubs + path.delimiter + process.env.PATH, CLAUDE_CONFIG_DIR: config, CODEX_HOME: path.join(base, 'codex'), NAW_WORKSPACE: cwd, NAW_TEST_APP_ROOT: code, NAW_TEST_CLAUDE_VERSION: version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json') };
   for (const key of ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'DEEPSEEK_API_KEY', 'GIT_ASKPASS']) delete shared[key];
   child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], { cwd, execArgv: ['--require', path.join(__dirname, 'fixtures/rotation-daemon.cjs')],
     env: { ...shared, HOME: home, NAW_OUTBOX_DESCRIPTOR: path.join(profile, 'outbox-owner.json'), NAW_APP_VERSION: require(path.join(code, 'package.json')).version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -160,7 +171,7 @@ async function start({ options = {}, env = {} } = {}) {
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
   await page.locator('#new-session').waitFor({ timeout: 60000 });
   const seen = await assertHidden(app, profile);
-  person = new SimulatedPerson(page, { snapshot, log: row => say('person', JSON.stringify(row)) });
+  person = await simulatedPerson(app, profile, { snapshot, log: row => say('person', JSON.stringify(row)) });
   say(`Claude ${version} on loopback; code ${code}; hidden Electron ${seen.windows.length} window(s); options ${JSON.stringify({ ...given, humanQuietMs: HUMAN_QUIET_MS, ...env })}`);
 }
 const ready = async id => { const s = await session(id); return s?.chatAvailable && s.state === 'idle' && !s.pendingTag; };
@@ -481,7 +492,7 @@ const cleanup = scratch.cleanup(teardown);
   try { await Promise.race([(dry ? dryRun : scenarios[scenario])(), limit]); } catch (error) { failure = error; } finally { clearTimeout(timer); }
   let raw = []; try { raw = rotationRows(); } catch (error) { failure ||= error; }
   console.log('--- rotation-log.jsonl (raw)'); for (const row of raw) console.log(JSON.stringify(row)); console.log('---');
-  if (!failure) try { assert.deepEqual(errors, [], 'No page errors'); fixture.assertClean(); if (!windowless) await assertHidden(app, profile); } catch (error) { failure = error; }
+  if (!failure) try { assert.deepEqual(errors, [], 'No page errors'); fixture.assertClean(); assert.equal(fs.existsSync(stubCalls) ? fs.readFileSync(stubCalls, 'utf8') : '', '', 'No other provider was started'); if (!windowless) await assertHidden(app, profile); } catch (error) { failure = error; }
   if (failure) {
     try {
       const state = await snapshot();

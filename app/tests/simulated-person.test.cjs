@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
-const { assertIsolated, touchesDaily } = require('../../scripts/fixtures/simulated-person.cjs');
+const { simulatedPerson, assertIsolated, touchesDaily } = require('../../scripts/fixtures/simulated-person.cjs');
 const daily = path.join(os.userInfo().homedir, 'Library', 'Application Support', 'Native Agent Workspace');
 const runner = path.join(root, 'scripts/test-rotation-person.cjs');
 function run(env) {
@@ -44,11 +44,43 @@ test('the simulated person accepts only its own private folder and the repositor
 });
 
 test('the clock fixture needs a test lease and takes only the dispatcher\'s own quiet times', () => {
-  const load = env => spawnSync(process.execPath, ['-r', path.join(root, 'scripts/fixtures/rotation-clock.cjs'), '-e', ''], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });
+  const load = env => spawnSync(process.execPath, ['-r', path.join(root, 'scripts/fixtures/rotation-clock.cjs'), '-e', ''], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8', timeout: 20000 });
   assert.match(load({}).stderr, /isolated test only/);
   const lease = { NAW_TEST_PARENT_PID: '1', NAW_DATA_DIR: '/nonexistent', NAW_TEST_APP_ROOT: root };
   assert.equal(load({ ...lease, NAW_TEST_ROTATION_OPTIONS: '{"quietMs":20000}' }).status, 0);
   assert.match(load({ ...lease, NAW_TEST_ROTATION_OPTIONS: '{"humanQuietMs":0}' }).stderr, /rotation-clock: humanQuietMs/);
+});
+
+test('the daemon fixture is refused in any process but the test daemon on its private folder', t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-person-')), profile = path.join(base, 'profile'), code = path.join(base, 'code');
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  fs.mkdirSync(profile, { mode: 0o700 }); fs.mkdirSync(path.join(code, 'app'), { recursive: true });
+  const daemon = path.join(code, 'app/daemon.cjs'), other = path.join(base, 'other.cjs');
+  for (const file of [daemon, other]) fs.writeFileSync(file, "console.log('started ' + Boolean(require('./app/adapters.cjs')))".replace('./app', file === other ? './code/app' : '.'));
+  fs.writeFileSync(path.join(code, 'app/adapters.cjs'), 'exports.NativeHost = class { start() {} };');
+  const load = (args, env = { NAW_TEST_APP_ROOT: code }) => spawnSync(process.execPath, ['-r', path.join(root, 'scripts/fixtures/rotation-daemon.cjs'), ...args], { env: { PATH: process.env.PATH, HOME: base, TMPDIR: os.tmpdir(), ...env }, encoding: 'utf8', timeout: 20000 });
+  assert.equal(load([daemon, profile]).stdout, 'started true\n');
+  for (const [args, env] of [[['-e', '']], [[other, profile]], [[daemon, profile], {}]]) assert.match(load(args, env).stderr, /isolated test daemon only/);
+  for (const folder of [base, daily]) { const result = load([daemon, folder]); assert.match(result.stderr, /Refused: /); assert.equal(result.stdout, ''); }
+  assert.match(load([daemon]).stderr, /Refused: no test profile/);
+});
+
+test('a simulated person is made only for the repository\'s own hidden app on its private folder', async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-person-')), profile = path.join(base, 'profile');
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  fs.mkdirSync(profile, { mode: 0o700 });
+  const exe = fs.realpathSync(require('electron')), hidden = { visible: false, focused: false };
+  const app = change => ({ evaluate: async () => ({ packaged: false, userData: profile, exe, windows: [hidden], ...change }), firstWindow: async () => ({ page: true }) });
+  const made = await simulatedPerson(app({}), profile, { snapshot: async () => ({}) });
+  assert.deepEqual(made.page, { page: true });
+  const refused = (change, folder = profile) => assert.rejects(simulatedPerson(app(change), folder, { snapshot: async () => ({}) }));
+  await refused({ packaged: true }); await refused({ userData: base }); await refused({ windows: [] });
+  await refused({ windows: [hidden, { visible: true, focused: false }] }); await refused({ windows: [{ visible: false, focused: true }] });
+  await refused({ exe: process.execPath }); await refused({ userData: base }, base);
+  await assert.rejects(simulatedPerson(app({ userData: daily }), daily, {}), /daily data folder/);
+  await assert.rejects(simulatedPerson({ keyboard: {}, locator() {} }, profile, {}));
+  assert.throws(() => new made.constructor({ keyboard: {} }, { snapshot: async () => ({}) }), /Refused/);
+  assert.throws(() => new made.constructor(undefined, { keyboard: {} }, { snapshot: async () => ({}) }), /Refused/);
 });
 
 test('nothing in the product knows the simulated person', () => {
