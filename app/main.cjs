@@ -1099,6 +1099,7 @@ function displayState(snapshot, context, read = null, toPage = false) {
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
+    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
 }
@@ -1144,15 +1145,7 @@ async function startQueueDispatcher() {
       roomState,
       dataDir,
       // Prefer a window's client: its state is already held and kept current.
-      clients: () => {
-        for (const context of windows.values()) {
-          const usable = !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed;
-          if (usable) {
-            return context.client;
-          }
-        }
-        return null;
-      },
+      clients: personClient,
       // A connection of its own is no page a person sees: what it creates is the person's window's to use.
       connect: owner => connect(dataDir, owner, { page: false }),
       labels: sessionLabels.labels,
@@ -1166,6 +1159,7 @@ async function startQueueDispatcher() {
         return current && { ...current, duty: stewardDutyText() };
       },
       creationDefaults: snapshot => creationDefaults.get(snapshot?.sessions || []),
+      modelChanges: () => sessionModelChanges?.ids() || [],
       directoryTrustTimeoutMs: process.env.NAW_QUEUE_DIRECTORY_TRUST_TIMEOUT_MS,
       // Passive local facts only; no controller or native/model runner is bound.
       observeQueueState: states => butlerIngress?.observeQueues(states),
@@ -1220,6 +1214,36 @@ async function startQueueDispatcher() {
     // Optional: the app and every native session keep working without it.
     queueDispatcher = null;
   }
+}
+function personClient() {
+  for (const context of windows.values()) {
+    const usable = !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed;
+    if (usable) {
+      return context.client;
+    }
+  }
+  return null;
+}
+// The person's model changes, also those still waiting for a session to be idle (N5, model-change.cjs).
+let sessionModelChanges = null;
+function modelChanges() {
+  return sessionModelChanges ||= new (require('./model-change.cjs').ModelChanges)({
+    dataDir,
+    client: personClient,
+    apply: snapshot => roomState.apply(snapshot),
+    rotations: () => queueDispatcher?.rotations || {},
+    engaged: () => queueDispatcher?.integration?.holding() || [],
+    humanAt: () => queueDispatcher?.humanAt || new Map(),
+    saveTerminal: async id => {
+      const file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner, { page: false }), 'naw-model', path.join(dataDir, 'rotation-terminals'), id, Date.now());
+      return file && path.join(dataDir, file);
+    },
+    changed: () => { broadcastRoom().catch(() => {}); queueDispatcher?.schedule(); },
+    done: notifyModelChange,
+  });
+}
+function notifyModelChange(notice) {
+  for (const context of windows.values()) sendToPage(context, 'workspace:model-changed', notice);
 }
 async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
@@ -1928,6 +1952,12 @@ async function boot() {
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const firstMessage = command.method === 'create' && backgroundOperation.creationMessage(command.arguments[0]);
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
+      if (action === 'changeModel') {
+        const session = state.sessions.find(s => s.id === command.arguments[0]);
+        const refusal = command.arguments.length !== 2 ? uiError('error.modelChange.unknown', { model: '' })
+          : require('./session-model.cjs').refused(session, session?.serviceCapabilities || state.capabilities, command.arguments[1]);
+        if (refusal) throw new background.PreconditionRefused(refusal, 'model-change-unavailable');
+      }
       if (action === 'readConversation' && !target) throw new background.PreconditionRefused(uiError('error.background.conversationChanged'), 'conversation-target-unavailable');
       return { type: 'warning',
       message: action === 'readConversation' ? displayText('background.readConversationTitle', { name: backgroundOperation.visibleText(actor.name), target: backgroundOperation.visibleText(target.name) })
@@ -2006,6 +2036,7 @@ async function boot() {
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
   await startQueueDispatcher();
+  try { modelChanges().schedule(); } catch { /* A later request tries again. */ }
   switchRecords = backendSwitch.readRecords(dataDir);
   if (quitting) return;
   const generation = localeHostGeneration;
@@ -2731,6 +2762,24 @@ async function boot() {
     return result;
   });
   register('preflight', () => preflight());
+  register('modelChoices', (c, id) => modelChanges().choices(id));
+  register('changeModel', async (c, id, value, nativeId) => {
+    if (!c.background) return modelChanges().request(id, value, nativeId);
+    // An agent names no native session: the card the person confirmed is bound to the one there is.
+    try {
+      const result = await modelChanges().request(id, value, c.client.snapshot().sessions.find(s => s.id === id)?.nativeId);
+      if (result.status === 'pending') notifyModelChange({ sessionId: id, model: value.model, effort: value.effort, waiting: result.waiting || 'applying' });
+      return result;
+    } catch (error) {
+      // Refused before anything was done: the person who confirmed it is told, and the agent gets the reason.
+      const key = error?.uiMessage?.key;
+      if (!key?.startsWith('error.modelChange.') || require('./session-model.cjs').UNSURE_KEYS.includes(key)) throw error;
+      notifyModelChange({ sessionId: id, model: value?.model ?? null, effort: value?.effort ?? null, error: error.message, errorUiMessage: error.uiMessage });
+      return { status: 'refused', reason: error.message };
+    }
+  });
+  register('cancelModelChange', (c, id) => modelChanges().cancel(id));
+  applicationHandlers.delete('cancelModelChange');
   register('interfaceSettings', (_c, ...args) => dsh.settings(...args));
   register('runtimeLocation', async (c, key, reset = false) => {
     if (!['claude', 'codex', 'python3'].includes(key) || typeof reset !== 'boolean') throw uiError("error.main.unknownProgramSetting");
@@ -3246,6 +3295,7 @@ app.on('will-quit', () => {
   backgroundNotifications?.dispose();
   notificationScreen?.dispose();
   queueDispatcher?.close();
+  sessionModelChanges?.close();
   try { butlerIngress?.ledger.closeQuestionMetricEpoch(); } catch { /* An unclosed epoch remains unverified. */ }
 });
 function notifyButlerQuit(key) {

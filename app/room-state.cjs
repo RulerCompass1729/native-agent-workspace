@@ -564,7 +564,7 @@ class RoomState {
     const summary = record.refusalSummary;
     const notices = { 'confirmation-limit': 'refusalLimit', 'originating-session-unavailable': 'refusalActor', 'another-operation-running': 'refusalBusy',
       'explicit-paths-required': 'refusalPaths', 'invalid-file-path-count': 'refusalPaths', 'file-preview-changed': 'refusalPreview',
-      'conversation-access-denied': 'refusalAccess', 'space-file-membership-required': 'refusalAccess', 'conversation-target-unavailable': 'refusalTarget' };
+      'conversation-access-denied': 'refusalAccess', 'space-file-membership-required': 'refusalAccess', 'conversation-target-unavailable': 'refusalTarget', 'model-change-unavailable': 'refusalModelChange' };
     if (record.state !== 'not-executed' || !Object.hasOwn(notices, summary.reason) || !orderId(record.actor.id) || !['claude', 'codex'].includes(record.actor.provider)) throw Error('Invalid refusal audit');
     const id = `control-refusal:${record.actor.provider}:${record.actor.nativeId}:${record.id}`;
     const name = require('./background-operation.cjs').visibleText(record.actor.name);

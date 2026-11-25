@@ -44,9 +44,10 @@ function fixture(t, provider = 'codex', extra = {}) {
   const sandbox = { background: require('../background-control.cjs'), ...require('../shown-sessions.cjs'), backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
     queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
     confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', windows: new Map(), operationsBlocks: -1, recordsChanged() {}, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(),
-    localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }), stewardWake: null,
+    localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }), stewardWake: null, sessionModelChanges: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
     displayText: (key, params) => locale.format('zh', key, params), uiError: require('../ui-errors.cjs').uiError, applicationBuild: {}, app: { getVersion: () => 'fixture' }, localeWarning: '', preflight: () => ({}), notifyCapacity() {},
+    require: id => require(id.replace('./', '../')),
     validViews: require('../view-store.cjs').validViews, saveViews() {}, structuredClone, register: (name, handler) => handlers.set(name, handler), roomIds: s => s.roomIds || [] };
   vm.createContext(sandbox);
   vm.runInContext(part('function displayState(', '\nfunction reportViewStorage('), sandbox);
@@ -862,4 +863,58 @@ test('a session designated butler while its read waits gets that read once the p
   await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
   const receipt = (await f.call({ action: 'receipt', operation_id: pending.id })).receipt;
   assert.ok(JSON.stringify(receipt.value).includes(f.secret)); assert.equal(receipt.unasked, undefined);
+});
+
+// Changing a session's model (N5): an agent can only ask for it, on a card, and the handler runs once the person confirms.
+for (const provider of ['claude', 'codex']) test(`${provider}: a model change is asked about every time, also for the asking session itself, and runs once on the person's confirmation`, async t => {
+  const f = fixture(t, provider), asked = []; f.state.capabilities = ['sessionModelV1'];
+  f.config.handlers.set('changeModel', (c, ...args) => { asked.push(args); return { status: 'pending', waiting: 'turn' }; });
+  for (const id of ['other', 'agent']) {
+    const request = command('changeModel', [id, { model: 'claude-opus-5-5', effort: 'xhigh' }]);
+    const pending = await f.controller.call(f.binding, request);
+    assert.equal(pending.state, 'confirmation-required'); assert.equal(asked.length, 0);
+    assert.equal(JSON.stringify(pending.confirmation).includes('claude-opus-5-5'), true);
+    const done = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
+    assert.equal(done.state, 'complete'); assert.deepEqual(JSON.parse(JSON.stringify(asked.splice(0))), [[id, { model: 'claude-opus-5-5', effort: 'xhigh' }]]);
+    const refused = await f.controller.call(f.binding, command('changeModel', [id, { model: 'claude-sonnet-5-5', effort: 'low' }]));
+    await f.controller.decide(f.actor.id, f.actor.nativeId, refused.id, 0); assert.equal(asked.length, 0);
+  }
+});
+test('a model change confirmed for one conversation never reaches the next one in the same session', async t => {
+  const f = fixture(t, 'claude'); let entered = 0; f.state.capabilities = ['sessionModelV1'];
+  f.config.handlers.set('changeModel', () => { entered++; });
+  const pending = await f.controller.call(f.binding, command('changeModel', ['other', { model: 'claude-opus-5-5', effort: 'xhigh' }]));
+  assert.equal(pending.state, 'confirmation-required');
+  f.state.sessions.find(s => s.id === 'other').nativeId = 'native-replaced';
+  const result = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1).catch(error => ({ state: 'refused', error }));
+  assert.notEqual(result.state, 'complete'); assert.equal(entered, 0);
+});
+test('a model change that cannot be made is refused with its reason before the person is asked', async t => {
+  const f = fixture(t, 'claude'); f.controller.now = () => 60000; let entered = 0;
+  f.config.handlers.set('changeModel', () => { entered++; });
+  const other = f.state.sessions.find(s => s.id === 'other'), value = { model: 'claude-opus-5-5', effort: 'xhigh' };
+  for (const [capabilities, patch, args] of [[[], {}, ['other', value]], [['sessionModelV1'], { state: 'ended' }, ['other', value]], [['sessionModelV1'], { provider: 'dsh' }, ['other', value]], [['sessionModelV1'], {}, ['other', { model: '--resume', effort: 'low' }]],
+    [['sessionModelV1'], {}, ['other', { ...value, skipPermissions: true }]], [['sessionModelV1'], {}, ['other', value, 'native-other']], [['sessionModelV1'], {}, ['gone', value]], [['sessionModelV1'], {}, ['other']], [['sessionModelV1'], {}, []]]) {
+    const before = { ...other }; Object.assign(other, patch); f.state.capabilities = capabilities;
+    const result = await f.controller.call(f.binding, command('changeModel', args)); Object.assign(other, before);
+    assert.deepEqual([result.state, result.reason, result.confirmation], ['not-executed', 'model-change-unavailable', undefined], JSON.stringify(args));
+  }
+  assert.equal(entered, 0); assert.equal(f.notices.length, 0);
+  // A backend of its own may be older than the one beside it.
+  f.state.capabilities = ['sessionModelV1']; other.serviceCapabilities = [];
+  assert.equal((await f.controller.call(f.binding, command('changeModel', ['other', value]))).reason, 'model-change-unavailable');
+});
+test('a model change the person is asked about is tied to its session and the asking one, not to what other sessions do meanwhile', async t => {
+  assert.deepEqual(operation.maintenanceTargets(command('changeModel', ['other', {}]), { id: 'agent' }, { sessions: [] }), { sessions: ['other'], rooms: [] });
+  const f = fixture(t, 'claude'); let entered = 0; f.state.capabilities = ['sessionModelV1']; f.config.handlers.set('changeModel', () => { entered++; });
+  f.state.sessions.push({ ...f.state.sessions.find(s => s.id === 'other'), id: 'third', name: 'Third', nativeId: 'native-third' });
+  const pending = await f.controller.call(f.binding, command('changeModel', ['other', { model: 'claude-opus-5-5', effort: 'xhigh' }]));
+  f.state.sessions.find(s => s.id === 'third').nativeId = 'native-replaced';
+  assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1)).state, 'complete'); assert.equal(entered, 1);
+});
+test('what an agent may read of the choices needs no card, and withdrawing a change is not offered to agents', () => {
+  assert.equal(operation.maintenanceAction('modelChoices', ['other'], { id: 'agent' }) || null, null);
+  const source = fs.readFileSync(require.resolve('../background-control.cjs'), 'utf8');
+  assert.match(source, /\n  modelChoices: \[/); assert.match(source, /\n  changeModel: \[/); assert.doesNotMatch(source, /\n  cancelModelChange: /);
+  assert.match(main, /register\('cancelModelChange', [^\n]+\n  applicationHandlers\.delete\('cancelModelChange'\);/);
 });

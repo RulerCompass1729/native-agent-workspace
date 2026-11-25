@@ -33,7 +33,7 @@ test('pending confirmations are projected only into human windows, never agent s
     confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', recordsChanged() {},
     backgroundControl: { rows: () => [], confirmations: () => { reads++; return [{ id: 'human-card' }]; } },
     backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    queueSecretary: null, integratorRole: null, stewardRole: null, stewardWake: null, queueDispatcher: null, butlerIngress: null,
+    queueSecretary: null, integratorRole: null, stewardRole: null, stewardWake: null, sessionModelChanges: null, queueDispatcher: null, butlerIngress: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, endedByMove: () => [], roomPeerIdentity: () => null,
     backgroundOperation: { conversationSnapshot: x => x }, conversationAccess: () => null,
     localVendorIcons: () => ({}) };

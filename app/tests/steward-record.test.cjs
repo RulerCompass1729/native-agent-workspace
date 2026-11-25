@@ -199,7 +199,7 @@ test('every sentence the dialog can show exists in Chinese and English', () => {
     { kind: 'invoke', method: 'openSession', target: 'B', state: null },
     { kind: 'invoke', method: 'send', state: 'complete', duplicate: true },
     ...['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'unconfirmed', 'odd'].map(state => ({ kind: 'invoke', method: 'send', state })),
-    ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
+    ...['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'model-change-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'odd'].map(reason => ({ kind: 'invoke', method: 'send', state: 'not-executed', reason })),
     ...['sent', 'not-sent', 'unconfirmed', null].map(state => ({ kind: 'wake', target: 'B', state })),
     ...['on', 'off', 'check'].map(wake => ({ kind: 'invoke', method: 'stewardWake', wake, state: 'complete' })),
     { kind: 'invoke', method: 'stewardEvents', state: 'complete' },

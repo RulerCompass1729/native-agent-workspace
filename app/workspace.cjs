@@ -92,6 +92,7 @@ const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 const { readCodexProfile, PROFILE_PATTERN: CODEX_PROFILE_PATTERN } = require('./codex-profile.cjs');
+const sessionModel = require('./session-model.cjs');
 // Who made the model a session runs (vendor) and which native program runs it (shell), for the
 // interface to tell DeepSeek-through-Codex from Codex. A Codex vendor is the model provider
 // Codex reports for the thread (or, before that, the one its profile names); null until known.
@@ -2205,6 +2206,7 @@ class Workspace extends EventEmitter {
   // `scope` 'participant' (participantMaintenanceStopV1): a rotation ends this one session, so its stop pauses
   // only the relays, grants and continuations this session is in; another space's relay keeps running. Without
   // it (the backend switch, which ends every session) the stop pauses all of them, as before.
+  // `requireAuto` 'typed': proven idle apart from text perhaps typed in the native terminal, which the caller saved.
   maintenanceStop(id, expected, requireAuto = false, scope = null) {
     const { sessionPlan, sameStop } = require('./backend-switch.cjs');
     const s = this.get(id), runtime = this.runtime(id);
@@ -2214,7 +2216,8 @@ class Workspace extends EventEmitter {
       for (const room of this.rooms.values()) if (room.run?.status === 'running') for (const member of room.run.ids || []) running.add(member);
       const current = { ...s, draftRevision: this.draftRevisions.get(id) || 0,
         activeTurnId: runtime.turnId, pendingQueue: runtime.pendingQueue, pendingSteer: runtime.pendingSteer,
-        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest };
+        nativeInputRequired: runtime.nativeInputRequired, interruptPending: runtime.nativeAbortRequest,
+        ...(requireAuto === 'typed' ? { terminalInputPending: false } : {}) };
       const plan = sessionPlan(current, current.state, running);
       if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
           !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2291,6 +2294,59 @@ class Workspace extends EventEmitter {
         !['ended', 'recoverable', 'disconnected'].includes(s.state)) throw uiError('error.workspace.nativeEndUnconfirmed');
     return { state: s.state };
   }
+  modelChangeable(id) {
+    const s = this.get(id);
+    if (!['claude', 'codex'].includes(s.provider) || otherVendor(s) || s.requestedSettings?.profile) throw uiError('error.modelChange.unsupported');
+    if (!s.nativeId || s.nativeContextPending || s.recovering || this.stops.has(id) || !['idle', 'working', 'approval'].includes(s.state)) throw uiError('error.modelChange.unavailable');
+    return s;
+  }
+  async modelChoices(id) {
+    const s = this.modelChangeable(id);
+    if (s.provider === 'claude') { if (s.state === 'idle') this.assertClaudeRestarts(s); return sessionModel.claudeChoices(s); }
+    const nativeId = s.nativeId, models = await this.runtime(id).models();
+    if (this.sessions.get(id) !== s || s.nativeId !== nativeId) throw uiError('error.modelChange.changed');
+    return { provider: 'codex', current: sessionModel.current(s), nativeDefault: false, models };
+  }
+  // Stopped, native could not bring it back: no folder to start in, or no conversation to resume yet.
+  assertClaudeRestarts(s) {
+    let folder = false;
+    try { folder = fs.statSync(s.cwd).isDirectory(); } catch { /* as if there were none */ }
+    if (!folder) throw uiError('error.workspace.originalDirectoryUnavailable');
+    const transcript = sessionModel.claudeTranscript(s);
+    if (transcript ? !transcript.conversation : !s.messages.some(m => ['user', 'assistant'].includes(m.role))) throw uiError('error.modelChange.unstarted');
+  }
+  // `expected`: for Claude the exact idle session to stop and resume (a sessionPlan stop proof), for Codex its
+  // native identity. The window that had the session keeps it. An error says whether anything was done: it is
+  // modelChange.unconfirmed or .stopped from the moment the stop began.
+  async changeModel(id, value, expected, requireAuto = true) {
+    const s = this.modelChangeable(id), nativeId = expected?.nativeId;
+    const changed = () => uiError('error.modelChange.changed');
+    if (typeof nativeId !== 'string' || s.nativeId !== nativeId) throw changed();
+    if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
+    if (s.provider === 'codex') return this.runtime(id).changeModel(value, () => {
+      if (this.closed || this.sessions.get(id) !== s || s.nativeId !== nativeId || this.modelChangeable(id) !== s) throw changed();
+    });
+    const wanted = sessionModel.claudeValue(value, s);
+    if (![true, 'typed'].includes(requireAuto)) throw changed();
+    this.assertClaudeRestarts(s);
+    const { sameStop, endedByThisStop } = require('./backend-switch.cjs');
+    const now = () => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0 });
+    let stopped;
+    try { stopped = (await this.maintenanceStop(id, expected, requireAuto, 'participant')).stoppedState; }
+    catch (error) {
+      const key = error?.uiMessage?.key;
+      // A Claude terminal that ends itself during the stop (see endedByThisStop).
+      if (key === 'error.backendSwitchDisconnectUnconfirmed') stopped = await endedByThisStop({ call: async () => ({ sessions: [now()] }) }, expected, 10000);
+      if (!stopped) throw key === 'error.backendSwitchSessionChanged' || sameStop(now(), expected) ? error : uiError('error.modelChange.unconfirmed');
+    }
+    if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw uiError('error.modelChange.unconfirmed');
+    // Native comes back in the mode it was left in, except bypass, which the resume asks for: not when it was left for another.
+    const left = sessionModel.claudeTranscript(s)?.permissionMode;
+    if (s.nativePermissionMode === 'bypassPermissions' && sessionModel.CLAUDE_MODES.includes(left)) s.nativePermissionMode = left;
+    sessionModel.applyClaude(s, wanted); this.changed(); this.persist();
+    try { await this.resume(id, s.owner, true); } catch { throw uiError('error.modelChange.stopped'); }
+    return wanted;
+  }
   maintenanceResume(id, expected, owner) {
     const { sameStop } = require('./backend-switch.cjs'), s = this.get(id);
     if (!expected || s.state !== expected.state || !sameStop({ ...s, draftRevision: this.draftRevisions.get(id) || 0 }, expected)) throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2362,7 +2418,7 @@ class Workspace extends EventEmitter {
     if (!maintenance) begin();
     return operation;
   }
-  async resume(id, owner) {
+  async resume(id, owner, participantOnly = false) {
     const s = this.get(id);
     if (s.worktreePreparation && s.worktreePreparation.status !== 'ready') throw uiError("error.workspace.gitRecoveryUnconfirmed", { arg1: s.worktreePreparation.target, arg2: s.worktreePreparation.branch });
     if (s.nativeContextPending) throw uiError("error.workspace.nativeContextIdentityUnconfirmed");
@@ -2402,7 +2458,9 @@ class Workspace extends EventEmitter {
     if (!fs.statSync(s.cwd).isDirectory()) throw uiError("error.workspace.originalDirectoryUnavailable");
     s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect'); s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
     // Membership is retained, but an interrupted automatic run never restarts.
-    this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]); this.changed();
+    if (participantOnly) this.pauseParticipant(id, '恢复原生会话后，请重新选择本次协作任务。', false, uiActivity('notice.run.resumedTask')[1]);
+    else this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]);
+    this.changed();
     let runtime;
     const generation = s.connectionRevision;
     try {
