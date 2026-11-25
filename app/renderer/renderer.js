@@ -2426,7 +2426,9 @@ $('privacy-dialog').addEventListener('close', event => {
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false; $('create-profile').replaceChildren();
+  const agyDefault = provider === 'agy';
+  if (agyDefault) $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); else $('skip-permissions').removeAttribute('data-agy-auto-skip');
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyDefault; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
@@ -3333,7 +3335,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
   const title = uiNode('h3', 'operator.card.title', () => ({ who: initiator?.name || op.initiatorId, name: op.args.name || uiText('operator.card.session', { provider: op.args.provider }) }));
   title.tabIndex = -1; entry.operatorHeading = title; controls.append(title);
   const facts = node('p', undefined, 'operator-creation-facts');
-  facts.append(node('span', op.args.provider === 'claude' ? 'Claude' : 'Codex'), node('code', op.args.cwd));
+  facts.append(node('span', providerName(op.args.provider)), node('code', op.args.cwd));
   const permission = uiNode('span', 'operator.permission', () => ({ permission: uiText('operator.' + op.args.permission) }));
   permission.classList.toggle('operator-bypass', op.args.permission === 'bypass'); facts.append(permission); controls.append(facts);
   if (!inbox) {
@@ -4191,6 +4193,7 @@ function sessionShortId(id) {
 function providerName(provider) {
   if (provider === 'claude') return 'Claude';
   if (provider === 'dsh') return 'DSH';
+  if (provider === 'agy') return 'Antigravity';
   return 'Codex';
 }
 async function moveSidebarSession(id, target, after) {
@@ -4399,10 +4402,11 @@ function createReadiness() {
   renderCreateSpaces();
   renderCreateProfiles();
   renderDshProvider();
+  renderAgyProvider();
   const historyProvider = chosenProvider();
   // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
-  // A DSH session has no history to continue here.
-  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  // DSH and Antigravity sessions have no history picker here.
+  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || historyProvider === 'agy' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   $('open-claude-sessions').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeSessionList');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
@@ -4438,8 +4442,9 @@ function createReadiness() {
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   // DSH keeps its own approvals; the service refuses bypass for it.
+  if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true' && historyProvider !== 'agy') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
-  if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
+  if ($('skip-permissions-option').hidden) { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
   ui.display.computed($('create-permission-note'), 'text', () => uiText('create.permissionNote', { directory: uiText(directoryKey), permission: uiText(permissionKey) }));
@@ -4450,8 +4455,8 @@ function createReadiness() {
     return;
   }
   const provider = chosenProvider();
-  // DSH is ready when the service found its pinned runtime and a Node.js to run it.
-  const programReady = provider === 'dsh' ? state.available?.dsh === true : state.preflight?.[provider];
+  // DSH and Antigravity are ready when the service resolved their runtimes.
+  const programReady = provider === 'dsh' ? state.available?.dsh === true : provider === 'agy' ? state.available?.agy === true : state.preflight?.[provider];
   const ready = state.preflight?.python && programReady && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
@@ -4472,6 +4477,15 @@ function renderDshProvider() {
   $('dsh-provider').hidden = !offered;
   const chosen = document.querySelector('input[name="provider"]:checked').value === 'dsh';
   if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+}
+function renderAgyProvider() {
+  const offered = state.available?.agy === true;
+  $('agy-provider').hidden = !offered;
+  const chosen = document.querySelector('input[name="provider"]:checked')?.value === 'agy';
+  if (!offered && chosen) {
+    document.querySelector('input[name="provider"][value="claude"]').checked = true;
+    if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
+  }
 }
 function chosenProvider() { return deepseekChosen() ? 'codex' : document.querySelector('input[name="provider"]:checked').value; }
 function renderCreateProfiles() {
@@ -5848,15 +5862,16 @@ function render() {
     $('room-session').hidden = !s;
     $('room-record-view').hidden = false;
     $('room-scope').hidden = !inRoom || !s;
-    const terminalVisible = Boolean(s && terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'));
+    const agyTerminalOnly = s?.provider === 'agy';
+    const terminalVisible = Boolean(s && (agyTerminalOnly || (terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'))));
     if ($('terminal-display-dialog').open && (!terminalVisible || terminalDisplayKey !== headerMenuKey())) $('terminal-display-dialog').close();
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('has-terminal', (!inRoom || memberFocus) && terminalVisible);
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
-    $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
-    $('conversation-pane').hidden = inRoom && !memberFocus;
+    $('session-layout').classList.toggle('native-only', agyTerminalOnly || (inRoom && !memberFocus));
+    $('conversation-pane').hidden = agyTerminalOnly || (inRoom && !memberFocus);
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
@@ -6026,7 +6041,9 @@ function render() {
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
   const s = current(); if (!s) return;
-  if (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized') terminalLayout = 'split';
+  const terminalOnly = s.provider === 'agy';
+  if (terminalOnly) next = 'terminal';
+  if (!terminalOnly && (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized')) terminalLayout = 'split';
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
   if (entry?.composing) entry.term.blur();
@@ -6042,13 +6059,13 @@ async function switchMode(next, takeControl = false) {
   }
   // Save the surface already shown to the person before waiting for native
   // control. Closing now must reopen this view; input remains separately gated.
-  if (mode === next) { preference = next; attempt(persistView); }
+  if (mode === next) { if (!terminalOnly) preference = next; attempt(persistView); }
   try {
     if (ending) await ending.done;
     if (!stillSelected()) return;
     if ((takeControl || !heldElsewhere(s)) && !await claimView(s.id, next, revision, takeControl)) return;
     if (!stillSelected()) return;
-    mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
+    mode = next; if (!terminalOnly) preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
     if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
     else if (inputFocusAllowed()) chatInput().focus();
@@ -6564,7 +6581,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // A DSH session opens in its terminal (it has no conversation view yet) and leaves the remembered view alone.
     let view = preference;
     if (provider === 'codex') view = $('initial-view').value;
-    if (provider === 'dsh') view = 'terminal';
+    if (provider === 'dsh' || provider === 'agy') view = 'terminal';
     else preference = view;
     // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
     const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;
@@ -6734,6 +6751,7 @@ $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = te
 $('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });
 $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
+  if (current()?.provider === 'agy') return;
   terminalLayout = 'hidden'; await switchMode('chat');
 });
 for (const input of [$('shared-input')]) input.addEventListener('focus', () => {
@@ -8067,7 +8085,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
       for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
-      $('skip-permissions').checked = false; folder = ''; newDirectory = false;
+      $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); folder = ''; newDirectory = false;
       $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
@@ -8115,7 +8133,14 @@ disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSe
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
 renderInterfaceLanguage();
 
-for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = () => {
+  if (input.value === 'agy' && input.checked) {
+    if (!$('skip-permissions').checked) { $('skip-permissions').checked = true; $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); }
+  } else if (input.checked && $('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') {
+    $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip');
+  }
+  createReadiness();
+};
 $('claude-history-id').oninput = createReadiness;
 $('create-profile').onchange = createReadiness;
 $('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
@@ -8124,7 +8149,7 @@ $('create-space-name').oninput = () => { $('create-space-name').dataset.edited =
 $('claude-history-id').onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
 };
-$('skip-permissions').onchange = createReadiness;
+$('skip-permissions').onchange = () => { $('skip-permissions').removeAttribute('data-agy-auto-skip'); createReadiness(); };
 attempt(async () => {
   state = await api.initial();
   languageWarning = ['unavailable', 'migrationNotSaved'].includes(state.localeWarning) ? state.localeWarning : null; renderInterfaceLanguage();

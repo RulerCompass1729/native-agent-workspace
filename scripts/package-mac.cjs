@@ -72,6 +72,8 @@ async function build() {
     const sources = [
       'adapters.cjs',
       'addressed-handoffs.cjs',
+      'agy-tui.cjs',
+      'agy_hook.py',
       'answer-notices.cjs',
       'approval-policy.js',
       'backend-switch.cjs',
