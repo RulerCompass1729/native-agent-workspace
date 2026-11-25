@@ -5120,6 +5120,113 @@ for (const use of ['draft', 'human turn']) test(`handoff timeout rolls back whil
   assert.deepEqual(f.fresh.roomIds, ['shared']); assert.equal(f.fresh.state, 'working');
   assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
 });
+const MINUTE = 60 * 1000;
+const advanceTo = (f, minutes) => f.dispatcher.advanceRotations(f.client.snapshot(), NOW + minutes * MINUTE);
+const stopsOf = f => f.client.calls.filter(c => c[0] === 'stopFailedSuccessor').length;
+test('R183: a delivered first turn still running after 3 minutes is neither failed nor stopped, and then confirms', async t => {
+  const f = await firstHandoff(t);
+  for (const minutes of [1, 3, 13.3, 29]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.record.phase, 'handed', `${minutes} minutes`); assert.equal(stopsOf(f), 0); assert.equal(f.fresh.state, 'working');
+    assert.notEqual(f.record.handoffConfirmed, true);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+    assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a', 'decisions move only with the confirmed turn');
+  }
+  f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 29.5);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'b');
+});
+test('R183: a first turn past its own limit rolls back as before', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(stopsOf(f), 1); assert.equal(f.fresh.state, 'ended'); assert.deepEqual(f.fresh.roomIds, []);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a'); assert.equal(f.old.state, 'idle');
+});
+for (const [label, input] of [['unconfirmed', { status: 'unconfirmed', nativeId: undefined, turnId: undefined }],
+  ['awaiting-native', { status: 'awaiting-native', nativeId: undefined, turnId: undefined }],
+  ['bound to another native session', { nativeId: 'native-other' }]])
+test(`R183: a handoff ${label} for 2 minutes still rolls back`, async t => {
+  const f = await firstHandoff(t, { state: 'idle' });
+  Object.assign(f.input, input);
+  await advanceTo(f, 2); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 2.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a handoff whose successor is missing from the start still rolls back after 2 minutes', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 2); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 2.1); assert.equal(f.record.phase, 'failed'); assert.equal(stopsOf(f), 0);
+});
+for (const state of ['ended', 'recoverable', 'background'])
+test(`R183: a delivered first turn whose successor is ${state} keeps the 2-minute limit`, async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1); f.fresh.state = state;
+  await advanceTo(f, 1.5); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 3); assert.equal(f.record.phase, 'failed'); assert.equal(stopsOf(f), f.record.failureCleanup.stop.state === 'done' ? 1 : 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a delivered first turn out of view for a pass, or in an app reopened meanwhile, keeps its limit', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1);
+  const { sessions } = f.client.state;
+  f.client.state.sessions = sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 5); assert.equal(f.record.phase, 'handed', 'its backend is briefly away');
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 6 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed', 'delivery was recorded on disk');
+  f.client.state.sessions = sessions; f.fresh.state = 'disconnected';
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 7 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed');
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 30.1 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'failed');
+});
+for (const wait of ['approval', 'nativeInputRequired'])
+test(`R183: a first turn waiting on the person (${wait}) is bounded by the same limit and is not stopped`, async t => {
+  const f = await firstHandoff(t, wait === 'approval' ? { state: 'approval', approval: { id: 'synthetic' } } : { nativeInputRequired: true });
+  await advanceTo(f, 29); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.failureCleanup.stop.state, 'retained');
+  assert.equal(stopsOf(f), 0); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+for (const status of ['failed', 'interrupted', 'incomplete'])
+test(`R183: a first turn that ends ${status} after 3 minutes rolls back at once`, async t => {
+  const f = await firstHandoff(t); await advanceTo(f, 3); assert.equal(f.record.phase, 'handed');
+  f.boundary(status); f.fresh.state = 'idle'; await advanceTo(f, 3.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'successor-turn-failed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: the wait for a collaboration is counted from the confirmed first turn', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle';
+  await advanceTo(f, 29); assert.equal(f.record.handoffConfirmed, true); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 31); assert.equal(f.record.phase, 'handed', 'two minutes into the wait');
+  assert.equal(f.old.state, 'idle');
+  f.client.state.rooms[0].run = null; await advanceTo(f, 32);
+  assert.equal(f.old.state, 'ended');
+});
+test('R183: that wait stays bounded', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 29);
+  await advanceTo(f, 59); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 59.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept'); assert.equal(f.old.state, 'idle');
+});
+test('R183: a rotation confirmed by an older version keeps its wait from the handoff', async t => {
+  const f = await firstHandoff(t, { state: 'idle' }); f.boundary('complete');
+  f.record.handoffConfirmed = true; f.dispatcher.save();
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 29); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept');
+});
+
 test('one space notice failing repeatedly does not block another space or duplicate its notice', async t => {
   const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
   const other = f.room.create('Synthetic second space'); f.record.roomIds.push(other);
