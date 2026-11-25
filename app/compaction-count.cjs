@@ -170,6 +170,11 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
   }
 }
 
+function publish(id, state, counts, contexts) {
+  if (state.dev !== null) counts.set(id, state.count);
+  if (state.context && state.whole) contexts.set(id, state.context);
+}
+
 class CompactionCounter {
   constructor(options = {}) {
     const env = options.env || process.env;
@@ -209,33 +214,45 @@ class CompactionCounter {
     let budget = this.passBytes;
     const counts = new Map(), contexts = new Map();
     for (const session of order) {
-      const file = await this.fileOf(session, now);
-      let state = this.states.get(session.id);
-      if (!file) {
-        this.states.delete(session.id);
-        continue;
-      }
-      if (!state || state.file !== file || state.nativeId !== session.nativeId) {
-        state = { file, nativeId: session.nativeId, provider: session.provider, dev: null, ino: null, offset: 0, count: 0, skipping: false, context: null, whole: false };
-        this.states.set(session.id, state);
-      }
-      state.whole = false;
-      if (budget > 0) {
-        const read = await readOn(state, file, session.provider, session.nativeId, Math.min(this.readBytes, Math.max(budget, this.lineCap + 1)), this.lineCap);
-        if (read < 0) {
-          this.states.delete(session.id);
-          // A rollout found but not readable is looked for again only after the same wait as one not found.
-          if (session.provider === 'codex') this.codexFiles.set(session.nativeId, { missAt: now });
-          continue;
-        }
-        budget -= read;
-      }
-      if (state.dev !== null) counts.set(session.id, state.count);
-      if (state.context && state.whole) contexts.set(session.id, state.context);
+      const { state, read } = await this.readSession(session, now, budget > 0 ? Math.min(this.readBytes, Math.max(budget, this.lineCap + 1)) : 0);
+      budget -= read;
+      if (state) publish(session.id, state, counts, contexts);
     }
     this.contexts = contexts;
     this.last = { at: now, counts };
     return counts;
+  }
+
+  // Reads one session again, to the end of its record as it is now, and renews its part of the last sample: a size up
+  // to sampleMs old may be from before a compaction. Not read to the end: no size.
+  async recheck(session, now) {
+    this.contexts.delete(session.id);
+    const { state } = await this.readSession(session, now, this.readBytes);
+    if (state) publish(session.id, state, this.last.counts, this.contexts);
+  }
+
+  // Reads one record on; { state: null } when there is none or it cannot be opened.
+  async readSession(session, now, maxBytes) {
+    const file = await this.fileOf(session, now);
+    let state = this.states.get(session.id);
+    if (!file) {
+      this.states.delete(session.id);
+      return { state: null, read: 0 };
+    }
+    if (!state || state.file !== file || state.nativeId !== session.nativeId) {
+      state = { file, nativeId: session.nativeId, provider: session.provider, dev: null, ino: null, offset: 0, count: 0, skipping: false, context: null, whole: false };
+      this.states.set(session.id, state);
+    }
+    state.whole = false;
+    if (maxBytes <= 0) return { state, read: 0 };
+    const read = await readOn(state, file, session.provider, session.nativeId, maxBytes, this.lineCap);
+    if (read < 0) {
+      this.states.delete(session.id);
+      // A rollout found but not readable is looked for again only after the same wait as one not found.
+      if (session.provider === 'codex') this.codexFiles.set(session.nativeId, { missAt: now });
+      return { state: null, read: 0 };
+    }
+    return { state, read };
   }
 
   async fileOf(session, now) {

@@ -118,6 +118,12 @@ const QUIET_COMPACT_MS = 2 * 60 * 1000;
 const CONTEXT_LIMITS = { claude: 180000 };
 // Of the cache lifetime its last request was billed at: past this the handoff itself could miss the cache.
 const CONTEXT_WARM_SHARE = 0.9;
+// With no item waiting it does, the butler too, only once idle for this long (R221): nearly cold, so that whoever writes to
+// it next pays for a small conversation, and before the CLI compacts it by itself at 0.9 of an hour.
+const QUIET_CONTEXT_MS = 45 * 60 * 1000;
+// Two looks at what is held for a migration window (session-wake.cjs QUIET_CHECK_MS): from one that closed on, what
+// was held for its sessions has reached them by then, and they are no longer idle.
+const QUIET_WINDOW_CLOSED_MS = 2 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 // The window client refuses a space pause or a member move while NAW replaces one backend (after an install,
@@ -1084,17 +1090,18 @@ function rotationHold(session, options, rotations) {
   return null;
 }
 
-// Why a member is due for rotation now: 'content', 'compact', 'context' (only before its next item), 'memory' or null.
-function rotationReason(session, now, options, rotations, beforeItem = false) {
+// Why a member is due for rotation now: 'content', 'compact', 'context', 'memory' or null. `contextIdleMs`: how long ago the
+// last request must be for 'context'; without it there is no such reason.
+function rotationReason(session, now, options, rotations, contextIdleMs = null) {
   if (!['claude', 'codex'].includes(session.provider) || rotationHold(session, options, rotations)) {
     return null;
   }
-  return dueReason(session, now, options, rotations[session.id], beforeItem);
+  return dueReason(session, now, options, rotations[session.id], contextIdleMs);
 }
 
 // Large, still warm, and old enough to have done an item: a successor that read a lot in its first turn would
 // otherwise be replaced before it does any.
-function contextDue(session, now, options) {
+function contextDue(session, now, options, idleMs) {
   const limit = options.contextLimits ? options.contextLimits[session.provider] : undefined;
   const context = options.contexts ? options.contexts.get(session.id) : undefined;
   if (!Number.isFinite(limit) || !context || !Number.isSafeInteger(context.tokens) || context.tokens < limit ||
@@ -1102,11 +1109,11 @@ function contextDue(session, now, options) {
     return false;
   }
   const idle = now - context.at, start = sessionStart(session, now);
-  return idle >= 0 && idle < context.ttlMs * CONTEXT_WARM_SHARE && start !== null && now - start >= options.memoryMinAgeMs;
+  return idle >= idleMs && idle < context.ttlMs * CONTEXT_WARM_SHARE && start !== null && now - start >= options.memoryMinAgeMs;
 }
 
 // The reason alone, whatever rotationHold says; `record` is the session's own resting record, if any.
-function dueReason(session, now, options, record, beforeItem = false) {
+function dueReason(session, now, options, record, contextIdleMs = null) {
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
   if (!record && Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
@@ -1115,7 +1122,7 @@ function dueReason(session, now, options, record, beforeItem = false) {
   if (Number.isSafeInteger(compactions) && Number.isSafeInteger(options.compactLimit) && options.compactLimit > 0 && compactions >= options.compactLimit) {
     return 'compact';
   }
-  if (beforeItem && contextDue(session, now, options)) {
+  if (contextIdleMs !== null && contextDue(session, now, options, contextIdleMs)) {
     return 'context';
   }
   if (record) {
@@ -1242,6 +1249,7 @@ function planDispatch(input) {
   const quietMs = input.quietMs ?? QUIET_BEFORE_ROTATE_MS;
   const quietMemoryMs = input.quietMemoryMs ?? QUIET_MEMORY_MS;
   const quietCompactMs = input.quietCompactMs ?? QUIET_COMPACT_MS;
+  const quietContextMs = input.quietContextMs ?? QUIET_CONTEXT_MS;
   const rotationOptions = {
     blockedRotations: input.blockedRotations,
     // Filled in step 1: members whose next item is marked afterDecision (asksPerson), and those whose open
@@ -1501,7 +1509,7 @@ function planDispatch(input) {
         continue;
       }
       hold(target.id, 'took-item');
-      const reason = rotationReason(target, now, rotationOptions, rotations, true);
+      const reason = rotationReason(target, now, rotationOptions, rotations, 0);
       stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
@@ -1558,7 +1566,10 @@ function planDispatch(input) {
       // Ten or thirty quiet minutes already settle the member; the 8-second idle timer is not needed.
       const readiness = sessionReady(session, input.wakePolicy);
       const ready = readiness.ready && !humanRecent(id, humanAt, now, humanQuietMs);
-      const reason = ready ? rotationReason(session, now, rotationOptions, rotations) : null;
+      const lastActivity = lastActivityOf(session, now);
+      // No reason at all until it has been idle that long: it holds no wake, and no other reason's quiet.
+      const contextIdleMs = lastActivity !== null && now - lastActivity >= quietContextMs && !session.quietWindowClosed ? quietContextMs : null;
+      const reason = ready ? rotationReason(session, now, rotationOptions, rotations, contextIdleMs) : null;
       if (!reason) {
         if (!readiness.ready) {
           stalled(id, readiness.reason);
@@ -1569,7 +1580,6 @@ function planDispatch(input) {
         }
         continue;
       }
-      const lastActivity = lastActivityOf(session, now);
       if (lastActivity === null) {
         stalled(id, 'activity-unknown');
         continue;
@@ -1579,6 +1589,8 @@ function planDispatch(input) {
         quiet = quietMemoryMs;
       } else if (reason === 'compact' && id === input.butler) {
         quiet = quietCompactMs;
+      } else if (reason === 'context') {
+        quiet = quietContextMs;
       }
       if (now - lastActivity < quiet) {
         // Short only of its quiet: the steward wake holds rather than reset it (a butler at 52 compactions, 2026-11-23).
@@ -2599,6 +2611,7 @@ class QueueDispatcher {
     this.compactLimit = options.compactLimit ?? COMPACT_LIMIT;
     this.contextLimits = options.contextLimits ?? CONTEXT_LIMITS;
     this.quietCompactMs = options.quietCompactMs ?? QUIET_COMPACT_MS;
+    this.quietContextMs = options.quietContextMs ?? QUIET_CONTEXT_MS;
     // Counts each member's own compactions from the native records (compaction-count.cjs); the app turns it on.
     this.compactions = options.compactions || (options.countCompactions === true ? new CompactionCounter() : null);
     // Told one line per stall and gate (noteRotationStalls); `stalls` holds since when, in memory only.
@@ -2903,13 +2916,15 @@ class QueueDispatcher {
   // The quiet the person's own use of a session is given before NAW replaces it.
   personQuiet(id, due, butler) {
     if (due === 'memory') return QUIET_MEMORY_MS;
+    if (due === 'context') return this.quietContextMs;
     return due === 'compact' && id === butler ? this.quietCompactMs : this.quietMs;
   }
 
   // A rotation the person interrupted waits for the quiet that member's rotation already needs (30 minutes; 10 for
-  // memory; 2 for the butler's compaction), counted from the later of the interruption and the person's own last use
-  // (noteHuman), so a queued item does not ask again while the person is still at it (the 11-14 drill, finding 1). Not
-  // the session's last activity: NAW's own items kept a busy member fresh and it was never rotated (the NAW dev PM, 11-23).
+  // memory; 45 for its size; 2 for the butler's compaction), counted from the later of the interruption and the person's
+  // own last use (noteHuman), so a queued item does not ask again while the person is still at it (the 11-14 drill,
+  // finding 1). Not the session's last activity: NAW's own items kept a busy member fresh and it was never rotated (the
+  // NAW dev PM, 11-23).
   personDeferred(sessions, butler, now) {
     const ids = new Set();
     for (const [id, entry] of this.deferredAt) {
@@ -3304,6 +3319,12 @@ class QueueDispatcher {
     // Copies (room-state.cjs apply): marking them changes nothing a backend holds.
     const quiet = this.quietWindows ? this.quietWindows.sessionIds(now) : null;
     if (quiet && quiet.size) for (const session of snapshot.sessions) if (quiet.has(session.id)) session.quietWindow = quiet.get(session.id);
+    const windows = this.quietWindows, closed = new Set();
+    // One past its deadline that is not recorded as closed yet holds nothing either.
+    for (const window of [...windows?.history || [], ...windows?.windows || []]) {
+      if (now - (window.closedAt ?? window.deadline) < QUIET_WINDOW_CLOSED_MS) for (const id of window.sessions) closed.add(id);
+    }
+    if (closed.size) for (const session of snapshot.sessions) if (closed.has(session.id)) session.quietWindowClosed = true;
     for (const session of snapshot.sessions) {
       // A live control needs an idle clock; this does not grant delivery readiness.
       const ownRequest = this.rotations[session.id];
@@ -3455,7 +3476,7 @@ class QueueDispatcher {
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
     const waits = new Map(), quietPending = new Map(), rotationGates = new Map(), openItems = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
-    const actions = planDispatch({
+    const input = {
       waits,
       quietPending,
       rotationGates,
@@ -3479,6 +3500,7 @@ class QueueDispatcher {
       contexts: this.contexts,
       contextLimits: this.contextLimits,
       quietCompactMs: this.quietCompactMs,
+      quietContextMs: this.quietContextMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
       memoryMinAgeMs: this.memoryMinAgeMs,
@@ -3488,7 +3510,22 @@ class QueueDispatcher {
       modelChanges: this.modelChanges(),
       outside: steward ? [steward.sessionId] : [],
       butler,
-    });
+    };
+    let actions = planDispatch(input);
+    // The size a member would be rotated for is read again first, and the pass planned by what it is now.
+    const checked = new Set();
+    for (;;) {
+      const rotation = actions.find(action => action.kind === 'rotate' && action.reason === 'context' && !checked.has(action.sessionId));
+      if (!rotation) break;
+      checked.add(rotation.sessionId);
+      try {
+        await this.compactions.recheck(current.snapshot.sessions.find(session => session.id === rotation.sessionId), current.now);
+      } catch {
+        // Its size was dropped before the read.
+      }
+      for (const told of [waits, quietPending, rotationGates]) told.clear();
+      actions = planDispatch(input);
+    }
     for (const action of actions) {
       if (this.closed) {
         return;
@@ -5466,6 +5503,7 @@ module.exports = {
   COMPACT_LIMIT,
   CONTEXT_LIMITS,
   QUIET_COMPACT_MS,
+  QUIET_CONTEXT_MS,
   PLANNER_WAITING,
   DECISIONS_LIMIT,
   openDecision,

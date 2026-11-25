@@ -5,9 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const rules = require('../queue-dispatch.cjs');
+const { CompactionCounter } = require('../compaction-count.cjs');
 const { RoomState } = require('../room-state.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
+const { QuietWindows } = require('../quiet-windows.cjs');
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
@@ -4429,8 +4431,12 @@ for (const outcome of ['delivered', 'refused', 'uncertain']) test(`an item marke
 // Queue 794d3cd7 (the person, 2026-11-13): a conversation compacted again and again continues in a new
 // session through the same handoff, without waiting out a successor's day of rest, and the butler between turns.
 function fakeCompactions(counts) {
-  const seen = [];
-  return { seen, counts, async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); } };
+  const seen = [], again = [];
+  return {
+    seen, again, counts,
+    async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); },
+    async recheck(session) { again.push(session.id); },
+  };
 }
 
 test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its next item, or after thirty quiet minutes', () => {
@@ -4490,7 +4496,7 @@ test('cache-aware rotation: a large warm Claude member is rotated before its nex
   // A successor that read a lot in its first turn does its item first, or it would be replaced again and again.
   assert.deepEqual(plan(rooms, [member('a', { createdAt: NOW - 59 * 60000 })], context()), dispatch);
   assert.deepEqual(plan(rooms, [member('a', { ...old, provider: 'codex' })], context()), dispatch, 'Codex is not measured');
-  // With nothing queued there is no item to save, and a new session would only go cold in its turn.
+  // With nothing queued: not while its last request is this recent, however long NAW saw nothing (R221, below).
   const idle = [{ id: 'shared', name: 'Team', queue: [] }];
   for (const minutes of [2, 10, 30, 50]) {
     assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], context()), []);
@@ -4758,9 +4764,142 @@ test('794d3cd7: a compacted member is asked for its handoff in words that say wh
   const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'compact'), 'the log keeps the reason');
   assert.deepEqual(fake.seen[0], ['a'], 'a session in no space that is not the butler is not read');
+  assert.deepEqual(fake.again, [], 'a count is not read again');
   assert.equal(client.sends('z').length, 0);
   assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
   assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
+});
+
+// R221 (the person, 2026-11-24): a large session that nobody is using is handed over while its cache is still warm, so
+// that whoever writes to it next does not pay for a cold one, and the CLI's own compaction at 54 minutes is not run for it.
+const idleRooms = [{ id: 'shared', name: 'Team', queue: [] }];
+const idleSize = (minutes, extra = {}, id = 'a') => ({ contexts: new Map([[id, { tokens: 180000, at: NOW - minutes * 60000, ttlMs: HOUR, ...extra }]]) });
+const idleMember = (minutes, extra = {}, id = 'a') => member(id, { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - minutes * 60000, ...extra });
+const idleRotate = (id = 'a') => [{ kind: 'rotate', sessionId: id, reason: 'context', contextTokens: 180000 }];
+
+test('R221: a large Claude member with no work is rotated once idle for 45 minutes and while still warm, a small, cold, young or Codex one is not', () => {
+  assert.equal(rules.QUIET_CONTEXT_MS, 45 * 60000);
+  const at = (minutes, size = {}, extra = {}) => plan(idleRooms, [idleMember(minutes, extra)], idleSize(minutes, size));
+  assert.deepEqual(at(45), idleRotate());
+  assert.deepEqual(at(53.9), idleRotate());
+  assert.deepEqual(at(44.9), []);
+  assert.deepEqual(at(54), [], 'the CLI compacts it itself from here, and the handoff could miss the cache');
+  assert.deepEqual(at(3 * 60), [], 'cold');
+  assert.deepEqual(at(50, { tokens: 179999 }), []);
+  assert.deepEqual(at(50, {}, { provider: 'codex' }), []);
+  assert.deepEqual(at(50, {}, { createdAt: NOW - 59 * 60000 }), []);
+  assert.deepEqual(at(50, { ttlMs: null }), [], 'lifetime unknown');
+  for (const minutes of [1, 4, 45, 50]) assert.deepEqual(at(minutes, { ttlMs: 5 * 60000 }), [], 'a five-minute cache is cold long before');
+  // Idle by both: what NAW saw of it and its own last request.
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], idleSize(44.9)), [], 'a request NAW saw nothing of');
+  assert.deepEqual(plan(idleRooms, [idleMember(44.9)], idleSize(50)), [], 'something other than a request');
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), quietContextMs: 51 * 60000 }), []);
+  assert.deepEqual(plan(idleRooms, [idleMember(20)], { ...idleSize(20), quietContextMs: 20 * 60000 }), idleRotate());
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), humanAt: new Map([['a', NOW - 60000]]) }), [], 'the person just used it');
+  // Before an item it needs no idle time, as before.
+  const queued = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  assert.deepEqual(plan(queued, [idleMember(2)], idleSize(2)), idleRotate());
+  // A successor's day of rest does not hold it, and one rotated at a time is still the rule.
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), rotations: { a: { phase: 'kept', keptAt: NOW - HOUR, successorOf: 'before' } } }), idleRotate());
+  const gates = new Map();
+  assert.deepEqual(plan(idleRooms, [idleMember(50), member('z', { state: 'working' })], { ...idleSize(50), rotationGates: gates,
+    rotations: { z: { phase: 'requested', requestedAt: NOW } } }), []);
+  assert.equal(gates.has('a'), false, 'its few minutes are over before a stall is');
+});
+
+test('R221: until then the size is no reason at all: nothing is held for it, nothing is told, another reason keeps its own quiet', () => {
+  const told = () => ({ quietPending: new Map(), rotationGates: new Map() });
+  for (const butler of [undefined, 'a']) for (const minutes of [0, 10, 31, 44.9]) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [idleMember(minutes)], { ...idleSize(minutes), ...pass, butler }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0], `${minutes} minutes`);
+  }
+  // Nor for one of the two clocks alone.
+  for (const [seen, request] of [[44.9, 50], [31, 50], [50, 44.9]]) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [idleMember(seen)], { ...idleSize(request), ...pass, butler: 'a' }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0]);
+  }
+  // Nothing known of its activity: not a stall of this reason either.
+  const pass = told();
+  plan(idleRooms, [idleMember(50, { lastActivityAt: undefined, createdAt: undefined })], { ...idleSize(50), ...pass });
+  assert.equal(pass.rotationGates.size, 0);
+  // Over its memory it goes at ten minutes, and waits for those as memory.
+  const heavy = { memory: new Map([['a', 4 * 1024 ** 3]]), memoryLimit: 1024 ** 3 };
+  assert.deepEqual(plan(idleRooms, [idleMember(12)], { ...idleSize(12), ...heavy }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(idleRooms, [idleMember(12)], { ...idleSize(50), ...heavy }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  const short = told();
+  assert.deepEqual(plan(idleRooms, [idleMember(5)], { ...idleSize(5), ...heavy, ...short }), []);
+  assert.deepEqual([...short.quietPending], [['a', 'memory']]);
+  // Compacted three times it goes at thirty, and a long conversation keeps its own words.
+  const compactions = new Map([['a', 3]]);
+  assert.deepEqual(plan(idleRooms, [idleMember(31)], { ...idleSize(31), compactions }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idleRooms, [idleMember(50, { messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+});
+
+test('R221: nor within two minutes of its migration window closing; the other reasons are as they were', () => {
+  const told = () => ({ quietPending: new Map(), rotationGates: new Map() });
+  const closed = (extra = {}) => idleMember(50, { quietWindowClosed: true, ...extra });
+  for (const butler of [undefined, 'a']) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), ...pass, butler }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0]);
+  }
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), memory: new Map([['a', 4 * 1024 ** 3]]), memoryLimit: 1024 ** 3 }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), compactions: new Map([['a', 3]]) }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idleRooms, [closed({ messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  const queued = [{ id: 'shared', name: 'Team', queue: [{ id: 'item', text: 'task', assignee: 'a', status: 'queued' }] }];
+  assert.deepEqual(plan(queued, [closed()], idleSize(50)), idleRotate(), 'before an item as before');
+});
+
+test('R221: the butler outside every space is rotated the same, and only as the butler', () => {
+  const butler = (minutes, extra) => idleMember(minutes, { roomIds: [], roomId: null, ...extra }, 'b');
+  const outside = { outside: ['b'], butler: 'b' };
+  assert.deepEqual(plan(idleRooms, [butler(45)], { ...idleSize(45, {}, 'b'), ...outside }), idleRotate('b'));
+  for (const minutes of [2, 10, 44.9, 54]) assert.deepEqual(plan(idleRooms, [butler(minutes)], { ...idleSize(minutes, {}, 'b'), ...outside }), []);
+  assert.deepEqual(plan(idleRooms, [butler(50)], idleSize(50, {}, 'b')), [], 'a session in no space that is not the butler');
+});
+
+test('R221: every gate a quiet rotation has holds this one too', () => {
+  const size = idleSize(50);
+  const due = (extra = {}, pass = {}) => plan(idleRooms, [idleMember(50, extra)], { ...size, ...pass });
+  assert.deepEqual(due(), idleRotate(), 'nothing in the way');
+  const asked = { id: 'q', role: 'assistant', text: 'A or B?' };
+  for (const [name, extra] of Object.entries({
+    draft: { liveDraft: 'half typed' },
+    'stored message': { pendingQueue: { tag: 'kept' } },
+    'message on its way in': { pendingTag: 'kept' },
+    question: { claudeQuestion: { id: 'question' } },
+    approval: { approval: { id: 'approval' } },
+    'native prompt': { nativeInputRequired: true },
+    dialog: { nativeTerminalDialog: true },
+    turn: { state: 'working' },
+    'background command': { background: 1 },
+    timer: { scheduled: 1 },
+    'background not known': { backgroundStale: true },
+    'team member at work': { fleet: [{ event: 'SubagentStart', id: 'child', stale: false, time: NOW }] },
+    'quiet window': { quietWindow: { deadline: NOW + 60000 } },
+    paused: { wakeDisabled: true },
+    archived: { archived: true },
+  })) {
+    const gates = new Map();
+    assert.deepEqual(due({ messages: [asked], ...extra }, { rotationGates: gates }), [], name);
+    assert.equal(gates.size, 0, `${name}: not a stall`);
+  }
+  for (const [name, pass] of Object.entries({
+    'automatic messages off': { wakePolicy: { enabled: false } },
+    'used by the person': { deferredRotations: new Set(['a']) },
+    'handed off': { handedOff: new Set(['a']) },
+    'model not known': { waitingModel: new Set(['a']) },
+    'trust fault': { blockedRotations: new Set(['a']) },
+    'integration handoff': { engaged: ['a'] },
+    'failed before': { rotations: { a: { phase: 'failed', failedAt: NOW - HOUR } } },
+  })) assert.deepEqual(due({}, pass), [], name);
+  // Decisions too long to hand over whole stay with it; others go along.
+  const long = n => sentItem({ id: `d${n}`, status: 'waiting', text: 'x'.repeat(rules.ITEM_TEXT_LIMIT), reply: '需要你决定：选哪个？' });
+  const waiting = queue => plan([{ id: 'shared', name: 'Team', queue }], [idleMember(50)], size);
+  assert.deepEqual(waiting([long(1), long(2)]), []);
+  assert.deepEqual(waiting([long(1)]), idleRotate());
 });
 
 test('cache-aware rotation: the size read from the record reaches the request, the space notice and the log in its own words', async t => {
@@ -4800,6 +4939,295 @@ test('cache-aware rotation: sizes a failed read left behind are not used', async
   await dispatcher.schedule();
   await dispatcher.schedule();
   assert.match(client.sends('a').at(-1)[2], /second task/);
+});
+
+// The 30-second sample and the real record together: the size a context rotation is started on is read again first.
+function recordedMember(t, id, native) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-recheck-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, `${native}.jsonl`);
+  const line = entry => fs.appendFileSync(file, `${JSON.stringify({ isSidechain: false, sessionId: native, ...entry })}\n`);
+  return {
+    file,
+    session: member(id, { nativeId: native, nativeTranscript: file, createdAt: NOW - 2 * HOUR }),
+    counter: new CompactionCounter({ claudeRoot: root, codexRoot: root }),
+    request(tokens, at, usage = { cache_creation_input_tokens: 500, cache_creation: { ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 } }) {
+      const cached = usage.cache_creation_input_tokens ? tokens - usage.cache_creation_input_tokens : 0;
+      line({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { role: 'assistant', model: 'claude-test-model',
+        usage: { input_tokens: tokens - cached - usage.cache_creation_input_tokens, cache_read_input_tokens: cached, ...usage } } });
+    },
+    compaction: () => line({ type: 'system', subtype: 'compact_boundary' }),
+  };
+}
+const [NATIVE_A, NATIVE_B, NATIVE_C] = ['a', 'b', 'c'].map(id => `0f6c2a3e-5b7d-4c1e-9a8b-00000000000${id}`);
+const UNCACHED = { cache_creation_input_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } };
+
+const rotated = (client, id = 'a') => client.sends(id).filter(call => /【NAW 换会话】/.test(call[2])).map(call => call[2]);
+
+for (const after of [22000, 30000]) test(`a compaction after the sample: picked ${after} ms after it, the member takes its item and is not rotated by the size from before`, async t => {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(20000, NOW - 60000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter, settleMs: 8000 });
+  room.queueAdd('first task', 'a');
+  await dispatcher.start();
+  advance(8000);
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /first task/);
+  advance(40000);
+  record.request(190000, dispatcher.now() - 1000);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(dispatcher.contexts.get('a').tokens, 190000, 'sampled while it works');
+  advance(after - 9000);
+  record.compaction();
+  record.request(20000, dispatcher.now() - 1000);
+  client.reply('a', 'first task finished');
+  await dispatcher.schedule();
+  advance(9000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  assert.deepEqual(rotated(client), []);
+  assert.match(client.sends('a').at(-1)[2], /next task/, 'in the same pass');
+  assert.equal(dispatcher.contexts.get('a').tokens, 20000);
+});
+
+// A member sampled at 190K, warm; `then` is what happens to its record before its next item, 22 seconds later. One pass.
+async function pickedAfterSample(t, then) {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(190000, NOW - 60000);
+  await record.counter.sample([record.session], NOW);
+  assert.equal(record.counter.contexts.get('a').tokens, 190000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter });
+  then(record);
+  advance(22000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  if (!rotated(client).length) assert.match(client.sends('a').at(-1)[2], /next task/);
+  else assert.equal(room.value.queue[0].status, 'queued');
+  return rotated(client);
+}
+
+test('a large warm member is rotated by the size it has now', async t => {
+  assert.match((await pickedAfterSample(t, () => {}))[0], /上下文已到约 190K/);
+  assert.match((await pickedAfterSample(t, record => record.request(206000, NOW + 10000)))[0], /上下文已到约 206K/);
+});
+
+test('a request that missed the cache after the sample: not rotated by the lifetime from before', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => record.request(190000, NOW + 10000, UNCACHED)), []);
+});
+
+test('a record that is not read to its end when the rotation would start: the member takes its item', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => fs.appendFileSync(record.file, '{"half')), []);
+  assert.deepEqual(await pickedAfterSample(t, record => { record.counter.readSession = async () => { throw Error('EIO'); }; }), []);
+});
+
+test('a third compaction found when the rotation would start rotates the member for that', async t => {
+  assert.match((await pickedAfterSample(t, record => {
+    for (let n = 0; n < 3; n++) record.compaction();
+    record.request(20000, NOW + 10000);
+  }))[0], /上下文已压缩 3 次/);
+});
+
+test('only a member the pass would rotate for its size is read again; when it drops out, the next one has the turn', async t => {
+  const a = recordedMember(t, 'a', NATIVE_A), b = recordedMember(t, 'b', NATIVE_B), c = recordedMember(t, 'c', NATIVE_C);
+  for (const one of [a, b, c]) one.request(190000, NOW - 60000);
+  const { counter } = a, read = [], recheck = counter.recheck.bind(counter);
+  counter.recheck = (session, now) => { read.push(session.id); return recheck(session, now); };
+  const { room, client, dispatcher } = dispatcherSetup(t, [a.session, b.session, c.session], { compactions: counter });
+  await counter.sample([a.session, b.session, c.session], NOW);
+  a.compaction();
+  a.request(20000, NOW - 1000);
+  for (const id of ['a', 'b', 'c']) room.queueAdd(`task ${id}`, id);
+  await dispatcher.tick();
+  assert.deepEqual(read, ['a', 'b']);
+  assert.match(client.sends('a')[0][2], /task a/);
+  assert.equal(rotated(client, 'b').length, 1);
+  assert.match(client.sends('c')[0][2], /task c/, 'one rotation at a time, as before');
+  const waits = [...room.queueWaits.values()].flat().map(wait => [wait.sessionId, wait.reason]);
+  assert.deepEqual(waits, [['b', 'rotating']], 'not those of the plans before');
+});
+
+// R221 through the dispatcher and the real record: one pass a minute, an open window, nothing queued.
+function idleSetup(t, minutes, { extra = {}, ...options } = {}) {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(190000, NOW - minutes * 60000);
+  Object.assign(record.session, { cwd: '/tmp', lastActivityAt: NOW - minutes * 60000 }, extra);
+  const f = dispatcherSetup(t, [record.session], { compactions: record.counter, window: true, sampleProcesses: async () => { throw Error('no sample'); }, ...options });
+  f.joins = fakeMembership(f.room, f.client);
+  f.record = record; f.old = record.session;
+  f.pass = async (forward = 0) => { f.advance(forward * 60000); f.dispatcher.dirty = true; await f.dispatcher.tick(); };
+  f.log = () => fs.existsSync(path.join(f.dir, 'rotation-log.jsonl'))
+    ? fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+  f.requests = () => f.log().filter(entry => entry.event === 'requested').map(entry => entry.reason);
+  // The rest of the rotation: the handoff, a successor in the same space, the old session ended.
+  f.finish = async () => {
+    f.client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+    await f.pass();
+    f.next = f.client.state.sessions.at(-1);
+    await f.pass();
+    f.next.messages.push({ id: 'first-reply', role: 'assistant', text: '已核对交接。' });
+    f.next.state = 'idle';
+    await f.pass();
+    await f.pass();
+  };
+  return f;
+}
+
+test('R221: a member left alone is asked at 45 minutes, and its successor goes on in its place', async t => {
+  const f = idleSetup(t, 44);
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  await f.pass(1);
+  assert.match(rotated(f.client)[0], /^【NAW 换会话】这个会话的上下文已到约 190K。/);
+  assert.deepEqual(f.requests(), ['context']);
+  await f.finish();
+  assert.deepEqual([f.old.state, f.next.roomIds, f.next.state], ['ended', ['shared'], 'idle']);
+  assert.deepEqual(f.log().map(entry => entry.event), ['requested', 'done', 'archived']);
+  assert.equal(f.client.sends('a').length, 1, 'asked once');
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.deepEqual(f.requests(), ['context'], 'the successor is small: nothing more');
+});
+
+test('R221: a compaction just before: found when the rotation would start, so there is none, then or later', async t => {
+  const f = idleSetup(t, 53);
+  await f.record.counter.sample([f.old], NOW);
+  assert.equal(f.record.counter.contexts.get('a').tokens, 190000);
+  f.record.compaction();
+  for (let n = 0; n < 3; n++) await f.pass(n && 1);
+  assert.deepEqual(rotated(f.client), []);
+  const still = idleSetup(t, 53);
+  await still.record.counter.sample([still.old], NOW);
+  await still.pass();
+  assert.equal(rotated(still.client).length, 1, 'without one it is asked');
+});
+
+test('R221: the CLI compacts the session while the request is on its way in: nothing lost, one rotation', async t => {
+  const f = idleSetup(t, 53);
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (method === 'dispatch' && args[0] === 'a') f.record.compaction();
+    return call(method, ...args);
+  };
+  await f.pass();
+  assert.equal(rotated(f.client).length, 1);
+  f.record.request(40000, NOW + 60000);
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  await f.finish();
+  assert.deepEqual([f.old.state, f.next.roomIds], ['ended', ['shared']]);
+  assert.match(f.client.sends(f.next.id)[0][2], /在 feature 分支 abc123/, 'the handoff written after it');
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.deepEqual(f.requests(), ['context']);
+  assert.equal(f.client.sends('a').length, 1);
+});
+
+for (const [name, extra, clear] of [
+  ['a draft', { liveDraft: 'half typed' }, { liveDraft: '' }],
+  ['a stored message', { pendingQueue: { tag: 'kept' } }, { pendingQueue: null }],
+  ['a question', { claudeQuestion: { id: 'question' } }, { claudeQuestion: null }],
+]) test(`R221: ${name} keeps the session; without it the same session is asked`, async t => {
+  const f = idleSetup(t, 47, { extra });
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  assert.deepEqual(f.log(), [], 'and nothing is told of it');
+  Object.assign(f.old, clear);
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+for (const [name, change] of [
+  ['a draft', { liveDraft: 'half typed' }],
+  ['a stored message', { pendingQueue: { tag: 'kept' } }],
+  ['a question', { claudeQuestion: { id: 'question' } }],
+]) test(`R221: ${name} that comes in between the plan and the request keeps the session`, async t => {
+  const f = idleSetup(t, 47);
+  const recheck = f.record.counter.recheck.bind(f.record.counter);
+  f.record.counter.recheck = async (...args) => { const result = await recheck(...args); Object.assign(f.old, change); return result; };
+  await f.pass();
+  assert.deepEqual(f.record.counter.contexts.get('a')?.tokens, 190000);
+  assert.deepEqual(rotated(f.client), []);
+  Object.assign(f.old, Object.fromEntries(Object.keys(change).map(key => [key, null])));
+  f.record.counter.recheck = recheck;
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+// What is held for a session because of its window is looked at once a minute (session-wake.cjs QUIET_CHECK_MS): a window
+// that closes early leaves it held for up to a minute that no gate shows, and a rotation in it ends it as not sent.
+const WINDOW_KEY = 'backends/aaaaaaaaaaaaaaaaaaaa';
+function idleWindow(f, { opened = 30, left = 10, ids = ['a'], wait = { code: 'busy', ids: ['z'] } } = {}) {
+  const at = f.dispatcher.now();
+  fs.writeFileSync(path.join(f.dir, 'quiet-windows.json'), JSON.stringify({ format: 1, history: [], windows: [{ id: NATIVE_A, scope: `backend:${WINDOW_KEY}`, reason: 'migration',
+    openedBy: 'naw', openedAt: at - opened * 60000, deadline: at + left * 60000, waited: 'busy', sessions: ids }] }), { mode: 0o600 });
+  f.windows = () => f.dispatcher.quietWindows = new QuietWindows(f.dir, { now: f.dispatcher.now, moveWait: () => wait });
+  const open = f.windows();
+  f.judge = (extra = {}) => open.pass({ options: [{ backendKey: WINDOW_KEY, sessions: ids.map(id => ({ id })) }], settings: { migrate: true }, sessions: [],
+    humanAt: new Map(), failed: new Set(), ...extra }).closed.map(window => window.code);
+}
+const windowEnds = [
+  ['still-busy', {}, f => f.judge()],
+  ['person', { opened: 5 }, f => f.judge({ humanAt: new Map([['z', NOW]]) })],
+  ['not-waiting', { opened: 5, wait: { code: 'draft', ids: ['z'] } }, f => f.judge()],
+  ['migrate-off', { opened: 5 }, f => f.judge({ settings: { migrate: false } })],
+  ['gone', { opened: 5 }, f => f.judge({ options: [] })],
+  ['moved', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'moved').code]],
+  ['move-failed', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'move-failed').code]],
+  ['timeout', { opened: 5, left: 1, wait: { code: 'quiet-10m', ids: [] } }, f => { f.advance(60000); return f.judge(); }],
+  ['timeout, not recorded yet', { opened: 5, left: 1 }, f => f.advance(60000)],
+];
+for (const [code, window, close] of windowEnds) test(`R221: a migration window closed (${code}): the session is asked two minutes later, not before`, async t => {
+  const closed = () => {
+    const f = idleSetup(t, 46 - (window.left === 1 ? 1 : 0));
+    idleWindow(f, window);
+    const codes = close(f);
+    if (codes) assert.deepEqual(codes, [code]);
+    return f;
+  };
+  const f = closed();
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), [], `at ${f.dispatcher.now() - NOW} ms`);
+  }
+  assert.deepEqual(f.log(), [], 'nothing is told of it');
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
+  for (const [ms, asked] of [[119999, 0], [120000, 1]]) {
+    const edge = closed();
+    await edge.pass(ms / 60000);
+    assert.equal(rotated(edge.client).length, asked, `${ms} ms after it`);
+  }
+});
+
+test('R221: the two minutes hold after NAW starts again; another backend\'s window holds nothing; inside its own nothing is asked', async t => {
+  const again = idleSetup(t, 46);
+  idleWindow(again);
+  assert.deepEqual(again.judge(), ['still-busy']);
+  again.windows();
+  await again.pass(0.1);
+  assert.deepEqual(rotated(again.client), []);
+  await again.pass(2);
+  assert.equal(rotated(again.client).length, 1);
+  const other = idleSetup(t, 46);
+  idleWindow(other, { ids: ['z'] });
+  assert.deepEqual(other.judge(), ['still-busy']);
+  await other.pass(0.1);
+  assert.equal(rotated(other.client).length, 1);
+  const open = idleSetup(t, 46);
+  idleWindow(open, { opened: 5 });
+  for (const forward of [0.1, 1, 1]) await open.pass(forward);
+  assert.deepEqual(rotated(open.client), []);
+});
+
+test('R221: a rotation of the size that the person interrupts waits for its own 45 minutes', t => {
+  const { dispatcher } = dispatcherSetup(t, []);
+  for (const butler of ['a', 'other']) assert.equal(dispatcher.personQuiet('a', 'context', butler), 45 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'content', 'a'), 30 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'memory', 'a'), 10 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'compact', 'a'), 2 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'compact', 'other'), 30 * 60000);
+  dispatcher.deferredAt.set('a', { at: NOW, due: 'context' });
+  const held = minutes => dispatcher.personDeferred([member('a')], null, NOW + minutes * 60000).has('a');
+  assert.deepEqual([held(31), held(44.9), held(45)], [true, true, false]);
 });
 
 test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
@@ -5588,6 +6016,72 @@ async function handedOver(t, { butler = true, extra = {}, others = [] } = {}) {
   f.session(f.newId).state = 'idle';
   return f;
 }
+// R221: the butler outside every space. After each pass there is exactly one designated session, and it is alive.
+function idleButler(t, minutes) {
+  let f = null;
+  f = idleSetup(t, minutes, { extra: { roomIds: [], roomId: null }, steward: stewardFrom(() => f?.role) });
+  f.role = new StewardRole(f.dir); f.role.set({ sessionId: 'a', nativeId: NATIVE_A });
+  const pass = f.pass; f.seats = [];
+  f.pass = async forward => {
+    await pass(forward);
+    const seat = f.role.current();
+    assert.equal(f.client.state.sessions.filter(s => s.id === seat?.sessionId && s.nativeId === seat.nativeId && s.state !== 'ended').length, 1);
+    f.seats.push(seat.sessionId);
+  };
+  return f;
+}
+test('R221: the butler left alone is asked at 45 minutes; the designation moves once, to its successor', async t => {
+  const f = idleButler(t, 44);
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  await f.pass(1);
+  assert.match(rotated(f.client)[0], /上下文已到约 190K/);
+  await f.finish();
+  assert.deepEqual(f.requests(), ['context']);
+  assert.deepEqual([f.old.state, f.next.state, f.next.roomIds], ['ended', 'idle', []]);
+  assert.deepEqual([...new Set(f.seats)], ['a', f.next.id]);
+  assert.equal(f.role.current().sessionId, f.next.id);
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.equal(f.client.state.sessions.length, 2, 'one successor');
+});
+test('R221: the butler is asked two minutes after its migration window closed, not before', async t => {
+  const f = idleButler(t, 46);
+  idleWindow(f);
+  assert.deepEqual(f.judge(), ['still-busy']);
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), []);
+  }
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
+});
+for (const [name, fail] of [
+  ['cannot be created', f => {
+    const call = f.client.call.bind(f.client);
+    f.client.call = async (method, ...args) => { if (method === 'create') throw Error('synthetic create failure'); return call(method, ...args); };
+  }],
+  ['fails in its first turn', f => {
+    const call = f.client.call.bind(f.client);
+    f.client.call = async (method, ...args) => {
+      const tag = await call(method, ...args), target = f.client.state.sessions.find(s => s.id === args[0]);
+      if (method === 'dispatch' && args[3]?.startsWith('rotation-handoff:')) { target.messages.at(-1).status = 'failed'; target.state = 'error'; }
+      return tag;
+    };
+  }],
+]) test(`R221: the butler whose successor ${name} stays the butler and is not asked again`, async t => {
+  const f = idleButler(t, 46);
+  fail(f);
+  await f.pass();
+  assert.equal(rotated(f.client).length, 1);
+  f.client.reply('a', '交接：在看三个交付。');
+  for (let n = 0; n < 4; n++) await f.pass(1);
+  assert.ok(f.log().some(entry => entry.event === 'failed'), 'the rotation failed');
+  assert.deepEqual([...new Set(f.seats)], ['a']);
+  assert.deepEqual([f.old.state, f.old.archived], ['idle', undefined]);
+  assert.equal(rotated(f.client).length, 1);
+});
+
 // The old session's one addition, told to the same successor and finished there.
 async function supplemented(f, text = '交接之后：人改了主意。') {
   assert.equal(f.asks().length, 1, 'the old session is asked');
