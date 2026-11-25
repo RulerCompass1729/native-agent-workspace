@@ -126,10 +126,12 @@ async function start({ options = {}, env = {} } = {}) {
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ model: 'claude-opus-5-5', effortLevel: 'high', permissions: { allow: ['mcp__native_workspace__workspace_control'] } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   assertIsolated({ profile, executable: electron, code });
-  const shared = { ...process.env, CLAUDE_CONFIG_DIR: config, CODEX_HOME: path.join(base, 'codex'), NAW_WORKSPACE: cwd, NAW_TEST_APP_ROOT: code, NAW_TEST_CLAUDE_VERSION: version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json') };
+  // Nothing of a running NAW is inherited: its outbox descriptor would lead a test session's calls to the daily app.
+  const outer = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_')));
+  const shared = { ...outer, CLAUDE_CONFIG_DIR: config, CODEX_HOME: path.join(base, 'codex'), NAW_WORKSPACE: cwd, NAW_TEST_APP_ROOT: code, NAW_TEST_CLAUDE_VERSION: version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json') };
   for (const key of ['CLAUDE_CODE_CHILD_SESSION', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'DEEPSEEK_API_KEY', 'GIT_ASKPASS']) delete shared[key];
   child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], { cwd, execArgv: ['--require', path.join(__dirname, 'fixtures/rotation-daemon.cjs')],
-    env: { ...shared, HOME: home, NAW_APP_VERSION: require(path.join(code, 'package.json')).version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    env: { ...shared, HOME: home, NAW_OUTBOX_DESCRIPTOR: path.join(profile, 'outbox-owner.json'), NAW_APP_VERSION: require(path.join(code, 'package.json')).version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'the test service');
   const { connectService } = require(path.join(code, 'app/service-connection.cjs'));
   client = await connectService(profile, 'person-sim-observer');
