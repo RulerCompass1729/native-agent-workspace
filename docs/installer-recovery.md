@@ -59,10 +59,14 @@ checked with `unzip -t` before removing that exact copy. Creating this archive h
 a separate five-minute maximum: a real signed bundle with over 25,000 entries
 exceeded the former generic 60-second command limit after upgrade verification.
 GUI waiting remains bounded to 20 seconds and backend activation to 210 seconds:
-60 for the backend, and 150 for the DSH runtime copy that startup finishes first
-(30 seconds clearing an interrupted copy, 120 seconds copying from one source; an
-unqualified source is followed by the next). The wait ends as soon as the new
-backend is active. Other platform commands keep their 60-second bound. An archive timeout still preserves the old copy and reports cleanup
+60 for the backend, and at most 120 of the rest for the DSH runtime copy, which a
+process of its own makes (`app/dsh-copy.cjs`). At 120 seconds startup goes on
+without DSH and the copy continues: it stops after 30 seconds in which nothing
+finished, or after 30 minutes. A copy that failed is tried again after ten minutes
+from the next source, at most twice per run. It ends with NAW, and the next start
+clears its half directory. The wait ends as soon as the new backend is active, so
+an install can be verified before DSH is there; the post-install check then reports
+the missing runtime until the copy is done. Other platform commands keep their 60-second bound. An archive timeout still preserves the old copy and reports cleanup
 failure, never partial deletion. A targeted `lsof` check
 before archiving and again before removal refuses a bundle still in use, including
 a mapped backend executable, or one whose use cannot be determined. If archive/removal fails,

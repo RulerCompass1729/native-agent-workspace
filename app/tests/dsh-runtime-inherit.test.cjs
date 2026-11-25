@@ -53,7 +53,7 @@ for(const kind of ['outside-link','relative-outside-link','linked-root','linked-
  await assert.rejects(inherit(f),refused(cause));assert.equal(fs.readFileSync(outside,'utf8'),'SYNTHETIC_OUTSIDE');assert.equal(fs.existsSync(tui.paths(f.target).root),false);
 });
 
-for (const existing of [false, true]) test('owned interrupted staging is pruned under the startup lock, existing target='+existing, async t => {
+for (const existing of [false, true]) test('owned interrupted staging is pruned when the copier asks for it, existing target='+existing, async t => {
  qualification(t); const f=fixture(t); runtime(f.source); if(existing)runtime(f.target);
  const old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(old,'dsh-tui/runtime/partial'),'interrupted');
  const other=path.join(f.target,'unrelated-stage');write(path.join(other,'keep'),'unrelated');
@@ -78,7 +78,7 @@ test('staging cleanup leaves linked, foreign-owned and unexpected trees untouche
  assert.equal(fs.readFileSync(path.join(outside,'keep'),'utf8'),'outside');tui.verifyRuntime(f.target);
 });
 
-test('ordinary runtime validation never sweeps staging outside the service startup lock',async t=>{
+test('ordinary runtime validation never sweeps staging',async t=>{
  qualification(t);const f=fixture(t);runtime(f.target);const old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'));write(path.join(old,'dsh-tui/runtime/partial'),'still owned');
  await inherit(f);assert.equal(fs.existsSync(old),true);
 });
@@ -111,8 +111,8 @@ test('a copier killed after opening its staged output is cleaned on the next loc
  assert.equal(fs.existsSync(path.join(f.target,abandoned[0])),false);tui.verifyRuntime(f.source);tui.verifyRuntime(f.target);
 });
 test('a target appearing at publication is never overwritten',async t=>{
- qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target),original=fsp.mkdir;let race=true,ino;
- t.mock.method(fsp,'mkdir',async function(file,...args){if(file===d.root&&race){race=false;runtime(f.target);write(path.join(d.root,'other-install'),'other');ino=fs.statSync(d.root).ino;}return Reflect.apply(original,this,[file,...args]);});
+ qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target),original=fs.mkdirSync;let race=true,ino;
+ t.mock.method(fs,'mkdirSync',function(file,...args){if(file===d.root&&race){race=false;runtime(f.target);write(path.join(d.root,'other-install'),'other');ino=fs.statSync(d.root).ino;}return Reflect.apply(original,this,[file,...args]);});
  const r=await inherit(f);assert.equal(r.status,'existing');assert.equal(fs.statSync(d.root).ino,ino);assert.equal(fs.readFileSync(path.join(d.root,'other-install'),'utf8'),'other');
 });
 test('copying is asynchronous, bounded in time and calls no network, npm or provider',async t=>{
@@ -167,10 +167,10 @@ test('a copy with nothing finished for thirty seconds stops and says where',asyn
  const error=await refusal(inherit(f));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'files');
  assert.ok(error.progress.item>0&&error.progress.item<40,JSON.stringify(error.progress));assert.ok(error.progress.elapsedMs>30000&&error.progress.elapsedMs<60000);nothingPublished(f);
 });
-test('a copy still moving at two minutes stops',async t=>{
- qualification(t);const f=fixture(t),s=runtime(f.source);padding(s,80);slowOpen(t,s.root,slowed(t),3000);
+test('a copy still moving at thirty minutes stops',async t=>{
+ qualification(t);const f=fixture(t),s=runtime(f.source);padding(s,800);slowOpen(t,s.root,slowed(t),3000);
  const error=await refusal(inherit(f));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'files');
- assert.ok(error.progress.item>20&&error.progress.item<80,JSON.stringify(error.progress));assert.ok(error.progress.elapsedMs>120000&&error.progress.elapsedMs<150000);nothingPublished(f);
+ assert.ok(error.progress.item>500&&error.progress.item<800,JSON.stringify(error.progress));assert.ok(error.progress.elapsedMs>1800000&&error.progress.elapsedMs<1830000);nothingPublished(f);
 });
 test('a refusal other than a deadline also says where it stopped',async t=>{
  qualification(t);const f=fixture(t),s=runtime(f.source),open=fsp.open;padding(s,40);let calls=0;
@@ -188,11 +188,19 @@ test('the last checks of a copied runtime each count as progress',async t=>{
  t.mock.method(fs,'readFileSync',function(file,...args){if(String(file).endsWith(staged))advance(20000);return Reflect.apply(read,this,[file,...args]);});
  const result=await inherit(f);assert.equal(result.status,'copied');assert.ok(result.elapsedMs>=60000);
 });
-test('clearing an interrupted copy keeps thirty seconds in total',async t=>{
- qualification(t);const f=fixture(t);runtime(f.source);const old=fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-')),advance=slowed(t),lstat=fs.lstatSync;
- for(let i=0;i<80;i++)write(path.join(old,'dsh-tui/runtime/partial-'+i),'interrupted');
- t.mock.method(fs,'lstatSync',function(file,...args){if(String(file).startsWith(old+path.sep))advance(500);return Reflect.apply(lstat,this,[file,...args]);});
+for(const [name,stall] of [['that keeps moving is not stopped at thirty seconds',0],['that stops moving for thirty seconds is stopped',31000]])test('clearing an interrupted copy '+name,async t=>{
+ qualification(t);const f=fixture(t);runtime(f.source);const old=['a','b'].map(()=>fs.mkdtempSync(path.join(f.target,'.dsh-tui-inherit-'))),advance=slowed(t),lstat=fs.lstatSync,rm=fsp.rm;let calls=0;
+ for(const dir of old)for(let i=0;i<40;i++)write(path.join(dir,'dsh-tui/runtime/partial-'+i),'interrupted');
+ t.mock.method(fs,'lstatSync',function(file,...args){if(old.some(dir=>String(file).startsWith(dir+path.sep)))advance(stall&&++calls===40?stall:500);return Reflect.apply(lstat,this,[file,...args]);});
+ t.mock.method(fsp,'rm',async function(file,...args){if(old.includes(file))advance(40000);return Reflect.apply(rm,this,[file,...args]);});
+ if(!stall){assert.equal((await tui.inheritRuntime(f.source,f.target,{cleanStaging:true})).status,'copied');assert.ok(old.every(dir=>!fs.existsSync(dir)));tui.verifyRuntime(f.target);return;}
  const error=await refusal(tui.inheritRuntime(f.source,f.target,{cleanStaging:true}));assert.equal(error.reason,'deadline');assert.equal(error.progress.stage,'cleanup');assert.equal(tui.installed(f.target),false);
+});
+test('publication leaves no turn in which the process could end between the reservation and the rename',async t=>{
+ qualification(t);const f=fixture(t);runtime(f.source);const d=tui.paths(f.target),mkdir=fs.mkdirSync,rename=fs.renameSync;let turns=null,published=0;
+ t.mock.method(fs,'mkdirSync',function(file,...args){const made=Reflect.apply(mkdir,this,[file,...args]);if(file===d.root){turns=0;process.nextTick(()=>turns++);}return made;});
+ t.mock.method(fs,'renameSync',function(from,to,...args){if(to===d.root){published++;assert.equal(turns,0,'the rename is in the same turn');}return Reflect.apply(rename,this,[from,to,...args]);});
+ assert.equal((await inherit(f)).status,'copied');assert.equal(published,1);assert.equal(turns,1);
 });
 test('a slow inventory gives the event loop a turn at least every fifty milliseconds',async t=>{
  qualification(t);const f=fixture(t),s=runtime(f.source),advance=slowed(t),lstat=fs.lstatSync,immediate=setImmediate,mkdtemp=fsp.mkdtemp;padding(s,100);let turns=0,counted=true;

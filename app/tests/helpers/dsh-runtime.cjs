@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path');
-const tui=require('../../dsh-tui.cjs'),privacy=require('../../butler-dsh-privacy.cjs'),update=require('../../dsh-tui-update-off.cjs');
+const tui=require('../../dsh-tui.cjs'),dshCopy=require('../../dsh-copy.cjs'),privacy=require('../../butler-dsh-privacy.cjs'),update=require('../../dsh-tui-update-off.cjs');
 const UPDATE='synthetic qualified TUI update source\n';
 const llm=fs.readFileSync(require.resolve('@deepseek-ai/dsh-llm-deepseek'),'utf8');
 privacy.patchSource(llm,privacy.VERSION);
@@ -16,4 +16,6 @@ function runtime(data){
  const m=path.join(w.root,'node_modules/@deepseek-ai/dsh-llm-deepseek');write(path.join(m,'package.json'),JSON.stringify({version:privacy.VERSION}));write(path.join(m,'lib/index.js'),llm);
  tui.verifyRuntime(data);return w;
 }
-module.exports={qualification,runtime,write};
+// The copy runs in this process, so a test can mock the copier and its clock.
+const inProcess=dsh=>({...dshCopy,copy:(_executable,source,target)=>dsh.inheritRuntime(source,target,{cleanStaging:true})});
+module.exports={qualification,runtime,write,inProcess};

@@ -121,8 +121,8 @@ function verifyRuntime(dataDir) {
 }
 
 // A busy disk slows the copy without stopping it: it ends only when nothing has finished for
-// STALL_MS, or at COPY_LIMIT_MS, which the installer's wait for the new backend has to outlast.
-const STALL_MS = 30000, COPY_LIMIT_MS = 120000;
+// STALL_MS, or at COPY_LIMIT_MS. How long a start waits for it is dsh-copy.cjs's.
+const STALL_MS = 30000, COPY_LIMIT_MS = 1800000;
 
 // Only the immutable runtime crosses backends; each backend keeps its own home and guards.
 async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = false } = {}) {
@@ -131,7 +131,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   if (uid === undefined) return { status: 'unsupported' };
   if (![sourceDataDir, targetDataDir].every(value => typeof value === 'string' && path.isAbsolute(value))) throw uiError('error.dsh.runtimeUnqualified');
   const source = paths(path.resolve(sourceDataDir)), target = paths(path.resolve(targetDataDir));
-  let deadlineStarted = started, progressed = started, limit = STALL_MS, stage = 'cleanup', item = 0;
+  let deadlineStarted = started, progressed = started, limit = COPY_LIMIT_MS, stage = 'cleanup', item = 0;
   const begin = (allowed = STALL_MS) => { deadlineStarted = progressed = performance.now(); limit = allowed; };
   const tick = () => {
     const now = performance.now();
@@ -196,7 +196,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   let staging, stagingIdentity, placeholder, published = false, checkingTarget = true;
   try {
     if (cleanStaging) {
-      // The service startup lock excludes a live copier; unknown trees remain untouched.
+      // The copier's own lock (dsh-copy.cjs) excludes another live copier; unknown trees remain untouched.
       directory(targetDataDir);
       for (const name of fs.readdirSync(targetDataDir)) {
         tick();
@@ -212,7 +212,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
           if (lstatOrNull(where.root)) directory(where.root);
           await tree(old, false);
           const current = directory(old);
-          if (current.dev === identity.dev && current.ino === identity.ino) await io.rm(old, { recursive: true });
+          if (current.dev === identity.dev && current.ino === identity.ino) { await io.rm(old, { recursive: true }); progressed = performance.now(); }
         } catch (error) {
           if (error.message === 'Runtime inheritance deadline') throw error;
         }
@@ -269,15 +269,16 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     if (copied.bytes !== inventory.bytes || copied.entries.size !== inventory.entries.size) throw Error('Incomplete runtime copy');
     verifyRuntime(staging); moved(); verifyRuntime(sourceDataDir); moved(); enter('publish');
     await io.mkdir(target.base, { recursive: true, mode: 0o700 }); const parent = directory(target.base);
-    // An exclusive empty reservation prevents rename from replacing another install's directory.
-    try { await io.mkdir(target.root, { mode: 0o700 }); placeholder = directory(target.root); }
+    // An exclusive empty reservation prevents rename from replacing another install's directory. No await up to the
+    // rename: a copier that exits with its window must not leave the empty reservation, which refuses every later copy.
+    try { fs.mkdirSync(target.root, { mode: 0o700 }); placeholder = directory(target.root); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       directory(target.root); await tree(target.root); verifyRuntime(targetDataDir); return { status: 'existing' };
     }
     const current = directory(target.base), reserved = directory(target.root);
     if (current.dev !== parent.dev || current.ino !== parent.ino || reserved.dev !== placeholder.dev || reserved.ino !== placeholder.ino || fs.readdirSync(target.root).length) throw Error('Runtime destination changed');
-    await io.rename(staged.root, target.root); published = true;
+    fs.renameSync(staged.root, target.root); published = true;
     return { status: 'copied', entries: inventory.entries.size, bytes: inventory.bytes, elapsedMs: performance.now() - started };
   } catch (cause) {
     // Refused before the source was read: the source's qualification is unknown.
