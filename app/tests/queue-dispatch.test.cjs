@@ -5095,6 +5095,22 @@ test('failed handoff persists recovery before its first side effect and restarts
   reopened.pruneRotations(NOW + 6 * 24 * HOUR); assert.ok(reopened.rotations.a);
   reopened.pruneRotations(NOW + 8 * 24 * HOUR); assert.equal(reopened.rotations.a, undefined);
 });
+test('failed handoff recovery retains a missing successor with no recorded native id', async t => {
+  const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
+  const saved = f.dispatcher.save.bind(f.dispatcher);
+  f.dispatcher.save = () => { saved(); if (f.record.failureCleanup) f.dispatcher.closed = true; };
+  await f.step();
+  f.record.successorOwner.nativeId = null;
+  saved();
+  f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'b');
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW);
+  assert.equal(reopened.rotations.a.failureCleanup.stop.state, 'retained');
+  assert.equal(f.old.rotationEpisode.state, 'released');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+  assert.equal(f.client.calls.some(c => c[0] === 'stopFailedSuccessor'), false);
+});
 for (const use of ['draft', 'human turn']) test(`handoff timeout rolls back while preserving successor ${use}`, async t => {
   const f = await firstHandoff(t);
   if (use === 'draft') { f.fresh.liveDraft = 'synthetic draft'; f.fresh.draftRevision++; }

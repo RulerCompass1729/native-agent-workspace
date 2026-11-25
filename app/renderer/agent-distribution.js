@@ -153,6 +153,7 @@
         return g;
       });
       const focused = doc.activeElement;
+      const focusedSession = focused?.classList?.contains('agent-cell') && strip.contains(focused) ? focused.dataset.sessionId : null;
       strip.replaceChildren(...parts);
       const groupButton = key => parts.find(part => part.dataset.group === key)?.querySelector('.agent-group-trigger') || toggle;
       if (invoker.dataset.group) invoker = groupButton(invoker.dataset.group);
@@ -164,6 +165,11 @@
       toggle.title = t('open', { mode: t('mode.' + mode) });
       host.hidden = !entries.length;
       fit();
+      if (focusedSession && !host.hidden) {
+        const replacement = [...strip.querySelectorAll('.agent-cell')].find(button => button.dataset.sessionId === focusedSession);
+        const next = replacement && !replacement.hidden ? replacement : more.hidden ? toggle : more;
+        next.focus({ preventScroll: true });
+      }
     }
     function drawPanel(groups) {
       const focused = doc.activeElement;

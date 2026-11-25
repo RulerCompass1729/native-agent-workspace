@@ -4159,7 +4159,7 @@ class QueueDispatcher {
     let fresh = this.client.snapshot().sessions.find(s => s.id === record.newId);
     let owner = record.successorOwner;
     const input = firstHandoff.handoffInput(fresh, record.handoffTag);
-    if (owner?.nativeId === null && input?.nativeId === fresh?.nativeId) owner = { ...owner, nativeId: input.nativeId };
+    if (owner?.nativeId === null && input && input.nativeId === fresh.nativeId) owner = { ...owner, nativeId: input.nativeId };
     if (['pending', 'started'].includes(c.stop.state)) {
       const receipt = fresh?.failedHandoffStop;
       if (firstHandoff.validStopReceipt(receipt) && receipt.tag === record.handoffTag && JSON.stringify(receipt.owner) === JSON.stringify(owner) &&

@@ -19,13 +19,26 @@ async function fixture(t, provider) {
   const id = await workspace.create(provider, dir, 'owner', 'Butler'), other = await workspace.create(provider, dir, 'owner', 'Other');
   const calls = [];
   const createdOptions = [];
+  const firstMessages = [];
+  let beforeFirstWrite = () => {};
   const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), close() {}, call: async (method, ...args) => {
     calls.push(method);
-    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1', 'archiveIdleMoveV1'] };
+    if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['nativePermissionDefaults', 'singleHomeMoveV1', 'archiveIdleMoveV1', 'firstMessageGuardV1'] };
     // Synthetic transport only: archive pauses routing, never a native process.
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') return workspace.moveMembership(...args);
     if (method === 'create') { const o = args[0]; createdOptions.push(structuredClone(o)); return workspace.create(o.provider, o.cwd, 'owner', o.name, o.view, { skipPermissions: o.skipPermissions }); }
+    if (method === 'send') {
+      const [target, text, nativeId, { firstMessageUntil }] = args;
+      await beforeFirstWrite();
+      workspace.assertNativeContext(target, nativeId);
+      workspace.assertFirstMessage(target, 'owner', firstMessageUntil);
+      workspace.runtime(target).send = async (value, tag, guard) => {
+        assert.ok(guard());
+        firstMessages.push({ target, value });
+      };
+      return workspace.send(target, text, 'owner');
+    }
     if (method === 'resume') return workspace.resume(args[0], 'owner');
     if (method === 'importHistory') return workspace.importHistory(args[0], 'owner', args[1]);
     throw Error('Unexpected business call: ' + method);
@@ -58,7 +71,8 @@ async function fixture(t, provider) {
   const cancel = pending => controller.decide(id, actor.nativeId, pending.id, 0);
   const named = name => labels.apply(workspace.snapshot()).sessions.filter(s => s.name === name);
   const spaces = name => rooms.apply(workspace.snapshot()).rooms.filter(r => r.name === name);
-  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, cancel, named, spaces, calls, controller, createdOptions };
+  return { dir, workspace, client, rooms, labels, actor, other, ask, confirm, cancel, named, spaces, calls, controller, createdOptions, firstMessages,
+    beforeFirstWrite(fn) { beforeFirstWrite = fn; } };
 }
 const archived = (f, id) => f.rooms.apply(f.workspace.snapshot()).sessions.find(s => s.id === id).archived;
 const addSession = f => f.workspace.create('codex', f.dir, 'owner', 'Unrelated');
@@ -239,6 +253,42 @@ for (const provider of ['codex', 'claude']) {
   });
 }
 const session = (f, name, extra = {}) => [{ provider: f.actor.provider, cwd: f.dir, name, ...extra }];
+test('the confirmed creation sends exactly the approved first text once', async t => {
+  const f = await fixture(t, 'codex');
+  const initialMessage = '  Synthetic first line\nSecond line  ';
+  const args = session(f, 'First-message candidate', { initialMessage });
+  const card = await f.ask('create', args);
+  assert.equal(card.state, 'confirmation-required');
+  assert.equal(JSON.parse(card.confirmation.options.detail).arguments[0].initialMessage, initialMessage);
+  assert.deepEqual(f.firstMessages, []);
+  await assert.rejects(f.ask('create', session(f, 'First-message candidate', { initialMessage: 'Different text' }), card.id),
+    /operation_id already belongs to a different command/);
+
+  const [first, duplicate] = await Promise.all([f.confirm(card), f.confirm(card)]);
+  assert.equal(first.state, 'complete', first.error);
+  assert.equal(duplicate.value, first.value);
+  assert.equal(f.createdOptions.length, 1);
+  assert.equal(f.createdOptions[0].initialMessage, undefined);
+  assert.deepEqual(f.firstMessages, [{ target: first.value, value: initialMessage }]);
+  await assert.rejects(f.confirm(card));
+});
+
+test('the final first-message writer refuses after the automatic-message switch is turned off', async t => {
+  const f = await fixture(t, 'codex');
+  const card = await f.ask('create', session(f, 'Limited candidate', { initialMessage: 'Synthetic first message' }));
+  assert.equal(card.state, 'confirmation-required');
+  f.beforeFirstWrite(async () => {
+    assert.equal(f.named('Limited candidate').length, 1);
+    require('../session-wake.cjs').setPolicy(f.workspace, null, false);
+  });
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'unconfirmed');
+  assert.ok(result.error.includes(require('../ui-errors.cjs').uiError('error.backgroundMessagesDisabled').message));
+  assert.equal(f.workspace.snapshot().wakePolicy.enabled, false);
+  assert.deepEqual(f.firstMessages, []);
+  assert.deepEqual(f.named('Limited candidate')[0].messages.filter(message => message.role === 'user'), []);
+});
+
 for (const provider of ['claude', 'codex']) {
   test(`${provider}: a new space and two new sessions confirmed together are all created`, async t => {
     const f = await fixture(t, provider);

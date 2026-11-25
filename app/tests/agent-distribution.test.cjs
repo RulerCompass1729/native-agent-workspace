@@ -121,6 +121,17 @@ test('a roster update keeps keyboard focus on the same listed agent', () => {
   assert.equal(host.querySelector('.agent-strip-panel').matches(':popover-open'), true);
 });
 
+test('a status update keeps keyboard focus on an agent square after it changes group', () => {
+  const { f, host, view, entries } = strip();
+  const square = () => host.querySelectorAll('.agent-cell').find(cell => cell.dataset.sessionId === 'synthetic-4');
+  const original = square();
+  original.focus();
+  view.update(entries.map(entry => entry.id === 'synthetic-4' ? { ...entry, status: 'working' } : entry));
+  assert.notEqual(square(), original);
+  assert.equal(square().dataset.agentStatus, 'working');
+  assert.ok(f.doc.activeElement === square(), 'focus moves to the replacement square');
+});
+
 test('the grouping choice is saved through the view store and restored on reopen without saving again', () => {
   const { validViews } = require('../view-store.cjs');
   assert.equal(validViews([{ owner: 'person', agentGrouping: 'model' }]), true);
