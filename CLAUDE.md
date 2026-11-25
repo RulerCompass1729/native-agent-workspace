@@ -1,12 +1,15 @@
 # Shared project instructions
 
 This file is shared by Claude Code and Codex. `AGENTS.md` points to this file.
+A maintainer may keep a private overlay of their own process rules outside Git
+(Claude loads it as `CLAUDE.local.md`). Where this file names the maintainer
+overlay, follow the overlay when it is present.
 
 ## Vision first (the person, 2026-11-04)
 
 All development serves the vision at the top of `docs/product.md`: 一个入口，用好所有 agent。你只管说要做什么，NAW 去找到或者新开对的 agent 接住它。
 - A new feature or design proposal states which part of the vision it serves: the problem, the approach, who it is for, its form, or a success marker. Repairs and maintenance need not.
-- When a feature, a requirement or the vision itself seems wrong or in conflict, do not choose silently. Add a row with the reason, evidence and a suggested resolution to 「与愿景的张力」 in `docs/product.md` (public-safe facts only), and ask the person on the task board. Like spending or publishing choices, this waits for the person's explicit answer; no default takes effect after a timeout, except for reversible local appearance or implementation-plan choices within existing authorization that the person allowed on 2026-11-16 to follow the five-minute recommendation process below. This exception does not authorize new features, grant new permissions, or relax permissions; reversible local plan choices within existing authorization follow the process in this section. Existing requirements otherwise stay in force until the person decides.
+- When a feature, a requirement or the vision itself seems wrong or in conflict, do not choose silently. Add a row with the reason, evidence and a suggested resolution to 「与愿景的张力」 in `docs/product.md` (public-safe facts only), and ask the person on the task board. Like spending or publishing choices, this waits for the person's explicit answer; no default takes effect after a timeout, unless the maintainer overlay sets a default-answer process for that kind of choice. Existing requirements otherwise stay in force until the person decides.
 - The vision is direction, not implementation authorization. Privacy, cost and approval rules still apply.
 
 Read `README.md`, `docs/product.md`, and `docs/readiness.md` before changing scope.
@@ -103,33 +106,8 @@ or start paid model runs as a side effect of editing documents.
   provider's session-to-session messaging to or between NAW sessions: it leaves no record
   in the space and does not reach other providers. A native team's internal
   messaging (Claude Agent Teams, Codex fleets) stays as the provider runs it.
-  Computer use in the daily app types only into the target space's composer after
-  confirming the single recipient and that no draft is present, starts the message
-  with its sender's name, prefers the workspace tools when available, keeps
-  screenshots private, and follows the
-  daily-app rules below. Writing a board or lane entry records a message; it does
-  not prove the recipient received it.
-
-## Lightweight mode (the person, 2026-11-08)
-
-Records, hashing and waiting took most agent time while product edits were a few
-percent of tool calls. For local, reversible changes (source, tests or docs on a
-local branch or main; not installed, pushed or published):
-- The evidence is the commit plus the relevant test output: the command, pass and
-  fail counts, and the failing assertion if any. Do not create per-step hash
-  manifests, ready.json files, process-record files or evidence bundles for these
-  changes. Keep raw test output for failures and for any change a risk gate sends
-  to independent review.
-- A task-board or lane entry is at most 300 characters: what changed, the commit,
-  the test result and the next owner. A claim still names the fields listed under
-  Task-led collaboration; put anything longer in one file and link it.
-- When the risk gates require an independent review, run it once per integration
-  batch over the combined diff, not once per commit. A batch is a delivery
-  checkpoint in the review rules below.
-- Everything else in this file still applies, including privacy and secret scans
-  before every commit and push, asking first for irreversible or outward actions,
-  no self-review, the risk-gate reviews themselves, signed acceptance and daily-use
-  checks before a row is done, and requirements the person stated.
+  Writing a board or lane entry records a message; it does not prove the
+  recipient received it.
 
 ## Test costs and instances
 
@@ -163,15 +141,8 @@ local branch or main; not installed, pushed or published):
   Clean up only processes owned by that test, preserving native user sessions.
   Finish isolated installed tests before normal-profile quit/reopen checks:
   quitting by bundle ID can target an isolated instance of the same application.
-- Do not quit, restart, hide or attach a debugger to the person's running daily
-  app for tests or installation without their explicit permission for that operation.
-  Use the isolated profile/launcher for diagnosis. After an authorized daily restart,
-  reopen visibly with an ordinary launch; never leave it hidden or a debug port open.
-- Keep one daily launchable installed app in `/Applications`. Build bundles are
-  temporary; keep distribution/rollback archives, not extra discoverable `.app`
-  copies. Do not leave test/backup bundles registered as ordinary applications.
-  Verify application-search entries separately from processes and window count;
-  removing a duplicate launcher must not stop or migrate native user sessions.
+- Do not quit, restart or attach a debugger to the app instance the person is
+  using; test with the isolated profile.
 - Installed native tests must start through normal service bootstrap, which
   copies writable provider plugins into the private runtime directory. Do not
   directly fork the signed bundle's daemon for real providers: native plugin
@@ -192,7 +163,7 @@ local branch or main; not installed, pushed or published):
   brief on stdin and output in private files:
 
   ```sh
-  claude -p --session-id "$NAW_REVIEW_ID" --model fable \
+  claude -p --session-id "$NAW_REVIEW_ID" --model "${NAW_REVIEW_MODEL:?}" \
     --max-turns "${NAW_REVIEW_MAX_TURNS:-6}" \
     --permission-mode bypassPermissions --output-format stream-json --verbose \
     --tools "Read,Grep,Glob" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
@@ -201,7 +172,9 @@ local branch or main; not installed, pushed or published):
     < "$BRIEF" > "$OUT" 2> "$OUT.err"
   ```
 
-  Set `NAW_REVIEW_ID` from `uuidgen` once for the new checkpoint. For fixes to
+  `NAW_REVIEW_MODEL` names the reviewer model; when it is unset the command
+  stops instead of falling back to a default. Set `NAW_REVIEW_ID` from
+  `uuidgen` once for the new checkpoint. For fixes to
   that same checkpoint, use `--resume` with its saved UUID. Keep the former
   `.local/reviewer-session-id` session as a backup; do not run paired reviews by
   default. For the next few checkpoints, retain the reported cost and findings
@@ -255,7 +228,7 @@ local branch or main; not installed, pushed or published):
   through NAW, to end any background wait. An idle member does not see the
   board, so a board entry does not reach it: work meant for an idle member goes
   to it through the queue (see Task-led collaboration for who may add items).
-- Otherwise, a Claude agent working from the private task board does not end a turn idle;
+- Otherwise, a Claude agent working from a task board does not end a turn idle;
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
   that exits on a specific event: a newer READY entry in a lane log (for the
@@ -267,67 +240,26 @@ local branch or main; not installed, pushed or published):
   before ending the turn. A background wait counts as background work and blocks
   moving the agent's backend: when the person asks to update it, end the wait
   first.
-- Questions for the person (the person, 2026-11-16: a question they have not
-  answered within 5 minutes goes ahead as recommended, since they can easily
-  miss one, but no agent may stall on it). For every agent in NAW, the butler
-  included:
-  1. A question may default only when the choice is reversible, affects only
-     the local repository, the current task or this machine's NAW, and stays
-     within authorization the person has already given. Every other choice is
-     a hard gate (item 5); when unsure, treat it as one.
-  2. Do not ask a question that may default through a prompt that blocks the
-     turn (AskUserQuestion). Write one line in the reply and one on the board:
-     「请你定：<问题>；推荐 <X>，因为 <一句理由>；<HH:MM> PT 前没回就按推荐做」,
-     with the deadline 5 minutes after sending. Do not start it with
-     「需要你决定：」, which NAW records as an open decision for the person.
-  3. While waiting, do not end the turn. First do the parts of the current item
-     that do not depend on the answer (a queue member works only on items NAW
-     sent it and on what the person asked it directly, and takes no other board
-     work; an agent outside a queue works only within existing authorization).
-     When nothing is left, wait in the foreground inside the turn, no longer
-     than the time remaining before the deadline, with no background command
-     or `/loop`. Handle a reply as soon as it arrives, and check the board for
-     an answer after each wait. When the person answers in another
-     session, the butler writes the answer on the board at once.
-  4. At the deadline, check the board and the agent's own conversation once
-     more. If there is still no answer, do only the one thing the question
-     named, not related switches or operations, and write on the board:
-     「<HH:MM> PT 5 分钟未答，按推荐做了 <具体哪件>；原问题 <…>；撤回办法 <…>」.
-     If the person later decides otherwise, change it back their way; for
-     something already installed in the daily app, changing back means the
-     next version.
-  5. A hard gate never defaults; it waits for the person's explicit answer.
-     Examples, not a complete list: pushing, uploading, publishing, or messages
-     to other people; spending money; connecting to the real DeepSeek service;
-     deleting data or anything else irreversible; switches only the person may
-     use (the automatic-messages switch, automatic migration, authorizations,
-     designating the secretary, integrator or butler); loosening permissions
-     or confirmation gates; ending sessions or backends, exposing this machine,
-     or quitting or restarting the daily NAW other than for an installation;
-     the person's own financial or career decisions, including proposals made
-     for them; a conflict with the vision or a requirement (see Vision first).
-     Write a hard-gate question as 「需要你决定：…（硬门，不按默认）」; the
-     butler collects it into the person's list. First do any part of the
-     current item that does not depend on it. Then a queue member ends its turn
-     with a final message whose first line is that question (NAW marks the
-     item 等你决定 and sends the member its next item). An agent outside a
-     queue (the integrator, the secretary, an agent on the private task
-     board), Claude or Codex, keeps working within
-     existing authorization or leaves one background command that waits for
-     this answer, and does not end the turn idle.
-  6. When the person is asked to look at the wording of interface text, items
-     2–4 apply; at the deadline the wording first passes one independent
-     review and merges only after it passes. Installing it into the daily app
-     then follows the person's standing install permission (2026-11-12, for
-     the agent that installs daily builds), provided every pre-install check
-     passes. Reversible local choices about how the interface looks (lines,
-     color blocks, spacing, layout) within existing authorization also follow
-     items 2–4 (the person, 2026-11-16). Send the pictures, state the
-     recommendation and how to undo it, and retain the required independent
-     review and pre-install checks.
-  7. A question without a recommendation cannot default. First decide a
-     recommendation with a reason, then ask; if you cannot, treat it as a hard
-     gate.
+- Questions for the person: hard gates. A hard gate never defaults; it waits
+  for the person's explicit answer. Examples, not a complete list: pushing,
+  uploading, publishing, or messages to other people; spending money;
+  connecting to the real DeepSeek service; deleting data or anything else
+  irreversible; switches only the person may use (the automatic-messages
+  switch, automatic migration, authorizations, designating the secretary,
+  integrator or butler); loosening permissions or confirmation gates; ending
+  sessions or backends, exposing this machine, or quitting or restarting the
+  daily NAW other than for an installation; the person's own financial or
+  career decisions, including proposals made for them; a conflict with the
+  vision or a requirement (see Vision first). Write a hard-gate question as
+  「需要你决定：…（硬门，不按默认）」; the butler collects it into the
+  person's list. First do any part of the current item that does not depend
+  on it. Then a queue member ends its turn with a final message whose first
+  line is that question (NAW marks the item 等你决定 and sends the member its
+  next item). An agent outside a queue (the integrator, the secretary, an
+  agent on a task board), Claude or Codex, keeps working within existing
+  authorization or leaves one background command that waits for this answer,
+  and does not end the turn idle. Other questions also wait for the person's
+  explicit answer, unless the maintainer overlay sets a default-answer process.
 - Verification principles (approved by the person on 2026-11-02 for every Claude
   and Codex agent here). A check exists only when it can catch a failure the
   earlier checks cannot, and missing that failure costs more than the check; say
@@ -339,34 +271,13 @@ local branch or main; not installed, pushed or published):
   already reviewed patch merged unchanged is not reviewed again. Leave to
   programs what they can decide (tests, template comparison, hashes, counts);
   people and models judge intent, experience and design trade-offs, and each
-  machine-checkable problem a judgment review finds becomes a test. Completion
-  follows the person's use: after an update is installed in the daily app,
-  operate each change of that version the person can see as they described it,
-  by GUI script where possible and otherwise by asking the person through the
-  board's secretary; the row moves to done only once that passes. Versions
-  follow urgency (the person, 2026-11-23). Tier 1, daily use broken or stuck or
-  anything hurting NAW development or function (butler not woken, sessions cut
-  off, messages lost or blocked, slow or blocked installs, invisible waits, data
-  loss, privacy): each fix with READY and a non-author PASS is installed alone
-  within about 2 hours. Tier 2, other fixes: a new version once the last is
-  installed, no batching. Tier 3, improvements: the next version. Push main
-  after each install; all gates stay. The rules correct themselves: daily, or
-  every five versions, the secretary reports three numbers from the records to
-  the person (at which step each problem the person found in daily use should
-  have been caught, whether each kind of check has recently caught a real
-  problem, and the time from feedback to the daily app); a step that misses
-  often is strengthened, and a check with no findings for a long time whose risk
-  is covered elsewhere is downgraded. Rule changes are shown to the person
-  first. Not traded for speed: the pre-push privacy and secret scan, no
-  self-review, asking before irreversible or outward actions, and requirements
-  the person stated. In practice: use the shared risk-based review gates once
-  per delivery checkpoint, quoting the person's words and checking side effects
-  on other views when a review is required; integration review covers only the
-  batch interactions and edits made while integrating, reusing unchanged
-  approved patches. The daily update operator is compared by program with the
-  last operator that ran, allowing only version numbers and hashes to differ,
-  and goes to review only when that template changes; install records are
-  checked by script against commit ids and counts instead of review.
+  machine-checkable problem a judgment review finds becomes a test. Not traded
+  for speed: the pre-push privacy and secret scan, no self-review, asking before
+  irreversible or outward actions, and requirements the person stated. In
+  practice: use the shared risk-based review gates once per delivery checkpoint,
+  quoting the person's words and checking side effects on other views when a
+  review is required; integration review covers only the batch interactions and
+  edits made while integrating, reusing unchanged approved patches.
 
 ## Architectural invariants
 
@@ -463,7 +374,8 @@ prove runtime compatibility. Record untested requirements explicitly.
 
 ## Push rules
 
-- Push only `main` under the person's standing authorization, without asking again, after the complete unpushed range passes the security checks below and independent review with zero unresolved findings; on any finding, stop, do not push and report it to the person. Show the full scan output to the person as before.
+- Ask the maintainer before pushing, unless the maintainer overlay grants a
+  standing authorization.
 - Never push `backup/*` or `lane/*`.
 - Never use `--no-verify` or bypass hooks or publication checks.
 - Before pushing, run `python3 scripts/privacy_guard.py history` (see

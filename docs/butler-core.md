@@ -732,3 +732,25 @@ to complete valid data at least as long while preserving the verified bytes; a
 valid shorter prefix is not an automatic recovery. User revoke still needs only
 the readable designation and its locked revision check. Directory/designation
 faults and unknown legacy locks remain unchanged; physical stopping is separate.
+
+## Six parts of a dispatch
+
+A dispatch from the butler to the project manager or a member (a queue item, a
+NAW message, or a brief it points to) is read by a session that cannot see the
+sender's reasoning. Weigh the six parts by the instruction's weight; not every
+part needs filling, and a short instruction still states its cause and its end
+signal.
+
+1. 起因 (cause): the person's request and the problem it solves, with
+   `file:line` when code is involved.
+2. 现状 (current state): who is working on it, how far it has got, and where the
+   evidence is.
+3. 目标 (goal): what the work should achieve, why it is worth it and what it
+   costs, so the receiver can judge how far an exception may bend it.
+4. 边界 (boundaries): what must not be done, and what the receiver decides for
+   itself.
+5. 结束与失败 (end and failure): the signal that ends the work, which must reach
+   and wake the receiver (a NAW message, queue item or event; a file alone does
+   not), what to do on failure, and who checks when no signal arrives in time.
+6. 未核实 (unverified): what the sender has not checked, so the receiver does not
+   take a guess for a fact.

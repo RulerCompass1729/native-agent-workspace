@@ -30,3 +30,10 @@ test('no other file under docs/ passes 1.5 MiB', () => {
   }
   assert.deepEqual(over, [], `over ${LIMIT} bytes; split before the push guard's 2 MiB limit refuses it`);
 });
+
+// Codex reads at most 32 KiB of project instructions (project_doc_max_bytes) and silently drops the rest; before the
+// maintainer overlay was split out, Codex sessions never saw the Push rules at the end.
+test('CLAUDE.md stays under the 32 KiB Codex reads', () => {
+  const size = fs.statSync(path.resolve(__dirname, '../../CLAUDE.md')).size;
+  assert.ok(size < 32768, `CLAUDE.md is ${size} bytes; Codex drops everything after 32768`);
+});
