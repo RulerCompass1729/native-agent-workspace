@@ -192,6 +192,7 @@ const CREATE_SETTINGS_CAPABILITY = 'createSettingsV1';
 const CREATE_PROFILE_CAPABILITY = 'createSettingsProfileV1';
 // What a new session can be started with; must match workspace.cjs (a test compares them).
 const CLAUDE_PERMISSION_MODES = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+const BYPASS = 'bypassPermissions';
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]{0,119}$/;
 const CODEX_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
@@ -861,6 +862,11 @@ function transcriptModel(session, root, maxBytes = TRANSCRIPT_TAIL_BYTES) {
   return null;
 }
 
+// The mode Claude reports as 'default' is asked for as 'manual'; not asked for, it starts in the person's own default.
+function launchMode(reported) {
+  return reported === 'default' ? 'manual' : reported;
+}
+
 // What a successor must start with to continue like the old session: its model, effort,
 // permission mode and view. { reason } when a new session could not match it.
 function carrySettings(session) {
@@ -882,8 +888,8 @@ function carrySettings(session) {
     if (CLAUDE_EFFORTS.includes(session.nativeEffort)) {
       settings.effort = session.nativeEffort;
     }
-    const mode = session.nativePermissionMode;
-    if (mode && mode !== 'default') {
+    const mode = launchMode(session.nativePermissionMode);
+    if (mode) {
       if (!CLAUDE_PERMISSION_MODES.includes(mode)) {
         return { reason: 'permission-mode' };
       }
@@ -938,7 +944,7 @@ function settingsMismatch(carry, fresh, modelProvider = null) {
     return 'model-provider';
   }
   if (fresh.provider === 'claude') {
-    if (carry.permissionMode && fresh.nativePermissionMode && fresh.nativePermissionMode !== carry.permissionMode) {
+    if (carry.permissionMode && fresh.nativePermissionMode && launchMode(fresh.nativePermissionMode) !== carry.permissionMode) {
       return 'permission-mode';
     }
     if (carry.effort && fresh.nativeEffort && fresh.nativeEffort !== carry.effort) {
@@ -3789,6 +3795,20 @@ class QueueDispatcher {
     return !(reply && reply.humanAfter);
   }
 
+  // The handoff turn reports the mode the person left the session in: its successor has bypass only if it still has.
+  leaveBypass(record, old) {
+    if (record.provider !== 'claude') {
+      return;
+    }
+    const mode = launchMode(old.nativePermissionMode), carried = record.carry?.permissionMode;
+    if (mode !== BYPASS && CLAUDE_PERMISSION_MODES.includes(mode) && (carried === BYPASS || record.skipPermissions && !carried)) {
+      record.carry = { ...record.carry, permissionMode: mode };
+    }
+    if (![undefined, BYPASS].includes(record.carry?.permissionMode)) {
+      record.skipPermissions = false;
+    }
+  }
+
   // Before an old session typed into since its process started ends, keep what its live terminal
   // shows, an unsent prompt included, in a private file beside the rotation log. Read through a
   // separate connection that owns nothing: a terminal no longer open is then never reopened, and
@@ -4539,6 +4559,7 @@ class QueueDispatcher {
       }
       await this.completeEpisode(oldId, record);
       record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
+      this.leaveBypass(record, old);
       record.phase = 'creating';
       record.creatingAt = now;
       this.save();
