@@ -27,11 +27,11 @@
     }
     return [...live.values()].sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.at - b.at);
   }
-  // Display keys and parameters only; the same words the card itself uses.
+  // Display keys and parameters only. A countdown says where it leads, unlike the cards' own badge.
   function label(item, now) {
     if (item.kind === 'countdown') {
       const left = Math.max(0, Math.ceil((item.at - now) / 1000)), minutes = Math.floor(left / 60), seconds = left % 60;
-      return { text: [['background.card.remaining', { time: `${minutes}:${String(seconds).padStart(2, '0')}` }]], name: minutes ? ['background.timer.countdownName', { minutes, seconds }] : ['background.timer.countdownSecondsName', { seconds }] };
+      return { text: [['background.timer.countdown', { time: `${minutes}:${String(seconds).padStart(2, '0')}` }]], name: minutes ? ['background.timer.countdownName', { minutes, seconds }] : ['background.timer.countdownSecondsName', { seconds }] };
     }
     if (item.kind === 'expired') return { text: [['background.card.elapsed']], name: ['background.timer.expiredName'] };
     const seconds = Math.max(0, Math.floor((now - item.at) / 1000));
