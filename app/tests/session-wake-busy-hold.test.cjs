@@ -18,7 +18,7 @@ function host(writes) {
     const r = new EventEmitter(); r.record = s; s.nativeId = 'native-' + s.id;
     r.host = { rpc: { call: async () => ({ goal: null }) } };
     r.chatAvailable = r.addressedSendAvailable = true; r.midturn = [];
-    r.start = async () => r.emit('state', 'idle');
+    r.start = async () => r.emit('state', 'idle'); r.stop = async () => ({ state: 'ended' }); r.stopForMaintenance = async begin => { begin(); r.stopped = true; return { state: 'ended' }; };
     r.send = async (text, tag, guard) => { assert.equal(guard(), true); writes.push({ id: s.id, text, tag, at: Date.now() }); r.emit('submitted', tag); };
     r.queue = r.steer = async (...args) => { r.midturn.push(args); };
     return r;
@@ -417,4 +417,58 @@ test('a quiet window that opens on the recipient\'s backend keeps it until the w
   busy(f); await f.look(); assert.equal(f.row.wake.status, 'held');
   assert.equal(f.row.wake.quietWindow, undefined, 'held for the recipient again, not for a window that is over');
   idle(f); await f.look(); assert.deepEqual([f.row.wake.status, f.to(f.b).length], ['submitted', 1]);
+});
+
+// The recipient ended before it was offered (298, R203): nothing was read from the sender and nothing written, so it is
+// not sent. A rotation stops the old session this way; its successor is another session.
+const stopped = f => f.target.stop(f.b, { check() {}, participantOnly: true, expected: { ...f.target.get(f.b), draftRevision: 0 } });
+const gone = { 'stopped as a rotation stops it': stopped, 'its record is gone': async f => { await stopped(f); f.target.forget(f.b); } };
+const reason = { 'stopped as a rotation stops it': ['会话已经结束；保存的记录仍可查看。', 'The session has ended. Its saved records remain available.', 'error.sessionEnded'],
+  'its record is gone': ['找不到这个会话。', 'This session could not be found.', 'error.sessionMissing'] };
+for (const provider of ['codex', 'claude']) for (const [name, end] of Object.entries(gone)) test(`a held message whose recipient ended (${provider}, ${name}) is not sent, and the sender is told so once`, async t => {
+  const f = await held(t, { provider });
+  const other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  idle(f); await end(f); await settle();
+  await f.look();
+  const [zh, en, key] = reason[name];
+  assert.equal(f.row.wake.status, 'not-sent'); assert.ok(Number.isSafeInteger(f.row.wake.settledAt));
+  assert.equal(f.row.text, `自动消息没有发出；不会自动重发。\n${zh}\nWhile it works.`);
+  assert.equal(locale.displayText('en', f.row.text, f.row.uiMessage), `Automatic message was not sent; it will not be retried automatically.\n${en}\nWhile it works.`);
+  assert.equal(f.row.uiMessage.cause.key, key);
+  assert.equal(f.writes.length, 0); assert.equal(f.source.wakeHoldTimer, null, 'not looked at again');
+  f.begin('two');
+  const told = (await f.call('Next.', 'call-two', other)).message;
+  assert.match(told, new RegExp(`\\n你之前存着等送的一条没有送到：发给 ${f.b}，「While it works\\.」：`));
+  assert.ok(!told.includes('可能已经送到') && !told.includes('先别重发'));
+  await f.end(); f.advance(MIN); f.begin('three');
+  assert.ok(!(await f.call('Third.', 'call-three', other)).message.includes('While it works.'), 'once');
+  await f.end(); await f.look();
+  assert.equal(f.to(f.b).length, 0, 'nothing went to the recipient');
+});
+for (const [name, end] of Object.entries(gone)) test(`an ordinary message whose recipient ended before the turn did (${name}) is not sent`, async t => {
+  const f = await fixture(t);
+  f.begin('one');
+  assert.equal((await f.call('Plain.', 'call-one')).readiness, 'checked');
+  await end(f); await f.end();
+  const row = f.rows().at(-1);
+  assert.deepEqual([row.wake.status, row.uiMessage.cause.key, f.writes.length, f.calls.wakeReceive], ['not-sent', reason[name][2], 0, 1]);
+  assert.equal(row.text, `自动消息没有发出；不会自动重发。\n${reason[name][0]}\nPlain.`);
+});
+// Once it took the message, an ended recipient or a lost connection leaves the outcome unknown, as before.
+const afterTake = {
+  'the recipient ends while it is written': f => { const send = f.target.send.bind(f.target); f.target.send = async (...args) => { await stopped(f); return send(...args); }; return 0; },
+  'the answer is lost after it was written': f => { const run = f.source.peerRunner.transferWake.bind(f.source.peerRunner); f.source.peerRunner.transferWake = async intent => { await run(intent); throw Error('The connection closed.'); }; return 1; },
+  'the take is answered and its answer lost': f => { const take = f.target.peerRunner.takeWake.bind(f.target.peerRunner); f.target.peerRunner.takeWake = async spec => { await take(spec); throw Error('The connection closed.'); }; return 0; },
+};
+for (const [name, act] of Object.entries(afterTake)) test(`after the recipient took it the outcome stays unknown: ${name}`, async t => {
+  const f = await held(t);
+  const other = await f.target.create('codex', f.root, 'other-owner', 'Other');
+  idle(f); const written = act(f);
+  await f.look();
+  assert.deepEqual([f.row.wake.status, f.to(f.b).length], ['unconfirmed', written]);
+  f.begin('two');
+  const told = (await f.call('Next.', 'call-two', other)).message;
+  assert.match(told, new RegExp(`\\n你之前存着等送的一条没能确认是否送到，可能已经送到，先别重发：发给 ${f.b}，「While it works\\.」`));
+  await f.end(); await f.look();
+  assert.equal(f.to(f.b).length, written, 'not sent again');
 });

@@ -27,6 +27,7 @@ async function fixture(t, { designate = true, receiveFails = false } = {}) {
       r.host = { rpc: { call: async () => ({ goal: null }) } };
       r.chatAvailable = r.addressedSendAvailable = true;
       r.start = async () => r.emit('state', 'idle');
+      r.stop = async () => ({ state: 'ended' }); r.stopForMaintenance = async begin => { begin(); r.stopped = true; return { state: 'ended' }; };
       r.send = async (text, tag, guard) => { assert.equal(guard(), true); writes.push({ i, text, tag }); r.emit('submitted', tag); };
       runtimes.push(r); return r;
     } }, dirs[i]); workspaces.push(w);
@@ -294,4 +295,42 @@ test('the butler\'s own message answered as held, then ended before its turn did
   f.main.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: f.a, nativeId: f.source.get(f.a).nativeId }) });
   assert.deepEqual(f.events().map(e => [e.payload.memberId, e.payload.reason]), [[f.b, 'own-message-undelivered']]);
   assert.ok(!/Secret/.test(JSON.stringify(f.main.ledger.snapshot())));
+});
+
+// 298: the recipient ended before it was offered, so nothing was written: not sent, where it was an unknown outcome.
+test('a message to the butler whose session ended before it was offered is one event, not sent, and wakes it once', async t => {
+  const f = await fixture(t);
+  const stewardWake = new StewardWake(f.mainDir, { ledger: () => f.main.ledger, selected: () => f.steward(), now: () => Date.now(), record: () => {} });
+  stewardWake.set(true);
+  f.ra.emit('state', 'idle'); f.start('one');
+  assert.equal((await f.call('Secret for the old butler.', 'call-one')).readiness, 'checked');
+  await f.target.stop(f.b, { check() {}, participantOnly: true, expected: { ...f.target.get(f.b), draftRevision: 0 } });
+  await f.finish();
+  const row = f.rows().at(-1); assert.equal(row.wake.status, 'not-sent');
+  f.observe(); f.observe();
+  assert.deepEqual(f.events().map(e => [e.kind, e.sourceRef, e.payload]), [['blocked', `wake-undelivered:${f.a}`, payload(f, 'not-sent:session-ended', row.wake.settledAt)]]);
+  assert.equal(stewardWake.due(), true);
+  assert.deepEqual(stewardWake.undelivered(), { undelivered: 1 });
+  f.advance(1000); f.observe(f.open()); assert.equal(f.events(f.open()).length, 1, 'main restarting records it no second time');
+  // A session that continues from it hears of it once too, from the same record.
+  f.main.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: 'butler-next', nativeId: 'native-butler-next' }), formerly: id => id === 'butler-next' ? [f.b] : [] });
+  assert.equal(f.events().length, 1);
+  wake.retryHeld(f.source); await settle();
+  assert.equal(f.writes.length, 0, 'nothing is sent again');
+  assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret'), 'never the message');
+});
+test('the butler\'s own held message whose recipient ended is one event, not sent, naming the recipient', async t => {
+  const f = await fixture(t, { designate: false });
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.a, nativeId: f.source.get(f.a).nativeId } }), { mode: 0o600 });
+  const observe = () => f.main.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: f.a, nativeId: f.source.get(f.a).nativeId }) });
+  f.ra.emit('state', 'idle'); f.rb.emit('state', 'working');
+  await f.turn('held', 'Secret held task.');
+  const row = f.rows().at(-1); assert.equal(row.wake.status, 'held');
+  f.rb.emit('state', 'idle');
+  await f.target.stop(f.b, { check() {}, participantOnly: true, expected: { ...f.target.get(f.b), draftRevision: 0 } });
+  f.advance(60000); wake.retryHeld(f.source); await settle();
+  assert.equal(row.wake.status, 'not-sent');
+  observe(); observe();
+  assert.deepEqual(f.events().map(e => [e.payload.memberId, e.payload.reason, e.payload.outcome]), [[f.b, 'own-message-undelivered', 'not-sent:session-ended']]);
+  assert.equal(f.writes.length, 0); assert.ok(!/Secret/.test(JSON.stringify(f.main.ledger.snapshot())));
 });

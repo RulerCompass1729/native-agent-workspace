@@ -715,7 +715,9 @@ async function check(w, spec) {
 async function receive(w, spec) {
   if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' ||
       typeof spec.senderId !== 'string' || !spec.senderId) throw uiError("error.wake.sourceInvalid");
-  const s = w.get(spec.recipientId), r = w.runtime(s.id);
+  let s, r;
+  // Ended before the take: nothing was written, so it is not an unknown outcome.
+  try { s = w.get(spec.recipientId); r = w.runtime(s.id); } catch (error) { return notSent(error); }
   const proof = identity(s), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
   let route;
