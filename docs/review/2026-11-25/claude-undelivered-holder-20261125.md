@@ -16,7 +16,7 @@ The move to alpha.300 conflicted only in the designation handler of `app/main.cj
 
 ## Checks
 
-On the previous head 6 of the 33 tests in `own-message-undelivered` fail and 27 pass; the two synthetic cases from the integration review are red there and on alpha.299, and green here. 93 related test files on the final code: 2744 passed, none failed or skipped. 45 mutations of the new conditions, run before the merge: 44 killed, one equivalent (the same event id is recorded once); the place of the sync, changed after it, fails a test in either branch when removed or moved back. Trial merges: no conflict with the five other lanes checked, and with the card-click lane only the frozen-day review file. The full suite, Electron and an install were not run. No model was called by the tests and the daily app was not touched.
+On the previous head 6 of the 33 tests in `own-message-undelivered` fail and 27 pass; the two synthetic cases from the integration review are red there and on alpha.299, and green here. 93 related test files on the final code: 2744 passed, none failed or skipped. 45 mutations of the new conditions, run before the merge: 44 killed, one equivalent (the same event id is recorded once); the place of the sync, changed after it: removing it fails a test in either branch, and moving it back fails one in the designation branch. Trial merges: no conflict with the five other lanes checked, and with the card-click lane only the frozen-day review file. The full suite, Electron and an install were not run. No model was called by the tests and the daily app was not touched.
 
 ## Independent review
 
@@ -26,7 +26,7 @@ A non-author read-only session reviewed the fix and the increment: PASS twice, n
 
 - A session between two lines of a former chain that never had a line of its own is not recorded.
 - While the record cannot be read, the butler's rows that failed before this intake started wait until it can be, and so does a former butler's message to a third session.
-- A message sent before the record's first line, which says the butler had already begun, is not recorded at all if it failed before this intake started: the record never says who held the role then.
+- A message sent before a line that says the butler had already begun (the first, or one after a failed write) is not recorded at all if it failed before this intake started: the record never says who held the role then.
 - If the role moved along the chain unseen by the record, the chain cannot be read as the person designates its newest session, and the sync is skipped, that session's earlier messages are not its own.
 - After a failed record write and a restart, what a replaced session sent up to the first line written after it can still count as own.
 - A message refused as it was called, to the session that is now the butler, is still reported as one to the butler.
