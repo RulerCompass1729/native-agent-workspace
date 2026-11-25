@@ -67,7 +67,11 @@ for (const [name, add, reply, status] of [
   ['the person\'s item', f => f.room.queueAdd('Mine.', 'a'), 'Done.', 'done'],
   ['a secretary\'s item', f => f.room.queueAdd('Theirs.', 'a', 'shared', { kind: 'secretary', name: 'Secretary', sessionId: 'secretary' }), 'Done.', 'done'],
   ['an item the butler\'s session queued as a secretary', f => f.room.queueAdd('Theirs.', 'a', 'shared', { kind: 'secretary', name: 'Butler', sessionId: 'butler' }), 'Done.', 'done'],
-  ['a member\'s own item', f => f.room.queueAdd('Its own.', 'a', 'shared', { kind: 'secretary', name: 'Agent a', sessionId: 'a' }), 'Done.', 'done'],
+  ['another member\'s item', f => {
+    // Another member queues it: an item a session queued is not dispatched back to that session (managerItemMayGo).
+    f.client.state.sessions.push({ ...structuredClone(f.client.state.sessions[0]), id: 'b', name: 'Agent b', nativeId: 'native-b' });
+    return f.room.queueAdd('Theirs.', 'a', 'shared', { kind: 'secretary', name: 'Agent b', sessionId: 'b' });
+  }, 'Done.', 'done'],
   ['a question for the person', f => f.butlers('Ask.'), '需要你决定：which one?', 'waiting'],
   ['an empty reply', f => f.butlers('Nothing.'), '   ', 'waiting'],
 ]) test(`nothing is told after ${name}`, async t => {
