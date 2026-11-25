@@ -249,3 +249,38 @@ test('a message to the session the butler continued from is recorded for the cur
   assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:control']);
   assert.ok(!JSON.stringify(f.main.ledger.snapshot()).includes('Secret to the old'));
 });
+
+// R187/R188: the butler's own message, held for a recipient at work, that did not go out wakes the butler too. A
+// message of its own refused at once was already its call's answer.
+test('the butler\'s own held message that did not go out is one event, naming the recipient; one refused at once is none', async t => {
+  const f = await fixture(t, { designate: false });
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.a, nativeId: f.source.get(f.a).nativeId } }), { mode: 0o600 });
+  const steward = () => ({ sessionId: f.a, nativeId: f.source.get(f.a).nativeId });
+  const observe = () => f.main.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward });
+  f.ra.emit('state', 'idle'); f.rb.emit('state', 'working');
+  await f.turn('held', 'Secret held task.');
+  const row = f.rows().at(-1); assert.equal(row.wake.status, 'held');
+  observe(); assert.deepEqual(f.events(), [], 'still waiting: no event');
+  f.advance(120 * 60000); wake.retryHeld(f.source); await settle();
+  assert.equal(row.wake.status, 'not-sent');
+  observe(); observe();
+  const own = outcome => ({ memberId: f.b, reason: 'own-message-undelivered', outcome, title: new Date(f.now()).toISOString() });
+  assert.deepEqual(f.events().map(e => [e.kind, e.sourceRef, e.payload]), [['blocked', `wake-undelivered:${f.b}`, own('not-sent:busy-hold-expired')]]);
+  // Withdrawn while held; and one refused at once.
+  f.advance(1000); await f.turn('again', 'Secret second task.');
+  f.source.claim(f.a, 'another-window'); f.advance(60000); wake.retryHeld(f.source); await settle();
+  f.target.get(f.b).wakeDisabled = true; f.advance(1000); await f.turn('off', 'Secret third task.');
+  assert.deepEqual(f.rows().slice(1).map(r => r.wake.status), ['cancelled', 'not-sent']);
+  observe();
+  assert.deepEqual(f.events().map(e => e.payload.outcome), ['not-sent:busy-hold-expired', 'cancelled:source-identity-changed']);
+  assert.ok(!/Secret/.test(JSON.stringify(f.main.ledger.snapshot())), 'never the message');
+  // It wakes the butler, and is not one of the messages to the butler that its wake counts.
+  const stewardWake = new StewardWake(f.mainDir, { ledger: () => f.main.ledger, selected: steward, now: () => Date.now(), record: () => {} });
+  stewardWake.set(true); f.advance(1000);
+  assert.deepEqual(stewardWake.undelivered(), {});
+  // The session the butler continued from: its held message is the current butler's to hear of.
+  const fresh = path.join(f.root, 'main-fresh'); fs.mkdirSync(fresh, { mode: 0o700 });
+  f.at(row.wake.settledAt - 1000); const later = f.open(fresh); f.at(row.wake.settledAt + 400000);
+  later.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: 'butler-next', nativeId: 'native-butler-next' }), formerly: id => id === 'butler-next' ? [f.a] : [] });
+  assert.deepEqual(f.events(later).map(e => e.payload.outcome), ['not-sent:busy-hold-expired', 'cancelled:source-identity-changed']);
+});

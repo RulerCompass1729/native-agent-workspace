@@ -210,8 +210,8 @@ class Workspace extends EventEmitter {
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
         if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
-        // Held for the butler's 60-second limit, so never sent: reopening does not offer it again.
-        if (message.wake?.status === 'held') { message.wake.status = 'cancelled'; message.text = `NAW 后台重开过；存着的自动消息没有补送。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldRestored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
+        // Held, so never sent: reopening does not offer it again.
+        if (message.wake?.status === 'held') { message.wake.status = 'cancelled'; message.wake.settledAt = Date.now(); message.text = `NAW 后台重开过；存着的自动消息没有补送。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldRestored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
       }
       this.room.messages = stored.room?.messages || [];
       for (const m of this.room.messages) if (['streaming', 'running'].includes(m.status)) { m.status = 'unconfirmed'; m.sharingStopped = '运行连接曾中断，未重发任务'; m.sharingStoppedUiMessage = uiActivity('notice.run.sharingInterrupted')[1]; }

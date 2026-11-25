@@ -204,13 +204,12 @@ test('target busy, permission wait, or immediate global/session off prevents any
     await f.finish(); assert.equal(f.writes.length, 0, boundary);
   }
 });
-test('a refused wake says why: working, waiting, turned off, or just sent one (wake proposal, item 4)', async t => {
+test('a refused wake says why: waiting, turned off, or just sent one (wake proposal, item 4)', async t => {
   // 2026-11-12 16:25: a message to a session mid-turn was refused under one sentence that also covered a changed
   // identity, the switch and the limit; nobody could tell it was only busy.
   const locale = require('../ui-locale.js');
   const cases = [
-    // Working, with no native way into its turn (this Codex fixture cannot steer): item 1 opens the others.
-    ['working', f => { f.target.get(f.b).state = 'working'; }, 'Receiver 正在干活。', 'Receiver is working.'],
+    // Working, with no native way into its turn (this Codex fixture cannot steer): held, session-wake-busy-hold.test.cjs.
     ['waiting', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。', 'The recipient is waiting for an approval or native input.'],
     ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
     ['queued', f => { f.rb.pendingQueue = 'tag'; }, '收件方已有一条输入在投递或排队。', 'The recipient already has input being delivered or queued.'],
@@ -334,7 +333,8 @@ test('mid-turn, a recipient waiting for approval or already holding a queued inp
   const cases = [
     ['claude', f => { f.rb.pendingQueue = 'the person queued one'; }, '收件方已有一条输入在投递或排队。'],
     ['claude', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。'],
-    ['claude', f => { f.rb.queueAvailable = false; }, 'Receiver 正在干活。'],
+    // Working with no way into its turn: held (session-wake-busy-hold.test.cjs), not into the turn.
+    ['claude', f => { f.rb.queueAvailable = false; }, null],
     ['codex', f => { f.rb.pendingSteer = 'the person steered'; }, '收件方已有一条输入在投递或排队。'],
   ];
   for (const [provider, set, zh] of cases) for (const when of ['registering', 'delivering']) {
@@ -343,7 +343,8 @@ test('mid-turn, a recipient waiting for approval or already holding a queued inp
     const result = await f.call('Exact body.');
     if (when === 'delivering') { assert.equal(result.status, 'staged'); set(f); await f.finish(); }
     const row = f.source.get(f.a).messages.find(x => x.wake);
-    assert.equal(row.text, `自动消息没有发出；不会自动重发。\n${zh}\nExact body.`, `${provider} ${when} ${zh}`);
+    if (zh === null) { if (when === 'registering') await f.finish(); assert.deepEqual([row.wake.status, row.text], ['held', '收件方还没空下来；这条先存着，空下来后再试一次。\nExact body.'], `${provider} ${when}`); }
+    else assert.equal(row.text, `自动消息没有发出；不会自动重发。\n${zh}\nExact body.`, `${provider} ${when} ${zh}`);
     assert.equal(m.calls.length, 0); assert.equal(f.writes.length, 0);
   }
 });
@@ -1199,7 +1200,7 @@ test('the limit itself stays: three in a row still ends it, and other recipients
   // Not the butler: refused for the limit and not retried, as before.
   const g = await toButler(t, { designate: false });
   const plainFirst = await g.turn('first', 'First.'); g.reply(); g.advance(10000);
-  assert.match(plainFirst.message, /当前原生回合正常结束后只尝试一次；/, 'to anyone else, tried once as before');
+  assert.match(plainFirst.message, /当前原生回合正常结束后尝试投递；那时收件方若正在干活、接不了，/, 'to anyone else, held only while it is at work');
   const refused = await g.turn('second', 'Second.');
   assert.equal(refused.status, 'not-sent');
   // Each side checks on its own. The recipient's: only the designated butler, refusing for its limit, asks to hold.
@@ -1235,11 +1236,13 @@ test('the butler still holds a message its limit refuses while the one it just t
   assert.equal(f.rows().at(-1).wake.status, 'held');
   f.target.get(f.b).pendingTag = null;
 });
-test('a held message is not sent once the person acts on the butler or the sender, or pauses all handoffs (option A)', async t => {
+test('a held message is not sent once the person acts on the butler, stops or takes over the sender, or pauses all handoffs; words into the sender leave it (option A)', async t => {
   const wake = require('../session-wake.cjs');
   const outcomes = {
     'butler-input': ['not-sent', '自动消息没有发出；不会自动重发。\n收件方已不是登记时的那个会话。\nSecond.'],
-    'sender-input': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
+    'sender-input': ['submitted', '发给原会话的自动消息：原生已接收。\nSecond.'],
+    'sender-esc': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
+    'sender-takeover': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
     'pause-all': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
     'pause-all-here': ['cancelled', '全部交接已暂停；自动消息未投递。\nSecond.'],
   };
@@ -1249,16 +1252,18 @@ test('a held message is not sent once the person acts on the butler or the sende
     const row = f.rows().at(-1); assert.equal(row.wake.status, 'held', act);
     if (act === 'butler-input') f.rb.emit('nativeInput', 'The person types into the butler', { id: 'butler-native-input' });
     else if (act === 'sender-input') f.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
+    else if (act === 'sender-esc') { f.source.get(f.a).view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, '\x1b', 'source-owner'); }
+    else if (act === 'sender-takeover') f.source.claim(f.a, 'another-window');
     else if (act === 'pause-all') f.target.pauseAll('你暂停了后续交接');
     else { f.source.pauseAll('你暂停了后续交接'); assert.equal(row.wake.status, 'cancelled', 'at once, on its own backend'); }
     f.advance(60000); wake.retryHeld(f.source); await f.settle();
-    assert.equal(f.writes.length, 1, act);
+    assert.equal(f.writes.length, act === 'sender-input' ? 2 : 1, act);
     assert.deepEqual([row.wake.status, row.text], outcomes[act], act);
     assert.equal(f.source.wakeHoldTimer, null, act);
   }
 });
-// No turn of the sender stands behind a held message: the input allowance of a running turn does not reach it.
-test('a held message is not sent once another agent\'s message enters its sender; one that entered its turn before it was held does not end it', async t => {
+// The person, 11-24 (3b): another agent's message into the sender does not withdraw what the sender left held.
+test('a held message still goes after another agent\'s message enters its sender, before or after it was held', async t => {
   const wake = require('../session-wake.cjs');
   for (const when of ['before it is held', 'after it is held']) {
     const f = await toButler(t);
@@ -1269,8 +1274,8 @@ test('a held message is not sent once another agent\'s message enters its sender
     const row = f.rows().at(-1); assert.equal(row.wake.status, 'held', when);
     if (when === 'after it is held') f.ra.emit('nativeControlBoundary', 'control:input');
     f.advance(60000); wake.retryHeld(f.source); await f.settle();
-    assert.equal(f.writes.length, when === 'before it is held' ? 2 : 1, when);
-    assert.deepEqual([row.wake.status, row.wake.cancellation?.code, row.wake.cancellation?.fields], when === 'before it is held' ? ['submitted', undefined, undefined] : ['cancelled', 'source-identity-changed', ['peerRevision']], when);
+    assert.equal(f.writes.length, 2, when);
+    assert.deepEqual([row.wake.status, row.wake.cancellation?.code, row.wake.cancellation?.fields], ['submitted', undefined, undefined], when);
   }
 });
 test('held messages to the butler go one at a time, oldest first, and a reopened backend never sends one (option A)', async t => {
@@ -1429,20 +1434,30 @@ async function personToButler(t) {
   now += 10000;
   return { ...f, s, say, read, begin, send, settle, rows, advance: ms => { now += ms; } };
 }
-test('a message held from an earlier turn is not sent once the person speaks into a later turn, even after that turn reads the words (items 3 and option A)', async t => {
+// The person, 11-24 (3c): ordinary words into the sender, here a later turn's, do not withdraw what it left held, whatever
+// they say; Esc, stopping that turn, taking the session over and pausing handoffs do.
+test('a message held from an earlier turn still goes after the person speaks into a later turn; stopping that turn ends it (3c and option A)', async t => {
   const wake = require('../session-wake.cjs');
   const f = await personToButler(t);
   f.begin('second'); assert.equal((await f.send('Second.', 'call-second')).status, 'staged'); await f.finish();
   const held = f.rows().at(-1);
   assert.equal(held.wake.status, 'held');
   f.begin('third');
-  f.read(await f.say('Do not send that one.'));
+  f.read(await f.say('Also look at the plan.'));
   f.advance(60000); wake.retryHeld(f.source); await f.settle();
-  assert.equal(f.writes.length, 1, 'the held message is not sent');
-  assert.deepEqual([held.wake.status, held.wake.cancellation?.code], ['cancelled', 'source-identity-changed']);
-  assert.equal(held.text, '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.');
+  assert.deepEqual([f.writes.length, held.wake.status], [2, 'submitted']);
   await f.finish();
-  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes.length, 2);
+  const g = await personToButler(t);
+  g.begin('second'); await g.send('Second.', 'call-second'); await g.finish();
+  const row = g.rows().at(-1); assert.equal(row.wake.status, 'held');
+  g.begin('third');
+  g.ra.interrupt = async () => ({ interrupted: true }); await g.source.interrupt(g.a, 'source-owner');
+  g.read(await g.say('Do not send that one.'));
+  g.advance(60000); wake.retryHeld(g.source); await g.settle();
+  assert.equal(g.writes.length, 1, 'the held message is not sent');
+  assert.deepEqual([row.wake.status, row.wake.cancellation?.code], ['cancelled', 'source-identity-changed']);
+  assert.equal(row.text, '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.');
 });
 test('a message the turn registered before the person spoke into it is held for the butler\'s limit and sent once it allows; the turn gets no second one (option A)', async t => {
   const wake = require('../session-wake.cjs');
