@@ -5,7 +5,7 @@ const { displayMessage } = require('./ui-locale.js');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
-const { connectService } = require('./service-connection.cjs');
+const { connectService, eachBackend } = require('./service-connection.cjs');
 const addressed = require('./addressed-handoffs.cjs');
 const guidelines = require('./discussion-guidelines.cjs');
 const spaces = require('./collaboration-spaces.cjs');
@@ -133,17 +133,18 @@ class PeerRunner {
       ? path.dirname(path.dirname(this.dataDir)) : this.dataDir;
   }
   async lookupWake(id, readiness) {
-    const root = this.root(), layout = readLayout(root); let found;
-    for (const key of layout.entries) {
+    const root = this.root(), layout = readLayout(root);
+    const holders = (await eachBackend(layout.entries, async key => {
       const client = await this.connect(path.join(root, key), 'workspace-wake-lookup');
       try {
         const state = await client.call('initial'), session = state.sessions.find(s => s.id === id);
-        if (session) {
-          if (found || !state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw uiError("error.peer.recipientBackendUnavailable");
-          found = { key, session, canCheckWake: state.capabilities.includes('agentWakePreflightV1') };
-        }
+        if (!session) return null;
+        if (!state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw uiError("error.peer.recipientBackendUnavailable");
+        return { key, session, canCheckWake: state.capabilities.includes('agentWakePreflightV1') };
       } finally { client.close(); }
-    }
+    })).filter(Boolean);
+    if (holders.length > 1) throw uiError("error.peer.recipientBackendUnavailable");
+    const [found] = holders;
     if (!found) throw uiError("error.peer.exactSessionMissing");
     if (readiness && found.canCheckWake) {
       const client = await this.connect(path.join(root, found.key), 'workspace-wake-check');

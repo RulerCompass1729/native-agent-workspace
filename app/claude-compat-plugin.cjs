@@ -35,6 +35,8 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
   const previousHooks = new Set([
     // Exact 77c10ff8 compatibility copy before a model report named the person's choice.
     'eec3fa5fad09c7ca208c7f89f80ae73c8ddb1872a580f9eebe9e0dfee9c2b858',
+    // Exact 2ec29a8e compatibility copy before a call NAW gave no answer to said why, and whether it ran.
+    '26f71596b69804338aad60a60764199eebca3c371159224d16ef00f7aed88263',
     // Exact 3405e65e compatibility copy before a refused workspace_message was reported for the butler.
     'f96af19e64b8b7efe02dd813b9d584c0367b75e2afa27bb7b64fcad89950be1e',
     // Exact 6a4b015c (alpha.286) compatibility copy before a refused root call was reported to NAW.
