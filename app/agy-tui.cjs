@@ -284,6 +284,7 @@ class AgyTui extends EventEmitter {
     this.humanInputTimer = null;
     this.mcpWarmPhase = 'idle'; // 'idle' | 'pending' | 'opening' | 'closing' | 'ready' | 'failed' | 'aborted'
     this.mcpServerListed = false;
+    this.mcpWarmObservedOutput = '';
     this.mcpWarmTimer = null;
     this.mcpAuthTimer = null;
     this.mcpCalls = new Map();
@@ -308,6 +309,7 @@ class AgyTui extends EventEmitter {
     if (this.mcpWarmPhase !== 'pending' || this.stopped || !this.terminal?.alive || !this.terminal.screen) return;
     if (editorState(this.terminal.screen) !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
     this.clearMcpWarmTimers();
+    this.mcpWarmObservedOutput = '';
     this.mcpWarmPhase = 'opening';
     this.syncCapabilities();
     // agy TUI skips plugin MCP loading before keyring auth finishes; opening /mcp once after auth
@@ -361,8 +363,12 @@ class AgyTui extends EventEmitter {
         this.mcpAuthTimer.unref?.();
       }
     } else if (this.mcpWarmPhase === 'opening') {
-      // Require authenticated tools/list callback from this session's MCP server plus an active /mcp overlay.
-      if (this.mcpServerListed && state !== 'empty' && screenShowsNawMcpReady(screen)) {
+      // Require authenticated tools/list callback, fresh post-/mcp output painting naw_workspace/workspace_message,
+      // and an active /mcp overlay on screen so stale pre-warmup listings can never trigger Escape.
+      if (this.mcpServerListed && state !== 'empty' &&
+        this.mcpWarmObservedOutput.includes('naw_workspace') &&
+        this.mcpWarmObservedOutput.includes('workspace_message') &&
+        screenShowsNawMcpReady(screen)) {
         this.mcpWarmPhase = 'closing';
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
       }
@@ -506,10 +512,14 @@ class AgyTui extends EventEmitter {
     this.trustConfirmSent = false;
     this.clearMcpWarmTimers();
     this.mcpServerListed = false;
+    this.mcpWarmObservedOutput = '';
     this.mcpWarmPhase = this.needsMcpWarmup() ? 'pending' : 'idle';
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
+      if (this.mcpWarmPhase === 'opening' && typeof event?.data === 'string' && event.data.length > 0) {
+        this.mcpWarmObservedOutput = (this.mcpWarmObservedOutput + stripAnsi(event.data)).slice(-8192);
+      }
       if (terminal.screen) this.syncScreenState(terminal.screen);
       else if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
       this.emit('terminal', event);

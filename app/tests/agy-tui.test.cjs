@@ -883,10 +883,52 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, true);
   assert.equal(rt1.addressedSendAvailable, true);
 
+  // 296-r4: Stale pre-warmup listing + rules already on screen, partial redraw erases bottom composer (no fresh naw_workspace output),
+  // then authenticated noteMcpListed() arrives -> MUST NOT send Escape until fresh post-/mcp output paints the overlay!
+  const id5 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const rt5 = ws.runtimes.get(id5), term5 = terms[1];
+  term5.emit('started', 71721);
+  // Pre-warmup screen has an old scrolled-up MCP listing with its own rules above the active empty composer.
+  await paint(term5, [
+    rule,
+    '> ',
+    rule,
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts    auto · Gemini 4 Neon · high',
+  ], 7);
+  assert.equal(rt5.mcpWarmPhase, 'opening');
+  const writesAfterOpen5 = term5.writes.length;
+  // Partial redraw erases rows 7..10 (current composer) without painting any fresh MCP listing.
+  const eraseBottom = '\x1b[7;1H\x1b[J';
+  await new Promise(resolve => term5.screen.write(eraseBottom, resolve));
+  term5.emit('data', { data: eraseBottom });
+  rt5.noteMcpListed();
+  assert.equal(rt5.mcpWarmPhase, 'opening', 'noteMcpListed during stale partial redraw never sends Escape without fresh post-/mcp output');
+  assert.equal(term5.writes.length, writesAfterOpen5);
+  // Once real post-/mcp overlay output arrives, Escape is sent and warmup finishes cleanly.
+  await paint(term5, [
+    rule,
+    '> ',
+    rule,
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
+  ], 4);
+  assert.equal(rt5.mcpWarmPhase, 'closing');
+  assert.equal(term5.writes.at(-1), '\x1b');
+  await paint(term5, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(rt5.mcpWarmPhase, 'ready');
+  assert.equal(rt5.addressedSendAvailable, true);
+
   // 296-r1/r2 #1: Human types and submits a visible draft while warmup is pending -> warmup aborts immediately,
   // so an empty-composer repaint arriving BEFORE PreInvocation never writes /mcp behind the human submission!
   const id4 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
-  const rt4 = ws.runtimes.get(id4), term4 = terms[1];
+  const rt4 = ws.runtimes.get(id4), term4 = terms[2];
   term4.emit('started', 71720);
   await paint(term4, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts']);
   ws.input(id4, 'human prompt', 'owner-1');
@@ -904,7 +946,7 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
 
   // Timeout path: sends Esc once, marks failed, keeps addressedSendAvailable=false while allowing chat after overlay closes.
   const id2 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
-  const rt2 = ws.runtimes.get(id2), term2 = terms[2];
+  const rt2 = ws.runtimes.get(id2), term2 = terms[3];
   term2.emit('started', 71718);
   await paint(term2, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt2.mcpWarmPhase, 'opening');
@@ -918,7 +960,7 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
 
   // Human input during opening aborts warmup cleanly without sending Esc over user keystrokes.
   const id3 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
-  const rt3 = ws.runtimes.get(id3), term3 = terms[3];
+  const rt3 = ws.runtimes.get(id3), term3 = terms[4];
   term3.emit('started', 71719);
   await paint(term3, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt3.mcpWarmPhase, 'opening');
