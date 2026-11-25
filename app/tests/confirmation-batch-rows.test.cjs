@@ -60,3 +60,47 @@ test('confirm all runs merged input cards one at a time, each with its own recei
     assert.ok(receipts[0].humanDecisionAt <= receipts[1].humanDecisionAt);
   } finally { f.release(); await Promise.allSettled([submit]); await f.cleanup(); }
 });
+test('merged stop cards say once that work stops, and one confirm gives every session its own receipt', async () => {
+  const f = await fixture(); let submit;
+  try {
+    for (const id of ['A', 'D', 'B', 'E']) await f.askStop(id);
+    const cards = f.cards(), page = render(cards), scope = page.sandbox, box = scope.entry.backgroundControls;
+    const batches = vm.runInContext('nativeWorkspaceConfirmationBatch.plan(state.backgroundConfirmations)', scope);
+    assert.deepEqual(Array.from(batches, b => Array.from(b.cards, c => c.operationId)), [['stop-A', 'stop-B'], ['stop-D', 'stop-E']]);
+    assert.match(page.shown, /断开 Codex 会话 · 2 项/);
+    assert.equal(find(box, 'background-risk').length, 1);
+    assert.equal(find(box, 'background-risk')[0].textContent, '会停下正在进行的工作');
+    assert.deepEqual(find(box, 'background-batch-details').map(detailOf), ['What disconnecting does', 'What disconnecting does']);
+    scope.api.backgroundDecision = (session, native, id, response) => f.control.decide(session, native, id, response);
+    scope.api.initial = async () => ({ backgroundConfirmations: f.cards() });
+    submit = vm.runInContext('answerConfirmationBatch(nativeWorkspaceConfirmationBatch.plan(state.backgroundConfirmations)[0], false)', scope);
+    await submit;
+    assert.deepEqual(f.effects, ['stop:A', 'stop:B']);
+    assert.deepEqual(['stop-A', 'stop-B', 'stop-D', 'stop-E'].map(id => f.control.receipt(actor, id).state),
+      ['complete', 'complete', 'confirmation-required', 'confirmation-required'], 'the other batch still waits');
+  } finally { f.release(); await Promise.allSettled([submit]); await f.cleanup(); }
+});
+test('a card its batch answers is one line with a way there: no waiting badge, no details, nothing to answer with', () => {
+  const cards = [inputCard('a', 'Target A'), inputCard('b', 'Target B')], page = render(cards), scope = page.sandbox;
+  const toggles = {}, entry = { item: { classList: { toggle: (name, on) => { toggles[name] = on; } } }, actions: { before() {} } };
+  scope.entry = entry; scope.message = cards[1].message;
+  vm.runInContext('renderBackgroundControls(entry,message)', scope);
+  const box = entry.backgroundControls;
+  assert.equal(toggles['background-card'], false);
+  assert.equal(box.className, 'background-operation background-merged');
+  assert.match(box.textContent, /Target B.*已并入「全部确认（2）」/);
+  const go = all(box).filter(el => el.tag === 'button');
+  assert.deepEqual(go.map(el => el.textContent), ['去确认']);
+  assert.match(go[0].computed['aria-label'], /^去确认：.*Target B/, 'each line\'s button is named by its own card');
+  assert.deepEqual([find(box, 'background-state'), find(box, 'background-details'), find(box, 'background-buttons')], [[], [], []]);
+  // What the merged card does not say about this one stays here.
+  delete entry.backgroundKey; entry.backgroundControls = null; cards[1].message.backgroundOperation.deliveryBlocked = 'temporarily-unavailable';
+  vm.runInContext('renderBackgroundControls(entry,message)', scope);
+  assert.equal(find(entry.backgroundControls, 'is-warning').length, 1);
+  // Once the batch is answered each card tells its own state again.
+  const started = render(cards, true); started.sandbox.entry = entry; started.sandbox.message = cards[1].message;
+  delete entry.backgroundKey; entry.backgroundControls = null;
+  vm.runInContext('renderBackgroundControls(entry,message)', started.sandbox);
+  assert.equal(toggles['background-card'], true);
+  assert.equal(find(entry.backgroundControls, 'background-state').length, 1);
+});

@@ -169,7 +169,7 @@ async function run() {
     const read = () => chip.evaluate(el => ({ text: el.textContent, name: el.getAttribute('aria-label'), tag: el.tagName, kind: el.dataset.kind, live: Boolean(el.closest('[aria-live]')), probe: el.probe === 1 }));
     const first = await read(); save('timer-first', first);
     assert.equal(first.tag, 'BUTTON'); assert.equal(first.kind, 'countdown'); assert.equal(first.live, false, 'No live region around the timer');
-    assert.match(first.text, /^等你确认 · 剩余 \d+:\d\d$/); assert.match(first.name, /^等你确认，剩余 (\d+ 分 )?\d+ 秒，跳到这条消息$/);
+    assert.match(first.text, /^去确认 · 剩余 \d+:\d\d$/); assert.match(first.name, /^去确认，剩余 (\d+ 分 )?\d+ 秒，跳到这条消息$/);
     assert.equal(await page.locator('#session-timers .session-timer-more').count(), 0, 'One merged card is one timer');
     await chip.evaluate(el => { el.probe = 1; });
     await until(async () => (await read()).text !== first.text, 'The 1 s clock changes the words');
@@ -206,7 +206,7 @@ async function run() {
     const rows = page.locator('#session-timer-list .session-timer-row');
     assert.equal(await rows.count(), 2); assert.ok(await page.locator('#session-timer-list').isVisible());
     const names = await rows.evaluateAll(list => list.map(el => [el.textContent, el.getAttribute('aria-label')])); save('plus-rows', names);
-    assert.ok(names.every(([text, name]) => /^等你确认 · 剩余 \d+:\d\d/.test(text) && /跳到这条消息$/.test(name)));
+    assert.ok(names.every(([text, name]) => /^去确认 · 剩余 \d+:\d\d/.test(text) && /跳到这条消息$/.test(name)));
     await shot('timer-plus-open-light', { scheme: 'light', width: 1280 }); await shot('timer-plus-open-dark', { scheme: 'dark', width: 1280 });
     await page.emulateMedia({ colorScheme: 'light' });
     await rows.first().focus(); await page.keyboard.press('Escape');

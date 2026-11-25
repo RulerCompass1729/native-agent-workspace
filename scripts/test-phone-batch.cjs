@@ -75,10 +75,12 @@ function desktopAPI(app) {
 const words = {
   zh: { actor: '大管家（合成）', targets: ['测试 2', '开发 2', '调研 3'], single: '允许读取项目文档？', archive: name => '归档「' + name + '」？',
     detail: name => '对象：' + name + ' · 合成测试会话', title: '归档会话 · 3 项', all: '逐项确认（1/3）', next: k => '确认下一项（' + k + '/3）',
+    stopTitle: '断开 Codex 会话 · 2 项', stopAsk: '断开这个 Codex 会话？', stopDetail: '合成示例：会请求中断当前回合。', stopAll: '逐项确认（1/2）', stopNext: '确认下一项（2/2）',
     chip: /^等你确认 · 剩余 \d+:\d\d$/, chipName: /^等你确认，剩余 (\d+ 分 )?\d+ 秒，跳到这条消息$/, moreName: '还有 1 个计时', manage: '管理', register: '登记敏感确认凭证',
     filler: '合成示例：这是一段较长的回复，用来把上面的确认卡推出可见区。' },
   en: { actor: 'Butler (synthetic)', targets: ['Test 2', 'Dev 2', 'Research 3'], single: 'Allow access to project docs?', archive: name => 'Archive ' + name + '?',
     detail: name => 'Target: ' + name + ' · synthetic session', title: 'Archive session · 3 items', all: 'Confirm one by one (1/3)', next: k => 'Confirm next (' + k + '/3)',
+    stopTitle: 'Disconnect Codex session · 2 items', stopAsk: 'Disconnect this Codex session?', stopDetail: 'Synthetic example: requests interruption of the current turn.', stopAll: 'Confirm one by one (1/2)', stopNext: 'Confirm next (2/2)',
     chip: /^Waiting for confirmation · \d+:\d\d left$/, chipName: /^Waiting for confirmation, (\d+ min )?\d+ s left. Jump to this message$/, moreName: 'Other timers: 1', manage: 'Manage', register: 'Register an approval passkey',
     filler: 'Synthetic example: a longer reply that pushes the confirmation cards out of view.' },
 };
@@ -109,9 +111,11 @@ async function scenario(lang) {
     const fingerprint = (command, state = initial) => require('../app/background-operation.cjs').controlFingerprint(command,
       { state, actor: { id, nativeId: record.nativeId }, context: { view: {} }, roomState: room, sessionLabels: labels });
     const optionsFor = target => target === 'single' ? { message: w.single, detail: 'demo-project/docs/ · Read only', buttons: ['Cancel', 'Approve'], cancelId: 0 }
+      : target === 'stop' ? { message: w.stopAsk, detail: w.stopDetail, buttons: ['Keep', 'Disconnect'], cancelId: 0 }
       : { message: w.archive(w.targets[targets.indexOf(target)]), detail: w.detail(w.targets[targets.indexOf(target)]), buttons: ['Cancel', 'Archive'], cancelId: 0 };
     background = new BackgroundControl({ dataDir: profile, confirmationFingerprint: (row, state) => fingerprint(row.command, state), handlers: new Map([
       ['archiveSession', async (_c, target) => { order.push(target); return true; }],
+      ['stop', async (c, target) => { if ((await dialog(c, 'message', optionsFor('stop'))).response === 1) order.push('stop:' + target); return true; }],
       ['synthetic', async c => { await dialog(c, 'message', optionsFor('single')); order.push('single'); return true; }]]),
       // Archive is a maintenance action: BackgroundControl asks its card itself and writes each step to the
       // maintenance space. Main supplies both; this records the events instead of writing a space.
@@ -122,7 +126,7 @@ async function scenario(lang) {
       const operationId = 'approval.stage:' + randomUUID(), actor = { id, nativeId: record.nativeId, provider: 'codex', name: record.name, operationId, callId: 'fixture-call', turnId: 'fixture-turn' };
       const command = { action: 'invoke', operation_id: operationId, method, arguments: [method === 'synthetic' ? operationId : target] };
       // Stored as production stores it (controlGuard clones), so a later commit cannot change its shape.
-      background.commit(d => d.records.push({ id: operationId, actor, command, guard: JSON.parse(JSON.stringify(fingerprint(command))), state: 'confirmation-required', at, confirmation: { kind: 'message', options: optionsFor(method === 'synthetic' ? 'single' : target) } }));
+      background.commit(d => d.records.push({ id: operationId, actor, command, guard: JSON.parse(JSON.stringify(fingerprint(command))), state: 'confirmation-required', at, confirmation: { kind: 'message', options: optionsFor(method === 'synthetic' ? 'single' : method === 'stop' ? 'stop' : target) } }));
       return { id: [id, record.nativeId, operationId].join(':'), operationId, target };
     }
     // One single card that expires first, then three archive cards from the same sender, ten seconds apart.
@@ -281,6 +285,21 @@ async function scenario(lang) {
     await go(chat); await page.locator('#phone-timers:not([hidden]) .phone-timer').waitFor();
     assert.equal(await page.locator('#phone-timers .phone-timer-more').count(), 0);
     pass(lang + ' after the batch is done, the chip keeps only the single card and drops +N');
+    // Two stop cards: one batch whose page says once, before any row is opened, what stopping interrupts.
+    const stops = targets.slice(0, 2).map((target, n) => card('stop', target, now - 60000 + n * 10000));
+    await go('#' + lang + '/confirm'); await page.reload(); await page.waitForFunction(() => globalThis.nawPhone?.client.state.session);
+    await page.locator('#content .link-row', { hasText: w.stopTitle }).click(); await page.locator('#consent-batch:not(:disabled)', { hasText: w.stopAll }).waitFor();
+    const closed = await page.locator('.batch-rows details').evaluateAll(list => list.map(d => d.open));
+    // Every line between the deadline and the rows: after the first answer it must not turn into that card's target.
+    const saidNow = () => page.locator('.batch-detail > p.quiet').evaluateAll(list => list.slice(1).map(p => p.textContent)), said = await saidNow();
+    await shot('stop-batch');
+    check(lang + ' stop batch says once what stopping interrupts, with its rows closed', () => { assert.deepEqual(closed, [false, false]); assert.deepEqual(said, [w.stopDetail]); });
+    const stopSigned = await signs();
+    await page.locator('#consent-batch').click(); await until(() => order.includes('stop:' + targets[0]), 'First stop carried out');
+    await page.locator('#consent-batch:not(:disabled)', { hasText: w.stopNext }).waitFor();
+    assert.equal(await signs(), stopSigned + 1); assert.deepEqual(await saidNow(), [w.stopDetail]);
+    assert.deepEqual(order.slice(3), ['stop:' + targets[0]]); assert.deepEqual(stops.map(c => state(c.operationId)), ['complete', 'confirmation-required']);
+    pass(lang + ' a tap on the stop batch signs once and carries out the first stop only');
     console.log('TRUTH ' + lang + ' order=' + order.map(t => targets.indexOf(t)).join(',') + ' signs=' + (await signs() - before) + ' row_states=' + JSON.stringify(rowStates) + ' daily_profile_touched=false');
   } finally {
     await context?.close(); await desktop?.close(); if (app) await app.stop(); await background?.close(); owner?.close();
