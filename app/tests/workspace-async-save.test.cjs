@@ -212,3 +212,114 @@ test('after a failed read no checkpoint writes over the store', async t => {
   assert.equal(f.writes.length, 0);
   assert.equal(f.disk('workspace.json').drafts.mark, 'A');
 });
+
+// Most reported changes are of state that is not saved; a checkpoint of the JSON already on disk writes nothing.
+const quiet = () => new Promise(r => setTimeout(r, 30));
+const pass = async (f, count) => { for (let i = 0; i < count; i++) (await f.gate()).resolve(); await f.settled(); };
+
+test('a checkpoint of what is already on disk writes nothing; the next real change is written', async t => {
+  const f = fixture(t, { rooms: true });
+  f.w.drafts.set('mark', 'A'); f.w.persist();
+  const before = fs.statSync(path.join(f.directory, 'workspace.json')).ino;
+  f.w.changed(); f.w.persistLater(); f.w.persistLater(); await quiet();
+  assert.equal(f.writes.length, 0, 'the state persist() saved is not written again');
+  assert.equal(f.w.saveWriting, false);
+  f.w.drafts.set('mark', 'B'); f.w.persistLater(); await pass(f, 2);
+  assert.equal(f.disk('workspace.json').drafts.mark, 'B');
+  assert.notEqual(fs.statSync(path.join(f.directory, 'workspace.json')).ino, before);
+  f.w.persistLater(); await quiet();
+  assert.equal(f.writes.length, 2, 'nor is the state a checkpoint saved');
+  f.w.drafts.set('mark', 'A'); f.w.persistLater(); await pass(f, 2);
+  assert.equal(f.disk('workspace.json').drafts.mark, 'A', 'going back to an earlier state is a change');
+});
+
+test('a change of room records alone is written', async t => {
+  const f = fixture(t, { rooms: true });
+  f.w.rooms.get('second').name = 'A'; f.w.persist();
+  f.w.rooms.get('second').name = 'B'; f.w.persistLater(); await pass(f, 2);
+  assert.equal(f.disk('room-records.json').rooms[0].name, 'B');
+});
+
+test('a full checkpoint finds a message changed in place that nothing reported', async t => {
+  const f = fixture(t);
+  f.w.room.messages.push({ id: 'm', role: 'human', text: 'A' }); f.w.persist();
+  f.w.sessions.set('s', { id: 's', provider: 'claude', state: 'idle', messages: [{ id: 'n', role: 'user', text: 'A' }], usage: {} });
+  f.w.persist();
+  f.w.sessions.get('s').messages[0].text = 'B'; f.w.savedAllAt = -Infinity;
+  f.w.persistLater(); await pass(f, 1);
+  assert.equal(f.disk('workspace.json').sessions[0].messages[0].text, 'B');
+});
+
+test('a full checkpoint of the same state writes nothing and keeps only the newer strings', async t => {
+  const f = fixture(t);
+  f.w.sessions.set('s', { id: 's', provider: 'claude', state: 'idle', messages: [{ id: 'n', role: 'user', text: 'A' }], usage: {} });
+  f.w.persist(); f.w.savedAllAt = -Infinity;
+  const kept = f.w.saved.state;
+  f.w.persistLater(); await quiet();
+  assert.equal(f.writes.length, 0);
+  assert.notEqual(f.w.saved.state, kept); assert.deepEqual(f.w.saved.state, kept);
+});
+
+for (const name of ['workspace.json', 'room-records.json']) {
+  for (const [what, act] of [
+    ['missing', file => fs.rmSync(file)],
+    ['replaced', file => { fs.writeFileSync(`${file}.other`, '{}'); fs.renameSync(`${file}.other`, file); }],
+    ['overwritten', file => fs.writeFileSync(file, '{}')],
+    ['rewritten at the same size and time', file => { const { size, atimeMs, mtimeMs } = fs.statSync(file); fs.writeFileSync(file, ' '.repeat(size)); fs.utimesSync(file, atimeMs / 1000, mtimeMs / 1000); }],
+    ['made readable to others', file => fs.chmodSync(file, 0o644)],
+    ['a link to the file saved', file => { fs.renameSync(file, `${file}.moved`); fs.symlinkSync(`${file}.moved`, file); }],
+  ]) test(`an unchanged store is written again when ${name} is ${what}`, async t => {
+    const f = fixture(t, { rooms: true });
+    f.w.drafts.set('mark', 'A'); f.w.rooms.get('second').name = 'A'; f.w.persist();
+    act(path.join(f.directory, name));
+    f.w.persistLater(); await pass(f, 2);
+    assert.equal(f.disk('workspace.json').drafts.mark, 'A');
+    assert.equal(f.disk('room-records.json').rooms[0].name, 'A');
+    const left = fs.lstatSync(path.join(f.directory, name)); assert.equal(left.isFile(), true); assert.equal(left.mode & 0o777, 0o600);
+  });
+}
+
+test('removing the last session is a change', async t => {
+  const f = fixture(t), row = id => ({ id, provider: 'claude', state: 'idle', messages: [], usage: {} });
+  f.w.sessions.set('s', row('s')); f.w.sessions.set('u', row('u')); f.w.persist();
+  f.w.sessions.delete('u'); f.w.persistLater(); await pass(f, 1);
+  assert.deepEqual(f.disk('workspace.json').sessions.map(s => s.id), ['s']);
+});
+
+test('persist() and close() write what is already on disk', async t => {
+  const f = fixture(t), file = path.join(f.directory, 'workspace.json'); const ino = () => fs.statSync(file).ino;
+  f.w.drafts.set('mark', 'A'); f.w.persist();
+  let before = ino(); assert.equal(f.w.persist(), true); assert.notEqual(ino(), before);
+  before = ino(); f.w.close(); assert.notEqual(ino(), before);
+});
+
+test('a replacement persist() saved is not taken for the state of the session', async t => {
+  const f = fixture(t);
+  const row = { id: 's', provider: 'claude', state: 'idle', name: 'A', messages: [], usage: {} };
+  f.w.sessions.set('s', row); f.w.persist();
+  assert.equal(f.w.persist({ id: 's', next: { ...row, name: 'B' } }), true);
+  f.w.persistLater(); await pass(f, 1);
+  assert.equal(f.disk('workspace.json').sessions[0].name, 'A');
+});
+
+test('a checkpoint that saved only the workspace file is not taken for saved', async t => {
+  const f = fixture(t, { rooms: true });
+  f.w.rooms.get('second').name = 'A'; f.w.drafts.set('mark', 'A'); f.w.persist();
+  f.w.rooms.get('second').name = 'B'; f.w.drafts.set('mark', 'B'); f.w.persistLater();
+  (await f.gate()).resolve();
+  const rooms = await f.gate(); rooms.fail = true; rooms.resolve(); await f.settled();
+  assert.equal(f.w.storageFailure, 'write');
+  assert.equal(f.disk('workspace.json').drafts.mark, 'B'); assert.equal(f.disk('room-records.json').rooms[0].name, 'A');
+  f.w.storageFailure = null; f.w.storageWarning = null; // as retrySave(), without its own save
+  f.w.persistLater(); await pass(f, 2);
+  assert.equal(f.disk('room-records.json').rooms[0].name, 'B');
+});
+
+test('a retry after a failed checkpoint saves the state', async t => {
+  const f = fixture(t);
+  f.w.drafts.set('mark', 'A'); f.w.persist();
+  f.w.drafts.set('mark', 'B'); f.w.persistLater();
+  const held = await f.gate(); held.fail = true; held.resolve(); await f.settled();
+  assert.equal(f.w.retrySave(), true);
+  assert.equal(f.disk('workspace.json').drafts.mark, 'B');
+});
