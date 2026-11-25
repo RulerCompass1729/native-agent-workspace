@@ -257,7 +257,8 @@ function launchSpec({ record, binary, bridgeDir = null, hookToken = null, hookSo
   if (typeof effort === 'string' && EFFORT_LEVELS.includes(effort)) {
     argv.push('--effort', effort);
   }
-  const env = {};
+  // agy turns its updater off only for lowercase `true`.
+  const env = { AGY_CLI_DISABLE_AUTO_UPDATE: 'true' };
   if (typeof hookToken === 'string' && hookToken && typeof hookSocket === 'string' && hookSocket) {
     env.NAW_HOOK_TOKEN = hookToken;
     env.NAW_HOOK_SOCKET = hookSocket;

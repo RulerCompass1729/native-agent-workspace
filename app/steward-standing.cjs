@@ -115,6 +115,16 @@ class StewardStanding {
     this.write({ ...s, on, designation: this.role.selected, revision: s.revision + 1 });
     return this.view();
   }
+  // The person designates another butler (main.cjs steward): asked before the designation moves, null unless they have
+  // it on for the butler being replaced. The step returned, after it moved, puts it on for the new one, or turns it off.
+  carry(context) {
+    if (!this.person(context) || !this.view().on) return null;
+    return keep => {
+      const s = this.read();
+      if (!s.on || keep && same(s.designation, this.role.selected)) return;
+      this.write({ ...s, on: keep, designation: this.role.selected, revision: s.revision + 1 });
+    };
+  }
   authorized(actor, command, state, roomId) {
     return covered(this, this.read(), actor, command, state, roomId);
   }

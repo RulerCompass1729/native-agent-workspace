@@ -496,7 +496,7 @@ function handler({ butler: isButler = true, person = true, wake = { view: () => 
     register: (name, fn) => { assert.equal(name, 'stewardWake'); registered = fn; },
     stewardCaller: async c => (c.background && isButler ? { id: 'butler', name: 'Synthetic butler' } : null),
     isCurrentHumanContext: c => !c.background && person,
-    stewardWake: wake, stewardRecord: record, uiError,
+    stewardWake: wake, stewardRecord: record, uiError, quietWindows: { holding: () => [] }, roomState: { value: {}, spaces: { rooms: [] }, queueWaits: new Map() },
   });
   vm.runInContext(source.slice(start, end), context);
   return { agent: (...args) => registered({ background: true }, ...args), person: (...args) => registered({ background: false }, ...args) };
@@ -511,7 +511,7 @@ test('only the person in their window and the designated butler turn it on or of
   assert.deepEqual(changes, [], 'a refused call changes nothing');
   assert.deepEqual(await handler({ wake }).agent(true), { on: true });
   assert.deepEqual(await handler({ wake }).person(false), { on: false });
-  assert.deepEqual(await handler({ wake }).agent(), { on: 'as is' }, 'no argument only says how it stands');
+  assert.deepEqual(JSON.parse(JSON.stringify(await handler({ wake }).agent())), { on: 'as is', quietWindows: [] }, 'no argument only says how it stands');
   assert.deepEqual(changes, [true, false]);
   await assert.rejects(handler({ wake }).agent('on'), refusal('error.steward.wakeInvalid'));
   await assert.rejects(handler({ wake: null }).agent(true), refusal('error.steward.wakeUnavailable'));
