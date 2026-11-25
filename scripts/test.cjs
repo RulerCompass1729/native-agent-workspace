@@ -4,6 +4,7 @@
 const fs = require('node:fs'), path = require('node:path');
 const { spawn } = require('node:child_process');
 const { guards, identity, inside, mayExist, readRecords, removeOwned } = require('./fixtures/test-temp.cjs');
+const { endLeft } = require('./fixtures/test-processes.cjs');
 const root = path.resolve(__dirname, '..');
 async function run(args = process.argv.slice(2)) {
   // Keep Unix socket paths short. This exact owned directory is the only tree
@@ -29,6 +30,11 @@ async function run(args = process.argv.slice(2)) {
       child.once('error', reject); child.once('close', (code, stopped) => resolve({ code, signal: stopped }));
     });
     const records = readRecords(journal), errors = [], guard = guards(records), kept = [];
+    // Before any directory goes: a stopped run's tests do not reach their own cleanup.
+    let processes = { ended: [], left: [], protected: [] };
+    try {
+      processes = await endLeft(temporary, { kept: records.filter(record => record.delegated && mayExist(record.path)).map(record => record.path), ...(signal ? { graceMs: 1000 } : {}) });
+    } catch (error) { console.error('PROCESS GUARD: not checked: ' + error.message); }
     // A worker killed before its exit handler gets the same identity-checked
     // cleanup here. Records outside this suite are only exact mkdtemp receipts.
     // A directory on the path of a delegated profile that may still exist is
@@ -42,7 +48,7 @@ async function run(args = process.argv.slice(2)) {
     const registered = records.filter(record => mayExist(record.path));
     const extra = [...new Set([...leftovers, ...registered.map(record => record.path)])];
     retain = kept.length > 0 || registered.some(record => record.delegated && inside(temporary, record.path)) || errors.length > 0;
-    report = { scope: owned, retained: retain, created: records.length, before: 0, after: extra.length, errors, protected: kept, leftovers: extra.map(file => ({
+    report = { scope: owned, processes: processes.ended.map(({ pid, command }) => ({ pid, command })), retained: retain, created: records.length, before: 0, after: extra.length, errors, protected: kept, leftovers: extra.map(file => ({
       prefix: path.basename(file).replace(/-[^-]+$/, ''),
       source: records.find(record => record.path === file)?.source || 'unregistered temporary directory',
       path: file,
@@ -52,8 +58,13 @@ async function run(args = process.argv.slice(2)) {
     for (const item of report.leftovers) console.error(`TEMP LEAK: ${item.prefix} | ${item.source} | ${item.path}`);
     for (const item of kept) console.error(`TEMP PROTECTED: ${item.path} | kept for ${item.by}`);
     for (const error of errors) console.error('TEMP CLEANUP: ' + error);
+    const open = processes.left.length + processes.protected.length;
+    for (const [word, list] of [['LEAK', processes.ended], ['LEFT', processes.left], ['PROTECTED', processes.protected]]) {
+      for (const row of list) console.error(`PROCESS ${word}: ${row.pid} | ${row.command.slice(0, 200)}${row.by ? ' | kept for ' + row.by : ''}`);
+    }
+    if (processes.ended.length || open) console.log(`PROCESS GUARD: ended=${processes.ended.length} left=${open}`);
     if (retain) console.error('TEMP RETAINED: protected or uncertain cleanup; inspect ' + temporary);
-    return result.code || (result.signal || signal ? 1 : 0) || (extra.length || errors.length ? 1 : 0);
+    return result.code || (result.signal || signal ? 1 : 0) || (extra.length || errors.length || processes.left.length ? 1 : 0);
   } catch (error) {
     retain = true; // Missing/corrupt ownership evidence cannot authorize a sweep.
     console.error('TEMP RETAINED: inspection failed; inspect ' + temporary);

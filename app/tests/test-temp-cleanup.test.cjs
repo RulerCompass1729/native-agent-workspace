@@ -1,6 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { processIdentity, processMayBeAlive } = require('../platform.cjs');
 const { registry, removeOwned } = require('../../scripts/fixtures/test-temp.cjs');
 const runner = path.resolve(__dirname, '../../scripts/test.cjs');
 function fixture(t, source) {
@@ -150,4 +151,96 @@ test('a worker keeps its own directory when another process protects a directory
     });
   `);
   assertKept(result);
+});
+
+// A run that is stopped, or whose test leaves a process, ends what it started: found by the run's own random directory.
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check, message, ms = 15000) {
+  for (const end = Date.now() + ms; Date.now() < end; await delay(50)) { const value = check(); if (value) return value; }
+  assert.fail(message());
+}
+const json = file => { try { return JSON.parse(fs.readFileSync(file)); } catch { return null; } };
+// The fixture leaves: one detached with the run's environment; one without it, named only by its command, that holds a
+// child, with neither, that ignores SIGTERM, and is stopped (claude-version-lifecycle.test.cjs does all of this).
+const IDLE = 'setInterval(()=>{},1000)';
+const workerSource = `const child = require('node:child_process').spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});process.stdout.write('1');${IDLE}"], { stdio: ['ignore', 'pipe', 'ignore'] });
+child.stdout.once('data', () => require('node:fs').writeFileSync(process.argv[2], String(child.pid)));
+${IDLE}`;
+const leaving = wait => `
+  const test = require('node:test'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { spawn } = require('node:child_process');
+  test('leaves processes behind', { timeout: 60000 }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-process-leak-')), alone = { detached: true, stdio: 'ignore' };
+    const worker = path.join(dir, 'worker.cjs'), seen = path.join(dir, 'seen'), file = process.env.NAW_LEAK_PIDS;
+    fs.writeFileSync(worker, ${JSON.stringify(workerSource)});
+    const plain = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}], alone), held = spawn(process.execPath, [worker, seen], { ...alone, env: {} });
+    plain.unref(); held.unref();
+    while (!fs.existsSync(seen) || !fs.readFileSync(seen, 'utf8')) await new Promise(resolve => setTimeout(resolve, 20));
+    process.kill(held.pid, 'SIGSTOP');
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ pids: [plain.pid, held.pid, Number(fs.readFileSync(seen, 'utf8'))], directory: os.tmpdir() })); fs.renameSync(file + '.tmp', file);
+    ${wait}
+  });
+`;
+function start(t, source, extra = {}) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-process-guard-test-')), file = path.join(directory, 'fixture.cjs'), report = path.join(directory, 'report.json');
+  fs.writeFileSync(file, source);
+  const env = { ...process.env, NAW_TEST_TEMP_REPORT: report, NAW_LEAK_PIDS: path.join(directory, 'pids.json'), ...extra };
+  delete env.NODE_TEST_CONTEXT;
+  const run = spawn(process.execPath, [runner, file], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = ''; for (const stream of [run.stdout, run.stderr]) stream.setEncoding('utf8').on('data', text => { output += text; });
+  const exited = new Promise(resolve => run.once('close', (code, signal) => resolve({ code, signal })));
+  const owned = [];
+  t.after(async () => {
+    // What the code under test should have ended, when it did not.
+    for (const identity of owned) if (processMayBeAlive(identity)) try { process.kill(identity.pid, 'SIGKILL'); } catch { /* ended since */ }
+    if (run.exitCode === null && run.signalCode === null) run.kill('SIGKILL');
+    await exited;
+    const value = json(report); if (value?.retained) removeOwned(value.scope);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const own = pids => pids.map(pid => { const identity = processIdentity(pid); assert.ok(identity, `process ${pid}`); owned.push(identity); return identity; });
+  return { run, exited, own, output: () => output, report: () => json(report), started: () => until(() => json(env.NAW_LEAK_PIDS), () => `the fixture did not start: ${output}`) };
+}
+const gone = identities => identities.map(identity => !processMayBeAlive(identity));
+for (const signal of ['SIGTERM', 'SIGINT']) test(`a run stopped by ${signal} ends every process it started, and nothing else`, { timeout: 60000 }, async t => {
+  const f = start(t, leaving('await new Promise(() => setInterval(() => {}, 1000));')), { pids, directory } = await f.started(), left = f.own(pids);
+  // The same command, and the run's directory in a command whose owner is alive: neither is this run's.
+  const others = [['-e', IDLE], ['-e', IDLE, directory]].map(args => spawn(process.execPath, args, { detached: true, stdio: 'ignore' }));
+  const kept = f.own(others.map(child => child.pid));
+  f.run.kill(signal);
+  const { code } = await f.exited;
+  assert.deepEqual(gone(left), [true, true, true], f.output());
+  assert.deepEqual(gone(kept), [false, false]);
+  assert.notEqual(code, 0);
+  assert.deepEqual(f.report().processes.map(p => p.pid).sort((a, b) => a - b), [...pids].sort((a, b) => a - b));
+  assert.match(f.output(), /PROCESS GUARD: ended=3 left=0/);
+  assert.doesNotMatch(f.output(), /NAW_TEST_TEMP_JOURNAL=/, 'no environment is printed');
+  for (const child of others) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited; }
+});
+test('a finished run ends what a passing test left, and says so', { timeout: 60000 }, async t => {
+  const f = start(t, leaving('')), { pids } = await f.started(), left = f.own(pids), { code } = await f.exited;
+  assert.deepEqual(gone(left), [true, true, true], f.output());
+  assert.equal(code, 0, f.output());
+  assert.match(f.output(), /PROCESS GUARD: ended=3 left=0/);
+  assert.equal(f.output().match(/PROCESS LEAK: /g).length, 3);
+});
+test('a process that is only slow to end is waited for; a run that leaves none says nothing', { timeout: 60000 }, async t => {
+  const slow = start(t, `require('node:test')('slow', () => { require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{},2500)'], { detached: true, stdio: 'ignore' }).unref(); });`);
+  assert.equal((await slow.exited).code, 0);
+  assert.doesNotMatch(slow.output(), /PROCESS/);
+  assert.deepEqual(slow.report().processes, []);
+});
+test('a process of a protected profile is its owner\'s: named, not ended', { timeout: 60000 }, async t => {
+  const f = start(t, `
+    const test = require('node:test'), fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { spawn } = require('node:child_process');
+    test('protected profile', () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-protected-profile-'));
+      globalThis[Symbol.for('naw.testTemp.delegate')](directory);
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(IDLE)}, directory], { detached: true, stdio: 'ignore' }); child.unref();
+      fs.writeFileSync(process.env.NAW_LEAK_PIDS, JSON.stringify({ pids: [child.pid] }));
+    });
+  `), { pids } = await f.started(), left = f.own(pids), { code } = await f.exited;
+  assert.deepEqual(gone(left), [false], f.output());
+  assert.equal(code, 1);
+  assert.match(f.output(), /PROCESS GUARD: ended=0 left=1/);
+  assert.match(f.output(), /PROCESS PROTECTED: /);
 });

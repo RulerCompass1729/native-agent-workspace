@@ -62,6 +62,13 @@ async function fixture(t, options = {}) {
       }, showReceipt: async () => {}, close: async () => { counts.closes++; } };
     },
   });
+  // Registered while what follows can still throw: an open listener keeps this file's process running for ever.
+  let server;
+  t.after(async () => {
+    await broker.close();
+    if (server) { server.server.closeAllConnections(); await new Promise(resolve => server.server.close(resolve)); }
+    root.close(); bridge.close(); fs.rmSync(dir, { recursive: true });
+  });
   // Execute the actual Main binding band, without booting Electron or a service.
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const band = main.slice(main.indexOf('function bindClient(context)'), main.indexOf('\nfunction displayState('));
@@ -72,12 +79,8 @@ async function fixture(t, options = {}) {
   bridge.restrictedOutboxCall = async (...values) => { try { return await callback(...values); } finally { callbackFinished(); } };
   const socketPath = path.join(dir, 'root.sock');
   const targets = new Map([['root-token', root]]);
-  const server = createSubmissionServer(socketPath, targets, { restrictedOutboxCall: (...values) => bridge.restrictedOutboxCall(...values) });
+  server = createSubmissionServer(socketPath, targets, { restrictedOutboxCall: (...values) => bridge.restrictedOutboxCall(...values) });
   await server.start();
-  t.after(async () => {
-    await broker.close(); server.server.closeAllConnections(); await new Promise(resolve => server.server.close(resolve));
-    root.close(); bridge.close(); fs.rmSync(dir, { recursive: true });
-  });
   const request = (extra = {}, token = 'root-token', route = '/addressed-message') => {
     let req;
     const result = new Promise((resolve, reject) => {
