@@ -379,13 +379,16 @@ async function stageOnce(w, s, r, native, args) {
   if (same) refusedNotice(row, quietSame());
   else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
+  // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
+  if (intent.quietWindow || waits) intent.saidHeld = true;
   const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
+  // In the same save as this answer: a backend that ends after it never tells the same loss twice.
+  for (const { wake: told } of lost) told.senderTold = true;
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
-  for (const { wake: told } of lost) told.senderTold = true;
+  try { durable(w); } catch (e) { for (const { wake: told } of lost) delete told.senderTold; intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
@@ -408,7 +411,7 @@ async function stageOnce(w, s, r, native, args) {
 // Messages this native session was told are held, that did not go out or may not have, each said once with its next
 // call's answer: nothing else tells an agent of it without starting a turn (the butler is also woken, butler-ingress.cjs).
 function untold(s, nativeId) {
-  return (s.messages || []).filter(({ wake: intent }) => (intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
+  return (s.messages || []).filter(({ wake: intent }) => (intent?.saidHeld || intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
 }
 function lostNotice({ wake: intent, text }) {
   const shown = String(text), reason = shown.endsWith(intent.body) ? shown.slice(0, -intent.body.length) : shown;
