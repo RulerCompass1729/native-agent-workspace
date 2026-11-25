@@ -199,8 +199,26 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
       }
       await inheritDsh(key, [layout.active, ...layout.entries.filter(entry => entry !== layout.active && entry !== key)]);
-      const next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
+      let next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
+      // Global human choices and slot activation share services.lock. Only a choice every other backend confirms is
+      // inherited: turning a slot off also revokes its creation grants, so a mixed or unknown state writes nothing.
+      if (next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
+        const others = [...states].filter(([entry]) => entry !== key);
+        const all = value => others.length > 0 && others.every(([, state]) => state.capabilities?.includes('operatorControl1a') &&
+          state.operatorPolicy?.enabled === value && !state.operatorPolicy.error);
+        const enabled = all(true) && !states.has(key) ? true : all(false) ? false : next.operatorPolicy?.enabled;
+        if (next.operatorPolicy?.enabled !== enabled) {
+          const client = await connectService(path.join(dataDir, key), 'upgrade');
+          try {
+            const pid = next.servicePid;
+            if (await client.call('operatorAction', null, 'enabled', enabled) !== true) throw Error('Operator setting inheritance is unconfirmed');
+            next = await client.call('initial');
+            if (next.servicePid !== pid || version && next.runtimeVersion !== version ||
+                next.operatorPolicy?.enabled !== enabled || next.operatorPolicy?.error) throw Error('Operator setting inheritance is unconfirmed');
+          } finally { client.close(); }
+        }
+      }
       for (const old of layout.entries) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
         try { await client.call('pause', { withdrawWakes: true, cause: 'upgrade' }); } finally { client.close(); }

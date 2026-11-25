@@ -31,7 +31,7 @@ function menuFixture(room) {
     attempt: action => action(),
     api: { copy: text => copies.push(text), spaceAction() {}, wakePolicy() {} },
     openSpaceCreate() {}, openSpaceMerge() {}, openMergeRecord() {}, openRename() {}, openNotes() {},
-    selectSpace() {}, openSpaceFiles() {}, showTrust() {}, setOperatorEnabled() {},
+    selectSpace() {}, openSpaceFiles() {}, showTrust() {}, setOperatorEnabled() {}, operatorGlobalMenuItems: () => [],
   });
   const start = renderer.indexOf('const roomMenuKey =');
   const end = renderer.indexOf('// Facts refresh in place', start);
