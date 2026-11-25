@@ -1410,8 +1410,11 @@ async function openWindow(saved) {
   }
   const context = { win, client, view, failed: false, uiReady: false };
   windows.set(win.webContents.id, context); bindClient(context); bindStatePush(context);
-  const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
-  ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
+  // The page first reads the whole state, which the backend may take 40 s to answer (service-connection.cjs).
+  const ready = new Promise((resolve, reject) => { context.ready = resolve; context.notReady = reject; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 90000); });
+  ready.catch(() => {}); // loadURL may fail first.
+  win.once('closed', () => context.notReady(new Error('Window closed')));
+  win.webContents.once('render-process-gone', () => context.notReady(new Error('Page ended')));
   win.webContents.on('did-start-loading', () => { context.uiReady = false; });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('page-title-updated', event => { event.preventDefault(); if (!win.isDestroyed()) win.setTitle('Native Agent Workspace'); });
@@ -1435,7 +1438,7 @@ async function openWindow(saved) {
     windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close({ leave: !quitting && !context.failed });
     localPages?.closeOwner(context);
   });
-  try { await win.loadURL(entry); await ready; }
+  try { await Promise.all([win.loadURL(entry), ready]); }
   catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
   finally { clearTimeout(context.readyTimer); }
   return win;
@@ -3112,7 +3115,8 @@ async function boot() {
   }, source, file, options));
   register('initial', async c => {
     const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir));
-    const snapshot = await c.client.call('initial'), request = backgroundOperation.request();
+    // A page that is still opening asks once, and cannot open without the answer.
+    const snapshot = await c.client.call('initial').catch(error => { c.notReady?.(error); throw error; }), request = backgroundOperation.request();
     let read = null;
     if (c.background && request?.maintenanceApproved && request.args.method === 'initial') {
       const id = request.args.arguments[0], expected = request.guard?.sessions?.find(s => s.id === id), target = snapshot.sessions.find(s => s.id === id);
