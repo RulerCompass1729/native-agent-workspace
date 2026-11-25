@@ -4610,9 +4610,10 @@ class QueueDispatcher {
         if (outcome !== 'complete') {
           if (record.handoffDelivered !== true && handoffDelivered(fresh, record.handoffTag)) {
             record.handoffDelivered = true;
-            this.save();
+            // An error here would stop the successor without the guards of a failed handoff; the next write has it.
+            try { this.save(); } catch {}
           }
-          // A successor whose process is gone finishes no turn: it keeps the short limit.
+          // Its process is known to be gone: it finishes no turn. Disconnected or out of view, it may still be running.
           const running = record.handoffDelivered === true && !['ended', 'background', 'recoverable'].includes(fresh?.state);
           if (now - (record.handedAt || now) > (running ? HANDOFF_TURN_MS : HANDOFF_ACCEPT_MS)) throw Error('handoff-unconfirmed');
           return;

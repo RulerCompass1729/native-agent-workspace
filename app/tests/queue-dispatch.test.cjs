@@ -5186,6 +5186,30 @@ test('R183: a delivered first turn out of view for a pass, or in an app reopened
   await reopened.advanceRotations(f.client.snapshot(), NOW + 30.1 * MINUTE);
   assert.equal(reopened.rotations.a.phase, 'failed');
 });
+for (const failures of [1, Infinity])
+test(`R183: a delivery that cannot be written to disk (${failures === 1 ? 'once' : 'for minutes'}) neither fails the rotation nor stops its successor`, async t => {
+  const f = await firstHandoff(t), save = f.dispatcher.save;
+  let left = failures;
+  f.dispatcher.save = () => { if (left-- > 0) throw Object.assign(Error('no space left on device'), { code: 'ENOSPC' }); return save.call(f.dispatcher); };
+  for (const minutes of [1, 3, 5]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.record.phase, 'handed', `${minutes} minutes`); assert.equal(f.fresh.state, 'working'); assert.deepEqual(f.fresh.roomIds, ['shared']);
+    assert.deepEqual(f.client.calls.filter(c => ['stop', 'stopFailedSuccessor'].includes(c[0])), []);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+  }
+  f.dispatcher.save = save;
+  f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 6);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+});
+test('R183: a delivered first turn whose successor never comes back into view rolls back at its limit and stops nothing', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1);
+  f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed'); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
 for (const wait of ['approval', 'nativeInputRequired'])
 test(`R183: a first turn waiting on the person (${wait}) is bounded by the same limit and is not stopped`, async t => {
   const f = await firstHandoff(t, wait === 'approval' ? { state: 'approval', approval: { id: 'synthetic' } } : { nativeInputRequired: true });
