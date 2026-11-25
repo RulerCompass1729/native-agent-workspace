@@ -32,7 +32,7 @@ function fixture(t, { landingOwner = null } = {}) {
   // The real membership function is not under test here: only whether it is reached.
   const roomState = { apply: snapshot => room.apply(snapshot), metadata() {}, serial: action => action(), membership: async (_client, id, join, _label, space) => { memberships.push([id, join, space ?? null]); } };
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, stewardOf: require('../steward-record.cjs').cachedSteward(role), roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
-    queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
+    queueDispatcher: null, queueRules: require('../queue-dispatch.cjs'), sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
     // Waking the butler on events (steward-wake.cjs): only whether the designation turns it off, and when.
     stewardWake: { reached: () => null, set: on => { wakeOff.push([on, role.selected]); }, redesignated: () => { wakeOff.push([false, role.selected]); } },
     // The person's permission to organize, real over the same directory: which designation it is for.
@@ -267,6 +267,12 @@ test('a session NAW opened to replace another, before it has moved in, cannot be
   f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside' } } };
   await assert.rejects(f.call('outside'), key('error.steward.invalid'));
   f.context.queueDispatcher = { rotations: { old: { phase: 'failed', newId: 'outside', handoffConfirmed: true } } };
+  await f.call('outside'); await f.call(null);
+  // One that has the work while its old session is still in use (R206): yes, as the person did on 2026-11-24.
+  const handed = { phase: 'handed', newId: 'outside', handoffConfirmed: true };
+  f.context.queueDispatcher = { rotations: { old: handed } };
+  await assert.rejects(f.call('outside'), key('error.steward.invalid'));
+  f.context.queueDispatcher = { rotations: { old: { ...handed, waitSince: 1 } } };
   await f.call('outside'); await f.call(null);
   // Once the rotation is over (kept), it can.
   f.context.queueDispatcher = { rotations: { old: { phase: 'kept' }, outside: { phase: 'kept', successorOf: 'old' } } };

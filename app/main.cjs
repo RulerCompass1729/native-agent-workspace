@@ -835,9 +835,10 @@ function stewardDutyText() {
 }
 // A session NAW opened to replace another and has not finished moving in (steward step 2, batch 2): its join is still
 // to come, and refusing that join would make the rotation stop it. Nor one a failed rotation is still to stop (never
-// handed work); a kept one, or one the failed rotation had already handed work to, is the person's to choose.
+// handed work); a kept one, one that has the work while its old session is in use (waitingOld), or one the failed
+// rotation had already handed work to, is the person's to choose.
 function midRotation(id) {
-  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !(record.phase === 'failed' && record.handoffConfirmed));
+  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !queueRules.waitingOld(record) && !(record.phase === 'failed' && record.handoffConfirmed));
 }
 // The designated butler calling through NAW now (steward step 2, batch 4): the very session and native session the
 // designation names, the designation readable, the session usable and in no space. Anything else is not the butler,
