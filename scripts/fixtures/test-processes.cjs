@@ -1,7 +1,9 @@
-// What a test command started and left running: a process with no owner any more (its parent is 1) that carries the
-// command's own random directory in its command or environment, and whatever that process started. Never found by name.
+// What a test command left running: a process with no owner any more (its parent is 1) whose environment carries the
+// command's own random directory, or whose command does when it is node or Electron (an editor or a tail that a person
+// opened there is not the run's); and whatever that process started. Never found by name alone.
 const { execFileSync } = require('node:child_process'), path = require('node:path');
 const { inside } = require('./test-temp.cjs');
+const PROGRAM = /^(?:node|electron)(?:$|[ -])/i;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // The environment is only searched: it can hold credentials, so nothing of it is kept or printed.
 const ps = (...args) => execFileSync('/bin/ps', args, { encoding: 'utf8', timeout: 10000, maxBuffer: 256 * 1024 * 1024, env: { LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'ignore'] }).split('\n');
@@ -15,10 +17,14 @@ function running() {
 }
 // One tree for each process left. `kept`: directories whose own helper decides about their processes (test-scratch.cjs).
 function trees(directory, kept) {
-  const rows = running(), mark = '/' + path.basename(directory), carrying = new Set(), protectedBy = new Map();
+  const rows = running(), mark = '/' + path.basename(directory), carrying = new Set(), protectedBy = new Map(), programs = new Map();
+  for (const line of ps('-axwwo', 'pid=,ucomm=')) programs.set(parseInt(line, 10), line.replace(/^\s*\d+ /, '').trim());
   for (const line of ps(process.platform === 'darwin' ? '-axEwwo' : '-axwwo', 'pid=,command=')) {
     if (!line.includes(mark)) continue;
-    const pid = Number(line.trim().split(' ', 1)[0]); carrying.add(pid);
+    const pid = parseInt(line, 10), text = line.replace(/^\s*\d+ /, ''), command = rows.get(pid)?.command;
+    // The environment follows the command. Where a shell stands says nothing about who started the program.
+    const env = command && text.startsWith(command) ? text.slice(command.length).replace(/ (?:OLD)?PWD=\S*/g, '') : '';
+    if (env.includes(mark) || command?.includes(mark) && PROGRAM.test(programs.get(pid))) carrying.add(pid);
     const by = kept.find(file => line.includes('/' + path.basename(directory) + file.slice(directory.length)));
     if (by) protectedBy.set(pid, by);
   }
