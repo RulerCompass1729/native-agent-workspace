@@ -177,7 +177,7 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
     open.set(page.id, entry);
     const wc = win.webContents;
     guard(wc, entry);
-    wc.on('page-title-updated', event => { event.preventDefault(); win.setTitle(entry.page.title); });
+    wc.on('page-title-updated', event => { event.preventDefault(); if (!win.isDestroyed()) win.setTitle(entry.page.title); });
     win.on('close', () => { try { saveBounds(page.id, win.getNormalBounds()); } catch { /* Default size next time. */ } });
     win.on('closed', () => { if (open.get(page.id) === entry) open.delete(page.id); });
     wc.loadURL(target).catch(() => { /* did-fail-load shows the reason in the window. */ });
