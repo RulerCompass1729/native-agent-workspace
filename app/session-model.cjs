@@ -14,6 +14,7 @@ const CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-2
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const NATIVE_DEFAULT = '原生默认';
 const CLAUDE_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'manual'];
+const BYPASS = 'bypassPermissions';
 const TAIL_BYTES = 256 * 1024;
 // Whether the change was made is not known, or it was and the session did not come back.
 const UNSURE_KEYS = ['error.modelChange.unconfirmed', 'error.modelChange.stopped'];
@@ -74,6 +75,14 @@ function claudeTranscript(record) {
   }
   return result;
 }
+// The mode a resume asks for by name, null where Claude comes back by itself: it does in the mode it was left in, except
+// from bypass, and from default where the person's own default is another mode. Never bypass unless NAW knew it in it.
+function resumeMode(record) {
+  const known = record.nativePermissionMode, left = claudeTranscript(record)?.permissionMode;
+  if (known === BYPASS) return CLAUDE_MODES.includes(left) ? left : BYPASS;
+  if (left === BYPASS) return CLAUDE_MODES.includes(known) ? known : null;
+  return left === 'default' ? left : null;
+}
 function applyClaude(record, value) {
   const requested = { ...record.requestedSettings };
   if (value.model === null) {
@@ -126,4 +135,4 @@ function codexModels(rows) {
   return models;
 }
 
-module.exports = { CAPABILITY, CLAUDE_MODELS, CLAUDE_EFFORTS, CLAUDE_MODES, NATIVE_DEFAULT, UNSURE_KEYS, validValue, current, claudeChoices, claudeValue, claudeTranscript, applyClaude, refused, codexValue, codexModels };
+module.exports = { CAPABILITY, CLAUDE_MODELS, CLAUDE_EFFORTS, CLAUDE_MODES, NATIVE_DEFAULT, UNSURE_KEYS, validValue, current, claudeChoices, claudeValue, claudeTranscript, resumeMode, applyClaude, refused, codexValue, codexModels };

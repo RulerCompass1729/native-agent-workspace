@@ -39,11 +39,24 @@ function fixture(t) {
   };
 }
 
-for (const by of ['update', 'person', 'model']) test(`left for another mode without a turn, then resumed by the ${by}: not put back into bypass`, async t => {
+for (const by of ['update', 'person', 'model']) test(`left for another mode without a turn, then resumed by the ${by}: started in that mode, not in bypass`, async t => {
   const resumed = fixture(t);
-  for (const mode of OTHERS) assert.deepEqual(await resumed([BYPASS, mode], { by }), { asked: null, mode }, mode);
-  assert.deepEqual(await resumed([BYPASS, 'plan', 'auto'], { by }), { asked: null, mode: 'auto' }, 'The last one counts');
+  // By name: left to itself, Claude comes back from default into the person's own default, which can be bypass.
+  for (const mode of OTHERS) assert.deepEqual(await resumed([BYPASS, mode], { by }), { asked: mode, mode }, mode);
+  assert.deepEqual(await resumed([BYPASS, 'plan', 'auto'], { by }), { asked: 'auto', mode: 'auto' }, 'The last one counts');
   assert.deepEqual(await resumed(['default', 'plan', BYPASS], { by }), { asked: BYPASS, mode: BYPASS }, 'Left and gone back to');
+});
+
+test('a session known in another mode is never started in bypass, and in default only if it was left in it', async t => {
+  const resumed = fixture(t);
+  for (const by of ['update', 'person', 'model']) for (const known of OTHERS) {
+    assert.deepEqual(await resumed([known, BYPASS], { by, record: { nativePermissionMode: known } }), { asked: known, mode: known }, `${by} ${known}, its transcript ends in bypass`);
+    assert.deepEqual(await resumed([known, 'default'], { by, record: { nativePermissionMode: known } }), { asked: 'default', mode: known }, `${by} ${known}, its transcript ends in default`);
+  }
+  // Claude brings these back by itself.
+  for (const known of OTHERS) for (const left of ['plan', 'acceptEdits', 'auto', 'dontAsk']) assert.deepEqual(await resumed([left], { record: { nativePermissionMode: known } }), { asked: null, mode: known }, `${known} ${left}`);
+  for (const usable of [null, [], ['someday']]) for (const known of ['plan', 'default']) assert.deepEqual(await resumed(usable, { record: { nativePermissionMode: known } }), { asked: null, mode: known }, 'Nothing usable: as before');
+  assert.deepEqual(await resumed([BYPASS], { record: { nativePermissionMode: undefined } }), { asked: null, mode: undefined });
 });
 
 test('a session that is still in bypass, and one whose record says nothing that can be used, come back as before', async t => {
@@ -60,17 +73,10 @@ test('a session that is still in bypass, and one whose record says nothing that 
   }
 });
 
-test('whatever its record says, a session comes back with no more than NAW knew it had', async t => {
-  const resumed = fixture(t);
-  for (const known of [...OTHERS, undefined]) for (const forged of [[BYPASS], ['plan', BYPASS], ['acceptEdits'], ['auto'], ['dangerously-skip-permissions']]) for (const by of forged.length > 1 ? ['update', 'person', 'model'] : ['update']) {
-    assert.deepEqual(await resumed(forged, { by, record: { nativePermissionMode: known } }), { asked: null, mode: known }, `${by} ${known} ${forged}`);
-  }
-});
-
 test('an imported conversation the person asked to have in bypass starts in it, whatever mode it was in before', async t => {
   const resumed = fixture(t), record = { externalHistory: true, state: 'recoverable', nativeTranscript: undefined, skipPermissions: undefined };
   assert.deepEqual(await resumed(['plan'], { by: 'person', record }), { asked: BYPASS, mode: BYPASS });
-  assert.deepEqual(await resumed([BYPASS], { by: 'person', record: { ...record, nativePermissionMode: undefined } }), { asked: null, mode: undefined });
+  assert.deepEqual(await resumed([BYPASS], { by: 'person', record: { ...record, nativePermissionMode: undefined } }), { asked: null, mode: undefined }, 'And not without being asked');
 });
 
 test('a resume that is refused leaves what NAW knows of the session alone', async t => {

@@ -2450,11 +2450,6 @@ class Workspace extends EventEmitter {
     const sameServer = s.provider === 'codex' && s.serverIdentity?.pid === this.host.codexProcess?.pid;
     if ((!sameServer && processMayBeAlive(s.serverIdentity)) || (processMayBeAlive(s.processIdentity) && !(sameServer && s.processIdentity.pid === s.serverIdentity.pid))) throw uiError("error.workspace.previousProcessMayRun");
     if (!fs.statSync(s.cwd).isDirectory()) throw uiError("error.workspace.originalDirectoryUnavailable");
-    // Claude comes back in the mode it was left in, except bypass, which its launch asks for: not when the person left it.
-    if (s.nativePermissionMode === 'bypassPermissions') {
-      const left = sessionModel.claudeTranscript(s)?.permissionMode;
-      if (sessionModel.CLAUDE_MODES.includes(left)) s.nativePermissionMode = left;
-    }
     s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect'); s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
     // Membership is retained, but an interrupted automatic run never restarts.
     if (participantOnly) this.pauseParticipant(id, '恢复原生会话后，请重新选择本次协作任务。', false, uiActivity('notice.run.resumedTask')[1]);

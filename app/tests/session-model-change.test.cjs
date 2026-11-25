@@ -511,7 +511,7 @@ test('a session left in another mode than bypass is not put back into bypass; an
   const resumed = async (nativePermissionMode, onStop) => {
     fs.writeFileSync(nativeTranscript, JSON.stringify({ type: 'user', sessionId: 'native-a' }) + '\n' + JSON.stringify({ type: 'permission-mode', permissionMode: nativePermissionMode, sessionId: 'native-a' }) + '\n');
     const f = workspace({ nativeTranscript, nativePermissionMode }, { onStop: s => { onStop?.(s); } }); let mode;
-    delete f.w.resume; f.w.bind = () => {}; f.w.host = { create: s => { mode = s.nativePermissionMode; return {}; } };
+    delete f.w.resume; f.w.bind = () => {}; f.w.host = { create: s => { mode = sessionModel.resumeMode(s); return {}; } };
     await f.w.changeModel('a', OPUS, f.expected, true); assert.deepEqual([f.s.state, f.s.requestedSettings.model], ['starting', OPUS.model]); return mode;
   };
   for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']) assert.equal(await resumed('bypassPermissions', left(mode)), mode);
@@ -520,8 +520,8 @@ test('a session left in another mode than bypass is not put back into bypass; an
   // However long the conversation: the end of the file is what is read.
   const long = s => { fs.appendFileSync(nativeTranscript, Array.from({ length: 3000 }, () => JSON.stringify({ type: 'system', text: 'x'.repeat(100) }) + '\n').join('')); left('plan')(s); };
   assert.equal(await resumed('bypassPermissions', long), 'plan');
-  // Never the other way: what is written there gives no session more than NAW knew it had, and no other mode is touched.
-  for (const mode of ['default', 'plan', undefined]) { assert.equal(await resumed(mode, left('bypassPermissions')), mode); assert.equal(await resumed(mode, left('acceptEdits')), mode); }
+  // Never the other way: what is written there puts no session into bypass, and no other mode is asked for.
+  for (const mode of ['default', 'plan', undefined]) { assert.equal(await resumed(mode, left('bypassPermissions')), mode ?? null); assert.equal(await resumed(mode, left('acceptEdits')), null); }
 });
 
 test('once the stop began, an error says that the outcome is open, or that the session stopped; nothing is resumed as something else', async () => {
