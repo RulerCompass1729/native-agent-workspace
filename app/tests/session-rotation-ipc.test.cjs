@@ -90,7 +90,7 @@ test('R207 甲: the designated butler asks for its own rotation, and only its ow
   await f.rotate('butler');
   assert.deepEqual(asked, [['butler', 'steward'], ['butler', 'steward']]);
   assert.equal(f.record.entries().filter(e => e.method === 'stewardRotate' && e.session.id === 'butler').length, 2, 'each is a step of its record');
-  for (const bad of [['other'], ['butler', 'other'], [null], [{ id: 'butler' }], ['butler', 'undo'], ['']]) await assert.rejects(f.rotate(...bad), butlerOnly, JSON.stringify(bad));
+  for (const bad of [['other'], ['butler', 'other'], [null], [{ id: 'butler' }], [undefined], ['butler', 'undo'], ['']]) await assert.rejects(f.rotate(...bad), butlerOnly, JSON.stringify(bad));
   // Not the butler; the butler of a moment ago; its native session replaced; in a space; archived.
   f.state.actor = { id: 'other', nativeId: 'native-other' };
   await assert.rejects(f.rotate(), butlerOnly); await assert.rejects(f.rotate('other'), butlerOnly); await assert.rejects(f.rotate('butler'), butlerOnly, 'a member cannot rotate the butler');
@@ -138,6 +138,15 @@ test('R207 甲: asked only as a step written in its record: none, one that takes
   await assert.rejects(f.rotate(), unwritten, 'it takes no lines');
   await assert.rejects(f.record.calls.run({ id: 'butler', nativeId: 'native-butler', open: true }, () => f.unrecorded()), unwritten, 'it failed while the call ran');
   assert.equal(asked.length, 1, 'nothing is asked for');
+});
+
+test('R207 甲: the refusal only the butler reads is not written to the person', () => {
+  const texts = require('../ui-messages.js');
+  for (const locale of ['zh', 'en']) {
+    const text = texts[locale]['error.rotation.personFirst'];
+    assert.match(text, /人撤销过|The person took it back/);
+    assert.doesNotMatch(text, /你|\byou\b/i, locale);
+  }
 });
 
 test('R207 甲: not a call of the person\'s window, refused while NAW sends nothing, and the butler has no undo', async t => {
