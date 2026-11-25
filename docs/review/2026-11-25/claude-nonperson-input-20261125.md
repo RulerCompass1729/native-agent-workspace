@@ -14,7 +14,7 @@ The queue dispatcher's own list of terminal replies keeps counting the wheel as 
 
 ## Checks
 
-On the unchanged code 17 of the 612 tests in the three changed files fail and 595 pass; the new ones that pass assert what must not change. All 612 pass on the new code. 42 mutations of the first version's conditions leave three that change nothing observable (a space's queue or steer is withdrawn by its own pause anyway; a guard before the native question that is repeated after it) and one in a label that existed before; 11 more of what the review changed are all caught. No model was called and the daily app was not touched. The Codex reconnect ran against the real adapter with synthetic native answers, not a native process.
+On the unchanged code 17 of the 612 tests in the three changed files fail and 595 pass; the new ones that pass assert what must not change. All 612 pass on the new code. 42 mutations of the first version's conditions leave three that change nothing observable (a space's queue or steer is withdrawn by its own pause anyway; a guard before the native question that is repeated after it) and one in a label that existed before; 11 more of what the review changed are all caught (one only after the three-second test was bound to a clock the fixture does not mock). No model was called and the daily app was not touched. The Codex reconnect ran against the real adapter with synthetic native answers, not a native process.
 
 ## Known limits and proposals, not done
 
@@ -23,7 +23,9 @@ On the unchanged code 17 of the 612 tests in the three changed files fail and 59
 - The earlier plan also listed another agent's plain typing through background control; the question put to the person named only queue and steer, so typing still withdraws.
 - A rolling wheel that the terminal turns into arrow keys is still keys.
 - The wheel and focus reports also no longer pause an open handoff; that is the same one condition, not a separate change.
+- A takeover by another window while the reconnect is under way withdraws the turn's messages; the turn itself stays known, and its end is reported.
+- The person's input in a kept turn renews permission as it does in any running turn.
 
 ## Independent review
 
-The first pass found no path that loosens a stop or an unnamed change. It blocked on evidence only: a wide run taken before the last edit still showed one failing source-shape test, and the old-code run used earlier tests. Both were run again. Three of its notes changed the code: only the window that kept control asks native to keep the turn, another agent's input is marked by its caller, and a control call's connection is compared as it was before.
+The first pass found no path that loosens a stop or an unnamed change. It blocked on evidence only: a wide run taken before the last edit still showed one failing source-shape test, and the old-code run used earlier tests. Both were run again (187 files, 5195 tests, none failing). Four of its notes changed the code: only the window that kept control asks native to keep the turn, another agent's input is marked by its caller, a control call's connection is compared as it was before, and the native question is bounded to three seconds. The second pass, on what changed, passed with nothing blocking; its remaining notes are the last two known limits above and wording.
