@@ -90,3 +90,7 @@
 .batch-rows>li>button{margin:0 0 10px 1.4em}
 
 .member-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 17px}.member-chip{display:flex;align-items:center;gap:7px;min-height:44px;max-width:100%;padding:5px 9px 5px 5px;border:1px solid var(--border);border-radius:10px;background:var(--raised)}a.member-chip:hover{background:#f6f8f1}.member-chip .avatar{width:28px;height:28px;border-radius:8px;font-size:11px}.member-chip .member-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:650}
+.queue-card.flash{background:#f8edd8;transition:background .3s}
+.waiting-row{min-height:64px}
+.waiting-row strong{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#waiting{margin-bottom:25px}
