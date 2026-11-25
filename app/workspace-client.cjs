@@ -1,3 +1,5 @@
+const path = require('node:path');
+const { createLock, releaseLock } = require('./service-lock.cjs');
 const { snapshotImageRoots } = require('./native-images.cjs');
 const { uiError, uiNotice } = require('./ui-errors.cjs');
 const liveUnsavedActivity = uiNotice('notice.activity.liveUnsaved');
@@ -254,6 +256,7 @@ class WorkspaceClient extends EventEmitter {
     const programDisplay = missingPrograms.length ? uiError('error.warning.programsMissing', { programs: missingPrograms.map(key => programNames[key]).join(', ') }) : null;
     const operators = this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a'));
     const operatorPolicy = operators.length ? { enabled: operators.every(e => !e.closed && !e.closing && !this.control.maintenance.has(e.key) && e.state.operatorPolicy?.enabled === true && !e.state.operatorPolicy?.error),
+      backends: operators.map(e => { const available = !e.closed && !e.closing && !this.control.maintenance.has(e.key) && !e.state.operatorPolicy?.error && typeof e.state.operatorPolicy?.enabled === 'boolean'; return { key: e.key, enabled: Boolean(available && e.state.operatorPolicy.enabled), available: Boolean(available) }; }),
       error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []),
       // B5: sessions created under a grant that names a space, until the desktop has placed them (operator-control.cjs).
       placements: operators.flatMap(e => e.state.operatorPolicy?.placements || []),
@@ -515,31 +518,43 @@ class WorkspaceClient extends EventEmitter {
     }
     if (method === 'operatorAction') {
       const global = args[0] === null && args[1] === 'enabled';
-      const resolve = () => global ? this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a')) : [this.route(args[0])];
-      const targets = resolve();
-      if (!targets.length || targets.some(e => !e.state.capabilities?.includes('operatorControl1a'))) throw Error('This backend does not support the operator interface');
-      const guards = targets.map(e => this.operationGuard(e));
-      const nativeId = global ? null : targets[0].state.sessions.find(s => s.id === args[0])?.nativeId;
-      const changed = () => { throw Error('Operator backend or identity changed; this action may be partially applied. Do not retry automatically.'); };
-      const check = () => {
-        guards.forEach(guard => guard());
-        this.authorizeOperation?.(method, args, roomId);
-        const current = resolve();
-        if (current.length !== targets.length || current.some(e => !targets.includes(e)) || targets.some(e => !e.state.capabilities?.includes('operatorControl1a')) ||
-            !global && targets[0].state.sessions.find(s => s.id === args[0])?.nativeId !== nativeId) changed();
-      };
-      check();
-      const results = [];
-      for (const entry of targets) {
-        check(); const result = await entry.client.call(method, ...args); check();
-        if (global && result !== true) throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
-        results.push(result);
+      const file = global && typeof this.scope === 'string' && path.isAbsolute(this.scope) ? path.join(this.scope, 'services.lock') : null;
+      let lease;
+      try {
+        if (file) {
+          try { lease = createLock(file, 'startup', this.scope); }
+          catch { throw uiError('error.service.connecting'); }
+          const layout = require('./service-layout.cjs').readLayout(this.scope);
+          if (layout.pending || JSON.stringify([...layout.entries].sort()) !== JSON.stringify(this.entries.map(e => e.key).sort())) throw uiError('error.client.operatorBackendListChanged');
+        }
+        const resolve = () => global ? this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a')) : [this.route(args[0])];
+        const targets = resolve();
+        if (!targets.length || targets.some(e => !e.state.capabilities?.includes('operatorControl1a'))) throw Error('This backend does not support the operator interface');
+        const guards = targets.map(e => this.operationGuard(e));
+        const nativeId = global ? null : targets[0].state.sessions.find(s => s.id === args[0])?.nativeId;
+        const changed = () => { throw Error('Operator backend or identity changed; this action may be partially applied. Do not retry automatically.'); };
+        const check = () => {
+          guards.forEach(guard => guard());
+          this.authorizeOperation?.(method, args, roomId);
+          const current = resolve();
+          if (current.length !== targets.length || current.some(e => !targets.includes(e)) || targets.some(e => !e.state.capabilities?.includes('operatorControl1a')) ||
+              !global && targets[0].state.sessions.find(s => s.id === args[0])?.nativeId !== nativeId) changed();
+        };
+        check();
+        const results = [];
+        for (const entry of targets) {
+          check(); const result = await entry.client.call(method, ...args); check();
+          if (global && result !== true) throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
+          results.push(result);
+        }
+        await this.refresh(roomId); check();
+        if (global && targets.some(e => e.state.operatorPolicy?.enabled !== args[2] || e.state.operatorPolicy?.error)) {
+          throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
+        }
+        return results[0];
+      } finally {
+        if (lease && !releaseLock(file, lease)) throw Error('Global operator setting lock release is unconfirmed; do not retry automatically.');
       }
-      await this.refresh(roomId); check();
-      if (global && targets.some(e => e.state.operatorPolicy?.enabled !== args[2] || e.state.operatorPolicy?.error)) {
-        throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
-      }
-      return results[0];
     }
     if (method === 'wakePolicy') {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
