@@ -3363,10 +3363,11 @@ class QueueDispatcher {
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
       const listed = current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
       // The person's own act is told past a quiet window (R200), and past nothing else. The turn it starts makes the move
-      // wait for its quiet again; the window's deadline stays. No idle clock runs in a window: its last activity counts.
+      // wait for its quiet again; the window's deadline stays, and it may close before. In a window its last activity
+      // counts: the idle clock there misses a turn no pass saw. Anything else waits without reading the backends.
       const past = Boolean(event && listed.quietWindow && this.stewardWake.personActed()), butler = past ? pastWindow(listed) : listed;
       const idle = past ? sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs)
-        : settled(steward.sessionId, this.idleSince, current.now, this.settleMs);
+        : !listed.quietWindow && settled(steward.sessionId, this.idleSince, current.now, this.settleMs);
       if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
@@ -3433,7 +3434,7 @@ class QueueDispatcher {
       if (this.closed) return;
       try {
         const session = current.snapshot.sessions.find(s => s.id === target.sessionId);
-        if (!session || session.nativeId !== target.nativeId || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
+        if (!session || session.nativeId !== target.nativeId || session.quietWindow || !settled(session.id, this.idleSince, current.now, this.settleMs)) continue;
         if (engaged.has(session.id) || Array.isArray(holding) && holding.includes(session.id)) continue;
         const fresh = await this.freshReady(session.id, quietMs);
         if (!fresh || fresh.session.nativeId !== target.nativeId) continue;

@@ -30,3 +30,21 @@ Tests: 21 in `migration-quiet-window.test.cjs`, one added in `queue-dispatch.tes
 Review: one read-only session. Round 1 BLOCKED by two findings: the first version let later windows open sooner, and the record misdescribed two of the five windows. Both were fixed (the kept place, this list). Round 2 PASS-WITH-NOTES, nothing blocking; its notes are in. Round 3, on the final code: PASS, nothing blocking.
 
 Undo: revert the commit; no stored format changes. A record with the new codes read by older code only loses their pause.
+
+## On 43bd89bf (alpha.300), 2026-11-25
+
+The commit was rebased from 297's base onto 43bd89bf without a conflict (`5583bd99`); the code is what was reviewed, the author of this part is another session.
+
+The six tests named when the earlier combination was tried (one in `steward-wake-card-click`, five in `steward-wake-person-window`) do not fail here: 113 of 113 in the wake, patrol and window tests. They fail only with the R209 card click (`68fa0ee7`, now `be1f6cd3`), which is not in 300. All six are right and stay as they are; the code is what changes, and it is one line of that lane. With it the wake of the person's act reads the idle clock whenever one runs, and since this change one runs inside a window too:
+1. `where no idle clock runs, the eight seconds after its turn end …`: a turn that no pass saw at work left the clock running, and the butler was woken at once. A real fault, the one asked for as a counter-example.
+2. `the butler's own last activity is its quiet there …`: the same.
+3. `two answers on queue items within a minute …`, `the two minutes after the person used the butler …`, `the butler gone by the read right before the send …`: the clock starts at the first pass after NAW starts, so an act on a butler that has long been idle waited eight more seconds and said `not-settled`.
+4. `an act that is no answer …`, its last row: the hold read `cooldown` where `send-not-sent` was due, and reads it again with that line; the step between was not traced.
+
+Found while judging, and fixed here: an event for a butler in a window, or an answer owed to an agent in one, was counted as settled and led to a full read of every backend on each pass (20 synthetic minutes with one event waiting: 0 reads on 43bd89bf, 41 with no other activity and 398 at the three-second tick on `5583bd99`; 0 again now). `wakeSteward` and `notifyOwed` now leave a session that a window holds before they read. What waits, and what it says, is unchanged. The comment there said no idle clock runs in a window; it says what holds now, and that a window may close before its deadline.
+
+Two lanes change the same three comment lines and the `idle` line of `wakeSteward`. Resolved: take the R209 lane's block with `this.idleSince.has(steward.sessionId) && !listed.quietWindow ?` and the last two sentences of this comment. Whichever lands second carries it. On that tree (`be1f6cd3`): 172 of 172 in the wake, patrol, window and answer tests; with its line left as it is 8 fail, the six and the two new ones.
+
+New tests: an event and an answer waiting in a window read nothing (red on `5583bd99`: 398 and 97 reads); a click right after the butler's turn ended in the window waits its eight seconds, whether a pass saw that turn or not (red on the unresolved combination).
+
+Related: 78 files that name the dispatcher, the windows, the wake, the version events or the answer notices, 2,174 of 2,174, none skipped; 6 of 6 mutations caught. The full suite was not run, nor a real NAW window. How often a real turn goes unseen by every pass was not measured. Review of this part: pending, on the increment after `5583bd99` only.

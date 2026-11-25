@@ -264,3 +264,25 @@ test('the wake inside a window makes the move wait for its quiet again, without 
   assert.equal(ready(f.sent[0].at + rules.MIGRATE_QUIET_MS), true);
   assert.equal(f.quiet.windowOf('butler', f.clock.now).deadline, before);
 });
+
+test('an event that waits for the window to end asks the backends for nothing meanwhile', async t => {
+  const f = fixture(t), refresh = f.client.refresh; let reads = 0;
+  f.client.refresh = async () => { reads += 1; return refresh(); };
+  f.event(); await f.run(20 * MIN, { hurry: true });
+  assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'quiet-window'); assert.equal(reads, 0);
+  f.clock.now = START + HOUR; await f.run(MIN);
+  assert.equal(f.sent.length, 1);
+});
+
+test('a click right after the butler\'s turn ended in the window waits its eight seconds, whether a pass saw that turn or not', async t => {
+  for (const seen of [true, false]) {
+    const f = fixture(t);
+    await f.run(MIN, { hurry: true });
+    if (seen) { f.butler.state = 'working'; await f.run(MIN, { hurry: true }); f.butler.state = 'idle'; }
+    f.butler.lastActivityAt = f.clock.now; f.click(); const at = f.clock.now;
+    await f.run(6000, { hurry: true });
+    assert.deepEqual(f.sent, [], `seen ${seen}`); assert.equal(f.held()?.reason, 'not-settled');
+    await f.run(30000, { hurry: true });
+    assert.equal(f.sent.length, 1); assert.ok(f.sent[0].at - at >= 8000 && f.sent[0].at - at <= 12000, `${f.sent[0].at - at} ms`);
+  }
+});
