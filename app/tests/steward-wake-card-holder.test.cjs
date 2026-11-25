@@ -55,8 +55,8 @@ function fixture(t, sessions) {
     await f.control.decide(who.id, who.nativeId, operation, decision);
   };
   f.rotated = (from, to) => fs.appendFileSync(path.join(dir, 'rotation-log.jsonl'), `${JSON.stringify(done(from, to))}\n`, { mode: 0o600 });
-  // Designated with the position the wake had reached kept: what is recorded after it is still to be told.
-  f.designate = who => { f.role.set(named(who)); f.wake.write({ ...f.wake.state, on: true, designation: named(who), woken: f.position }); };
+  // As main.cjs's steward: designated with the position the wake had reached kept, then turned on.
+  f.designate = who => { const reached = f.wake.reached(); f.role.set(named(who)); f.wake.redesignated(reached); f.wake.set(true); };
   f.run = async ms => { const end = clock.now + ms; do { await f.dispatcher.schedule(); clock.now += 3 * SEC; } while (clock.now <= end); };
   f.wakes = () => sent.filter(s => s.kind === 'steward-wake');
   return f;
@@ -66,7 +66,7 @@ function fixture(t, sessions) {
 async function kept(t, { asker, then, sessions, decision = 1, card = null, opened = () => {} }) {
   const f = fixture(t, sessions);
   await f.card(as('earlier', 'native-earlier'), 1, 'op-earlier'); // A record with no event at all has no position to keep.
-  f.role.set(named(asker)); f.wake.set(true); f.position = f.wake.state.woken;
+  f.role.set(named(asker)); f.wake.set(true);
   if (card) await card(f); else await f.card(asker, decision);
   await then(f);
   await f.restart(); opened(f);

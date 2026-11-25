@@ -20,6 +20,11 @@ const STATE_VERSION = 2, SETTLE_MS = 24 * 3600 * 1000;
 const RETIRE_AFTER = 5 * 60 * 1000, RETIRE_EVERY = 60 * 1000;
 const settledStates = new Set(['complete', 'received', 'awaiting-native', 'cancelled', 'not-executed', 'unconfirmed']);
 const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at;
+// Records whose row only a new record object changes: commit and reappend never edit one in place. The others follow
+// the clock and the answers under way, and are read again each time.
+const fixedStates = new Set(['complete', 'received', 'cancelled', 'not-executed', 'unconfirmed']);
+const fixedRows = new WeakMap(), archivedFacts = new WeakMap(); let namesMade = 0;
+const isCard = r => r.confirmation?.kind === 'message' || Number.isSafeInteger(r.confirmationRequestedAt) || Number.isSafeInteger(r.humanDecision);
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 // Person-approved 2026-11-15: one policy point for new and retained pending cards.
@@ -274,6 +279,7 @@ class BackgroundControl {
     this.archived.set(key, record); this.archivedIds.add(record.id);
     const rows = this.archivedBySession.get(record.actor.id) || [];
     if (prior) rows[rows.indexOf(prior)] = record; else rows.push(record);
+    archivedFacts.delete(rows);
     this.archivedBySession.set(record.actor.id, rows);
   }
   recordsOf(sessionId) {
@@ -1138,10 +1144,13 @@ class BackgroundControl {
   // only what the person is told on the cards. The page answers only the newest waiting card, and a card whose
   // request was already confirmed on a later one is refused here, so one request is not carried out twice by mistake.
   sameRequests(row, all = [...(this.archivedBySession.get(row.actor.id) || []), ...this.data.records]) {
-    const key = this.key(row.actor), own = all.indexOf(row);
-    return all.map((r, index) => ({ r, later: r.at > row.at || r.at === row.at && index > own })).filter(({ r }) => r !== row && this.key(r.actor) === key &&
-      r.command?.method === row.command.method && isDeepStrictEqual({ ...r.command, operation_id: row.command.operation_id }, row.command) &&
-      (r.state === 'confirmation-required' ? isDeepStrictEqual(r.guard ?? null, row.guard ?? null) : isDeepStrictEqual(guardTargets(r.guard), guardTargets(row.guard))));
+    const key = this.key(row.actor), own = all.indexOf(row), same = [];
+    all.forEach((r, index) => {
+      if (r !== row && r.command?.method === row.command.method && this.key(r.actor) === key && isDeepStrictEqual({ ...r.command, operation_id: row.command.operation_id }, row.command) &&
+        (r.state === 'confirmation-required' ? isDeepStrictEqual(r.guard ?? null, row.guard ?? null) : isDeepStrictEqual(guardTargets(r.guard), guardTargets(row.guard))))
+        same.push({ r, later: r.at > row.at || r.at === row.at && index > own });
+    });
+    return same;
   }
   replacement(row, all) {
     if (row?.state !== 'confirmation-required') return null;
@@ -1178,21 +1187,71 @@ class BackgroundControl {
     const reason = this.deliveryBlocked(row, snapshot);
     return reason ? { deliveryBlocked: reason } : {};
   }
-  // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
-  rows(sessionId, names = {}, { expire = true } = {}) {
-    if (expire) this.expirePending();
-    const own = [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)];
-    return own.map(saved => { const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved; return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
+  // A number for the names a summary is read from: sessions with their provider, rooms, in their order.
+  namesVersion(names) {
+    const list = [];
+    for (const [items, keys] of [[names.sessions, ['id', 'name', 'provider']], [names.rooms, ['id', 'name']]]) {
+      list.push(Array.isArray(items) ? items.length : null);
+      if (Array.isArray(items)) for (const item of items) for (const key of keys) list.push(item?.[key]);
+    }
+    // A few at once: windows can be a rename apart for a moment.
+    const seen = this.namesSeen ||= [], at = seen.findIndex(entry => entry.list.length === list.length && entry.list.every((value, i) => Object.is(value, list[i])));
+    if (at > 0) seen.unshift(...seen.splice(at, 1));
+    if (at < 0) { seen.unshift({ list, version: ++namesMade }); seen.length = Math.min(seen.length, 4); }
+    return seen[0].version;
+  }
+  // The row without the words only the page gets.
+  baseRow(r) {
+    return ({ id: `background:${r.actor.nativeId}:${r.id}`, role: 'system', kind: 'background-operation',
       name: operation.visibleText(r.actor.name), time: r.at, status: ['running', 'awaiting-native'].includes(r.state) ? 'working' : ['complete', 'received', 'cancelled'].includes(r.state) ? 'complete' : 'error',
       text: operation.visibleText(`${r.actor.name} · ${r.command.method}\n${JSON.stringify(r.command.arguments)}\n${r.disposition ? require('./ui-locale.js').format('zh', r.stateUiMessage.key) : ({ running: '正在执行', complete: '操作已执行', received: '原生会话已收到', 'awaiting-native': '已提交，原生收件待确认', 'confirmation-required': '等待你的确认', cancelled: '已取消，未执行', 'not-executed': '未执行', unconfirmed: '结果未确认' })[r.state] || r.state}${r.error ? `: ${r.error}` : ''}`),
       backgroundOperation: { id: r.id, sessionId: r.actor.id, nativeId: r.actor.nativeId, state: r.state, ...(r.disposition ? { disposition: r.disposition, stateUiMessage: r.stateUiMessage } : {}), ...(r.state === 'confirmation-required' ? { expiresAt: confirmationExpiresAt(r) } : {}), ...(this.answerState(r) ? { answer: this.answerState(r) } : {}), ...this.answerProgress(r),
         confirmation: r.confirmation ? { ...r.confirmation, options: visibleOptions(r.confirmation.options) } : null,
         ...(r.standingFallback ? { standingFallback: r.standingFallback } : {}),
-        resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null),
-        ...(names ? { summary: operation.operationSummary(r.command, r.actor, names), arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)),
-          ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}),
-          ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own), ...this.deliveryNote(r, names) } : {}) } : {}) } }); });
+        resultNotice: r.resultNotice || (r.command.method === 'restoreSession' && r.value?.placement === 'unavailable' ? r.value.uiMessage : null) } });
   }
+  pageWords(r) {
+    return { arguments: operation.visibleText(JSON.stringify(r.command.arguments ?? [], null, 2)), ...(r.error ? { error: operation.visibleText(String(r.error)) } : {}) };
+  }
+  row(saved, names, version, own) {
+    if (!fixedStates.has(saved.state)) {
+      const r = this.expired(saved) ? { ...saved, ...this.expiryFields(saved) } : saved, base = this.baseRow(r);
+      if (!names) return base;
+      return { ...base, backgroundOperation: { ...base.backgroundOperation, summary: operation.operationSummary(r.command, r.actor, names), ...this.pageWords(r),
+        ...(r.state === 'confirmation-required' ? { replacedBy: this.replacement(r, own), repeated: this.repeated(r, own), ...this.deliveryNote(r, names) } : {}) } };
+    }
+    let kept = fixedRows.get(saved);
+    if (!kept) fixedRows.set(saved, kept = { base: this.baseRow(saved) });
+    if (!names) return kept.base;
+    if (kept.version !== version) {
+      kept.words ||= this.pageWords(saved);
+      kept.page = { ...kept.base, backgroundOperation: { ...kept.base.backgroundOperation, summary: operation.operationSummary(saved.command, saved.actor, names), ...kept.words } };
+      kept.version = version;
+    }
+    return kept.page;
+  }
+  // `names` is the page's display state; an agent's own view (null) gets the rows as before, without the card's words.
+  // A settled record's row is the same object until the record or a name changes: read it, never edit it.
+  rows(sessionId, names = {}, { expire = true } = {}) {
+    if (expire) this.expirePending();
+    const own = this.own(sessionId); if (!own.length) return [];
+    const version = names ? this.namesVersion(names) : null;
+    return own.map(saved => this.row(saved, names, version, own));
+  }
+  // What the archived records of one session come to, until one is added or replaced (remember).
+  archivedFacts(list) {
+    let facts = archivedFacts.get(list);
+    if (!facts) archivedFacts.set(list, facts = { cards: list.filter(isCard), times: list.map(r => ({ time: r.at })) });
+    return facts;
+  }
+  // The times of each session's rows, in the order of rows().
+  recordTimes() {
+    const times = new Map();
+    for (const [id, list] of this.archivedBySession) if (list.length) times.set(id, [...this.archivedFacts(list).times]);
+    for (const r of this.data.records) { if (!times.has(r.actor.id)) times.set(r.actor.id, []); times.get(r.actor.id).push({ time: r.at }); }
+    return times;
+  }
+  own(sessionId) { return [...(this.archivedBySession.get(sessionId) || []), ...this.data.records.filter(r => r.actor.id === sessionId)]; }
   // Human-window waiting strip: reuse the conversation card and its warnings.
   confirmationState(row, snapshot) {
     const unknown = reason => ({ state: 'unverifiable', actionable: false, reason: row.handlerStarted ? 'partial-operation' : reason });
@@ -1235,25 +1294,31 @@ class BackgroundControl {
     // Expiry may persist a receipt. A failed write cannot take the person's
     // conversation down or make a pending card look executable.
     try { this.expirePending(); this.settleArchivedOrigins(observed); } catch { unavailable = true; }
-    const all = () => [...this.archivedBySession.values()].flat().concat(this.data.records);
-    const source = all(), messages = new Map();
-    return source.filter(r => r.confirmation?.kind === 'message' || Number.isSafeInteger(r.confirmationRequestedAt) || Number.isSafeInteger(r.humanDecision))
-      .map(row => {
-        const replacedBy = this.replacement(row, source), expired = this.expired(row);
-        const status = row.state === 'confirmation-required' && unavailable ? { state: 'unverifiable', actionable: false, reason: row.handlerStarted ? 'partial-operation' : 'evidence-unavailable' }
-          : expired ? { state: 'expired', disposition: 'expired', actionable: false, reason: 'deadline-elapsed' }
-          : replacedBy ? { state: 'replaced', actionable: false, reason: 'replaced' }
-          : row.state === 'confirmation-required' ? this.confirmationState(row, observed)
-          : { state: row.state, disposition: row.disposition || null, reason: row.reason || null, actionable: false };
-        if (!messages.has(row.actor.id)) messages.set(row.actor.id, this.rows(row.actor.id, names, { expire: false }));
-        const message = messages.get(row.actor.id).find(m => m.backgroundOperation.id === row.id && m.backgroundOperation.nativeId === row.actor.nativeId);
-        const summary = row.confirmationSummary || operation.operationSummary(row.command, row.actor, names);
-        return { id: message.id, key: [row.actor.id, row.actor.nativeId, row.id].join(':'), operationId: row.id, sessionId: row.actor.id, nativeId: row.actor.nativeId,
-          actorName: operation.visibleText(row.actor.name), targetName: summary?.target || summary?.room || summary?.name || '',
-          title: row.confirmationTitle || row.confirmation?.options?.message || summary?.method || '', summary,
-          time: row.at, expiresAt: confirmationExpiresAt(row), finishedAt: replacedBy?.time || row.finishedAt || null,
-          afterStart: row.handlerStarted === true, ...status, replacedBy, message };
-      }).sort((a, b) => a.time - b.time || (a.sessionId + ':' + a.nativeId + ':' + a.operationId).localeCompare(b.sessionId + ':' + b.nativeId + ':' + b.operationId));
+    const source = [...this.archivedBySession.values()].flatMap(list => this.archivedFacts(list).cards).concat(this.data.records.filter(isCard));
+    const version = this.namesVersion(names), owned = new Map();
+    const own = id => owned.get(id) || owned.set(id, this.own(id)).get(id);
+    const card = (row, status, replacedBy, message) => {
+      const summary = row.confirmationSummary || operation.operationSummary(row.command, row.actor, names);
+      return { id: message.id, key: [row.actor.id, row.actor.nativeId, row.id].join(':'), operationId: row.id, sessionId: row.actor.id, nativeId: row.actor.nativeId,
+        actorName: operation.visibleText(row.actor.name), targetName: summary?.target || summary?.room || summary?.name || '',
+        title: row.confirmationTitle || row.confirmation?.options?.message || summary?.method || '', summary,
+        time: row.at, expiresAt: confirmationExpiresAt(row), finishedAt: replacedBy?.time || row.finishedAt || null,
+        afterStart: row.handlerStarted === true, ...status, replacedBy, message };
+    };
+    const settled = row => ({ state: row.state, disposition: row.disposition || null, reason: row.reason || null, actionable: false });
+    return source.map(row => {
+      if (fixedStates.has(row.state)) {
+        const message = this.row(row, names, version), kept = fixedRows.get(row);
+        if (kept.card?.message !== message) kept.card = card(row, settled(row), null, message);
+        return kept.card;
+      }
+      const replacedBy = this.replacement(row, own(row.actor.id)), expired = this.expired(row);
+      const status = row.state === 'confirmation-required' && unavailable ? { state: 'unverifiable', actionable: false, reason: row.handlerStarted ? 'partial-operation' : 'evidence-unavailable' }
+        : expired ? { state: 'expired', disposition: 'expired', actionable: false, reason: 'deadline-elapsed' }
+        : replacedBy ? { state: 'replaced', actionable: false, reason: 'replaced' }
+        : row.state === 'confirmation-required' ? this.confirmationState(row, observed) : settled(row);
+      return card(row, status, replacedBy, this.row(row, names, version, own(row.actor.id)));
+    }).sort((a, b) => a.time - b.time || (a.sessionId + ':' + a.nativeId + ':' + a.operationId).localeCompare(b.sessionId + ':' + b.nativeId + ':' + b.operationId));
   }
   pending(names = {}) {
     this.expirePending();

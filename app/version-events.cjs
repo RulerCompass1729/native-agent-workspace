@@ -6,12 +6,15 @@
 // conversation. The butler gets an event in its record (butler-ingress.cjs), which steward-wake.cjs wakes it for; the
 // secretary a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
 // switch, like answer-notices.cjs. NAW adds no queue item and opens no other channel.
+// Each start also says how the last run ended (2026-11-24: a crash read as 「重启完成 296->296」): a run leaves
+// main-running.json at its start and renames it to main-exited.json on its own quit path. Normal
+// needs that second mark; with neither, the next start says it has no record.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
-const FILE = 'version-seen.json', RECORD_MAX = 1024, MAX_BACKENDS = 20, MAX_NAMES = 4, MAX_OWED = 20;
-const RETRY_MS = 60 * 1000, MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FILE = 'version-seen.json', RUNNING = 'main-running.json', EXITED = 'main-exited.json', RECORD_MAX = 1024, MAX_BACKENDS = 20, MAX_NAMES = 4, MAX_OWED = 20;
+const MAX_TIME = 8640000000000000, RETRY_MS = 60 * 1000, MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CONTROL = /[\u0000-\u001f\u007f]/gu;
 const clean = (value, limit) => typeof value === 'string' ? value.replace(CONTROL, ' ').trim().slice(0, limit) : '';
 const token = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -55,44 +58,85 @@ function behindText(version, backends) {
   return `还有 ${backends.length} 个后台不在 ${version}：\n${listed.join('\n')}\n迁完或失败时再发一条。`;
 }
 
-function readSeen(file) {
+function readRecord(file, max) {
   let fd;
   try {
     // Open first, then judge what was opened: a link is refused.
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > RECORD_MAX || stat.uid !== process.getuid()) return null;
+    if (!stat.isFile() || stat.size > max || stat.uid !== process.getuid()) return null;
     const data = JSON.parse(fs.readFileSync(fd, 'utf8'));
-    return data && data.format === 1 && token(data.version) ? data.version : null;
+    return data && typeof data === 'object' ? data : null;
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function readSeen(file) {
+  const data = readRecord(file, RECORD_MAX);
+  return data && data.format === 1 && token(data.version) ? data : null;
 }
 // Without a seen record (a profile that never ran a start with it), the daily installer's receipt names the version it
 // replaced (scripts/install-daily.cjs); only when it names this version as the one installed.
 function readReplaced(file, version) {
-  let fd;
-  try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > 4096 || stat.uid !== process.getuid()) return null;
-    const data = JSON.parse(fs.readFileSync(fd, 'utf8'));
-    return data && data.version === version && token(data.previous) && data.previous !== version ? data.previous : null;
-  } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
+  const data = readRecord(file, 4096);
+  return data && data.version === version && token(data.previous) && data.previous !== version ? data.previous : null;
 }
-function writeSeen(file, version, at) {
+// null: no mark there. A mark that cannot be read has neither a pid nor a start.
+function readMark(file) {
+  try { fs.lstatSync(file); } catch { return null; }
+  const data = readRecord(file, RECORD_MAX) || {};
+  const valid = value => Number.isSafeInteger(value) && value > 0 && value <= MAX_TIME;
+  return { pid: valid(data.pid) ? data.pid : null, at: valid(data.at) ? data.at : null };
+}
+// How the last run of this profile ended, as its mark says: 'clean', 'abnormal' (with that run's pid and start, when
+// the mark can be read) or 'unrecorded'. A run that announced wrote its start into the seen record too, so a seen
+// record newer than the mark is a version without marks that ran since: nothing is known about how it ended.
+function lastExit(directory, seen) {
+  const running = readMark(path.join(directory, RUNNING)), exited = readMark(path.join(directory, EXITED));
+  const mark = running || exited;
+  if (!mark || (mark.at !== null && Number.isSafeInteger(seen?.at) && seen.at > mark.at)) return { kind: 'unrecorded' };
+  if (running) return { kind: 'abnormal', pid: running.pid, at: running.at };
+  return { kind: exited.at === null ? 'unrecorded' : 'clean' };
+}
+function exitText(last) {
+  if (last.kind === 'clean') return '上次正常退出。';
+  if (last.kind !== 'abnormal') return '没有上次退出的记录。';
+  const who = last.pid === null ? '' : `主进程 ${last.pid}${last.at === null ? '' : `，${iso(last.at)} 启动`}，`;
+  return `上次没有正常退出：${who}没写下正常退出的标记（崩溃、被强杀或断电都会这样）。具体原因看 ~/Library/Logs/DiagnosticReports。`;
+}
+function writeRecord(file, value) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.rmSync(temp, { force: true });
-  fs.writeFileSync(temp, JSON.stringify({ format: 1, version, at }), { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
   fs.renameSync(temp, file);
+}
+
+// This run's mark, left at its start (main.cjs, right after the single-instance lock). Judged first, then both old
+// marks go and this run's is written: a write that fails leaves none, so the next start says it has no record.
+class RunMark {
+  constructor(directory, { version, now = Date.now }) {
+    this.running = path.join(directory, RUNNING); this.exited = path.join(directory, EXITED);
+    this.at = now();
+    this.last = lastExit(directory, readSeen(path.join(directory, FILE)));
+    for (const file of [this.running, this.exited]) try { fs.rmSync(file, { force: true }); } catch { /* Judged again by the next start. */ }
+    try { writeRecord(this.running, { format: 1, pid: process.pid, at: this.at, version }); } catch { /* No mark: no record. */ }
+  }
+  // The normal quit path (main.cjs will-quit): only while the mark is still this run's.
+  exitClean() {
+    const mark = readRecord(this.running, RECORD_MAX);
+    if (mark && mark.pid === process.pid && mark.at === this.at) fs.renameSync(this.running, this.exited);
+  }
 }
 
 class VersionEvents {
   // `record(event)`: into the butler's event record. `owe(text)`: to the secretary; nothing when none is designated.
-  constructor(directory, { version, now = Date.now, record, owe }) {
+  // `run`: this run's mark (RunMark) with how the last one ended, when main left one.
+  constructor(directory, { version, now = Date.now, record, owe, run = null }) {
     this.file = path.join(directory, FILE);
     Object.assign(this, { version, now, record, owe });
-    this.at = now();
+    // The start this run announced, the same in its mark: a later seen record tells an unmarked run apart (lastExit).
+    this.at = run ? run.at : now();
+    this.last = run ? run.last : { kind: 'unrecorded' };
     // The last version a start announced; 「已装」 once per version, 「重启完成」 on every other start.
-    this.previous = readSeen(this.file) || readReplaced(path.join(directory, 'installation.json'), version);
+    this.previous = readSeen(this.file)?.version || readReplaced(path.join(directory, 'installation.json'), version);
     this.announced = false; this.watch = new Map(); this.sequence = 0;
   }
   // Something is left to tell: this start, or a backend still on an old version.
@@ -108,9 +152,10 @@ class VersionEvents {
       const head = installed ? `已装 ${this.version}（原来是 ${this.previous || '没有记录'}），${iso(this.at)} 重启完成。`
         : `重启完成：${this.version}，${iso(this.at)}。`;
       for (const b of list) this.watch.set(b.key, { ...b, failed: b.wait.code === 'failed' });
-      this.emit(installed ? 'version-installed' : 'version-restarted', `【NAW 版本】${head}\n${behindText(this.version, list)}`,
-        `${this.previous || 'unknown'}->${this.version}`);
-      try { writeSeen(this.file, this.version, this.at); } catch { /* The next start says 「已装」 again. */ }
+      const reason = installed ? 'version-installed' : 'version-restarted';
+      this.emit(this.last.kind === 'abnormal' ? `${reason}-after-abnormal-exit` : reason,
+        `【NAW 版本】${head}${exitText(this.last)}\n${behindText(this.version, list)}`, `${this.previous || 'unknown'}->${this.version}`);
+      try { writeRecord(this.file, { format: 1, version: this.version, at: this.at }); } catch { /* The next start says 「已装」 again. */ }
       return;
     }
     const current = new Map(list.map(b => [b.key, b])), lines = [];
@@ -154,7 +199,7 @@ class VersionEvents {
   emit(reason, text, outcome) {
     const at = this.now(), eventId = `version-change:${hash([this.version, this.at, this.sequence++])}`;
     try {
-      this.record({ eventId, sourceRef: `version-change:${this.version}`, kind: reason === 'backend-move-failed' ? 'failure' : 'blocked',
+      this.record({ eventId, sourceRef: `version-change:${this.version}`, kind: reason === 'backend-move-failed' || reason.endsWith('-after-abnormal-exit') ? 'failure' : 'blocked',
         payload: { reason, outcome, title: iso(at), text } });
     } catch { /* The secretary may still be told. */ }
     try { this.owe(`${text}\nNAW 只通知，不加任务。`); } catch { /* No secretary, or its notice could not be kept. */ }
@@ -205,4 +250,4 @@ class VersionNotices {
   text(notices) { return notices.map(n => n.text).join('\n\n'); }
 }
 
-module.exports = Object.freeze({ VersionEvents, VersionNotices, FILE, WAITS });
+module.exports = Object.freeze({ VersionEvents, VersionNotices, RunMark, FILE, WAITS });
