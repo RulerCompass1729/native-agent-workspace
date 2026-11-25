@@ -1132,7 +1132,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method, args[1]);
+    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method, args[1], context.view?.owner);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -1209,7 +1209,7 @@ function displayState(snapshot, context, read = null, toPage = false) {
   const result = { ...display, spaceManagers: managers, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
-    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
+    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [], sessionRotations: queueDispatcher?.rotationRows || {} }),
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
 }
@@ -1652,7 +1652,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardStanding', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardStanding', 'stewardWake', 'stewardPatrol', 'stewardRotate', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the space's manager and person-only actions.
@@ -2910,6 +2910,34 @@ async function boot() {
     return result;
   });
   register('preflight', () => preflight());
+  // 「现在就换」 and 「撤销」 (R207): the person in their own window; no agent's call reaches this one.
+  register('sessionRotation', async (c, sessionId, action) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.rotation.personOnly');
+    if (typeof sessionId !== 'string' || !['now', 'undo'].includes(action)) throw uiError('error.rotation.unavailable');
+    if (!queueDispatcher) throw uiError('error.rotation.unavailable');
+    if (action === 'now') await queueDispatcher.requestRotation(sessionId, 'person');
+    else await queueDispatcher.withdrawRotation(sessionId, 'person');
+    await broadcastRoom();
+  });
+  applicationHandlers.delete('sessionRotation');
+  // 甲 (R207; the person, 2026-11-25: 「「权限可以」 同意」): the designated butler asks for its own rotation now. Itself
+  // only, never another session, and it cannot take one back. The call is a step in its record, as its others are.
+  register('stewardRotate', async (c, ...args) => {
+    const refuse = (key, reason) => new background.HandlerRefused(uiError(key), reason);
+    const steward = await stewardCaller(c);
+    if (!steward || args.length > 1 || args.length === 1 && args[0] !== steward.id) throw refuse('error.rotation.butlerOnly', 'rotation-caller');
+    if (!stewardRecord || stewardRecord.failed || !stewardRecord.recording(backgroundOperation.current())) throw refuse('error.steward.recordUnavailable', 'rotation-unrecorded');
+    if (!queueDispatcher) throw refuse('error.rotation.unavailable', 'rotation-unavailable');
+    let row;
+    try {
+      row = await queueDispatcher.requestRotation(steward.id, 'steward');
+    } catch (error) {
+      // Both are thrown before anything is asked for; a save that failed is not.
+      const key = error?.uiMessage?.key, reason = { 'error.rotation.personFirst': 'rotation-person-first', 'error.rotation.unavailable': 'rotation-unavailable' }[key];
+      throw reason ? refuse(key, reason) : error;
+    }
+    return row ? { state: row.state, ...(row.gate ? { gate: row.gate } : {}) } : null;
+  });
   register('modelChoices', (c, id) => modelChanges().choices(id));
   register('changeModel', async (c, id, value, nativeId) => {
     if (!c.background) return modelChanges().request(id, value, nativeId);

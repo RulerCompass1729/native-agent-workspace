@@ -70,6 +70,8 @@ const HUMAN_QUIET_MS = 2 * 60 * 1000;
 // What the person answered on an agent's own cards waits only this long after their last input to that session: the
 // answer is for that agent to go on with, but a line half typed in its terminal leaves no draft (answer-notices.cjs).
 const ANSWER_QUIET_MS = 20 * 1000;
+// Keys in a terminal are written down at most this often.
+const TYPED_SAVE_MS = 5000;
 // A sent item whose send never returned a tag is not resent (no silent replay).
 const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
@@ -226,6 +228,7 @@ function conversation(session) {
   return (session?.messages || []).filter(m => m && (m.role === 'user' || m.role === 'assistant'));
 }
 const personRow = m => m.role === 'user' && !automaticInput(m);
+const personSince = (session, at) => conversation(session).some(m => personRow(m) && Number(m.time) > at);
 function seenRow(session, now) {
   const last = conversation(session).at(-1);
   return { id: validId(last?.id) ? last.id : null, at: now };
@@ -253,10 +256,39 @@ function supplementReply(session, ask, now) {
   return { text: own.map(m => m.text).filter(text => typeof text === 'string' && text.trim()).join('\n\n'), more: next >= 0,
     seen: { id: validId(last?.id) ? last.id : null, at: Number.isFinite(later) ? Math.min(now, later - 1) : now } };
 }
+// A time shown to the minute: a windows' row does not change with every key the person types.
+const wholeMinute = at => Math.ceil(at / 60000) * 60000;
+// A rotation asked for by hand, or its withdrawal (R207): when, and by whom.
+const validAsk = value => dictionary(value) && validTime(value.at) && ['person', 'steward'].includes(value.by);
+function readRequests(value) {
+  const requests = {};
+  for (const [id, request] of Object.entries(dictionary(value) ? value : {})) {
+    if (validId(id) && validAsk(request) && (request.nativeId === null || validId(request.nativeId))) {
+      requests[id] = { at: request.at, by: request.by, nativeId: request.nativeId };
+    }
+  }
+  return requests;
+}
+// When the person last typed in a Codex terminal (noteTyped).
+function readTyped(value) {
+  const typed = {};
+  for (const [id, mark] of Object.entries(dictionary(value) ? value : {})) {
+    if (validId(id) && dictionary(mark) && validTime(mark.at)) {
+      typed[id] = { at: mark.at };
+    }
+  }
+  return typed;
+}
+// The turn of NAW's own request to write the handoff, if it was interrupted.
+function cutTurn(session, tag) {
+  const input = session.messages.find(m => m.id === tag);
+  return validId(input?.turnId) && session.messages.find(m => m.kind === 'turn' && m.nativeId === session.nativeId && m.turnId === input.turnId && m.status === 'interrupted');
+}
 // What an unreadable waiting record loses is asked for again; none of it ends a session on its own.
 function cleanWait(record) {
   const seen = value => dictionary(value) && (value.id === null || validId(value.id)) && validTime(value.at);
   for (const key of ['waitSince', 'usedAt', 'typedAt', 'controlAt']) if (record[key] !== undefined && !validTime(record[key])) delete record[key];
+  for (const key of ['person', 'withdrawn', 'stopped']) if (record[key] !== undefined && !validAsk(record[key])) delete record[key];
   if (record.seen !== undefined && !seen(record.seen)) delete record.seen;
   for (const key of ['gates', 'left']) if (!Array.isArray(record[key]) || !record[key].every(value => typeof value === 'string')) delete record[key];
   const m = record.missed, s = record.supplement;
@@ -1481,6 +1513,47 @@ function planDispatch(input) {
       }
     }
   }
+  // 1b) A rotation asked for by hand (R207) goes before queued items and before those that came due: no size check, no
+  // quiet wait. Only what a rotation never cuts holds it. `requests`: id -> why no successor can match it, or ''.
+  const requests = input.requests instanceof Map ? input.requests : new Map();
+  function requestGate(id, refusal) {
+    if (busy.has(id)) {
+      return why.get(id) || 'busy';
+    }
+    if (rotationOptions.blockedRotations?.has(id)) {
+      return 'trust-fault';
+    }
+    const session = byId.get(id);
+    const readiness = sessionReady(session, input.wakePolicy);
+    if (!readiness.ready) {
+      return readiness.reason;
+    }
+    if (rotationOptions.decisionsStay.has(id)) {
+      return 'decisions-stay';
+    }
+    if (refusal) {
+      return refusal;
+    }
+    if (!settled(id, idleSince, now, settleMs) && !quietFor(session, new Map(), now, settleMs)) {
+      return 'settling';
+    }
+    return rotationSlots > 0 ? '' : 'no-slot';
+  }
+  for (const [id, refusal] of requests) {
+    const gate = requestGate(id, refusal);
+    if (!gate) {
+      rotationSlots -= 1;
+      hold(id, 'rotating');
+      actions.push({ kind: 'rotate', sessionId: id, reason: 'person' });
+      continue;
+    }
+    input.requestGates?.set(id, gate);
+    if (['settling', 'no-slot'].includes(gate)) {
+      // About to be rotated: no new item, and no wake, first.
+      input.quietPending?.set(id, 'person');
+      hold(id, 'rotating');
+    }
+  }
   // 2) Send the next queued item to each ready member, one item per member.
   for (const room of rooms) {
     if (room.archived) {
@@ -1527,8 +1600,11 @@ function planDispatch(input) {
         continue;
       }
       hold(target.id, 'took-item');
-      const reason = rotationReason(target, now, rotationOptions, rotations, 0);
-      stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
+      const asked = requests.has(target.id);
+      const reason = asked ? null : rotationReason(target, now, rotationOptions, rotations, 0);
+      if (!asked) {
+        stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
+      }
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
         actions.push(rotateAction(target.id, reason, rotationOptions));
@@ -1576,6 +1652,9 @@ function planDispatch(input) {
   }
   for (const ids of quietGroups) {
     for (const id of ids) {
+      if (requests.has(id)) {
+        continue;
+      }
       if (busy.has(id)) {
         stalled(id, why.get(id) || 'busy');
         continue;
@@ -1726,6 +1805,7 @@ function dispatchText(roomName, item, notes = '', manager = false) {
 const ROTATION_CAUSES = [
   [/^person-active$/, 'personActive'],
   [/^handoff-missing$/, 'handoffMissing'],
+  [/^handoff-interrupted$/, 'handoffInterrupted'],
   [/^handoff-request-/, 'handoffRequest'],
   [/^handoff-unconfirmed$/, 'handoffUnconfirmed'],
   [/^successor-turn-failed$/, 'successorTurnFailed'],
@@ -1758,7 +1838,9 @@ const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-need
   'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
   'team-running', 'quiet-window', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
   'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
-const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
+// The old session is let go at once: nothing rests and nothing holds it (deferRotation).
+const RELEASED_REASONS = ['person-active', 'handoff-interrupted'];
+const ROTATION_FAILURE_CODES = new Set([...RELEASED_REASONS, 'handoff-missing', 'handoff-request-unconfirmed',
   'handoff-request-timeout', 'handoff-unconfirmed', 'successor-turn-failed', 'old-session-missing', 'new-session-missing',
   'new-session-not-ready', 'new-session-ambiguous', 'create-timeout', 'new-session-model-unreported',
   'join-timeout', 'leave-timeout', 'stop-timeout', 'native-stop-unconfirmed', 'guarded-stop-unavailable',
@@ -1774,7 +1856,10 @@ function rotationReasonCode(value, fallback = 'rotation-failed') {
 }
 
 // Why it is due, as the old session (in Chinese) and the spaces (in the reader's language) are told.
-function rotationWhyNotice(reason, records, bytes, compactions, contextTokens) {
+function rotationWhyNotice(reason, records, bytes, compactions, contextTokens, by) {
+  if (reason === 'person') {
+    return uiNotice(by === 'steward' ? 'notice.rotation.why.butler' : 'notice.rotation.why.person');
+  }
   if (reason === 'memory') {
     return uiNotice('notice.rotation.why.memory', { gb: (bytes / 1073741824).toFixed(1) });
   }
@@ -1788,9 +1873,9 @@ function rotationWhyNotice(reason, records, bytes, compactions, contextTokens) {
 }
 
 function handoffRequestText(why, reason) {
-  const purpose = ['compact', 'context'].includes(reason) ? '为了不再一次次压缩上下文' : '为了释放内存';
+  const purpose = reason === 'person' ? '' : ['compact', 'context'].includes(reason) ? '为了不再一次次压缩上下文，' : '为了释放内存，';
   return [
-    `【NAW 换会话】${why}。${purpose}，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
+    `【NAW 换会话】${why}。${purpose}NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
     '',
     '请现在只写交接，不要开始新工作。交接写给接手的新会话，包括：',
     '1. 正在做的事和目标；',
@@ -1828,8 +1913,10 @@ function directoryHandoff(record, snapshot) {
 // butler designation follows the rotation once that is done (queue-secretary.cjs successor).
 // `decisions`: decisionsNote of the old session's open decisions. It stands right after the old session's own
 // text, whole: only that text is shortened.
-function handoffText(oldName, handoff, directoryNote = '', duty = '', decisions = '') {
-  const after = duty
+function handoffText(oldName, handoff, directoryNote = '', duty = '', decisions = '', solo = false) {
+  const after = solo
+    ? '旧会话交完就结束；要是它交接之后又有新内容，NAW 把之后变了的补给你，再结束它。'
+    : duty
     ? '旧会话交完就结束，大管家由你接着当；要是人这时还在用旧会话，大管家先仍是它，等人用完，NAW 把之后变了的补给你，再结束它、由你接着当。'
     : '旧会话交完就结束；要是人这时还在用它，这个空间里没指定成员的活 NAW 先派给你，等人用完，NAW 把之后变了的补给你，再结束它。';
   const text = body => [
@@ -2125,7 +2212,8 @@ function validLogEntry(entry) {
     return false;
   }
   // archived: an old session NAW archived after its done rotation (only done and kept link sessions).
-  if (!['requested', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
+  // asked, withdrawn, dropped: a rotation asked for by hand (R207).
+  if (!['asked', 'withdrawn', 'dropped', 'requested', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
     return false;
   }
   if (entry.noticeId !== undefined && !validTrustReceipt(entry.noticeId)) return false;
@@ -2538,6 +2626,9 @@ function readRotations(file, now, faults = {}) {
     return unreadable('invalid-envelope');
   }
   if (data.quarantinedRotations && typeof data.quarantinedRotations === 'object' && !Array.isArray(data.quarantinedRotations)) faults.rejected = { ...data.quarantinedRotations };
+  faults.requests = readRequests(data.requests);
+  faults.withdrawals = readRequests(data.withdrawals);
+  faults.typed = readTyped(data.typed);
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
@@ -2680,6 +2771,7 @@ class QueueDispatcher {
     this.humanAt = new Map();
     // The last key the person typed in a session's terminal here.
     this.typedAt = new Map();
+    this.typedSaved = new Map();
     this.rotationWaitReasons = new Map();
     this.pending = null;
     this.again = false;
@@ -2698,6 +2790,16 @@ class QueueDispatcher {
     this.rotationRead = {};
     this.rotations = readRotations(this.file, this.now(), this.rotationRead);
     this.rejectedRotations = { ...this.rotationRead.rejected };
+    // Asked for by hand and not begun: id -> { at, by, nativeId }, kept in the rotations' file (R207).
+    this.requests = this.rotationRead.requests || {};
+    // What the person took back, kept until they next act on that session: the butler does not ask for it meanwhile.
+    this.withdrawals = this.rotationRead.withdrawals || {};
+    this.typed = this.rotationRead.typed || {};
+    this.requestGates = new Map();
+    // When an unsent prompt in its own terminal refused the request (FINISH_RETRY_MS).
+    this.requestTried = new Map();
+    this.lastGates = new Map();
+    this.rotationRows = {};
     this.isolation = trustIsolation(this.roomState.directoryTrustIsolation?.());
     this.persistedTrustHolds = { ...this.isolation.holds };
     this.isolationDirty = false;
@@ -3158,6 +3260,9 @@ class QueueDispatcher {
     }
     const temp = `${this.file}.${randomUUID()}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ version: 1, rotations: this.rotations,
+      ...(Object.keys(this.requests).length ? { requests: this.requests } : {}),
+      ...(Object.keys(this.withdrawals).length ? { withdrawals: this.withdrawals } : {}),
+      ...(Object.keys(this.typed).length ? { typed: this.typed } : {}),
       ...(Object.keys(this.rejectedRotations).length ? { quarantinedRotations: this.rejectedRotations } : {}) }), { mode: 0o600 });
     fs.renameSync(temp, this.file);
   }
@@ -3173,23 +3278,86 @@ class QueueDispatcher {
   }
 
   close() {
+    if (!this.closed && this.typedUnsaved) this.saveQuietly();
     this.closed = true;
     clearInterval(this.timer);
     this.listen(null);
     this.dropOwnClient();
   }
 
-  // The person's own input, takeover or view of a session (main.cjs IPC).
-  noteHuman(sessionId, method, data) {
+  // The person's own input, takeover or view of a session (main.cjs IPC); `viewOwner`: the window it came from.
+  noteHuman(sessionId, method, data, viewOwner) {
     if (typeof sessionId === 'string' && sessionId) {
+      const interrupt = method === 'interrupt' || method === 'input' && terminalInterrupt(data);
       this.humanAt.set(sessionId, this.now());
       if (method === 'input') this.typedAt.set(sessionId, this.now());
+      if (method === 'input' && !interrupt) this.noteTyped(sessionId);
+      if (interrupt || method === 'claim' && this.takenOver(sessionId, viewOwner)) this.noteStop(sessionId);
       // Their stop of a continuation the last pass saw scheduled is their decision, not a stall (noteErrorStalls).
-      if (method === 'interrupt' || method === 'input' && terminalInterrupt(data)) {
+      if (interrupt) {
         for (const stall of this.errorStalls.values()) if (stall.memberId === sessionId && stall.scheduled) stall.stopped = stall.scheduled;
       }
       this.vacancySince.delete(sessionId); this.vacancyIdentity.delete(sessionId);
       this.dirty = true;
+    }
+  }
+
+  // Esc, an interrupt, or taking the session over from another window while the handoff asked for by hand is written:
+  // that rotation ends with the turn and is not asked for again. A look, keys and messages do not stop it (R207).
+  noteStop(sessionId) {
+    const record = this.rotations[sessionId];
+    if (record?.phase !== 'requested' || !record.person || record.stopped) return;
+    record.stopped = { at: this.now(), by: 'person' };
+    // Whatever becomes of the record: not sent, not released, released by the butler.
+    this.withdrawals[sessionId] = { ...record.stopped, nativeId: record.oldNativeId };
+    this.saveQuietly();
+  }
+
+  // Claimed by another window than the one that has it; its own window only shows its other side.
+  takenOver(sessionId, viewOwner) {
+    if (this.rotations[sessionId]?.phase !== 'requested' || typeof viewOwner !== 'string') return false;
+    const owner = this.knownSession(sessionId)?.owner;
+    return typeof owner === 'string' && owner !== viewOwner;
+  }
+
+  // Keys in a Codex terminal may be a prompt not sent, which NAW cannot see there; a restart does not forget them.
+  noteTyped(sessionId) {
+    const now = this.now(), mark = this.typed[sessionId];
+    if (mark) {
+      mark.at = now;
+      this.typedUnsaved = true;
+    }
+    if (now - (this.typedSaved.get(sessionId) ?? -Infinity) < TYPED_SAVE_MS) return;
+    this.typedSaved.set(sessionId, now);
+    const session = this.knownSession(sessionId);
+    if (session && session.provider !== 'codex') return;
+    this.typed[sessionId] = { at: now };
+    this.saveQuietly();
+  }
+
+  // For the person's own key: a state that cannot be read is never in its way.
+  knownSession(sessionId) {
+    try {
+      return (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  unsentTyping(session) {
+    const mark = session.provider === 'codex' && this.typed[session.id];
+    // A new native process starts with an empty prompt (workspace.cjs bind).
+    return Boolean(mark) && session.terminalInputPending !== false && !personSince(session, mark.at);
+  }
+
+  // For the person's own key: a store that cannot be written is never in its way, and one that could not be read is left.
+  saveQuietly() {
+    if (this.rotationRead.error && this.rotationRead.error !== 'missing') return;
+    try {
+      this.save();
+      this.typedUnsaved = false;
+    } catch {
+      // Held in memory.
     }
   }
 
@@ -3277,6 +3445,9 @@ class QueueDispatcher {
 
   // Metadata only, no session state: is there anything to send, settle or rotate?
   hasOpenWork() {
+    if (Object.keys(this.requests).length) {
+      return true;
+    }
     if (this.activeRotations().length || Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)))) {
       return true;
     }
@@ -3516,7 +3687,8 @@ class QueueDispatcher {
         current = this.view();
       }
     }
-    if (rotating || recoveringTrust || Object.values(this.rotations).some(record => record.phase === 'waiting-provider' || waitingOld(record))) {
+    if (rotating || recoveringTrust || Object.values(this.rotations).some(record => record.phase === 'waiting-provider' || waitingOld(record) ||
+        record.person && record.phase === 'failed' && RELEASED_REASONS.includes(record.reason))) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
@@ -3529,13 +3701,16 @@ class QueueDispatcher {
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
-    const waits = new Map(), quietPending = new Map(), rotationGates = new Map(), openItems = new Map();
+    const waits = new Map(), quietPending = new Map(), rotationGates = new Map(), openItems = new Map(), requestGates = new Map();
+    this.pruneRequests(current.snapshot, handedOff, current.now);
     const engaged = this.integration ? this.integration.holding() : undefined;
     const input = {
       waits,
       quietPending,
       rotationGates,
       openItems,
+      requestGates,
+      requests: this.requestRefusals(current.snapshot, current.now),
       unmatched: unmatched ? [unmatched] : [],
       managers: this.managerRooms(current.snapshot.sessions),
       earlier: id => this.earlierSessions(id),
@@ -3580,9 +3755,10 @@ class QueueDispatcher {
       } catch {
         // Its size was dropped before the read.
       }
-      for (const told of [waits, quietPending, rotationGates]) told.clear();
+      for (const told of [waits, quietPending, rotationGates, requestGates]) told.clear();
       actions = planDispatch(input);
     }
+    this.requestGates = requestGates;
     for (const action of actions) {
       if (this.closed) {
         return;
@@ -3597,7 +3773,9 @@ class QueueDispatcher {
         await this.requestHandoff(action, sample.memory.get(action.sessionId), current.snapshot);
       }
     }
+    this.lastGates = rotationGates;
     this.noteRotationStalls(rotationGates, current.snapshot.sessions, current.now);
+    if (this.noteRotationRows(current.snapshot, current.now)) this.broadcast().catch(() => {});
     this.noteErrorStalls(openItems, current.now);
     // In memory only: the person and the butler read why each queued item is still waiting (queue item 5614a65c).
     if (this.roomState.setQueueWaits(waits)) this.broadcast().catch(() => {});
@@ -3650,7 +3828,7 @@ class QueueDispatcher {
       if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
-      if (!click && quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
+      if (!click && ['compact', 'person'].includes(quietPending?.get(steward.sessionId))) return skip('engaged');
       const why = {}, fresh = await this.freshReady(steward.sessionId, click ? 0 : this.humanQuietMs, why, as);
       if (!fresh) return skip(why.reason || 'state-unavailable', why.session);
       // Keys typed in its terminal may be an input on its way that no draft shows.
@@ -4165,6 +4343,12 @@ class QueueDispatcher {
     return !(reply && reply.humanAfter);
   }
 
+  // Whether what the person did since stops this rotation. One asked for by hand goes on: that click, and what they type
+  // after it, is no use of the session, and their messages are told to the successor (R207); their stop is (noteStop).
+  interrupted(old, record, reply) {
+    return record.person ? Boolean(record.stopped) || old.nativeId !== record.oldNativeId : !this.untouched(old, record, reply);
+  }
+
   // The handoff turn reports the mode the person left the session in: its successor has bypass only if it still has.
   leaveBypass(record, old) {
     if (record.provider !== 'claude') {
@@ -4191,7 +4375,7 @@ class QueueDispatcher {
   // Used since this step read it (a keystroke in its terminal, the person's window)? Read fresh
   // state right before ending it.
   // `seen.latest` is then the state judged, for the stop that follows (stopUnchanged).
-  async touchedSince(oldId, old, seen = null) {
+  async touchedSince(oldId, old, seen = null, quietMs = this.humanQuietMs) {
     await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout');
     const latest = this.view().snapshot.sessions.find(s => s.id === oldId);
     if (seen) {
@@ -4206,7 +4390,7 @@ class QueueDispatcher {
     if ((latest.controlRevision || 0) !== (old.controlRevision || 0)) {
       return true;
     }
-    return humanRecent(oldId, this.humanAt, this.now(), this.humanQuietMs);
+    return humanRecent(oldId, this.humanAt, this.now(), quietMs);
   }
 
   // Ends the old process only if nothing moved since `latest`, the state the last check judged. The
@@ -4264,6 +4448,22 @@ class QueueDispatcher {
     }
   }
 
+  // What a successor must start with, or the `reason` no successor can match it.
+  carryOf(session, capabilities) {
+    let carry = carrySettings(session);
+    if (carry.reason === 'model-unknown') {
+      const model = transcriptModel(session, this.transcriptRoot);
+      if (model) {
+        carry = carrySettings({ ...session, model });
+      }
+    }
+    const offered = capabilities || [];
+    if (!carry.reason && (!offered.includes(CREATE_SETTINGS_CAPABILITY) || (carry.settings.profile && !offered.includes(CREATE_PROFILE_CAPABILITY)))) {
+      return { reason: 'backend-cannot-carry-settings' };
+    }
+    return carry;
+  }
+
   // The old session is left as it is: one record, log line and notice, then a week's rest.
   skipRotation(session, now, reason) {
     const record = {
@@ -4292,28 +4492,43 @@ class QueueDispatcher {
   async requestHandoff(action, bytes, plannedSnapshot = this.client.snapshot()) {
     // Keep the last known membership: the fresh read itself can fail.
     const expected = plannedSnapshot.sessions.find(session => session.id === action.sessionId), whyReady = {};
+    const asked = action.reason === 'person' ? this.requests[action.sessionId] : null;
+    if (action.reason === 'person' && !asked) {
+      return;
+    }
     let current;
-    try { current = await this.freshReady(action.sessionId, this.humanQuietMs, whyReady); }
+    try { current = await this.freshReady(action.sessionId, asked ? 0 : this.humanQuietMs, whyReady); }
     catch (error) {
       if (!this.closed) this.rotationWait(expected, error?.message === 'refresh-timeout' ? 'refresh-timeout' : 'refresh-failed');
       return;
     }
+    // Withdrawn while the state was read.
+    if (asked && this.requests[action.sessionId] !== asked) {
+      return;
+    }
     if (!current) {
-      this.rotationWait(expected, whyReady.reason || 'not-idle');
+      if (asked) {
+        this.requestGates.set(action.sessionId, whyReady.reason || 'not-idle');
+      } else {
+        this.rotationWait(expected, whyReady.reason || 'not-idle');
+      }
       return;
     }
     if (this.modelChanging(action.sessionId)) return;
     const session = current.session;
+    if (asked && session.nativeId !== asked.nativeId) {
+      return;
+    }
     const reason = action.reason || 'content';
-    const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions, action.contextTokens);
+    const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions, action.contextTokens, asked?.by);
     const why = whyNotice.text;
     // Decided before the old session is asked anything: a successor must match it.
-    let carry = carrySettings(session);
-    if (carry.reason === 'model-unknown') {
-      const model = transcriptModel(session, this.transcriptRoot);
-      if (model) {
-        carry = carrySettings({ ...session, model });
-      }
+    const carry = this.carryOf(session, current.snapshot.capabilities);
+    const refusal = carry.reason;
+    if (asked && refusal) {
+      // It stays asked for: the row names what to change first.
+      this.requestGates.set(session.id, refusal);
+      return;
     }
     if (carry.reason === 'model-unknown') {
       // Its next turn reports the model; until then the session simply keeps working.
@@ -4329,11 +4544,6 @@ class QueueDispatcher {
         this.appendLog('waiting', { oldId: session.id, oldNativeId: session.nativeId, name: this.name(session), roomIds: spaces }, { reason: 'model-unknown' });
       }
       return;
-    }
-    let refusal = carry.reason;
-    const capabilities = current.snapshot.capabilities || [];
-    if (!refusal && (!capabilities.includes(CREATE_SETTINGS_CAPABILITY) || (carry.settings.profile && !capabilities.includes(CREATE_PROFILE_CAPABILITY)))) {
-      refusal = 'backend-cannot-carry-settings';
     }
     if (refusal) {
       this.skipRotation(session, current.now, refusal);
@@ -4359,11 +4569,19 @@ class QueueDispatcher {
       skipPermissions: session.skipPermissions === true,
       roomIds: roomIds(session),
     };
+    if (asked) {
+      record.person = { at: asked.at, by: asked.by };
+      // In no space and not the butler: no designation goes with it (designationMoved).
+      if (!record.roomIds.length && this.stewardSession(current.snapshot.sessions)?.session.id !== session.id) {
+        record.solo = true;
+      }
+    }
     record.newName = nextName(record.name);
     // Two living sessions called the same cannot be told apart (2026-11-24): not a name in use or already given.
     const names = new Set([...current.snapshot.sessions.flatMap(s => [s.name, this.name(s)]), ...this.log.map(entry => entry.new?.name)]);
     while (names.has(record.newName)) record.newName = nextName(record.newName);
     this.rotations[session.id] = record;
+    delete this.requests[session.id];
     this.save();
     try {
       record.tag = await this.send(session, handoffRequestText(why, reason), `rotation:${session.id}`);
@@ -4376,7 +4594,19 @@ class QueueDispatcher {
         // The person has an unsent prompt there: ask again later, record no failure.
         this.humanAt.set(session.id, this.now());
       }
-      if (notSent(error)) {
+      if (notSent(error) && asked) {
+        delete this.rotations[session.id];
+        if (record.stopped) {
+          // Stopped while it was being sent: ended, as one stopped in its turn is (deferRotation).
+          this.appendLog('waiting', record, { reason: 'person-active' });
+          this.roomState.rotationEvent(record.roomIds, 'withdrawn', this.label(session.id, record.name));
+        } else if (!record.withdrawn) {
+          this.requests[session.id] = { ...asked, ...record.person };
+          this.requestTried.set(session.id, this.now());
+          this.requestGates.set(session.id, errorKey(error) === NATIVE_DRAFT_KEY ? 'terminal-input'
+            : error?.message === 'backend-update-needed' ? 'backend-update-needed' : 'handoff-request-not-sent');
+        }
+      } else if (notSent(error)) {
         delete this.rotations[session.id];
         this.rotationWait(session, errorKey(error) === NATIVE_DRAFT_KEY ? 'person-typing'
           : rotationReasonCode(errorKey(error) || error?.message, 'handoff-request-not-sent'));
@@ -4412,6 +4642,8 @@ class QueueDispatcher {
       const session = snapshot.sessions.find(s => s.id === id), episode = session?.rotationEpisode;
       if (!record.failureCleanup && (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
           episode.epoch === record.episodeEpoch && episode.tag === record.tag || this.retiredProviderWait(session, record))) {
+        // Released by NAW, whose answer was lost.
+        if (record.phase === 'failed' && episode?.disposition?.actor?.kind === 'naw') this.keepAsked(id, record);
         delete this.rotations[id]; this.save();
       }
     }
@@ -4426,7 +4658,7 @@ class QueueDispatcher {
       }
     }
     for (const [id, record] of Object.entries(this.rotations)) {
-      if (record.phase === 'failed' && record.reason === 'person-active' && record.episodeEpoch &&
+      if (record.phase === 'failed' && RELEASED_REASONS.includes(record.reason) && record.episodeEpoch &&
           !record.newId && !record.handoffConfirmed && !trustRecord(record)) {
         try { await this.deferRotation(id, record, null, now); }
         catch { /* Keep the exact unresolved record until its release is confirmed. */ }
@@ -4585,7 +4817,7 @@ class QueueDispatcher {
       record.oldId = oldId;
     }
     // A successor in a moved directory is held under this record (holdTrustSuccessor); it keeps the failed record.
-    if (reason === 'person-active' && stopped && !record.handoffConfirmed && !movedSuccessor(record)) {
+    if (RELEASED_REASONS.includes(reason) && stopped && !record.handoffConfirmed && !movedSuccessor(record)) {
       await this.deferRotation(oldId, record, due, now);
       return;
     }
@@ -4675,10 +4907,26 @@ class QueueDispatcher {
     if (cleanupComplete(record)) this.releaseTrustSuccessor(record);
   }
 
+  // Still asked for: their message came before its handoff, so it is asked for again once the session is free.
+  keepAsked(oldId, record) {
+    if (record.person?.by === 'person' && !record.withdrawn && !record.stopped && record.reason === 'person-active') {
+      this.requests[oldId] = { ...record.person, nativeId: record.oldNativeId };
+    }
+  }
+
   // The person used the old session while it was being rotated (the 11-14 drill, finding 1: a week's rest for it).
   // Nothing failed: the record goes, and the member is rotated again once quiet (personDeferred). No OS notice, since
   // the person is at that session; the space says why the request stopped. Each new attempt asks for a handoff again.
   async deferRotation(oldId, record, due, now) {
+    const cut = record.reason === 'handoff-interrupted';
+    if (cut && !record.cutReported) {
+      // Not known to be the person's stop: they are told, also where the session is in no space, and may ask again.
+      record.cutReported = true;
+      this.save();
+      this.appendLog('failed', record, { reason: record.reason });
+      this.failedEvent(record.roomIds, oldId, record);
+      this.notify('failed', record);
+    }
     if (record.episodeEpoch) {
       const entry = this.client.route(oldId);
       const result = await withTimeout(entry.client.call('invalidateRotation', oldId, record.oldNativeId, record.episodeEpoch,
@@ -4686,11 +4934,272 @@ class QueueDispatcher {
       if (result?.epoch !== record.episodeEpoch || result.tag !== record.tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
     }
     delete this.rotations[oldId];
+    this.keepAsked(oldId, record);
     this.save();
     this.deferredAt.set(oldId, { at: now, due });
-    this.appendLog('waiting', record, { reason: 'person-active' });
-    this.roomState.rotationEvent(record.roomIds, 'deferred', this.label(oldId, record.name));
+    if (!cut) {
+      this.appendLog('waiting', record, { reason: record.withdrawn ? 'withdrawn' : 'person-active' });
+      this.roomState.rotationEvent(record.roomIds, record.withdrawn || record.stopped ? 'withdrawn' : 'deferred', this.label(oldId, record.name));
+    }
     await this.broadcast();
+  }
+
+  // 「现在就换」 (R207): a rotation asked for now by the person, or by the butler for itself. It is the same rotation as one
+  // that came due, begun without the size check and the quiet wait; one already handed over is finished with its own
+  // successor, never with another. Every request and withdrawal is written to the rotation log.
+  async requestRotation(sessionId, by = 'person') {
+    const session = await this.requested(sessionId);
+    const record = this.rotations[sessionId], now = this.now();
+    if (by === 'steward' && (record?.withdrawn || record?.stopped || this.takenBack(session) || this.unusedSuccessor(session))) {
+      throw uiError('error.rotation.personFirst');
+    }
+    if (record && !RESTING_PHASES.includes(record.phase) && !waitingOld(record) && record.phase !== 'requested') {
+      // Its successor is already taking over.
+      if (record.phase === 'waiting-provider') throw uiError('error.rotation.unavailable');
+      return this.rotationRow(sessionId, session, now);
+    }
+    const restore = this.askState(sessionId);
+    if (record?.phase === 'requested' || waitingOld(record)) {
+      if (record.person && !record.withdrawn && !record.stopped) return this.rotationRow(sessionId, session, now);
+      record.person = { at: now, by };
+      delete record.withdrawn;
+      delete record.stopped;
+    } else if (!this.requests[sessionId]) {
+      if (record && (trustRecoveryPending(record) || failedHandoffPending(record))) throw uiError('error.rotation.unavailable');
+      this.requests[sessionId] = { at: now, by, nativeId: session.nativeId || null };
+      this.requestTried.delete(sessionId);
+    } else if (by === 'person' && this.requests[sessionId].by === 'steward') {
+      // Theirs from now on, whoever is the butler.
+      this.requests[sessionId].by = 'person';
+    } else {
+      return this.rotationRow(sessionId, session, now);
+    }
+    if (by === 'person') {
+      delete this.withdrawals[sessionId];
+    }
+    return this.requestSaved('asked', sessionId, session, by, now, restore);
+  }
+
+  // What a request or a withdrawal changes, to put back when it cannot be saved: the window reports that error.
+  askState(sessionId) {
+    const record = this.rotations[sessionId], request = this.requests[sessionId], by = request?.by;
+    const kept = [[this.requests, sessionId], [this.withdrawals, sessionId], ...(record ? ['person', 'withdrawn', 'stopped'].map(key => [record, key]) : [])]
+      .map(([map, key]) => [map, key, map[key]]);
+    return () => {
+      for (const [map, key, value] of kept) {
+        if (value === undefined) delete map[key];
+        else map[key] = value;
+      }
+      if (request) request.by = by;
+    };
+  }
+
+  // 甲: what the person took back stays so until they next act on that session (a message there, or their own click).
+  takenBack(session) {
+    const taken = this.withdrawals[session.id];
+    return Boolean(taken) && !personSince(session, taken.at);
+  }
+
+  // 甲: a new session does not ask because of what its handoff says: the person has written in it first.
+  unusedSuccessor(session) {
+    const rows = conversation(session);
+    const told = rows.findLastIndex(m => typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('rotation-handoff:'));
+    if (told >= 0) {
+      return !rows.slice(told + 1).some(personRow);
+    }
+    const own = this.rotations[session.id];
+    return Boolean(own?.successorOf) && !personSince(session, own.keptAt);
+  }
+
+  // Before the handoff is written; from then on a successor exists or is being made.
+  async withdrawRotation(sessionId, by = 'person') {
+    const record = this.rotations[sessionId], now = this.now();
+    if (!this.requests[sessionId] && (record?.phase !== 'requested' || record.withdrawn)) throw uiError('error.rotation.cannotUndo');
+    const session = await this.requested(sessionId);
+    const restore = this.askState(sessionId);
+    if (this.requests[sessionId]) {
+      delete this.requests[sessionId];
+      this.requestGates.delete(sessionId);
+      // What came due for it on its own waits for quiet again.
+      this.deferredAt.set(sessionId, { at: now, due: 'content' });
+    } else if (this.rotations[sessionId]?.phase === 'requested') {
+      // Its turn is never cut off: the request ends when that turn does (advanceRotation).
+      this.rotations[sessionId].withdrawn = { at: now, by };
+    } else {
+      throw uiError('error.rotation.cannotUndo');
+    }
+    this.withdrawals[sessionId] = { at: now, by, nativeId: session.nativeId || null };
+    return this.requestSaved('withdrawn', sessionId, session, by, now, restore);
+  }
+
+  async requested(sessionId) {
+    const client = this.client || await this.source();
+    const session = client.snapshot().sessions.find(s => s.id === sessionId);
+    const record = this.rotations[sessionId];
+    const open = record && !RESTING_PHASES.includes(record.phase);
+    if (this.closed || !session || session.archived || !['claude', 'codex'].includes(session.provider) ||
+        OUT_STATES.includes(session.state) || this.faultedRotations.has(sessionId) || Object.hasOwn(this.rejectedRotations, sessionId) ||
+        !open && this.handedOff().has(sessionId)) {
+      throw uiError('error.rotation.unavailable');
+    }
+    return session;
+  }
+
+  requestSaved(event, sessionId, session, by, now, restore) {
+    let spaces = [];
+    try {
+      spaces = roomIds(session);
+    } catch {
+      // The line is still written without its spaces.
+    }
+    try {
+      this.save();
+    } catch (error) {
+      restore();
+      throw error;
+    }
+    this.appendLog(event, { oldId: sessionId, oldNativeId: session.nativeId, name: this.name(session), roomIds: spaces }, { by });
+    const row = this.rotationRow(sessionId, session, now);
+    if (row) {
+      this.rotationRows = { ...this.rotationRows, [sessionId]: row };
+    } else {
+      const { [sessionId]: gone, ...rest } = this.rotationRows;
+      this.rotationRows = rest;
+    }
+    this.dirty = true;
+    this.broadcast().catch(() => {});
+    this.schedule();
+    return row;
+  }
+
+  // What is asked for no longer holds: the session is another conversation, is put away, is out for good, or handed over.
+  pruneRequests(snapshot, handedOff, now) {
+    let changed = false;
+    for (const [id, request] of Object.entries(this.requests)) {
+      const session = snapshot.sessions.find(s => s.id === id), record = this.rotations[id];
+      let reason = '';
+      if (session && !request.nativeId && validId(session.nativeId)) {
+        request.nativeId = session.nativeId;
+        changed = true;
+      }
+      if (record && !RESTING_PHASES.includes(record.phase)) {
+        record.person ??= { at: request.at, by: request.by };
+        reason = 'under-way';
+      } else if (session && request.nativeId && session.nativeId && session.nativeId !== request.nativeId) {
+        reason = 'identity-changed';
+      } else if (session?.archived) {
+        reason = 'archived';
+      } else if (handedOff.has(id)) {
+        reason = 'handed-off';
+      } else if (request.by === 'steward' && session && this.stewardSession([session]) === null) {
+        // Asked by the butler for itself, and it is not the butler any more.
+        reason = 'designation-changed';
+      } else if ((!session || OUT_STATES.includes(session.state)) && this.outGate(id, session, now) === '') {
+        reason = 'session-ended';
+      }
+      if (!reason) continue;
+      delete this.requests[id];
+      this.requestGates.delete(id);
+      changed = true;
+      if (reason !== 'under-way') {
+        this.appendLog('dropped', { oldId: id, oldNativeId: request.nativeId, name: session ? this.name(session) : id, roomIds: [] }, { reason, by: request.by });
+      }
+    }
+    for (const id of Object.keys(this.typed)) {
+      const session = snapshot.sessions.find(s => s.id === id);
+      if (session && !this.unsentTyping(session)) {
+        delete this.typed[id];
+        this.typedSaved.delete(id);
+        changed = true;
+      }
+    }
+    for (const [id, taken] of Object.entries(this.withdrawals)) {
+      const session = snapshot.sessions.find(s => s.id === id);
+      const other = session && taken.nativeId && session.nativeId && session.nativeId !== taken.nativeId;
+      if (session && (session.archived || other || personSince(session, taken.at))) {
+        delete this.withdrawals[id];
+        changed = true;
+      }
+    }
+    if (changed) this.save();
+  }
+
+  // For planDispatch: what is asked for, each with why it cannot begin whatever its turn does, or ''.
+  requestRefusals(snapshot, now) {
+    const refusals = new Map();
+    for (const [id, request] of Object.entries(this.requests)) {
+      const session = snapshot.sessions.find(s => s.id === id);
+      let refusal = '';
+      if (!session) {
+        refusal = 'missing';
+      } else if (!request.nativeId) {
+        refusal = 'model-unknown';
+      } else if (now - (this.unknownModelAt.get(id) ?? -Infinity) < UNKNOWN_MODEL_RETRY_MS && !reportedModel(session)) {
+        refusal = 'model-unknown';
+      } else {
+        refusal = this.carryOf(session, snapshot.capabilities).reason || '';
+        if (refusal === 'model-unknown') this.unknownModelAt.set(id, now);
+      }
+      // A prompt not sent may be in its terminal.
+      const tried = now - (this.requestTried.get(id) ?? -Infinity) < FINISH_RETRY_MS;
+      if (!refusal && session && this.unsentTyping(session)) refusal = 'terminal-input';
+      if (!refusal && (tried || humanRecent(id, this.typedAt, now, Math.min(this.humanQuietMs, ANSWER_QUIET_MS)))) {
+        refusal = this.requestGates.get(id) === 'handoff-request-not-sent' ? 'handoff-request-not-sent' : 'terminal-input';
+      }
+      refusals.set(id, refusal);
+    }
+    return refusals;
+  }
+
+  // Where a session's rotation stands, for the person's windows (the row above its composer), or null. `gate`: what it
+  // waits for; `at`: the earliest it goes on when that is their own quiet.
+  rotationRow(id, session, now, policy = { enabled: true }) {
+    const record = this.rotations[id], request = this.requests[id];
+    if (request) {
+      return { state: 'requested', gate: this.requestGates.get(id) || 'settling', undo: true };
+    }
+    if (record && this.faultedRotations.has(id)) return null;
+    const butler = this.stewardSession([session])?.session.id === id;
+    const next = record?.newId ? { id: record.newId, name: this.label(record.newId, record.newName || record.name) } : null;
+    if (waitingOld(record)) {
+      const row = { state: 'handed', gate: record.gate || 'settling', next, ...(butler ? { butler } : {}), ...(record.person ? {} : { now: true }) };
+      if (row.gate === 'person-quiet') row.at = wholeMinute((record.usedAt ?? 0) + this.personQuiet(id, record.reason, butler ? id : null));
+      return row;
+    }
+    if (record?.phase === 'requested') {
+      if (record.withdrawn || record.stopped) return null;
+      const ready = session.state === 'idle' ? sessionReady({ ...session, rotationEpisode: null }, policy).reason : '';
+      return { state: 'writing', undo: true, ...(ready ? { gate: ready } : {}) };
+    }
+    if (record && ['creating', 'joining', 'created', 'handed', 'waiting-trust'].includes(record.phase)) {
+      return { state: 'taking', ...(butler ? { butler } : {}) };
+    }
+    const held = this.lastGates.get(id);
+    if (!held) return null;
+    const row = { state: 'due', gate: held.gate, now: true };
+    if (['quiet', 'human-recent', 'person-active', 'person-recent'].includes(held.gate)) {
+      const last = Math.max(...[lastActivityOf(session, now), this.humanAt.get(id), this.deferredAt.get(id)?.at].filter(Number.isFinite));
+      const quiet = this.personQuiet(id, held.reason, butler ? id : null);
+      const used = conversation(session).findLast(m => m.role === 'user');
+      // Quiet after work of its own or NAW's is not waiting for the person.
+      if (held.gate === 'quiet' && !(used && personRow(used)) && !humanRecent(id, this.humanAt, now, quiet)) return null;
+      row.gate = 'person-quiet';
+      row.at = wholeMinute(last + quiet);
+    }
+    return row;
+  }
+
+  // Read by the windows with every state; computed once a pass. True when one of them changed.
+  noteRotationRows({ sessions, wakePolicy }, now) {
+    const rows = {};
+    for (const id of new Set([...Object.keys(this.requests), ...Object.keys(this.rotations), ...this.lastGates.keys()])) {
+      const session = sessions.find(s => s.id === id);
+      const row = session && !session.archived && ['claude', 'codex'].includes(session.provider) ? this.rotationRow(id, session, now, wakePolicy) : null;
+      if (row) rows[id] = row;
+    }
+    const changed = JSON.stringify(rows) !== JSON.stringify(this.rotationRows);
+    this.rotationRows = rows;
+    return changed;
   }
 
   // Before alpha.284 (a73629ca) a deferral for the person dropped its record and left the backend episode invalid,
@@ -4899,7 +5408,7 @@ class QueueDispatcher {
     if (record.phase === 'waiting-provider') return;
     if (record.phase === 'requested' && await this.waitForProvider(oldId, record, snapshot)) return;
     if (record.phase === 'waiting-trust') {
-      if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
+      if (old && this.interrupted(old, record, replyAfter(old, record.tag, record.requestedAt))) throw Error('person-active');
       if (!successor || ['ended', 'background', 'recoverable', 'error'].includes(successor.state)) throw Error('new-session-directory-trust-unavailable');
       const prompt = successor.nativeStartupPrompt?.kind === 'directory-trust';
       const ready = !prompt && sessionReady(successor, snapshot.wakePolicy).ready;
@@ -4929,20 +5438,35 @@ class QueueDispatcher {
       if (!old) {
         throw Error('old-session-missing');
       }
-      if (old.state !== 'idle' || old.pendingTag || !settled(oldId, this.idleSince, now, this.settleMs)) {
+      const cut = record.person && cutTurn(old, record.tag);
+      // A turn cut off does not settle: Claude reports its background work again only at the end of the next one.
+      if (old.state !== 'idle' || old.pendingTag || !(record.withdrawn || record.stopped || cut) && !settled(oldId, this.idleSince, now, this.settleMs)) {
         return;
       }
       const reply = replyAfter(old, record.tag, record.requestedAt);
-      if (!this.untouched(old, record, reply)) {
+      // Interrupted where no window of this NAW saw a stop: a phone, the native CLI, an agent, a restart. A click after
+      // it asks anew.
+      if (cut && !record.withdrawn && !record.stopped && !(record.person.at > cut.time)) {
+        throw Error('handoff-interrupted');
+      }
+      if (record.withdrawn || cut || this.interrupted(old, record, reply)) {
         throw Error('person-active');
       }
-      if (!reply || !reply.text.trim()) {
-        throw Error('handoff-missing');
+      // Asked for by hand: what the person sent meanwhile is told afterwards (record.seen), not taken as the handoff.
+      const own = reply?.humanAfter ? replyAfter(old, record.tag, record.requestedAt, true) : reply;
+      const during = Boolean(reply?.humanAfter) && Boolean(own?.text.trim());
+      const handoff = during ? own.text : reply?.text || '';
+      if (!handoff.trim()) {
+        throw Error(reply?.humanAfter ? 'person-active' : 'handoff-missing');
       }
-      await this.completeEpisode(oldId, record);
+      try {
+        await this.completeEpisode(oldId, record);
+      } catch (error) {
+        throw reply.humanAfter ? Error('person-active') : error;
+      }
       this.leaveBypass(record, old);
-      record.handoff = reply.text.slice(0, ITEM_TEXT_LIMIT * 2);
-      record.seen = seenRow(old, now);
+      record.handoff = handoff.slice(0, ITEM_TEXT_LIMIT * 2);
+      record.seen = during ? handoffSeen(old, record) : seenRow(old, now);
       record.phase = 'creating';
       record.creatingAt = now;
       this.save();
@@ -5044,7 +5568,7 @@ class QueueDispatcher {
         }
         return;
       }
-      if (old && !this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) {
+      if (old && this.interrupted(old, record, replyAfter(old, record.tag, record.requestedAt))) {
         throw Error('person-active');
       }
       // The new session must report the old one's model (and, once reported, effort and mode).
@@ -5061,7 +5585,7 @@ class QueueDispatcher {
       // Its open decisions go in the same message, whole; the items move once the successor has it (below).
       const decisions = decisionsNote(record.name, openDecisions(snapshot.rooms || [], old || { id: oldId, messages: [] }, record.roomIds || []));
       record.successorOwner = trustProof(fresh); this.save();
-      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record), decisions), `rotation-handoff:${oldId}`);
+      record.handoffTag = await this.send(fresh, handoffText(record.name, record.handoff, directoryHandoff(record, snapshot), this.stewardDuty(oldId, record), decisions, record.solo === true), `rotation-handoff:${oldId}`);
       record.handedAt = now;
       record.phase = 'handed';
       this.save();
@@ -5148,7 +5672,7 @@ class QueueDispatcher {
     if (old.nativeId !== record.oldNativeId) return 'identity-changed';
     if (rowsSince(old, record.seen).some(personRow)) return 'person-message';
     if ((old.controlRevision || 0) !== record.oldControl) return 'control-changed';
-    if (!this.untouched(old, record, replyAfter(old, record.tag, record.requestedAt))) return 'person-input';
+    if (this.interrupted(old, record, replyAfter(old, record.tag, record.requestedAt))) return 'person-input';
     if (typeof old.liveDraft === 'string' && old.liveDraft.trim()) return 'person-typing';
     if (old.state !== 'idle' || old.pendingTag) return old.state === 'idle' || old.state === 'working' ? 'turn-running' : `state-${old.state}`;
     if (this.collaborating(oldId, record, snapshot)) return 'collaborating';
@@ -5193,7 +5717,7 @@ class QueueDispatcher {
       }
       this.save();
     }
-    if (!record.told && (PERSON_GATES.includes(gate) || now - record.waitSince > STOP_WAIT_MS)) {
+    if (!record.told && (PERSON_GATES.includes(gate) && !record.person || now - record.waitSince > STOP_WAIT_MS)) {
       record.told = true;
       this.save();
       this.roomState.rotationEvent(record.roomIds, 'oldKept', this.label(oldId, record.name), this.label(record.newId, record.newName || record.name));
@@ -5265,9 +5789,9 @@ class QueueDispatcher {
     const ready = sessionReady({ ...old, archived: false }, snapshot.wakePolicy);
     if (!ready.ready) return ready.reason !== 'not-idle' ? ready.reason : old.state === 'working' ? 'turn-running' : `state-${old.state}`;
     // Claude's own prompt says whether it holds text when NAW asks it (NATIVE_DRAFT_KEY); Codex's cannot be asked.
-    if (record.typedAt !== undefined && old.provider === 'codex') return 'terminal-input';
+    if (old.provider === 'codex' && (record.typedAt !== undefined || record.person && this.unsentTyping(old))) return 'terminal-input';
     const butler = this.stewardSession(snapshot.sessions)?.steward.sessionId;
-    if (now - (record.usedAt ?? 0) < this.personQuiet(oldId, record.reason, butler)) return 'person-quiet';
+    if (!record.person && now - (record.usedAt ?? 0) < this.personQuiet(oldId, record.reason, butler)) return 'person-quiet';
     if (this.collaborating(oldId, record, snapshot)) return 'collaborating';
     if (engagedSessions({}, snapshot.rooms).has(oldId)) return 'queue-item';
     if (!settled(oldId, this.idleSince, now, this.settleMs)) return 'settling';
@@ -5285,7 +5809,7 @@ class QueueDispatcher {
 
   // A designation the person has since given to another session; 'unreadable' is not an answer.
   designationMoved(oldId, record, holder) {
-    if (record.roomIds.length) return false;
+    if (record.roomIds.length || record.solo) return false;
     let steward;
     try { steward = this.steward(); } catch { return 'unreadable'; }
     return Boolean(steward && ![oldId, record.newId, holder?.id].includes(steward.sessionId));
@@ -5379,7 +5903,7 @@ class QueueDispatcher {
   // for the row and does not send again.
   async askSupplement(oldId, record, holderName, now) {
     const why = {};
-    let current = await this.freshReady(oldId, this.humanQuietMs, why);
+    let current = await this.freshReady(oldId, record.person ? 0 : this.humanQuietMs, why);
     if (why.reason === 'archived') {
       // One the person put away while it runs is asked too, if nothing else holds it.
       const view = this.view(), session = view.snapshot.sessions.find(s => s.id === oldId);
@@ -5558,7 +6082,8 @@ class QueueDispatcher {
       }
       // Fresh state before anything changes: a session used meanwhile keeps its spaces and process.
       const judged = seenRow(old, now), seen = {};
-      const moved = async () => await this.touchedSince(oldId, old, seen) ? 'changed-before-stop' : seen.latest && rowsSince(seen.latest, judged).length ? 'new-content' : this.recipientGate(record);
+      const quietMs = record.person ? 0 : this.humanQuietMs;
+      const moved = async () => await this.touchedSince(oldId, old, seen, quietMs) ? 'changed-before-stop' : seen.latest && rowsSince(seen.latest, judged).length ? 'new-content' : this.recipientGate(record);
       const before = await moved();
       if (before) return before;
       for (const roomId of record.roomIds) {

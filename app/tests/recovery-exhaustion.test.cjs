@@ -67,8 +67,9 @@ function rig(t,f){
  t.after(()=>d.close());
  const told=()=>ingress.ledger.eventsAfter(null).events.filter(e=>e.payload.reason==='error-stalled');
  const pass=async ms=>{for(let n=0;n<ms;n+=10000){d.dirty=true;await d.schedule();clock.now+=10000;}};
- const authorize=new Function('queueRules','queueDispatcher',human+'return (method,args)=>{if(humanSessionWork(method,args))'+note+'};')(rules,d);
- const person=async(method,...args)=>{authorize(method,[f.s.id,...args]);await (method==='draft'?f.w.setDraft(f.s.id,...args):f.w[method](f.s.id,...args));};
+ const authorize=new Function('queueRules','queueDispatcher',human+'return (method,args,context)=>{if(humanSessionWork(method,args))'+note+'};')(rules,d);
+ // The window a call comes from is the owner the workspace is given (claim's first argument, the others' last).
+ const person=async(method,...args)=>{authorize(method,[f.s.id,...args],{view:{owner:method==='claim'?args[0]:args.at(-1)}});await (method==='draft'?f.w.setDraft(f.s.id,...args):f.w[method](f.s.id,...args));};
  return {room,id,clock,told,pass,person};
 }
 const STREAM={apiErrorStatus:undefined,apiError:'stream_idle_timeout',error:'server_error'};
