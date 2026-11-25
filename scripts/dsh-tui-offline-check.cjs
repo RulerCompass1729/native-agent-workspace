@@ -38,6 +38,7 @@ const BLOCKED_TARGET = 'example.com:443';
 // pty_host.py sends SIGKILL only once this long has passed since its SIGTERM.
 const PTY_TERM_GRACE_MS = 5000;
 const ATTEMPTS = 3;
+const REQUEST_FIELDS = new Set(['max_tokens', 'messages', 'model', 'output_config', 'stream', 'system', 'thinking', 'tools']);
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -149,11 +150,12 @@ function startFakeDeepSeek(certificate) {
       body += chunk;
     });
     request.on('end', () => {
-      let model = null, fields = [];
+      let model = null, fields = [], parsed = false;
       try {
-        const parsed = JSON.parse(body);
-        model = parsed.model || null;
-        fields = Object.keys(parsed).sort();
+        const json = JSON.parse(body);
+        model = json.model || null;
+        fields = Object.keys(json).sort();
+        parsed = true;
       } catch {
         model = null;
       }
@@ -165,6 +167,7 @@ function startFakeDeepSeek(certificate) {
         headers: Object.keys(request.headers).sort(),
         model,
         fields,
+        parsed,
         fakeKeyArrived: headerKey === FAKE_KEY || bearer === `Bearer ${FAKE_KEY}`,
       });
       if (request.method === 'POST' && /\/v1\/messages$/.test(request.url)) {
@@ -344,6 +347,11 @@ async function checkChat(options, where) {
   // Upstream sends these by default inside model requests, which the egress proxy cannot see.
   const uploads = [...new Set(options.fake.requests.flatMap(request => request.fields.filter(name => name.startsWith('dsh_'))))];
   check('chat: no dsh_session_log or dsh_plugin_packages field', uploads.length === 0, uploads.join(',') || 'none');
+  // A renamed or new upload shows up as a field outside this list; an unreadable body is not a pass.
+  const extra = [...new Set(turns.flatMap(request => request.fields.filter(name => !REQUEST_FIELDS.has(name))))];
+  const unread = turns.filter(request => !request.parsed).length;
+  check('chat: model requests carry only the expected fields', turns.length > 0 && unread === 0 && extra.length === 0,
+    `unexpected: ${extra.join(',') || 'none'}; unreadable: ${unread}; seen: ${[...new Set(turns.flatMap(request => request.fields))].join(',')}`);
   const targets = session.proxy.records().map(item => `${item.target}:${item.verdict}`);
   check('chat: egress saw only api.deepseek.com:443', targets.length > 0 && targets.every(item => item === 'api.deepseek.com:443:allowed'), [...new Set(targets)].join(','));
   await session.stop();
