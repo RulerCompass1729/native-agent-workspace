@@ -16,6 +16,16 @@ const DIRECTED = 'peerDirectedHandoffsV2';
 const fields = ['nativeId', 'owner', 'memberRevision', 'controlRevision', 'connectionRevision', 'peerRevision'];
 const backendIdentity = s => { const value = s.provider === 'codex' ? s.serverIdentity : s.processIdentity; return { pid: value?.pid ?? s.pid ?? null, started: value?.started ?? null }; };
 const identity = (s, roomId = 'shared') => ({ ...Object.fromEntries(fields.map(k => [k, s[k] ?? (k === 'peerRevision' ? 0 : null)])), backend: backendIdentity(s), ...(roomId === 'shared' ? {} : { roomId, roomMemberRevision: spaces.membershipRevision(s, roomId) }) });
+// R238: ordinary input into a recipient does not withdraw a message on its way to it. Its backend publishes how much of its
+// revisions that input made (session-wake.cjs recipientInput) with an epoch that a reopened backend never repeats; without
+// readable counts (an older backend) the whole identity counts, as before. `input` marks the proofs made this way.
+const inputCounts = value => value && typeof value.epoch === 'string' && /^[0-9a-f-]{36}$/.test(value.epoch) &&
+  [value.control, value.peer].every(count => Number.isSafeInteger(count) && count >= 0) ? value : null;
+function recipientIdentity(session, counts = session.wakeInput) {
+  const proof = identity(session), input = inputCounts(counts);
+  if (!input) return proof;
+  return { ...proof, controlRevision: proof.controlRevision - input.control, peerRevision: proof.peerRevision - input.peer, input: input.epoch };
+}
 const sameIdentity = (s, expected) => s && (!expected.roomId || spaces.roomId(expected.roomId) && spaces.membershipRevision(s, expected.roomId) === expected.roomMemberRevision) && fields.filter(k => !expected.roomId || k !== 'memberRevision').every(k => (s[k] ?? (k === 'peerRevision' ? 0 : null)) === expected[k]) && JSON.stringify(backendIdentity(s)) === JSON.stringify(expected.backend);
 const clean = (text, max) => typeof text === 'string' && !!text.trim() && text.length <= max && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text);
 const counts = info => Object.fromEntries(['background', 'scheduled', 'fleetPending', 'stopHookActive'].map(k => [k, info[k] ?? null]));
@@ -148,7 +158,7 @@ class PeerRunner {
     if (readiness && found.canCheckWake) {
       const client = await this.connect(path.join(root, found.key), 'workspace-wake-check');
       try {
-        found.readiness = await client.call('wakeCheck', { ...readiness, recipientId: id, targetProof: identity(found.session) });
+        found.readiness = await client.call('wakeCheck', { ...readiness, recipientId: id, targetProof: recipientIdentity(found.session) });
         if (!['ready', 'not-sent'].includes(found.readiness?.status) || found.readiness.status === 'not-sent' && typeof found.readiness.reason !== 'string') throw uiError('error.wake.nativeGoalDisallows');
       } finally { client.close(); }
     }
@@ -337,4 +347,4 @@ function mergePeerMessages(messages) {
   }
   return [...map.values()].map(m => aliases.has(m.replyTo) ? { ...m, replyTo: aliases.get(m.replyTo) } : m);
 }
-module.exports = { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity, mergePeerMessages };
+module.exports = { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity, recipientIdentity, mergePeerMessages };

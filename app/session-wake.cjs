@@ -133,16 +133,37 @@ function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailur
 // stop, membership or permission changes. Runtime-only: reopening never replays a wake.
 const inputChanges = new WeakMap();
 // byAgent is said by the caller: an event's ambient background operation may be an older one its connection was opened in.
-function messageInput(w, s, { control = 0, peer = 0, connection = 0, byAgent = false }) {
+// recipient false: counted for what the session sends, not for a message on its way to it.
+function messageInput(w, s, { control = 0, peer = 0, connection = 0, byAgent = false, recipient = !byAgent }) {
+  if (recipient) recipientInput(s, { control, peer });
   const prior = inputChanges.get(s) || { control: 0, peer: 0, connection: 0, agentControl: 0 };
   inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer, connection: prior.connection + connection,
     agentControl: prior.agentControl + (byAgent ? control : 0) });
 }
 // The same window reconnected to the same turn, still running (workspace.cjs resume): its own two changes are counted.
 function reconnected(w, s) {
-  messageInput(w, s, { control: 1, connection: 1 });
+  messageInput(w, s, { control: 1, connection: 1, recipient: false });
   const list = causes.get(s) || [], at = list.findLastIndex(e => e.code === labelled('reconnect'));
   if (at >= 0) causes.set(s, list.toSpliced(at, 1));
+}
+// R238 (the person, 2026-11-25), the recipient's side: the same input does not withdraw a message on its way here either.
+// Narrower than the sender's count: a reconnect, and another agent's background queue or steer, still withdraw it.
+// The snapshot publishes it, for the sender's backend to register with (peer-handoffs.cjs recipientIdentity).
+const recipientCounts = new WeakMap();
+function arrivals(s) {
+  let value = recipientCounts.get(s);
+  if (!value) recipientCounts.set(s, value = { epoch: randomUUID(), control: 0, peer: 0 });
+  return value;
+}
+function recipientInput(s, { control = 0, peer = 0 }) {
+  const value = arrivals(s);
+  recipientCounts.set(s, { ...value, control: value.control + control, peer: value.peer + peer });
+}
+// Esc anywhere in one piece of terminal input, or Esc or Ctrl-C as a key report (Ctrl-C's own byte is told apart before
+// this, workspace.cjs input). Arrow and editing keys, a paste's marks and an Option key (Esc and one character) are not.
+function interrupts(data) {
+  if (/^\x1b[^\x1b]$/u.test(data) && !/^\x1b[[O]$/.test(data)) return false;
+  return data.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|O[ -~])/g, key => /^\x1b\[(?:27;\d+;)?(?:27|67|99)(?:[;:][\d;:]*)?[u~]$/.test(key) ? '\x1b' : '').includes('\x1b');
 }
 function sourceIdentity(w, s) {
   const proof = identity(s), input = inputChanges.get(s);
@@ -177,7 +198,9 @@ function nativeStart(w, r, info, s) {
   catch { r.wakeTurn = null; }
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
-function same(s, expected) { return s && JSON.stringify(identity(s)) === JSON.stringify(expected); }
+// The recipient as a proof names it: less its ordinary input when the proof was made so, else whole.
+function recipientProof(s, expected) { return expected?.input === undefined ? identity(s) : require('./peer-handoffs.cjs').recipientIdentity(s, arrivals(s)); }
+function same(s, expected) { return s && JSON.stringify(recipientProof(s, expected)) === JSON.stringify(expected); }
 function sourceIssue(w, s, r, intent) {
   if (w.closed) return { code: 'workspace-closed' };
   if (w.storageWarning) return { code: 'storage-unavailable' };
@@ -199,19 +222,22 @@ function notSent(error, hold) {
 // A message the designated butler refuses only for its 60-second limit is kept by its sender's backend and offered
 // again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (eight in
 // a row, waiting, switched off, a changed identity), and the limit of every other recipient, stay as before: not sent,
-// not retried. Each offer is a full delivery attempt again, so the person acting on the recipient, stopping or taking over
-// the sender, or pausing all handoffs still ends it. The recipient's backend says so, with the time its limit opens.
+// not retried. Each offer is a full delivery attempt again, so the person interrupting or taking over the recipient, stopping
+// or taking over the sender, or pausing all handoffs still ends it. The recipient's backend says so, with the time its limit opens.
 // Ordinary input into the sender does not end it, whatever holds it (the person, 11-24, 3b and 3c: 「真人往发送方打的
 // 普通字、别的 agent 的消息，都不撤」): sourceIssue, which every look and the recipient's take check, leaves it out.
 //
 // R187/R188: from any sender, one refused because the recipient is at work is held too, at most QUIET_HELD_MAX on this
 // backend and BUSY_HOLD_MS each, and offered every minute. Marked busyHold, its recipient takes it only when idle,
 // never in a running turn, and it waits out the recipient's other passing states. The limits stay as they are.
-const BUSY = 'error.wake.recipientBusy', BUSY_HOLD_HOURS = 2, BUSY_HOLD_MS = BUSY_HOLD_HOURS * 3600000;
+//
+// R238: so is one that text left unsent in Claude's own prompt keeps out (DRAFT): never written over it or sent with it.
+// Claude's prompt is asked again once something was typed or sent there, and at the latest after DRAFT_ASK_MS.
+const BUSY = 'error.wake.recipientBusy', DRAFT = 'error.submission.nativeDraft', WAITS = Object.freeze([BUSY, DRAFT]), DRAFT_ASK_MS = 600000, BUSY_HOLD_HOURS = 2, BUSY_HOLD_MS = BUSY_HOLD_HOURS * 3600000;
 function holdFor(w, s, error, intent) {
   const key = error?.uiMessage?.key, at = s.wakeBudget?.lastAt;
   const limit = error?.cooldown === true && Number.isSafeInteger(at) ? { hold: true, retryAt: at + COOLDOWN } : undefined;
-  if (key === BUSY || intent?.busyHold && QUIET_PASSING.includes(key)) return limit || { hold: true, retryAt: Date.now() + COOLDOWN };
+  if (WAITS.includes(key) || intent?.busyHold && QUIET_PASSING.includes(key)) return limit || { hold: true, retryAt: Date.now() + COOLDOWN };
   return isSteward(w, s) ? limit : undefined;
 }
 // The sender's side checks the answer too: only a refusal for the recipient being at work, or for the limit of a
@@ -220,7 +246,7 @@ function holdable(w, intent, result) {
   if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt)) return false;
   const key = result.reasonUiMessage?.key;
   if (intent.busyHold && QUIET_PASSING.includes(key)) return Date.now() < intent.busyHold.deadline;
-  if (key === BUSY) return busyRows(w) < QUIET_HELD_MAX;
+  if (WAITS.includes(key)) return busyRows(w) < QUIET_HELD_MAX;
   return key === 'error.wake.recipientCooldown' && stillButler(w, intent);
 }
 const busyHold = () => ({ deadline: Date.now() + BUSY_HOLD_MS });
@@ -273,7 +299,7 @@ async function relocate(w, intent) {
   const found = await w.peerRunner.lookupWake(intent.recipientId);
   if (found.key === intent.targetKey) return;
   if (!found.session || found.session.nativeId !== intent.targetProof?.nativeId) throw uiError('error.wake.recipientIdentityChanged');
-  intent.targetKey = found.key; intent.targetProof = identity(found.session);
+  intent.targetKey = found.key; intent.targetProof = require('./peer-handoffs.cjs').recipientIdentity(found.session);
   durable(w);
 }
 // A message from another space does not reach a space's project manager (space-managers.cjs).
@@ -398,7 +424,7 @@ async function stageOnce(w, s, r, native, args) {
   const after = sourceIssue(w, s, r, intent);
   if (after) throw revokedError(issueCause(w, s, after, intent, since));
   if (native.valid?.() === false || r.turnId !== native.turnId) throw revokedError(controlCause(s, since, 'native-turn'));
-  intent.targetKey = target.key; intent.targetProof = identity(target.session);
+  intent.targetKey = target.key; intent.targetProof = require('./peer-handoffs.cjs').recipientIdentity(target.session);
   const managed = managerRefusal(w, s, target.session);
   if (managed) target.readiness = managed;
   const quiet = quietWindow(w, target.key), refused = target.readiness?.status === 'not-sent';
@@ -413,7 +439,7 @@ async function stageOnce(w, s, r, native, args) {
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
   // The butler's limit can open before this turn ends: the message stays staged, and is held then if it has not.
   const waits = !intent.quietWindow && !full && !same && refused && holdable(w, intent, target.readiness);
-  if (waits && target.readiness.reasonUiMessage.key === BUSY) intent.busyHold = busyHold();
+  if (waits && WAITS.includes(target.readiness.reasonUiMessage.key)) intent.busyHold = busyHold();
   if (same) refusedNotice(row, quietSame());
   else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
@@ -550,7 +576,7 @@ function hold(w, row, { retryAt, reasonUiMessage }) {
   intent.status = 'held'; intent.heldAt ??= now;
   // Never sooner than a second from now, never later than the limit itself allows.
   intent.retryAt = Math.min(Math.max(retryAt, now + 1000), now + COOLDOWN + 1000);
-  if (reasonUiMessage.key === BUSY) intent.busyHold ??= busyHold();
+  if (WAITS.includes(reasonUiMessage.key)) intent.busyHold ??= busyHold();
   if (intent.busyHold) {
     // A window that closed is over: only the recipient keeps this one now, on the backend it is on.
     delete intent.quietWindow;
@@ -657,6 +683,8 @@ function budgetIssue(s, id, senderId, senderKey = senderId) {
   if (senderId === undefined) return budget.lastAt && Date.now() - budget.lastAt < COOLDOWN ? ['error.wake.recipientCooldown'] : null;
   if (typeof senderId !== 'string' || !senderId) return ['error.wake.recipientUnreachable'];
   if (typeof senderKey !== 'string' || !senderKey) return ['error.wake.recipientUnreachable'];
+  // Its own reservation, also once the person's input since then cleared the run.
+  if (budget !== s.wakeBudget && s.wakeBudget?.version === 2 && budgetSender({ senders: s.wakeBudget.senders || {} }, senderId, senderKey)?.id === id) return null;
   const sender = budgetSender(budget, senderId, senderKey), streak = sender?.streak || 0;
   if (sender?.id === id) return streak <= MAX_STREAK ? null : ['error.wake.consecutiveLimit'];
   if (streak >= MAX_STREAK) return ['error.wake.consecutiveLimit'];
@@ -740,6 +768,7 @@ function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r, intent)?.mod
   // the one it just took is still on its way in, so the butler's can be held (option A).
   const budget = budgetIssue(s, intent.id, intent.senderId, intent.senderNativeId || intent.nativeId || intent.senderId);
   if (budget) return budget;
+  if (!tag && r.wakeDraft && r.wakeDraft.control === s.controlRevision && Date.now() < r.wakeDraft.until) return [DRAFT];
   if (mode === 'queue' || mode === 'steer') {
     if (s.approval || r.nativeInputRequired || s.state === 'approval') return ['error.wake.recipientAwaiting'];
     const slot = mode === 'queue' ? r.pendingQueue : r.pendingSteer;
@@ -793,7 +822,7 @@ async function receive(w, spec) {
   let s, r;
   // Ended before the take: nothing was written, so it is not an unknown outcome.
   try { s = w.get(spec.recipientId); r = w.runtime(s.id); } catch (error) { return notSent(error); }
-  const proof = identity(s), generation = boundary(w);
+  const proof = require('./peer-handoffs.cjs').recipientIdentity(s, arrivals(s)), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
   let route;
   try {
@@ -807,21 +836,44 @@ async function receive(w, spec) {
     }
     refuseRecipient(w, s, r, intent);
     route = routeFor(s, r, intent);
-  } catch (error) { return notSent(error, holdFor(w, s, error, intent)); }
-  reserveBudget(s, intent.id, intent.senderId, intent.nativeId);
+  } catch (error) { return refusal(w, s, r, intent, personPending(s, r, error) ? uiError(BUSY, { name: s.name }) : error); }
+  const before = s.wakeBudget, reserved = reserveBudget(s, intent.id, intent.senderId, intent.nativeId);
   // The ticket holds the way chosen here: a message sent as a turn of its own stays one, and a midturn one keeps
   // its slot and turn. Every native step checks it again.
   const ticket = { intent, mode: route.mode, valid: tag => eligible(w, s, r, intent, tag, route.mode, route.turnId) };
   const text = `[Workspace message from ${intent.senderName} · ${intent.senderId} at ${new Date(intent.time).toISOString()}]\n${intent.body}`;
   durable(w);
-  if (route.mode !== 'send') {
-    let tag;
+  let tag;
+  try { tag = route.mode === 'send' ? await w.send(s.id, text, null, null, null, null, null, ticket) : await w.wakeMidturn(s.id, text, ticket, route); }
+  catch (error) {
+    const held = error?.notSent === true && heldBack(w, s, r, intent, error);
+    if (held) {
+      if (reserved && s.wakeBudget === reserved) s.wakeBudget = before;
+      // It never reached the session: no row of it stays there, and the next attempt makes its own.
+      const at = s.messages.findIndex(m => m.id === ticket.tag && m.origin === 'agent-wake');
+      if (at >= 0) s.messages.splice(at, 1);
+      try { durable(w); } catch { /* The next save keeps it. */ }
+      return held;
+    }
     // A refusal before native held it is not-sent, with its reason; an uncertain outcome stays an error (unconfirmed).
-    try { tag = await w.wakeMidturn(s.id, text, ticket, route); } catch (error) { if (error?.notSent === true) return notSent(error); throw error; }
-    return { status: s.messages.find(m => m.id === tag)?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
+    if (route.mode !== 'send' && error?.notSent === true) return notSent(error);
+    throw error;
   }
-  const tag = await w.send(s.id, text, null, null, null, null, null, ticket);
-  const row = s.messages.find(m => m.id === tag);
-  return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
+  return { status: s.messages.find(m => m.id === tag)?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, QUEUE_DONE, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, queueDone, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+const refusal = (w, s, r, intent, error) => notSent(error, holdFor(w, s, error, intent));
+// R238: the person's own input, queued or on its way in, as the reason this one cannot go now.
+function personPending(s, r, error) {
+  const tag = error?.uiMessage?.key === 'error.wake.recipientInputPending' && (r.pendingQueue || r.pendingSteer || s.pendingTag);
+  const row = tag && s.messages.find(m => m.id === tag);
+  return Boolean(row) && ['human', 'human-mobile'].includes(row.origin);
+}
+// R238: native has none of it, and what stopped it was ordinary input: text in Claude's prompt, or input that came first.
+// Everything that withdraws a message shows in recipientIssue, and is then not held.
+function heldBack(w, s, r, intent, error) {
+  const key = error.uiMessage?.key, issue = recipientIssue(w, s, r, intent);
+  if (issue) return issue[0] === BUSY ? refusal(w, s, r, intent, uiError(...issue)) : null;
+  if (key === DRAFT) { r.wakeDraft = { control: s.controlRevision, until: Date.now() + DRAFT_ASK_MS }; return refusal(w, s, r, intent, error); }
+  return error.inputChanged === true || key === 'error.submissionRevokedByHuman' ? refusal(w, s, r, intent, uiError(BUSY, { name: s.name })) : null;
+}
+module.exports = { CAPABILITY, PREFLIGHT, QUEUE_DONE, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, queueDone, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, recipientInput, arrivals, interrupts, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

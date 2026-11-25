@@ -173,14 +173,15 @@ test('a person typing to an unrelated session neither cancels a staged wake nor 
   assert.equal(delivered.length, 1, 'The staged wake is delivered once');
   assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted');
 });
-test('a person acting on the receiver still cancels that wake; the person\'s input into the sender does not', async t => {
-  for (const act of ['sender-input', 'receiver-send', 'receiver-native-input']) {
+test('the person interrupting the receiver still cancels that wake; input into the sender or the receiver does not (R238)', async t => {
+  for (const act of ['sender-input', 'receiver-native-input', 'receiver-esc', 'receiver-ctrl-c']) {
     const f = await fixture(t); await f.call();
+    f.target.get(f.b).view = 'terminal'; f.rb.terminal = { alive: true, input() {} };
     if (act === 'sender-input') f.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
-    else if (act === 'receiver-send') await f.target.send(f.b, 'The person talks to the receiver.', 'target-owner');
-    else f.rb.emit('nativeInput', 'The person types into the receiver', { id: 'receiver-native-input' });
+    else if (act === 'receiver-native-input') f.rb.emit('nativeInput', 'The person types into the receiver', { id: 'receiver-native-input' });
+    else f.target.input(f.b, act === 'receiver-esc' ? '\x1b' : '\x03', 'target-owner');
     await f.finish();
-    const delivered = act === 'sender-input';
+    const delivered = act.endsWith('-input');
     assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, delivered ? 1 : 0, act);
     assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status === 'submitted', delivered, act);
   }
@@ -537,7 +538,7 @@ test('pointer hover over a terminal is not human input; a press still is', async
   const g = await fixture(t); g.target.get(g.b).view = 'terminal'; g.rb.terminal = { alive: true, input() {} };
   await g.call(); g.target.input(g.b, '\x1b[<0;10;5M', 'target-owner');
   assert.notEqual(g.target.get(g.b).controlRevision, control, 'A press is a human operation');
-  await g.finish(); assert.equal(g.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 0);
+  await g.finish(); assert.equal(g.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 1, 'It interrupts nothing (R238)');
 });
 
 for (const side of ['source', 'target']) test(`terminal-generated mode reports preserve a staged wake at the ${side}`, async t => {
@@ -1238,10 +1239,11 @@ test('the butler still holds a message its limit refuses while the one it just t
   assert.equal(f.rows().at(-1).wake.status, 'held');
   f.target.get(f.b).pendingTag = null;
 });
-test('a held message is not sent once the person acts on the butler, stops or takes over the sender, or pauses all handoffs; words into the sender leave it (option A)', async t => {
+test('a held message is not sent once the person interrupts the butler, stops or takes over the sender, or pauses all handoffs; words into either leave it (option A, R238)', async t => {
   const wake = require('../session-wake.cjs');
   const outcomes = {
-    'butler-input': ['not-sent', '自动消息没有发出；不会自动重发。\n收件方已不是登记时的那个会话。\nSecond.'],
+    'butler-esc': ['not-sent', '自动消息没有发出；不会自动重发。\n收件方已不是登记时的那个会话。\nSecond.'],
+    'butler-input': ['submitted', '发给原会话的自动消息：原生已接收。\nSecond.'],
     'sender-input': ['submitted', '发给原会话的自动消息：原生已接收。\nSecond.'],
     'sender-esc': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
     'sender-takeover': ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nSecond.'],
@@ -1252,14 +1254,15 @@ test('a held message is not sent once the person acts on the butler, stops or ta
     const f = await toButler(t);
     await f.turn('first', 'First.'); f.reply(); f.advance(10000); await f.turn('second', 'Second.');
     const row = f.rows().at(-1); assert.equal(row.wake.status, 'held', act);
-    if (act === 'butler-input') f.rb.emit('nativeInput', 'The person types into the butler', { id: 'butler-native-input' });
+    if (act === 'butler-esc') { f.target.get(f.b).view = 'terminal'; f.rb.terminal = { alive: true, input() {} }; f.target.input(f.b, '\x1b', f.target.get(f.b).owner); }
+    else if (act === 'butler-input') f.rb.emit('nativeInput', 'The person types into the butler', { id: 'butler-native-input' });
     else if (act === 'sender-input') f.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
     else if (act === 'sender-esc') { f.source.get(f.a).view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, '\x1b', 'source-owner'); }
     else if (act === 'sender-takeover') f.source.claim(f.a, 'another-window');
     else if (act === 'pause-all') f.target.pauseAll('你暂停了后续交接');
     else { f.source.pauseAll('你暂停了后续交接'); assert.equal(row.wake.status, 'cancelled', 'at once, on its own backend'); }
     f.advance(60000); wake.retryHeld(f.source); await f.settle();
-    assert.equal(f.writes.length, act === 'sender-input' ? 2 : 1, act);
+    assert.equal(f.writes.length, ['sender-input', 'butler-input'].includes(act) ? 2 : 1, act);
     assert.deepEqual([row.wake.status, row.text], outcomes[act], act);
     assert.equal(f.source.wakeHoldTimer, null, act);
   }
@@ -1936,12 +1939,12 @@ for (const [name, data] of scrolls) test(`${name} in a terminal is not a person'
   }
   await f.finish(); assert.equal(f.writes.length, 1);
 });
-for (const [name, data] of [['a click', '\x1b[<0;10;5M'], ['a release', '\x1b[<0;10;5m'], ['a drag', '\x1b[<32;10;5M'], ['the wheel and a click', '\x1b[<64;10;5M\x1b[<0;10;5M'], ['the wheel and a key', '\x1b[<64;10;5Mx'], ['a sideways wheel', '\x1b[<66;10;5M'], ['a key after focus', '\x1b[Ix']]) test(`${name} in a terminal is still a person's operation`, async t => {
+for (const [name, data] of [['a click', '\x1b[<0;10;5M'], ['a release', '\x1b[<0;10;5m'], ['a drag', '\x1b[<32;10;5M'], ['the wheel and a click', '\x1b[<64;10;5M\x1b[<0;10;5M'], ['the wheel and a key', '\x1b[<64;10;5Mx'], ['a sideways wheel', '\x1b[<66;10;5M'], ['a key after focus', '\x1b[Ix']]) test(`${name} in a terminal is still a person's operation, and interrupts nothing (R238)`, async t => {
   const f = await fixture(t), s = f.target.get(f.b); s.view = 'terminal'; f.rb.terminal = { alive: true, input() {} };
   assert.equal(await staged(() => f.call('Registered.', 'one')), 'staged');
   const control = s.controlRevision; f.target.input(f.b, data, 'target-owner');
   assert.deepEqual([s.controlRevision, s.terminalInputPending], [control + 1, true]);
-  await f.finish(); assert.equal(f.writes.length, 0);
+  await f.finish(); assert.equal(f.writes.length, 1);
 });
 for (const [name, data] of scrolls) test(`a held message still goes after ${name} reaches its sender`, async t => {
   const wake = require('../session-wake.cjs'), f = await toButler(t);

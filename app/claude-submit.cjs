@@ -97,7 +97,7 @@ class SubmissionChannel extends EventEmitter {
     });
     else {
       const notSent = message.status === 'draft' || message.status === 'blocked';
-      this.finish(Object.assign(uiError(message.status === 'draft' ? 'error.submission.nativeDraft' : notSent ? 'error.submission.nativeRejected' : 'error.submission.nativeResultUnconfirmed'), { notSent }));
+      this.finish(Object.assign(uiError(message.status === 'draft' ? 'error.submission.nativeDraft' : notSent ? 'error.submission.nativeRejected' : 'error.submission.nativeResultUnconfirmed'), { notSent, ...(message.status === 'blocked' && message.reason === 'input-changed' ? { inputChanged: true } : {}) }));
     }
     return true;
   }
