@@ -275,6 +275,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 const dshTui = require('./dsh-tui.cjs');
+const agyTui = require('./agy-tui.cjs');
 const preflightRefusals = new WeakSet();
 
 // Local receipt timing is an observation, never a native failure or authority
@@ -855,6 +856,7 @@ class Claude extends EventEmitter {
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.id === 'control:model' && (message.kind !== 'control' || message.status !== 'complete' || typeof message.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(message.model))) ||
+      message.selected !== undefined && (message.id !== 'control:model' || message.selected !== true) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
       (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
       (message.kind === 'input' && (inline || nativePrompt ? (inline ? !this.nativeInlineInput : !this.nativePromptInput) ||
@@ -886,6 +888,8 @@ class Claude extends EventEmitter {
         return { observed: true };
       } else if (message.id === 'control:model') {
         // Metadata is not an input/turn boundary and grants no sharing authority.
+        // A replayed choice is still the person's latest one; a replayed report may be stale.
+        if (message.selected) this.emit('modelSelected', message.model);
         if (!message.replayed) {
           this.nativeModelEpoch = this.observationEpoch;
           if (!this.displayGap) this.observeCreationSetting('model', message.model);
@@ -3192,6 +3196,8 @@ class NativeHost {
     this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
     this.dshTargets = new Set();
+    this.agyTargets = new Set();
+    this.agyMcpTargets = new Map();
     // Automatic Codex version decisions (B3) are kept in the persistent data directory.
     this.codexQualificationFile = path.join(dataDir, 'codex-qualification.json'); codexQualification.load(this.codexQualificationFile);
     this.claudeModChecks = new Map();
@@ -3219,6 +3225,30 @@ class NativeHost {
             const valid = () => currentWorkspaceMcpProof(runtime, identity, args, socket, call);
             if (!valid()) throw uiError("error.nativeToolOriginUnconfirmed");
             return runtime.addressedCall({ ...identity, valid }, args);
+          }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
+          return;
+        }
+        if (event.agyMcpListed === true) {
+          const runtime = this.agyMcpTargets.get(event.token);
+          if (runtime && runtime.record?.provider === 'agy' && !runtime.stopped && runtime.terminal?.alive) {
+            runtime.noteMcpListed?.();
+          }
+          socket.end();
+          return;
+        }
+        if (event.agyWorkspaceMessage === true) {
+          // Same-OS-account TUI boundary (accepted 2026-11-24): defense-in-depth MCP token + PreToolUse proof; not equivalent to Claude rootLease / Codex app-server.
+          socket.removeAllListeners('data');
+          socket.setTimeout(0); const deadline = setTimeout(() => socket.destroy(), 10000);
+          socket.once('close', () => clearTimeout(deadline));
+          Promise.resolve().then(async () => {
+            const runtime = this.agyMcpTargets.get(event.token);
+            if (!runtime || runtime.record?.provider !== 'agy' || !runtime.addressedSendAvailable || !runtime.addressedCall || runtime.stopped || !runtime.terminal?.alive) {
+              throw uiError('error.nativeToolOriginUnconfirmed');
+            }
+            const proof = await runtime.claimWorkspaceMcpProof(event.arguments, socket);
+            if (!proof.valid()) throw uiError('error.nativeToolOriginUnconfirmed');
+            return runtime.addressedCall({ nativeId: proof.nativeId, turnId: proof.turnId, callId: proof.callId, valid: proof.valid }, event.arguments);
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
           return;
         }
@@ -3533,7 +3563,7 @@ class NativeHost {
     // pinned TUI runtime is installed in this data directory (dsh-tui.cjs).
     let dsh;
     if (dshTui.installed(this.dataDir)) dsh = executable('node');
-    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable(), dsh };
+    this.binaries = { claude: executable('claude'), codex: executable('codex'), agy: executable('agy'), python: pythonExecutable(), dsh };
     if (this.nativeStarted) this.watchClaudeLauncher();
     return this.binaries;
   }
@@ -3550,6 +3580,7 @@ class NativeHost {
     if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     if (record.provider === 'claude') return new Claude(record, this);
     if (record.provider === 'dsh') return this.createDsh(record);
+    if (record.provider === 'agy') return this.createAgy(record);
     return new Codex(record, this);
   }
   createDsh(record) {
@@ -3560,7 +3591,15 @@ class NativeHost {
     });
     return runtime;
   }
-  close() { this.closed = true; this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); for (const target of this.dshTargets) target.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
+  createAgy(record) {
+    const runtime = new agyTui.AgyTui(record, this, { Terminal });
+    this.agyTargets.add(runtime);
+    runtime.on('state', state => {
+      if (state === 'ended' || state === 'error') this.agyTargets.delete(runtime);
+    });
+    return runtime;
+  }
+  close() { this.closed = true; this.claudeLauncherWatch?.close(); this.claudeLauncherWatch = null; for (const check of this.claudeModChecks.values()) check.stop.abort(); for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); for (const target of this.dshTargets) target.stop().catch(() => {}); for (const target of this.agyTargets) target.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
 module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle, promptTextTag };

@@ -64,7 +64,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
   if (expectedBinding && !serviceBinding.runnerAbsent(dataDir)) throw serviceBinding.failure('runner-exit-unconfirmed');
-  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'daemon.cjs', 'adapters.cjs', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'native-blocks.cjs', 'rotation-handoff.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
+  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'state-share.cjs', 'daemon.cjs', 'adapters.cjs', 'agy-tui.cjs', 'agy_hook.py', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'rotation-handoff.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.
@@ -175,7 +175,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           // A target refusal is retried after repair without charging the source.
           if (reason !== 'target') {
             failures = failures.filter(row => row !== previous);
-            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason }); saveDsh();
+            failures.push({ source, target, attempts: (previous?.attempts || 0) + 1, reason, ...error?.progress }); saveDsh();
           }
           // Only diagnostics are cached; every startup still performs preflight.
           const state = reason === 'target' ? targetWarningState(target, error) : null;
@@ -199,8 +199,25 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
       }
       await inheritDsh(key, [layout.active, ...layout.entries.filter(entry => entry !== layout.active && entry !== key)]);
-      const next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
+      let next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
       if (version && next.runtimeVersion !== version) throw uiError("error.service.newBackendNotReady");
+      // Global human choices and slot activation share services.lock. Only a slot new to the layout takes its setting
+      // here, on if every other backend is on. A slot in use keeps its own: off may be only another slot's default, and
+      // writing it would revoke this slot's creation grants without asking.
+      if (!states.has(key) && next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
+        const enabled = states.size > 0 && [...states.values()].every(state => state.capabilities?.includes('operatorControl1a') &&
+          state.operatorPolicy?.enabled === true && !state.operatorPolicy.error);
+        if (next.operatorPolicy?.enabled !== enabled) {
+          const client = await connectService(path.join(dataDir, key), 'upgrade');
+          try {
+            const pid = next.servicePid;
+            if (await client.call('operatorAction', null, 'enabled', enabled) !== true) throw Error('Operator setting inheritance is unconfirmed');
+            next = await client.call('initial');
+            if (next.servicePid !== pid || version && next.runtimeVersion !== version ||
+                next.operatorPolicy?.enabled !== enabled || next.operatorPolicy?.error) throw Error('Operator setting inheritance is unconfirmed');
+          } finally { client.close(); }
+        }
+      }
       for (const old of layout.entries) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
         try { await client.call('pause', { withdrawWakes: true, cause: 'upgrade' }); } finally { client.close(); }

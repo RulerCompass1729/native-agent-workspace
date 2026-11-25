@@ -1374,6 +1374,69 @@ test('PF08 activity: root refresh cannot query inside a pending model switch or 
   assert.equal((await f.ask({ model: 'model-new' })).state, 'complete'); assert.equal(f.effects.length, 1);
 });
 
+async function selectingSession(t, requestedSettings) {
+  const f = await standingModelActivity(t); f.peer.requestedSettings = requestedSettings;
+  f.switch = async event => { await f.invoke('classic.PostModelSwitch', { session_id: f.peer.nativeId, ...event }); await f.flush(); };
+  return f;
+}
+for (const source of ['command', 'picker']) test(`a model the person chose by ${source} becomes the one later resumes ask for`, async t => {
+  const f = await selectingSession(t, { model: 'model-requested', effort: 'low' });
+  await f.switch({ from_model: 'model-current', to_model: 'model-chosen', requested_model: 'chosen', source });
+  assert.equal(f.peer.model, 'model-chosen');
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-chosen', effort: 'low' });
+  await f.switch({ from_model: 'model-chosen', to_model: 'model-fallback', requested_model: null, source: 'auto' });
+  assert.equal(f.peer.model, 'model-fallback');
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-chosen', effort: 'low' }, 'A native change after it is only reported');
+  await f.switch({ from_model: 'model-fallback', to_model: 'model-second', requested_model: 'second', source });
+  assert.equal(f.peer.requestedSettings.model, 'model-second', 'The latest choice wins');
+});
+for (const source of ['auto', 'resume', 'sdk', 'future-cause', undefined, null, ['command']])
+test(`a model native changed itself (source ${JSON.stringify(source)}) is reported without becoming the requested one`, async t => {
+  for (const requested of [{ model: 'model-requested' }, undefined]) {
+    const f = await selectingSession(t, requested);
+    await f.switch({ from_model: 'model-current', to_model: 'model-native', requested_model: null, source });
+    assert.equal(f.peer.model, 'model-native');
+    assert.deepEqual(f.peer.requestedSettings, requested);
+    t.mock.restoreAll();
+  }
+});
+test('a session created without a model keeps the one the person chose', async t => {
+  const f = await selectingSession(t, undefined);
+  await f.switch({ to_model: 'model-chosen', source: 'command' });
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-chosen' });
+});
+test('model reads, children, other sessions and invalid ids never set the requested model', async t => {
+  const f = await selectingSession(t, { model: 'model-requested' });
+  await f.readModel(); await f.flush();
+  assert.equal(f.peer.model, 'model-current');
+  await f.switch({ agent_id: 'child', to_model: 'model-child', source: 'command' });
+  await f.switch({ session_id: randomUUID(), to_model: 'model-other', source: 'command' });
+  for (const to_model of [null, '', 'bad\nmodel', 'x'.repeat(161)]) await f.switch({ to_model, source: 'picker' });
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-requested' });
+  // Longer than a launch accepts (120): reported, but the model asked for before stays.
+  await f.switch({ to_model: 'x'.repeat(121), source: 'picker' });
+  assert.equal(f.peer.model, 'x'.repeat(121));
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-requested' });
+  await f.switch({ to_model: 'model-chosen[1m]', source: 'picker' });
+  assert.deepEqual(f.peer.requestedSettings, { model: 'model-chosen[1m]' });
+});
+test('a choice replayed after a lost connection is kept and only model rows may carry one', async () => {
+  const f = await mod({ version: '2.1.309' }), models = [], chosen = [];
+  f.r.on('model', value => models.push(value)); f.r.on('modelSelected', value => chosen.push(value));
+  f.setModelReader(async () => 'claude-sonnet-test');
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test', source: 'command' });
+  await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.deepEqual([models, chosen], [['claude-sonnet-test'], ['claude-sonnet-test']]);
+  const base = { ...f.requests[0], sequence: 2 };
+  for (const selected of [false, null, 1, 'true', {}]) assert.throws(() => f.r.observeBlock({ ...base, selected }), /Invalid/);
+  assert.throws(() => f.r.observeBlock({ ...base, id: 'control:input', selected: true }), /Invalid/);
+  f.r.observeBlock({ ...base, model: 'claude-earlier', replayed: true });
+  assert.deepEqual([models, chosen], [['claude-sonnet-test'], ['claude-sonnet-test', 'claude-earlier']]);
+  const stale = f.r; stale.bindRoot({ sessionId: stale.record.nativeId, nativeBlocks: true });
+  assert.throws(() => stale.observeBlock({ ...base, sequence: 999 }), /Invalid/);
+  assert.equal(chosen.length, 2);
+});
+
 test('native model metadata preserves the active task and ignores children, stale roots and late startup', async () => {
   const f = await mod({ version: '2.1.309' }), models = [];
   f.r.on('model', value => models.push(value)); f.setModelReader(async () => 'claude-sonnet-test');

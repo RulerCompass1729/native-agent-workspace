@@ -63,7 +63,7 @@ test('decision line strips three markers and ANSI, bounds only the first line, a
   assert.equal(rules.decisionLine('需要你决定：' + '字'.repeat(70)), '字'.repeat(59) + '…');
 });
 function harness(language = 'zh') {
-  const notices = [], sent = [], callbacks = new Map(); let supported = true, fail = false, activations = 0;
+  const notices = [], sent = [], uncovered = [], closedPages = [], callbacks = new Map(); let supported = true, fail = false, activations = 0;
   class Notification extends EventEmitter {
     static isSupported() { return supported; }
     constructor(options) { super(); this.options = options; notices.push(this); }
@@ -73,19 +73,23 @@ function harness(language = 'zh') {
   const sandbox = { Notification, butlerIngress: null, showQuestionNotification: require('../butler-question-notification.cjs').showQuestionNotification, queueRules: rules, untouchedDefault: require('../collaboration-spaces.cjs').untouchedDefault,
     queueOutcomeSeen: new Set(), queueOutcomeNotifications: new Map(), pendingReveal: null,
     windows: new Map([[1,c]]), quitting: false, backgroundTest: true, focusOrOpen: () => activations++,
+    localPages: { workspace: context => uncovered.push({ context, sentBefore: sent.length }), closeOwner: context => closedPages.push(context) },
     require: createRequire(require.resolve('../main.cjs')), backgroundNotifications: null, backgroundControl: null, notificationScreen: null, primary: true,
     roomState: { metadata: () => ({ id: 'shared', name: '共同工作' }) }, backgroundOperation: require('../background-operation.cjs'),
     displayText: (key, params) => locale.format(language, key, params), register: (key, fn) => callbacks.set(key, fn) };
   vm.createContext(sandbox);
   vm.runInContext(section(main, 'function notifyBackgroundConfirmation(', '\nfunction bindClient(') + '\n' + section(main, "register('uiReady',", '\n  register('), sandbox);
-  return { sandbox, c, notices, sent, ready: () => callbacks.get('uiReady')(c), fire: value => sandbox.notifyQueueOutcome({ roomId:'shared', eventId:'event', status:'waiting', reason:'', memberName:'Member', task:'Task', reply:'需要你决定：Proceed?', ...value }),
+  return { sandbox, c, notices, sent, uncovered, closedPages, ready: () => callbacks.get('uiReady')(c), fire: value => sandbox.notifyQueueOutcome({ roomId:'shared', eventId:'event', status:'waiting', reason:'', memberName:'Member', task:'Task', reply:'需要你决定：Proceed?', ...value }),
     set supported(v) { supported=v; }, set fail(v) { fail=v; }, get activations() { return activations; } };
 }
 for (const language of ['zh','en']) test(`actual notifier localizes, deduplicates and navigates: ${language}`, () => {
   const h=harness(language); h.fire(); h.fire(); assert.equal(h.notices.length,1);
   assert.equal(h.notices[0].options.title, language==='zh'?'NAW · 需要你决定':'NAW · Needs your decision');
   assert.equal(h.notices[0].options.body, language==='zh'?'Member · 共同工作：Proceed?':'Member · Shared work: Proceed?');
+  assert.equal(h.uncovered.length,0);
   h.notices[0].emit('click'); assert.equal(h.activations,1);
+  // A click uncovers NAW from a tab page, once, before the record is shown.
+  assert.equal(h.uncovered.length,1); assert.equal(h.uncovered[0].context,h.c); assert.equal(h.uncovered[0].sentBefore,0);
   assert.equal(JSON.stringify(h.sent), JSON.stringify([['workspace:reveal-record',{roomId:'shared',eventId:'event'}]]));
   assert.equal(h.sandbox.queueOutcomeNotifications.size,0);
   h.fire({eventId:'failure',status:'failed',reason:'member-missing'});
@@ -101,14 +105,14 @@ test('unsupported or failing notification never retries; active and remembered s
 });
 test('click waits for an actual workspace renderer; latest click wins, background context cannot consume', () => {
   const h=harness();h.c.uiReady=false;h.fire();h.notices[0].emit('click');assert.equal(h.sent.length,0);
-  h.fire({eventId:'latest'});h.notices[1].emit('click');h.c.background=true;h.ready();assert.equal(h.sent.length,0);
-  h.c.background=false;h.ready();h.ready();assert.equal(h.sent.length,1);assert.equal(h.sent[0][1].eventId,'latest');
+  h.fire({eventId:'latest'});h.notices[1].emit('click');h.c.background=true;h.ready();assert.equal(h.sent.length,0);assert.equal(h.uncovered.length,0);
+  h.c.background=false;h.ready();h.ready();assert.equal(h.sent.length,1);assert.equal(h.sent[0][1].eventId,'latest');assert.equal(h.uncovered.length,1);
   h.sandbox.quitting=true;h.fire({eventId:'quit'});h.notices.at(-1).emit('click');assert.equal(h.sent.length,1);
 });
 test('closed and timed-out loading windows discard a pending reveal', async () => {
   const h=harness();h.c.uiReady=false;h.fire();h.notices[0].emit('click');
   // Execute the actual cleanup called by openWindow's close and failure paths.
-  h.sandbox.discardReveal(h.c);h.ready();assert.equal(h.sent.length,0);
+  h.sandbox.discardReveal(h.c);h.ready();assert.equal(h.sent.length,0);assert.equal(h.uncovered.length,0);
   assert.match(main,/win\.on\('closed', \(\) => \{\s*discardReveal\(context\)/);
   assert.match(main,/catch \(error\) \{ discardReveal\(context\); if \(quitting/);
 });
@@ -192,6 +196,8 @@ for (const closed of [false,true]) test(`actual loading window ${closed?'closes'
   timers[0]();
   if(closed) await opening;else await assert.rejects(opening,/UI did not become ready/);
   assert.equal(h.sandbox.pendingReveal,null);
+  // Its tab pages close with the window, and only then.
+  assert.equal(h.closedPages.length,closed?1:0); if(closed) assert.equal(h.closedPages[0].win,win);
 });
 test('mobile cleanup failure cannot preserve a closed window notification click', () => {
   const h = harness(), win = new EventEmitter(); let cleanups = 0;
@@ -216,7 +222,7 @@ test('a missing pre-flattened question safely falls back to the task', t => {
   assert.equal(outcomes[0].question,'Synthetic task');
 });
 test('reveal foregrounds the same ready workspace it targets, even if another window is loading', () => {
-  const h=harness(), calls=[];h.sandbox.backgroundTest=false;
+  const h=harness(), calls=[];h.sandbox.backgroundTest=false;h.sandbox.localPages=null; // No tab page was ever opened.
   Object.assign(h.c.win,{isMinimized:()=>true,restore:()=>calls.push('restore'),show:()=>calls.push('show'),focus:()=>calls.push('focus')});
   h.sandbox.windows=new Map([[0,{uiReady:false,win:{isDestroyed:()=>false}}],[1,h.c]]);
   h.fire();h.notices[0].emit('click');assert.deepEqual(calls,['restore','show','focus']);assert.equal(h.sent.length,1);

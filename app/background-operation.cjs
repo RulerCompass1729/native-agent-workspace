@@ -182,22 +182,25 @@ function operationSummary(command, actor, names = {}) {
   const session = id => named(names.sessions, id), room = id => named(names.rooms, id);
   // Display classification only; the maintenance/consent policy above is unchanged.
   const clearsHistory = method === 'clearSharedHistory' || method === 'spaceAction' && args[1] === 'clearSharedHistory';
-  const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
+  // stop asks by provider (main.cjs): Codex is disconnected, every other session is ended. An unknown session gets neither.
+  const stopped = method === 'stop' && Array.isArray(names.sessions) ? names.sessions.find(item => item?.id === args[0])?.provider : undefined;
+  const stopAction = stopped ? stopped === 'codex' ? 'disconnectCodex' : 'endSession' : null;
+  const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || stopAction || (askedByHandler.includes(method) ? method : null);
   const withMessage = method === 'create' && typeof args[0]?.initialMessage === 'string';
   const summary = { action: withMessage ? 'createWithFirstMessage' : action, method: visibleText(method), risks: [] };
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
   if (method === 'create' || method === 'importHistory') {
     const options = (method === 'create' ? args[0] : args[1]) || {};
-    const providers = method === 'create' ? ['claude', 'codex', 'dsh'] : ['claude', 'codex'];
+    const providers = method === 'create' ? ['claude', 'codex', 'dsh', 'agy'] : ['claude', 'codex'];
     put('name', shown(options.name)); put('provider', providers.includes(options.provider) ? options.provider : undefined);
     put('folder', last(options.cwd));
     if (method === 'create') {
       // Creation's batch identity. Names differ on purpose; everything that changes what starts must match.
       // A hash keeps the absolute directory out of the broadcast summary while still separating same-named folders.
       const settings = options.settings && typeof options.settings === 'object' && !Array.isArray(options.settings) ? options.settings : {};
-      // The key follows what workspace.create runs: a fork and DSH are terminal-only, and one folder has one path.
+      // The key follows what workspace.create runs: a fork, DSH and Antigravity are terminal-only, and one folder has one path.
       const requested = ['chat', 'terminal'].includes(options.view) ? options.view : options.provider === 'codex' ? 'terminal' : 'chat';
-      const view = options.fork != null || options.provider === 'dsh' ? 'terminal' : requested;
+      const view = options.fork != null || options.provider === 'dsh' || options.provider === 'agy' ? 'terminal' : requested;
       const directory = typeof options.cwd === 'string' && path.isAbsolute(options.cwd) ? path.resolve(options.cwd) : options.cwd;
       put('model', shown(settings.model)); put('effort', shown(settings.effort)); put('profile', shown(settings.profile));
       put('permissionMode', ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'].includes(settings.permissionMode) ? settings.permissionMode : undefined);
@@ -227,7 +230,7 @@ function operationSummary(command, actor, names = {}) {
   if (clearsHistory) summary.risks.push('deletesSharedHistory');
   if (Array.isArray(command.paths) && command.paths.length) { put('file', last(command.paths[0])); if (command.paths.length > 1) summary.files = command.paths.length; }
   if (method === 'approve' && args[2] === 'accept') summary.risks.push('approvePermission');
-  if (['interrupt', 'pause', 'quitService'].includes(action)) summary.risks.push('stopsWork');
+  if (['interrupt', 'pause', 'quitService', 'disconnectCodex', 'endSession'].includes(action)) summary.risks.push('stopsWork');
   if (method === 'saveLocalFile') summary.risks.push('writesFile');
   return summary;
 }

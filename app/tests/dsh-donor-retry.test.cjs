@@ -31,7 +31,8 @@ for(const pending of [false,true])test('unqualified empty donor retires immediat
 });
 for(const fault of ['deadline','filesystem'])for(const pending of [false,true])test('persistent '+fault+' stops after two attempts and releases an empty donor, pending='+pending,async t=>{
  const f=fixture(t,{fault,pending});const first=await f.start();assert.ok(first.layout.entries.includes('.'));assert.equal(first.inheritCalls,1);
- assert.deepEqual(first.layout.dshInheritance.failures,[{source:'.',target:f.key,attempts:1,reason:fault}]);
+ const [{item,elapsedMs,...row}]=first.layout.dshInheritance.failures;assert.deepEqual(row,{source:'.',target:f.key,attempts:1,reason:fault,stage:'files'});
+ assert.ok(Number.isSafeInteger(item)&&item>=0);assert.ok(Number.isSafeInteger(elapsedMs)&&elapsedMs>=(fault==='deadline'?30000:0));
  for(let n=2;n<=4;n++){const r=await f.start();assert.deepEqual(r.layout.entries,[f.key]);assert.equal(r.inheritCalls,2);assert.equal(r.boots,n===2?2:1);assert.equal(r.layout.dshInheritance,undefined);}
  assert.deepEqual(f.retired,[f.root]);
 });
@@ -70,16 +71,23 @@ test('retry metadata accepts legacy layouts and rejects malformed counters or pa
  const key='backends/aaaaaaaaaaaaaaaaaaaa',base={format:1,active:key,entries:['.',key]};fs.mkdirSync(path.join(root,key),{recursive:true,mode:0o700});
  layout.writeLayout(root,base);assert.deepEqual(layout.readLayout(root),base);
  const valid={version:'synthetic-v1',failures:[{source:'.',target:key,attempts:1,reason:'deadline'}]};
- for(const bad of [null,{...valid,version:1},{...valid,failures:{}},{...valid,failures:[{...valid.failures[0],source:'../escape'}]},{...valid,failures:[{...valid.failures[0],target:null}]},{...valid,failures:[{...valid.failures[0],attempts:3}]},{...valid,failures:[{...valid.failures[0],reason:'raw-private-error'}]},{...valid,failures:[valid.failures[0],valid.failures[0]]}]){
+ for(const bad of [null,{...valid,version:1},{...valid,failures:{}},{...valid,failures:[{...valid.failures[0],source:'../escape'}]},{...valid,failures:[{...valid.failures[0],target:null}]},{...valid,failures:[{...valid.failures[0],attempts:3}]},{...valid,failures:[{...valid.failures[0],reason:'raw-private-error'}]},{...valid,failures:[valid.failures[0],valid.failures[0]]},
+  ...[{stage:'/private/path'},{stage:7},{stage:'x'.repeat(21)},{item:-1},{item:1.5},{item:'3'},{elapsedMs:null},{elapsedMs:-1}].map(part=>({...valid,failures:[{...valid.failures[0],...part}]}))]){
   layout.writeLayout(root,{...base,dshInheritance:bad});assert.throws(()=>layout.readLayout(root),e=>e.uiMessage?.key==='error.service.invalidLayout');
  }
- layout.writeLayout(root,{...base,dshInheritance:valid});assert.deepEqual(layout.readLayout(root).dshInheritance,valid);
+ const where={...valid,failures:[{...valid.failures[0],stage:'files',item:40000,elapsedMs:120412}]};
+ for(const good of [valid,where]){layout.writeLayout(root,{...base,dshInheritance:good});assert.deepEqual(layout.readLayout(root).dshInheritance,good);}
 });
 test('a failing donor does not retire another runtime before that source gets its turn',async t=>{
  const f=fixture(t,{fault:'filesystem'}),other='backends/dddddddddddddddddddd';runtime(path.join(f.root,other));
  const initial=layout.readLayout(f.root);initial.entries.splice(1,0,other);layout.writeLayout(f.root,initial);
  for(let n=0;n<2;n++){const r=await f.start();assert.ok(r.layout.entries.includes(other),'unattempted source must remain reachable');}
  const r=await f.start();assert.equal(r.inheritCalls,3);assert.equal(tui.installed(f.target),true);assert.deepEqual(r.layout.entries,[f.key]);
+});
+test('a failure recorded by an older version keeps its count and gains where the next one stopped',async t=>{
+ const f=fixture(t,{fault:'deadline',empty:false}),state=layout.readLayout(f.root);state.dshInheritance={version:'synthetic-v1',failures:[{source:'.',target:f.key,attempts:1,reason:'deadline'}]};layout.writeLayout(f.root,state);
+ const r=await f.start(),[row]=r.layout.dshInheritance.failures;assert.equal(row.attempts,2);assert.equal(row.stage,'files');assert.ok(Number.isSafeInteger(row.item));
+ await f.start();assert.equal(f.calls(),1);
 });
 test('stale donor metadata left by an older client is pruned without blocking startup',async t=>{
  const f=fixture(t),state=layout.readLayout(f.root);state.dshInheritance={version:'synthetic-v1',failures:[{source:'backends/aaaaaaaaaaaaaaaaaaaa',target:f.key,attempts:2,reason:'deadline'}]};layout.writeLayout(f.root,state);

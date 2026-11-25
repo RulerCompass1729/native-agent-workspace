@@ -205,7 +205,8 @@ class Workspace extends EventEmitter {
         // Old Claude records could inherit the other provider's app-server PID.
         // Keep unknown legacy proof; discard that alias only with an own PID.
         const serverIdentity = record.provider === 'claude' && Number.isSafeInteger(record.processIdentity?.pid) && record.processIdentity.pid > 1 ? null : record.serverIdentity;
-        this.sessions.set(record.id, { ...record, ...(record.provider === 'dsh' ? { nativeId: null } : {}), serverIdentity, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker || record.provider === 'dsh' ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
+        const agyUnresumable = record.provider === 'agy' && !require('./agy-tui.cjs').validConversationId(record.nativeId);
+        this.sessions.set(record.id, { ...record, ...(record.provider === 'dsh' || agyUnresumable ? { nativeId: null } : {}), serverIdentity, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker || record.provider === 'dsh' || agyUnresumable ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
       }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
@@ -489,6 +490,7 @@ class Workspace extends EventEmitter {
       if (skipPermissions != null || settings != null) throw uiError("error.workspace.invalidSettings");
       view = 'terminal';
     }
+    if (provider === 'agy') view = 'terminal';
     const requestedSettings = createSettings(provider, settings);
     // The model vendor the session will run, until Codex reports the one it uses: a missing or
     // unreadable profile refuses the creation here, before any native process starts.
@@ -500,8 +502,8 @@ class Workspace extends EventEmitter {
     if (worktreePlan != null && (fork || newDirectory)) throw uiError("error.workspace.gitModeConflict");
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
-    if (!['claude', 'codex', 'dsh'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
-    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH' }[provider];
+    if (!['claude', 'codex', 'dsh', 'agy'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
+    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH', agy: 'Antigravity' }[provider];
     const sessionName = name ? cleanText(name, 60) : `${providerLabel} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`;
     if (worktreePlan != null) {
       if (this.closed || this.storageWarning) throw uiError("error.workspace.gitBackendUnavailable");
@@ -907,6 +909,11 @@ class Workspace extends EventEmitter {
       s.modelProvider = value; this.changed(); this.persist();
     });
     on('model', (model, uiMessage) => { s.model = model; const message = displayMessage(uiMessage, 'notice.', model); if (message) s.modelUiMessage = message; else delete s.modelUiMessage; this.changed(); });
+    // Resume asks for the requested model over the last report, which native may have changed itself (adapters.cjs).
+    on('modelSelected', model => {
+      if (!MODEL_PATTERN.test(model)) return;
+      s.requestedSettings = { ...s.requestedSettings, model }; this.changed();
+    });
     on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.
     on('nativeTitle', title => { const clean = String(title).replace(/[\x00-\x1f\x7f]/g, ' ').trim(); const name = clean && `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${clean}`.slice(0, 60); if (s.autoName && name && (name !== s.name || s.nameSource !== 'native')) { s.name = name; s.nameSource = 'native'; this.changed(); } });
@@ -1120,7 +1127,7 @@ class Workspace extends EventEmitter {
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; setActivity(s, ''); if (!this.approvalRoutes.has(s.id)) s.approval = null; }
-      if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete', time: Date.now() });
+      if ((s.provider === 'claude' || s.provider === 'agy') && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete', time: Date.now(), ...(s.provider === 'agy' && info.tag ? { inputTag: info.tag } : {}), ...(s.provider === 'agy' && info.nativeId ? { nativeId: info.nativeId } : {}), ...(s.provider === 'agy' && info.turnId ? { turnId: info.turnId } : {}) });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && spaces.isMember(s, forward.roomId || 'shared') && forward.member === spaces.membershipRevision(s, forward.roomId || 'shared') && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
       const displayedPlan = forward && forwardTag === info.tag && !info.text && this.sharedReplies.hasCompletedPlan(s, forwardTag);
@@ -1403,6 +1410,7 @@ class Workspace extends EventEmitter {
   claim(id, owner, view = 'chat', roomId, free = false) {
     const s = this.get(id);
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
+    if (s.provider === 'agy') view = 'terminal';
     // Taking a session no open window holds is not a takeover: nothing is paused and no queued input is revoked.
     const heldOpen = s.owner !== owner && s.owner !== null && !this.pagelessOwners.has(s.owner);
     if (free && heldOpen) return false;
@@ -1942,6 +1950,7 @@ class Workspace extends EventEmitter {
       }
       if (interrupt || backgroundOperation.current()) wake.cause(s, interrupt ? 'interrupt' : 'input');
       s.terminalInputPending = true;
+      runtime.noteHumanTerminalInput?.(data);
     }
     const t = runtime.terminal; if (!t?.alive) throw uiError("error.workspace.terminalNotConnected"); t.input(data);
   }

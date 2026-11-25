@@ -6,7 +6,9 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const sourceFile = process.env.NAW_TEST_MESSAGE_TOOL_SOURCE || path.resolve(__dirname, '../claude-message-tool.cjs');
 const source = fs.readFileSync(sourceFile, 'utf8');
-const start = source.indexOf('function stageNative('), end = source.indexOf('\nasync function main()', start);
+const payloadStart = source.indexOf('function stagePayload(');
+const start = payloadStart >= 0 ? payloadStart : source.indexOf('function stageNative(');
+const end = source.indexOf('\nasync function main()', start);
 assert.ok(start >= 0 && end > start, 'Rebind this test to the actual native transport if its entry point changes.');
 const identity = { nativeId: 'owned-native', sessionId: 'owned-session', turnId: 'owned-turn', callId: 'owned-call' };
 const args = { recipient_id: 'owned-recipient', message: 'One  task 中文 🙂\nSecond line stays literal.' };
@@ -22,7 +24,7 @@ function fixture(connectError = false) {
   socket.setTimeout = (ms, callback) => { assert.equal(ms, 10000); timeout = callback; };
   socket.write = line => { writes.push(line); return true; };
   socket.destroy = () => { socket.destroyed = true; };
-  const stage = vm.runInNewContext('(' + source.slice(start, end) + ')', {
+  const stage = vm.runInNewContext(source.slice(start, end) + '\nstageNative;', {
     process: { env: { NAW_MESSAGE_SOCKET: 'owned-in-memory-hook', NAW_MESSAGE_TOKEN: 'synthetic-host-token' } },
     net: { connect(target) {
       assert.equal(target, 'owned-in-memory-hook'); connections++;

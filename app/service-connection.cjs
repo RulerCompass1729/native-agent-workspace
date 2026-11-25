@@ -2,16 +2,19 @@ const fs = require('node:fs'), net = require('node:net'), path = require('node:p
 const { EventEmitter } = require('node:events');
 const { readFrames, RESPONSE_BYTES, SERVICE_CLOSE_REASONS } = require('./service-transport.cjs');
 const { rebuildState } = require('./state-delta.cjs');
+const stateShare = require('./state-share.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const background = require('./background-operation.cjs');
 
 class ServiceClient extends EventEmitter {
-  constructor(socket) {
+  // endpoint: where the backend listens. Connections to the same one keep identical messages once (state-share.cjs).
+  constructor(socket, { endpoint = null } = {}) {
     super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); this.stateRead = { flying: null, next: null }; let received = 0;
     // The last whole state, which a delta frame builds on (state-delta.cjs). lastState: the same, for whoever takes
     // this client over after the `initial` it asked for (workspace-client.cjs newestState).
     let state = null, initial = null;
+    const shared = endpoint === null ? null : stateShare.join(endpoint, name => name === 'state' ? state : initial);
     readFrames(socket, RESPONSE_BYTES, m => {
       const pending = this.pending.get(m.id);
       if (Object.hasOwn(m, 'initialDelta')) {
@@ -19,12 +22,14 @@ class ServiceClient extends EventEmitter {
         try { if (m.initialDelta === 1) m = { ...m, value: rebuildState(initial, m.value) }; }
         catch { this.closeReason = 'initial-rebuild'; socket.destroy(); return; }
         initial = m.value;
+        shared?.take('initial', initial);
       }
       if (m.event === 'state') {
         if (m.delta === 1) {
           try { m = { ...m, data: rebuildState(state, m.data) }; } catch { this.closeReason = 'state-rebuild'; socket.destroy(); return; }
         }
         state = this.lastState = m.data;
+        shared?.take('state', state);
       }
       const value = m.event ? m.data : m.value;
       if (value && typeof value === 'object') this.receipts.set(value, ++received);
@@ -49,7 +54,7 @@ class ServiceClient extends EventEmitter {
     // code: the service's side; 'local-destroy': a frame this side refused (service-transport.cjs readFrames).
     socket.on('error', error => { this.closeReason ||= error.code || 'error'; });
     socket.on('end', () => { this.closeReason ||= 'peer'; });
-    socket.on('close', () => { this.closeReason ||= 'local-destroy'; for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(uiError('error.serviceClosed')); } this.pending.clear(); this.emit('closed'); });
+    socket.on('close', () => { shared?.leave(); this.closeReason ||= 'local-destroy'; for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(uiError('error.serviceClosed')); } this.pending.clear(); this.emit('closed'); });
   }
   receivedOrder(value) { return this.receipts.get(value); }
   call(method, ...args) {
@@ -101,7 +106,7 @@ async function connectService(dataDir, owner, { page = true } = {}) {
   if (info.protocol !== 1) throw uiError('error.protocol');
   const parent = fs.statSync(path.dirname(info.endpoint));
   if (parent.uid !== process.getuid() || (parent.mode & 0o077)) throw uiError('error.socketPermissions');
-  const socket = net.connect(info.endpoint); const client = new ServiceClient(socket);
+  const socket = net.connect(info.endpoint); const client = new ServiceClient(socket, { endpoint: info.endpoint });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { socket.destroy(); reject(uiError('error.serviceUnresponsive')); }, 2500);
     client.once('ready', () => { clearTimeout(timer); resolve(); });

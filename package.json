@@ -1,6 +1,6 @@
 {
   "name": "native-agent-workspace",
-  "version": "0.1.0-alpha.295",
+  "version": "0.1.0-alpha.299",
   "private": true,
   "description": "A local desktop demo for native agent sessions and bounded collaboration",
   "license": "Apache-2.0",

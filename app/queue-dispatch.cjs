@@ -110,13 +110,23 @@ const COMPACT_LIMIT = 3;
 // minutes or more in 5 hours and none of thirty. A member is rotated before its next item, or after
 // the usual thirty quiet minutes, so a conversation the person is having is not cut into.
 const QUIET_COMPACT_MS = 2 * 60 * 1000;
+// A Claude member this large continues in a new session before its next item while its prompt cache is still warm
+// (the person, 2026-11-24). A replay of seven days of the person's own records: 13-17% fewer compactions in the middle of
+// work and 0.4-1.3% less cost where the CLI compacts at 267K, 7-8% and 0-0.5% at 217K; a smaller limit rotates more for
+// the same. Codex is not listed: its cache is kept longer and what a rotation would save there is not measured.
+const CONTEXT_LIMITS = { claude: 180000 };
+// Of the cache lifetime its last request was billed at: past this the handoff itself could miss the cache.
+const CONTEXT_WARM_SHARE = 0.9;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 // The window client refuses a space pause or a member move while NAW replaces one backend (after an install,
 // one backend a minute). Nothing was changed, or the change is found again: the caller asks again later.
 const BACKEND_UPDATING_KEYS = new Set(['error.client.connectionUpdatingNoInput', 'error.client.connectionChangedNoReplay',
   'error.client.spacePauseUnconfirmed']);
+// A pass that finds the handoff message still undelivered, or its successor's process gone, after this long gives it up.
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
+// Once delivered, its first turn has this long, approvals included. 125 recorded first turns: median 0.6 minutes, longest 13.3.
+const HANDOFF_TURN_MS = 30 * 60 * 1000;
 // The old session waits at most this long for running collaborations before it is kept instead.
 const STOP_WAIT_MS = 30 * 60 * 1000;
 const FAILED_ROTATION_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
@@ -252,6 +262,11 @@ function failedHandoffPending(record) {
   const c = record?.failureCleanup;
   return Boolean(c && (c.log === 'pending' || c.os === 'pending' || c.release !== 'done' || ['pending', 'started'].includes(c.stop.state) ||
     Object.values(c.rooms).some(r => r.queue !== 'done' || r.notice !== 'done' || r.leave === 'pending')));
+}
+// Native has the handoff message. Kept on the record: a pass that cannot see the successor must not undo it.
+function handoffDelivered(session, tag) {
+  const input = firstHandoff.handoffInput(session, tag);
+  return Boolean(input && (!input.nativeId || input.nativeId === session.nativeId) && (input.status === 'submitted' || input.turnId));
 }
 function quarantinedSuccessor(record) {
   return trustFailure(record) && !cleanupComplete(record) || Boolean(record?.failureCleanup && ['pending', 'started'].includes(record.failureCleanup.stop.state));
@@ -977,16 +992,29 @@ function rotationHold(session, options, rotations) {
   return null;
 }
 
-// Why a member is due for rotation now: 'content', 'compact', 'memory' or null.
-function rotationReason(session, now, options, rotations) {
+// Why a member is due for rotation now: 'content', 'compact', 'context' (only before its next item), 'memory' or null.
+function rotationReason(session, now, options, rotations, beforeItem = false) {
   if (!['claude', 'codex'].includes(session.provider) || rotationHold(session, options, rotations)) {
     return null;
   }
-  return dueReason(session, now, options, rotations[session.id]);
+  return dueReason(session, now, options, rotations[session.id], beforeItem);
+}
+
+// Large, still warm, and old enough to have done an item: a successor that read a lot in its first turn would
+// otherwise be replaced before it does any.
+function contextDue(session, now, options) {
+  const limit = options.contextLimits ? options.contextLimits[session.provider] : undefined;
+  const context = options.contexts ? options.contexts.get(session.id) : undefined;
+  if (!Number.isFinite(limit) || !context || !Number.isSafeInteger(context.tokens) || context.tokens < limit ||
+      !Number.isFinite(context.at) || !Number.isFinite(context.ttlMs)) {
+    return false;
+  }
+  const idle = now - context.at, start = sessionStart(session, now);
+  return idle >= 0 && idle < context.ttlMs * CONTEXT_WARM_SHARE && start !== null && now - start >= options.memoryMinAgeMs;
 }
 
 // The reason alone, whatever rotationHold says; `record` is the session's own resting record, if any.
-function dueReason(session, now, options, record) {
+function dueReason(session, now, options, record, beforeItem = false) {
   const limit = options.contentLimits ? options.contentLimits[session.provider] : undefined;
   if (!record && Number.isFinite(limit) && recordCount(session) >= limit) {
     return 'content';
@@ -994,6 +1022,9 @@ function dueReason(session, now, options, record) {
   const compactions = options.compactions ? options.compactions.get(session.id) : undefined;
   if (Number.isSafeInteger(compactions) && Number.isSafeInteger(options.compactLimit) && options.compactLimit > 0 && compactions >= options.compactLimit) {
     return 'compact';
+  }
+  if (beforeItem && contextDue(session, now, options)) {
+    return 'context';
   }
   if (record) {
     return null;
@@ -1125,6 +1156,8 @@ function planDispatch(input) {
     contentLimits,
     compactions: input.compactions,
     compactLimit: input.compactLimit ?? COMPACT_LIMIT,
+    contexts: input.contexts,
+    contextLimits: input.contextLimits ?? CONTEXT_LIMITS,
     handedOff: input.handedOff,
     waitingModel: input.waitingModel,
     deferredRotations: input.deferredRotations,
@@ -1364,7 +1397,7 @@ function planDispatch(input) {
         continue;
       }
       hold(target.id, 'took-item');
-      const reason = rotationReason(target, now, rotationOptions, rotations);
+      const reason = rotationReason(target, now, rotationOptions, rotations, true);
       stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
       if (reason && rotationSlots > 0) {
         rotationSlots -= 1;
@@ -1477,6 +1510,7 @@ function planDispatch(input) {
 function rotateAction(sessionId, reason, options) {
   const action = { kind: 'rotate', sessionId, reason };
   if (reason === 'compact') action.compactions = options.compactions.get(sessionId);
+  if (reason === 'context') action.contextTokens = options.contexts.get(sessionId).tokens;
   return action;
 }
 
@@ -1592,18 +1626,21 @@ function rotationReasonCode(value, fallback = 'rotation-failed') {
 }
 
 // Why it is due, as the old session (in Chinese) and the spaces (in the reader's language) are told.
-function rotationWhyNotice(reason, records, bytes, compactions) {
+function rotationWhyNotice(reason, records, bytes, compactions, contextTokens) {
   if (reason === 'memory') {
     return uiNotice('notice.rotation.why.memory', { gb: (bytes / 1073741824).toFixed(1) });
   }
   if (reason === 'compact') {
     return uiNotice('notice.rotation.why.compact', { count: String(compactions) });
   }
+  if (reason === 'context') {
+    return uiNotice('notice.rotation.why.context', { count: String(Math.round(contextTokens / 1000)) });
+  }
   return uiNotice('notice.rotation.why.content', { count: String(records) });
 }
 
 function handoffRequestText(why, reason) {
-  const purpose = reason === 'compact' ? '为了不再一次次压缩上下文' : '为了释放内存';
+  const purpose = ['compact', 'context'].includes(reason) ? '为了不再一次次压缩上下文' : '为了释放内存';
   return [
     `【NAW 换会话】${why}。${purpose}，NAW 会开一个新会话接着做，这个会话随后结束（记录保留，可以恢复）。`,
     '',
@@ -2422,6 +2459,7 @@ class QueueDispatcher {
     this.contentLimits = options.contentLimits ?? CONTENT_LIMITS;
     this.quietMs = options.quietMs ?? QUIET_BEFORE_ROTATE_MS;
     this.compactLimit = options.compactLimit ?? COMPACT_LIMIT;
+    this.contextLimits = options.contextLimits ?? CONTEXT_LIMITS;
     this.quietCompactMs = options.quietCompactMs ?? QUIET_COMPACT_MS;
     // Counts each member's own compactions from the native records (compaction-count.cjs); the app turns it on.
     this.compactions = options.compactions || (options.countCompactions === true ? new CompactionCounter() : null);
@@ -3133,12 +3171,14 @@ class QueueDispatcher {
     return session.name || session.id;
   }
 
-  // Compactions counted so far per member; without a counter or a readable record, none.
+  // Compactions counted so far per member, and (this.contexts) its size; without a counter or a readable record, none.
   async compactionCounts(snapshot, steward, handedOff, now) {
+    this.contexts = undefined;
     if (!this.compactions) return new Map();
     try {
       const subjects = rotationSubjects(snapshot.rooms, snapshot.sessions, steward ? [steward.sessionId] : [], handedOff);
       const counts = await this.compactions.sample(subjects, now);
+      this.contexts = this.compactions.contexts;
       return counts instanceof Map ? counts : new Map();
     } catch {
       return new Map();
@@ -3247,6 +3287,8 @@ class QueueDispatcher {
       quietMs: this.quietMs,
       compactions,
       compactLimit: this.compactLimit,
+      contexts: this.contexts,
+      contextLimits: this.contextLimits,
       quietCompactMs: this.quietCompactMs,
       memory: sample.memory,
       memoryLimit: sample.limit,
@@ -3846,7 +3888,7 @@ class QueueDispatcher {
     }
     const session = current.session;
     const reason = action.reason || 'content';
-    const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions);
+    const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions, action.contextTokens);
     const why = whyNotice.text;
     // Decided before the old session is asked anything: a successor must match it.
     let carry = carrySettings(session);
@@ -4601,7 +4643,16 @@ class QueueDispatcher {
         const outcome = firstHandoff.outcome(fresh, record.handoffTag);
         if (outcome === 'failed') throw Error('successor-turn-failed');
         if (outcome !== 'complete') {
-          if (now - (record.handedAt || now) > HANDOFF_ACCEPT_MS) throw Error('handoff-unconfirmed');
+          // A late receipt counts, as a late completion does: undoing what native has taken stops it midway or, when it
+          // may not be stopped, leaves two sessions on the same work.
+          if (record.handoffDelivered !== true && handoffDelivered(fresh, record.handoffTag)) {
+            record.handoffDelivered = true;
+            // An error here would stop the successor without the guards of a failed handoff; the next write has it.
+            try { this.save(); } catch {}
+          }
+          // Its process is known to be gone: it finishes no turn. Disconnected or out of view, it may still be running.
+          const running = record.handoffDelivered === true && !['ended', 'background', 'recoverable'].includes(fresh?.state);
+          if (now - (record.handedAt || now) > (running ? HANDOFF_TURN_MS : HANDOFF_ACCEPT_MS)) throw Error('handoff-unconfirmed');
           return;
         }
       }
@@ -4610,6 +4661,7 @@ class QueueDispatcher {
       if (mismatch && mismatch !== 'pending') {
         throw Error(`settings-differ:${mismatch}`);
       }
+      if (!record.handoffConfirmed) record.confirmedAt = now;
       record.handoffConfirmed = true;
       if (fresh && fresh.nativeId) {
         record.newNativeId = fresh.nativeId;
@@ -4643,7 +4695,7 @@ class QueueDispatcher {
         }
       }
       const live = old && !['ended', 'background'].includes(old.state);
-      const waitedTooLong = now - (record.handedAt || now) > STOP_WAIT_MS;
+      const waitedTooLong = now - (record.confirmedAt || record.handedAt || now) > STOP_WAIT_MS;
       if ((live && collaborating || updating) && !waitedTooLong) {
         return;
       }
@@ -4745,6 +4797,7 @@ module.exports = {
   CONTENT_LIMITS,
   QUIET_BEFORE_ROTATE_MS,
   COMPACT_LIMIT,
+  CONTEXT_LIMITS,
   QUIET_COMPACT_MS,
   PLANNER_WAITING,
   DECISIONS_LIMIT,

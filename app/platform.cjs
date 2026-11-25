@@ -47,6 +47,7 @@ const LAUNCHER_SESSION = [
   // Its message inbox, and the token that proves a sender belongs to it.
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
   'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI',
+  'ANTIGRAVITY_CONVERSATION_ID', 'ANTIGRAVITY_LS_ADDRESS', 'ANTIGRAVITY_CSRF_TOKEN', 'ANTIGRAVITY_PROJECT_ID',
 ];
 function nativeEnvironment(extra = {}) {
   const env = { ...process.env };

@@ -12,7 +12,7 @@ function metadataIdentity(meta) {
   if (Object.values(identity).some(v => typeof v !== 'string' || !v || v.length > 160) || turn?.thread_id !== identity.nativeId) throw Error('Native workspace tool provenance is missing or inconsistent');
   return identity;
 }
-function stageNative(identity, args) {
+function stagePayload(payload) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(process.env.NAW_MESSAGE_SOCKET); let data = '', writeAttempted = false;
     const fail = () => { socket.destroy(); reject(Error(writeAttempted
@@ -21,7 +21,7 @@ function stageNative(identity, args) {
     socket.setEncoding('utf8'); socket.setTimeout(10000, fail); socket.once('error', fail);
     socket.once('connect', () => {
       writeAttempted = true;
-      socket.write(JSON.stringify({ token: process.env.NAW_MESSAGE_TOKEN, workspaceMessage: true, identity, arguments: args }) + '\n');
+      socket.write(JSON.stringify(payload) + '\n');
     });
     socket.on('data', part => {
       data += part; if (data.length > 16384) return fail();
@@ -35,22 +35,47 @@ function stageNative(identity, args) {
     socket.once('end', () => { if (!data.includes('\n')) fail(); });
   });
 }
+function stageNative(identity, args) {
+  return stagePayload({ token: process.env.NAW_MESSAGE_TOKEN, workspaceMessage: true, identity, arguments: args });
+}
+function stageAgy(args) {
+  return stagePayload({ token: process.env.NAW_MESSAGE_TOKEN, agyWorkspaceMessage: true, arguments: args });
+}
+function notifyAgyListed() {
+  const sock = process.env.NAW_MESSAGE_SOCKET, token = process.env.NAW_MESSAGE_TOKEN;
+  if (!sock || !token) return Promise.resolve();
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    try {
+      const socket = net.connect(sock);
+      socket.setTimeout(300, () => { socket.destroy(); finish(); });
+      socket.once('error', () => { socket.destroy(); finish(); });
+      socket.once('close', finish);
+      socket.once('connect', () => { socket.end(JSON.stringify({ token, agyMcpListed: true }) + '\n'); });
+    } catch { finish(); }
+  });
+}
 async function main() {
   const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
   const transport = new JsonRpcLineTransport(process.stdin, process.stdout);
+  const isCodex = process.argv.includes('--codex'), isAgy = process.argv.includes('--agy');
   transport.onRequest(async (method, params) => {
     if (method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'workspace', version: '1' } };
     if (method === 'ping') return {};
-    if (method === 'tools/list') return { tools: [tool, background.tool, ...(process.argv.includes('--codex') ? [] : operator.tools)].map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
-      annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
+    if (method === 'tools/list') {
+      if (isAgy) await notifyAgyListed();
+      return { tools: (isAgy ? [tool] : [tool, background.tool, ...(isCodex ? [] : operator.tools)]).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
+        annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
+    }
     if (method !== 'tools/call') throw Error('Unsupported workspace tool request');
-    if (params.name === background.tool.name) {
+    if (!isAgy && params.name === background.tool.name) {
       const args = background.validate(params.arguments);
-      if (!process.argv.includes('--codex')) return { content: [{ type: 'text', text: JSON.stringify({ approved: true, background: args }) }] };
+      if (!isCodex) return { content: [{ type: 'text', text: JSON.stringify({ approved: true, background: args }) }] };
       const result = await require('./computer-use-outbox-tool.cjs').requestOutbox(process.env.NAW_CONTROL_DESCRIPTOR, metadataIdentity(params._meta), args, undefined, true);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: !['complete', 'received', 'awaiting-native'].includes(result.state) };
     }
-    if (!process.argv.includes('--codex') && operator.names.includes(params.name)) {
+    if (!isCodex && !isAgy && operator.names.includes(params.name)) {
       const args = operator.validate(params.name, params.arguments);
       // This is only native permission approval. The root-bound bridge must
       // replace it with the synchronous authenticated workspace result.
@@ -58,8 +83,12 @@ async function main() {
     }
     if (params.name !== tool.name) throw Error('Unsupported workspace tool request');
     const args = params.arguments; require('./session-wake.cjs').validateArgs(args);
-    if (process.argv.includes('--codex')) {
+    if (isCodex) {
       const result = await stageNative(metadataIdentity(params._meta), args);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'staged' };
+    }
+    if (isAgy) {
+      const result = await stageAgy(args);
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'staged' };
     }
     return { content: [{ type: 'text', text: JSON.stringify({ approved: true, recipient_id: args.recipient_id, message: args.message }) }] };

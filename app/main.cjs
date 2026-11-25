@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen, Notification, powerMonitor } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen, Notification, powerMonitor } = require('electron');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -504,7 +504,10 @@ function workspaceMenuReady() { return Boolean(wired && dsh && entry && dataDir 
 function switchWindowMode(mode, win = BrowserWindow.getFocusedWindow()) {
   if (!workspaceMenuReady() || !['chat', 'terminal'].includes(mode)) return;
   const context = win && windows.get(win.webContents.id);
-  if (context && context.win === win) sendToPage(context, 'workspace:switch-mode', mode);
+  if (context && context.win === win) {
+    localPages?.workspace(context);
+    sendToPage(context, 'workspace:switch-mode', mode);
+  }
 }
 function updateApplicationMenu() {
   const text = key => displayText(key, { app: app.name });
@@ -806,6 +809,7 @@ function flushReveal() {
   if (!context) return;
   const target = pendingReveal; pendingReveal = null;
   if (!backgroundTest) { if (context.win.isMinimized()) context.win.restore(); context.win.show(); context.win.focus(); }
+  localPages?.workspace(context);
   sendToPage(context, 'workspace:reveal-record', target);
 }
 function discardReveal(context) {
@@ -1277,6 +1281,7 @@ async function openWindow(saved) {
       try { saveViews(); } catch { view.active = true; }
     }
     windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close({ leave: !quitting && !context.failed });
+    localPages?.closeOwner(context);
   });
   try { await win.loadURL(entry); await ready; }
   catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
@@ -2843,13 +2848,25 @@ async function boot() {
     });
     if (answer.response === 1) return c.client.call('stop', id);
   });
-  // Pages the person declared in local-pages.json open in their own window; only that
-  // window's partition is configured, never the main window's session above.
-  register('openLocalPage', (c, id, requested) => (localPages ||= createLocalPages({
-    dataDir, BrowserWindow, session, shell, screen, uiError, displayText,
+  // Pages the person declared in local-pages.json open in their own window, or as a tab of
+  // the asking window; only their partitions are configured, never the main window's session above.
+  const currentLocalPages = () => localPages ||= createLocalPages({
+    dataDir, BrowserWindow, WebContentsView, session, shell, screen, uiError, displayText,
     windowDefaults: { show: false, focusable: !backgroundTest }, backgroundThrottling: !backgroundTest,
     present: win => { if (backgroundTest) { if (visibleTest) win.showInactive(); return; } if (win.isMinimized()) win.restore(); win.show(); win.focus(); },
-  })).open(id, requested, { background: c.background }));
+    notify: (c, state) => sendToPage(c, 'workspace:local-page-tabs', state),
+  });
+  register('openLocalPage', (c, id, requested) => currentLocalPages().open(id, requested, { background: c.background, owner: c }));
+  register('localPageTabs', (c, action, value) => {
+    if (c.background) throw uiError('error.localPage.background');
+    const pages = currentLocalPages();
+    if (action === 'list') return pages.tabs(c);
+    if (action === 'show') return pages.show(c, value);
+    if (action === 'reload') return pages.reload(c, value);
+    if (action === 'layout') return pages.layout(c, value);
+    throw uiError('error.localPage.unknown', { id: '' });
+  });
+  applicationHandlers.delete('localPageTabs');
   register('textPath', (c, action, value) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.paths.personOnly');
     if (action === 'inspect') return inspectTextPaths(value);

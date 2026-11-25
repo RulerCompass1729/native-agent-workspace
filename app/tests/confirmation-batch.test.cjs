@@ -98,3 +98,33 @@ test('an input card whose full text cannot be shown, or with a risk mark, is nev
   for (const c of [blank, missing, risky]) assert.equal(batchable(c), false, c.operationId);
   assert.deepEqual(keys(plan([input('a', 'Target A'), blank, missing, risky, input('b', 'Target B')])), [['a', 'b']]);
 });
+function stop(id, target, action = 'endSession', changes = {}, op = {}) {
+  return card(id, { summary: { action, method: 'stop', target, risks: ['stopsWork'] }, ...changes },
+    { confirmation: { kind: 'message', options: { message: 'End?', detail: 'What ending does', buttons: ['Keep session', action === 'disconnectCodex' ? 'Disconnect' : 'End session'], cancelId: 0 } }, ...op });
+}
+test('four stop cards from one agent become one batch, and so do four resume cards (the person, 2026-11-24)', () => {
+  assert.deepEqual(keys(plan(['a', 'b', 'c', 'd'].map(id => stop(id, 'Target ' + id)))), [['a', 'b', 'c', 'd']]);
+  const resume = id => card(id, { summary: { action: 'resume', method: 'resume', target: id, risks: [] } });
+  assert.deepEqual(keys(plan(['e', 'f', 'g', 'h'].map(resume))), [['e', 'f', 'g', 'h']]);
+});
+test('ending a session and disconnecting Codex are never one card, by the action or by the question itself', () => {
+  const mixed = [stop('a', 'Claude A'), stop('x', 'Codex X', 'disconnectCodex'), stop('b', 'Claude B'), stop('y', 'Codex Y', 'disconnectCodex')];
+  assert.deepEqual(keys(plan(mixed)), [['a', 'b'], ['x', 'y']]);
+  assert.deepEqual(plan([stop('c', 'Claude C'), stop('z', 'Codex Z', 'disconnectCodex')]), []);
+  const said = stop('d', 'Claude D', 'endSession', {}, { confirmation: { kind: 'message', options: { message: 'Disconnect?', buttons: ['Keep session', 'Disconnect'], cancelId: 0 } } });
+  assert.deepEqual(plan([stop('e', 'Claude E'), said]), [], 'the same action with another answer stays single');
+});
+test('a stop card without its named action, with any other risk mark or from another agent stays single', () => {
+  const older = stop('old', 'Target', null), unmarked = stop('gone', 'Target', undefined);
+  unmarked.summary.action = 'stop';
+  const risky = stop('risky', 'Target', 'endSession', { summary: { action: 'endSession', method: 'stop', risks: ['stopsWork', 'deletesSharedHistory'] } });
+  for (const c of [older, unmarked, risky]) assert.equal(batchable(c), false, c.operationId);
+  const elsewhere = stop('e', 'Target', 'endSession', { sessionId: 'other', nativeId: 'other-native', key: 'other:other-native:e' });
+  assert.deepEqual(keys(plan([stop('a', 'A'), older, elsewhere, risky, stop('b', 'B')])), [['a', 'b']]);
+});
+test('only stop joined the methods one answer may cover; the other work-stopping actions and deletions stay single', () => {
+  assert.deepEqual([...globalThis.nativeWorkspaceConfirmationBatch.METHODS], ['archiveSession', 'create', 'resume', 'restoreSession', 'input', 'stop']);
+  for (const method of ['interrupt', 'pause', 'quitService', 'forget', 'switchBackend', 'deleteSession'])
+    assert.equal(batchable(card(method, { summary: { action: method, method, risks: ['stopsWork'] } })), false, method);
+  assert.equal(batchable(card('archive', { summary: { action: 'archiveSession', method: 'archiveSession', risks: ['stopsWork'] } })), false);
+});

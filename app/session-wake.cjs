@@ -382,14 +382,23 @@ async function stageOnce(w, s, r, native, args) {
   if (intent.quietWindow || waits) intent.saidHeld = true;
   // The call answers that it is saved: if it does not go out after that, main tells the butler whose it is (butler-ingress.cjs).
   if (intent.status === 'staged') intent.told = true;
-  const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
-  // In the same save as this answer: a backend that ends after it never tells the same loss twice.
-  for (const { wake: told } of lost) told.senderTold = true;
+  const lost = untold(s, native.nativeId);
+  let missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { for (const { wake: told } of lost) delete told.senderTold; intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; delete intent.told; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; delete intent.told; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  // Told in this answer only with its mark on disk. Marked after the answer's own save, which can fail partway and
+  // leave on disk what it was to save. If the mark is not saved, a later answer tells it.
+  if (lost.length) {
+    for (const { wake: told } of lost) told.senderTold = true;
+    w.changed();
+    if (!w.persist()) {
+      for (const { wake: told } of lost) delete told.senderTold;
+      w.edited?.(s); missed = '';
+    }
+  }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));

@@ -43,6 +43,7 @@ function fixture() {
     ui: { ...l.ui, menu: options => { menus.push(options); return () => {}; } },
   });
   vm.runInContext(section('const uiNode =', 'const states ='), c);
+  vm.runInContext(section('let operatorSettingBusy =', '// A background operation'), c);
   vm.runInContext(section('function sessionMenuModel(', 'function memberMenuKey('), c);
   vm.runInContext(section('function queueRow(', 'function renderQueue('), c);
   return { c, record, calls, menus, state, l };
@@ -292,4 +293,32 @@ test('the header menu carries the integrator action, ignores a changed designati
   assert.equal(offline.items.find(item => item.id === 'integrator-revoke').disabled, true);
   offline.onSelect('integrator-revoke'); await tick();
   assert.deepEqual(f.calls, []);
+});
+
+test('a session grant is not presented as enabled while the global operator switch is off', async () => {
+  const f = fixture(); Object.assign(f.record, { provider: 'claude', operatorEnabled: true, serviceCapabilities: ['operatorControl1a'] });
+  f.state.operatorPolicy = { enabled: false }; const calls=[];
+  f.c.setOperatorEnabled = async (...args) => calls.push(args);
+  const model = f.c.sessionMenuModel(f.record.id, {});
+  const action = model.items.find(item => item.id === 'operator-enable-global');
+  assert.ok(action, 'the menu points to the missing global prerequisite');
+  assert.equal(action.label, '全局未开，点此启用控制接口');
+  assert.equal(model.items.some(item => item.label === '撤销此会话的控制授权'), false);
+  assert.ok(model.items.some(item => item.id === 'operator-session-revoke'), 'local revocation remains available without enabling global control');
+  f.l.setLanguage('en'); assert.equal(f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'operator-enable-global').label, 'Global control is off — enable it');
+  f.c.openSessionMenu(f.record.id); f.state.operatorPolicy.enabled = true;
+  await f.menus.at(-1).onSelect('operator-enable-global'); assert.deepEqual(calls, [[null,true]], 'a stale menu cannot revoke the session instead');
+  assert.equal(f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'operator-session').label, 'Revoke this session’s control authorization');
+});
+
+test('operator global status is an inert counted row and disabling is a separate action',()=>{
+ const f=fixture();Object.assign(f.record,{provider:'claude',serviceCapabilities:['operatorControl1a'],operatorEnabled:true});
+ f.state.operatorPolicy={enabled:true,backends:[{key:'.',enabled:true,available:true},{key:'backends/abcdef',enabled:true,available:true}]};
+ let items=f.c.sessionMenuModel(f.record.id,{}).items;
+ assert.equal(items.find(x=>x.id==='operator-global-status')?.type,'label');assert.equal(items.find(x=>x.id==='operator-global-status')?.text,'已启用 agent 控制接口 · 2/2 后台');
+ assert.ok(items.find(x=>x.id==='operator-disable-global'));assert.equal(items.find(x=>x.id==='operator-global-status').label,undefined);
+ f.state.operatorPolicy.enabled=false;f.state.operatorPolicy.backends[1].enabled=false;
+ items=f.c.sessionMenuModel(f.record.id,{}).items;
+ assert.equal(items.find(x=>x.id==='operator-global-status').text,'控制接口部分启用 · 1/2 后台');
+ assert.ok(items.some(x=>x.type==='label'&&x.text.includes('abcdef')));assert.ok(items.some(x=>x.id==='operator-enable-global'));
 });

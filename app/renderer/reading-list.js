@@ -691,7 +691,7 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
     group.content.className = group.effective ? 'process-content' : '';
     group.summary.hidden = !group.effective;
     group.item.dataset.running = String(plan.active);
-    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : view.session?.provider === 'dsh' ? 'DSH' : 'Codex');
+    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : view.session?.provider === 'dsh' ? 'DSH' : view.session?.provider === 'agy' ? 'Antigravity' : 'Codex');
     const caption = () => plan.captionRead ? plan.captionRead() : plan.caption, outcome = () => plan.outcomeRead ? plan.outcomeRead() : plan.outcome;
     ui.display.computed(group.author, 'text', author); ui.display.computed(group.caption, 'text', caption); ui.display.computed(group.outcome, 'text', outcome);
     const summary = () => `${author()} · ${plan.active ? uiText('process.active') : ''}${caption()}${outcome() ? ' · ' + outcome() : ''}`;

@@ -2426,7 +2426,9 @@ $('privacy-dialog').addEventListener('close', event => {
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false; $('create-profile').replaceChildren();
+  const agyDefault = provider === 'agy';
+  if (agyDefault) $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); else $('skip-permissions').removeAttribute('data-agy-auto-skip');
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyDefault; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
@@ -2788,9 +2790,80 @@ function closeRename(returnFocus = true) {
 }
 // The collapsed rail does not draw ⋯ (sidebar-look.css); focus then goes back to the row's own button.
 function focusSessionAction(id) { if (id === 'room') { $('room-more').focus(); return; } const row = sessionRow(id); if (!row) return; (row.link && !row.more.getClientRects().length ? row.link : row.more).focus(); }
+let operatorSettingBusy = false;
+function operatorBackendName(key) {
+  return key === '.' ? uiText('operator.rootBackend') : uiText('operator.backendName', { id: key.split('/').at(-1).slice(0, 8) });
+}
+function operatorBackendStatusKey(row) {
+  return row.available !== true ? 'operator.backendUnknown' : row.enabled ? 'operator.backendOn' : 'operator.backendOff';
+}
+function operatorGlobalSummary() {
+  const backends = Array.isArray(state.operatorPolicy?.backends) ? state.operatorPolicy.backends : [];
+  const enabled = backends.filter(row => row.enabled === true).length, total = backends.length;
+  const unknown = backends.filter(row => row.available !== true).length;
+  const key = !total || unknown && !enabled ? 'operator.globalUnknown' : enabled === total ? 'operator.globalOn' : enabled ? 'operator.globalPartial' : 'operator.globalOff';
+  return { backends, enabled, total, unknown, key };
+}
+function operatorGlobalMenuItems() {
+  if (!state.operatorPolicy) return [];
+  const summary = operatorGlobalSummary();
+  const items = [{ type: 'label', id: 'operator-global-status', text: uiText(summary.key, summary) }];
+  for (const row of summary.backends.filter(row => summary.unknown || summary.enabled !== summary.total || !row.enabled)) items.push({ type: 'label', id: 'operator-backend:' + row.key,
+    text: uiText(operatorBackendStatusKey(row), { name: operatorBackendName(row.key) }) });
+  if (!summary.total || summary.enabled !== summary.total) items.push({ id: 'operator-enable-global',
+    label: uiText(summary.enabled || summary.unknown ? 'operator.retryEnable' : 'operator.enableGlobalFirst'),
+    labelKey: summary.enabled || summary.unknown ? 'operator.retryEnable' : 'operator.enableGlobalFirst', disabled: operatorSettingBusy });
+  const disableKey = summary.unknown || summary.enabled > 0 && summary.enabled < summary.total ? 'operator.retryDisable' : 'operator.disableAll';
+  items.push({ id: 'operator-disable-global', label: uiText(disableKey), labelKey: disableKey,
+    disabled: operatorSettingBusy || summary.total > 0 && summary.enabled === 0 && summary.unknown === 0 });
+  return items;
+}
+function operatorSettingsDialog(options) {
+  const dialog = node('dialog'), title = uiNode('h2', options.confirm ? 'operator.confirmDisable' : options.error ? 'operator.resultUnconfirmed' : options.enabled ? 'operator.resultEnabled' : 'operator.resultDisabled');
+  dialog.id = 'operator-settings-dialog'; title.id = 'operator-settings-title'; dialog.setAttribute('aria-labelledby', title.id);
+  dialog.append(title, uiNode('p', options.confirm ? 'operator.disableConsequences' : options.backendChanged ? 'error.client.operatorBackendListChanged' : options.error ? options.enabled ? 'operator.resultCheckEnable' : 'operator.resultCheckDisable' : options.enabled ? 'operator.enableConsequences' : 'operator.disabledConsequences'));
+  if (options.confirm) {
+    const grants = (state.operatorPolicy?.domains || []).filter(domain => !domain.revokedAt && domain.expiresAt > Date.now());
+    dialog.append(uiNode('p', 'operator.grantsAffected', { count: grants.length }));
+    const list = node('ul');
+    for (const grant of grants) {
+      const names = grant.initiators.map(holder => state.sessions.find(s => s.id === holder.id)?.name || holder.id.slice(0, 8)).join(' · ');
+      list.append(node('li', names + ' · ' + grant.id.slice(0, 8) + ' · ' + grant.providers.join('/')));
+    }
+    dialog.append(list);
+  } else if (options.readConfirmed) {
+    const summary = operatorGlobalSummary(); dialog.append(uiNode('p', summary.key, summary));
+    const list = node('ul');
+    for (const row of summary.backends.filter(row => row.available !== true || row.enabled !== options.enabled)) list.append(uiNode('li', operatorBackendStatusKey(row), { name: operatorBackendName(row.key) }));
+    dialog.append(list);
+  } else dialog.append(uiNode('p', 'operator.currentUnconfirmed'));
+  const form = node('form', undefined, 'dialog-actions'); form.method = 'dialog';
+  const action = (key, value) => { const b = uiNode('button', key); b.type = 'submit'; b.value = value; form.append(b); return b; };
+  if (options.confirm) action('operator.confirmDisableAction', 'disable');
+  else if (options.error && options.readConfirmed) action(options.enabled ? 'operator.retryEnable' : 'operator.retryDisable', 'retry');
+  action(options.confirm ? 'common.cancel' : 'common.close', 'close').autofocus = true;
+  dialog.append(form); document.body.append(dialog);
+  return new Promise(resolve => {
+    dialog.addEventListener('close', () => { const value = dialog.returnValue; dialog.returnValue = ''; ui.display.unbind(dialog); dialog.remove(); resolve(value); }, { once: true });
+    dialog.showModal();
+  });
+}
 async function setOperatorEnabled(id, enabled) {
-  await api.operatorAction(id, 'enabled', enabled);
-  toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote');
+  if (id !== null) { await api.operatorAction(id, 'enabled', enabled); toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote'); return; }
+  if (operatorSettingBusy) return;
+  operatorSettingBusy = true;
+  let result;
+  try {
+    if (!enabled && await operatorSettingsDialog({ confirm: true }) !== 'disable') return;
+    let error = false, readConfirmed = true, backendChanged = false;
+    try { await api.operatorAction(null, 'enabled', enabled); } catch (cause) { error = true; backendChanged = cause?.uiMessage?.key === 'error.client.operatorBackendListChanged'; }
+    try { updateState(await api.initial()); } catch { error = true; readConfirmed = false; }
+    if (backendChanged) readConfirmed = false;
+    const summary = operatorGlobalSummary();
+    if (!summary.total || summary.unknown || (enabled ? summary.enabled !== summary.total : summary.enabled !== 0)) error = true;
+    result = await operatorSettingsDialog({ enabled, error, readConfirmed, backendChanged });
+  } finally { operatorSettingBusy = false; }
+  if (result === 'retry') return setOperatorEnabled(null, enabled);
 }
 // A background operation is said as one sentence: what the agent asks or did, with the names, folder and flags
 // in its command, and the risks marked. The raw command shows once, folded under 「详情」. A card the agent asked
@@ -2933,9 +3006,11 @@ function setSessionTimerList(open) {
   if (list) list.hidden = !sessionTimerOpen;
 }
 function jumpToSessionTimer(id, from) {
-  const list = $('messages');
   if (from?.closest('.session-timer-list')) { setSessionTimerList(false); $('session-timers').querySelector('.session-timer-more')?.focus(); }
-  if (!pointToMessage(list, focusedReadingKey(sessionTimerSession), id)) { toastMessage('toast.selectionMissing'); return; }
+  jumpToCard($('messages'), focusedReadingKey(sessionTimerSession), id);
+}
+function jumpToCard(list, key, id) {
+  if (!pointToMessage(list, key, id)) { toastMessage('toast.selectionMissing'); return; }
   const target = list.querySelector('[data-search-target]');
   clearTimeout(sessionTimerFlash);
   sessionTimerFlash = setTimeout(() => { if (target?.dataset.searchTarget === 'true') delete target.dataset.searchTarget; }, 2000);
@@ -3116,11 +3191,11 @@ function renderConfirmationBatch(box, role) {
     const config = node('p', undefined, 'background-batch-config');
     ui.display.computed(config, 'text', () => backgroundBatchConfig(cards[0].summary));
     box.append(config);
-    if (cards[0].summary?.risks?.length) {
-      const risks = node('ul', undefined, 'background-risks');
-      for (const risk of cards[0].summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
-      box.append(risks);
-    }
+  }
+  if (cards[0].summary?.risks?.length) {
+    const risks = node('ul', undefined, 'background-risks');
+    for (const risk of cards[0].summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
+    box.append(risks);
   }
   const list = node('ul', undefined, 'background-batch-list');
   cards.forEach((card, index) => {
@@ -3164,13 +3239,39 @@ function renderConfirmationBatch(box, role) {
   review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); lastMessages = ''; lastRoomMessages = ''; render(); });
   buttons.append(cancel, review, all); box.append(buttons);
 }
+function appendBackgroundNotes(box, op, card) {
+  // Said before the click: confirming cannot deliver this input now (background-control.cjs deliveryBlocked).
+  const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
+  if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
+  if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
+  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
+  if (card && !op.replacedBy && !op.disposition && op.standingFallback === 'standing-other-designation') {
+    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
+  }
+  return blocked;
+}
+// A card its batch answers is one plain line that leads to the batch; it looks like nothing that can be answered here.
+function renderMergedCard(box, role, summary, item) {
+  const line = node('p', undefined, 'background-line'), sentence = node('span', undefined, 'background-sentence'), note = node('span', undefined, 'background-merged-note'), go = node('button', '', 'small');
+  ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
+  ui.display.text(note, 'background.batch.merged', { count: role.batch.cards.length });
+  ui.display.text(go, 'background.batch.go');
+  ui.display.computed(go, 'aria-label', () => uiText('background.batch.goName', { target: backgroundSummaryText(summary) }));
+  go.addEventListener('click', () => {
+    let list = item.parentElement;
+    while (list && !messageViews.has(list)) list = list.parentElement;
+    if (list) jumpToCard(list, messageViews.get(list).key, globalThis.nativeWorkspaceConfirmationBatch.holder(role.batch).id);
+  });
+  line.append(sentence, note, go); box.append(line);
+}
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
   const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
-  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition));
+  const batchRole = confirmationBatchRole(op), folded = Boolean(summary && batchRole && !batchRole.open && !batchRole.anchor && !batchRole.batch.started);
+  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition && !folded));
   entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
-  const batchRole = confirmationBatchRole(op), pending = op && confirmationCardPending(op);
+  const pending = op && confirmationCardPending(op);
   const key = JSON.stringify([op, disconnected, backgroundExecutionUnavailable(), confirmationBatchKey(batchRole), Boolean(pending), pending?.failed, pending?.settled]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
@@ -3180,6 +3281,7 @@ function renderBackgroundControls(entry, message) {
   const box = node('div', undefined, `background-operation${card ? ' background-controls' : ''}`);
   entry.backgroundControls = box; entry.actions.before(box);
   if (batchRole?.anchor && !batchRole.open) { box.classList.add('background-batch'); renderConfirmationBatch(box, batchRole); return; }
+  if (folded) { box.className = 'background-operation background-merged'; renderMergedCard(box, batchRole, summary, entry.item); appendBackgroundNotes(box, op, card); return; }
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
   const answered = card && !op.replacedBy && !op.disposition && op.answer;
   const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : answered ? (op.answer === 'queued' ? 'background.card.queued' : 'background.card.answerRunning')
@@ -3207,14 +3309,7 @@ function renderBackgroundControls(entry, message) {
     ui.display.computed(note, 'text', () => uiText('background.card.repeated', { time: backgroundClock(op.repeated.time) }));
     box.append(note);
   }
-  // Said before the click: confirming cannot deliver this input now (background-control.cjs deliveryBlocked).
-  const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
-  if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
-  if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
-  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
-  if (card && !op.replacedBy && !op.disposition && op.standingFallback === 'standing-other-designation') {
-    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
-  }
+  const blocked = appendBackgroundNotes(box, op, card);
   const raw = backgroundDetailText(op);
   if (raw) box.append(backgroundDetails(uiNode('summary', 'background.card.details'), raw));
   const mergedAway = batchRole && !batchRole.open;
@@ -3333,7 +3428,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
   const title = uiNode('h3', 'operator.card.title', () => ({ who: initiator?.name || op.initiatorId, name: op.args.name || uiText('operator.card.session', { provider: op.args.provider }) }));
   title.tabIndex = -1; entry.operatorHeading = title; controls.append(title);
   const facts = node('p', undefined, 'operator-creation-facts');
-  facts.append(node('span', op.args.provider === 'claude' ? 'Claude' : 'Codex'), node('code', op.args.cwd));
+  facts.append(node('span', providerName(op.args.provider)), node('code', op.args.cwd));
   const permission = uiNode('span', 'operator.permission', () => ({ permission: uiText('operator.' + op.args.permission) }));
   permission.classList.toggle('operator-bypass', op.args.permission === 'bypass'); facts.append(permission); controls.append(facts);
   if (!inbox) {
@@ -3561,7 +3656,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const key = roomMenuKey(id);
   roomMenu = ui.menu({
-    items: [{ type: 'label', id: 'space-id', text: uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }), labelRead: () => uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }) }, { type: 'separator', id: 'space-id-separator' }, { id: 'copy-id', label: uiText('menu.copySpaceId'), labelKey: 'menu.copySpaceId' }, { id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), ...(state.operatorPolicy ? [{ id: 'operator-global', label: uiText(state.operatorPolicy.enabled ? 'operator.disableAll' : 'operator.enableAll'), labelKey: state.operatorPolicy.enabled ? 'operator.disableAll' : 'operator.enableAll' }] : []), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
+    items: [{ type: 'label', id: 'space-id', text: uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }), labelRead: () => uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }) }, { type: 'separator', id: 'space-id-separator' }, { id: 'copy-id', label: uiText('menu.copySpaceId'), labelKey: 'menu.copySpaceId' }, { id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), ...operatorGlobalMenuItems(), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
     onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey(id) && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
     onSelect: action => {
@@ -3571,7 +3666,8 @@ function openRoomMenu(point, anchor, id = spaceId) {
       else if (action === 'merge') openSpaceMerge(id);
       else if (action === 'merge-record') attempt(() => openMergeRecord(id));
       else if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled));
-      else if (action === 'operator-global') attempt(() => setOperatorEnabled(null, !state.operatorPolicy?.enabled));
+      else if (action === 'operator-enable-global') attempt(() => setOperatorEnabled(null, true));
+      else if (action === 'operator-disable-global') attempt(() => setOperatorEnabled(null, false));
       else if (action === 'rename') openRename('room', anchor, id);
       else if (action === 'notes') openNotes(id);
       else if (action === 'files') attempt(async () => { await selectSpace(id); openSpaceFiles(); });
@@ -3693,7 +3789,7 @@ function sessionMenuModel(id, row) {
   const secretaryKey = state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
   const secretary = typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === id || record.nativeId && !record.archived)
     ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey }] : [];
-  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -3831,6 +3927,9 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'steward-change') openStewardChooser();
       else if (action === 'steward-record') stewardSteps?.open();
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
+      else if (action === 'operator-enable-global') attempt(() => setOperatorEnabled(null, true));
+      else if (action === 'operator-disable-global') attempt(() => setOperatorEnabled(null, false));
+      else if (action === 'operator-session-revoke') attempt(() => setOperatorEnabled(id, false));
       else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
       else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && (domain.initiators.some(i => i.id === id) || domain.carried?.some(c => c.from.id === id))) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
       else if (action === 'update-backend') attempt(() => updateSessionBackend(id));
@@ -4191,6 +4290,7 @@ function sessionShortId(id) {
 function providerName(provider) {
   if (provider === 'claude') return 'Claude';
   if (provider === 'dsh') return 'DSH';
+  if (provider === 'agy') return 'Antigravity';
   return 'Codex';
 }
 async function moveSidebarSession(id, target, after) {
@@ -4399,10 +4499,11 @@ function createReadiness() {
   renderCreateSpaces();
   renderCreateProfiles();
   renderDshProvider();
+  renderAgyProvider();
   const historyProvider = chosenProvider();
   // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
-  // A DSH session has no history to continue here.
-  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  // DSH and Antigravity sessions have no history picker here.
+  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || historyProvider === 'agy' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   $('open-claude-sessions').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeSessionList');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
@@ -4438,8 +4539,9 @@ function createReadiness() {
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   // DSH keeps its own approvals; the service refuses bypass for it.
+  if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true' && historyProvider !== 'agy') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
-  if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
+  if ($('skip-permissions-option').hidden) { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
   ui.display.computed($('create-permission-note'), 'text', () => uiText('create.permissionNote', { directory: uiText(directoryKey), permission: uiText(permissionKey) }));
@@ -4450,8 +4552,8 @@ function createReadiness() {
     return;
   }
   const provider = chosenProvider();
-  // DSH is ready when the service found its pinned runtime and a Node.js to run it.
-  const programReady = provider === 'dsh' ? state.available?.dsh === true : state.preflight?.[provider];
+  // DSH and Antigravity are ready when the service resolved their runtimes.
+  const programReady = provider === 'dsh' ? state.available?.dsh === true : provider === 'agy' ? state.available?.agy === true : state.preflight?.[provider];
   const ready = state.preflight?.python && programReady && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
@@ -4472,6 +4574,15 @@ function renderDshProvider() {
   $('dsh-provider').hidden = !offered;
   const chosen = document.querySelector('input[name="provider"]:checked').value === 'dsh';
   if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+}
+function renderAgyProvider() {
+  const offered = state.available?.agy === true;
+  $('agy-provider').hidden = !offered;
+  const chosen = document.querySelector('input[name="provider"]:checked')?.value === 'agy';
+  if (!offered && chosen) {
+    document.querySelector('input[name="provider"][value="claude"]').checked = true;
+    if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
+  }
 }
 function chosenProvider() { return deepseekChosen() ? 'codex' : document.querySelector('input[name="provider"]:checked').value; }
 function renderCreateProfiles() {
@@ -5848,15 +5959,16 @@ function render() {
     $('room-session').hidden = !s;
     $('room-record-view').hidden = false;
     $('room-scope').hidden = !inRoom || !s;
-    const terminalVisible = Boolean(s && terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'));
+    const agyTerminalOnly = s?.provider === 'agy';
+    const terminalVisible = Boolean(s && (agyTerminalOnly || (terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'))));
     if ($('terminal-display-dialog').open && (!terminalVisible || terminalDisplayKey !== headerMenuKey())) $('terminal-display-dialog').close();
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('has-terminal', (!inRoom || memberFocus) && terminalVisible);
     $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
-    $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
-    $('conversation-pane').hidden = inRoom && !memberFocus;
+    $('session-layout').classList.toggle('native-only', agyTerminalOnly || (inRoom && !memberFocus));
+    $('conversation-pane').hidden = agyTerminalOnly || (inRoom && !memberFocus);
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
@@ -6026,7 +6138,9 @@ function render() {
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
   const s = current(); if (!s) return;
-  if (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized') terminalLayout = 'split';
+  const terminalOnly = s.provider === 'agy';
+  if (terminalOnly) next = 'terminal';
+  if (!terminalOnly && (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized')) terminalLayout = 'split';
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
   if (entry?.composing) entry.term.blur();
@@ -6042,13 +6156,13 @@ async function switchMode(next, takeControl = false) {
   }
   // Save the surface already shown to the person before waiting for native
   // control. Closing now must reopen this view; input remains separately gated.
-  if (mode === next) { preference = next; attempt(persistView); }
+  if (mode === next) { if (!terminalOnly) preference = next; attempt(persistView); }
   try {
     if (ending) await ending.done;
     if (!stillSelected()) return;
     if ((takeControl || !heldElsewhere(s)) && !await claimView(s.id, next, revision, takeControl)) return;
     if (!stillSelected()) return;
-    mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
+    mode = next; if (!terminalOnly) preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
     if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
     else if (inputFocusAllowed()) chatInput().focus();
@@ -6564,7 +6678,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // A DSH session opens in its terminal (it has no conversation view yet) and leaves the remembered view alone.
     let view = preference;
     if (provider === 'codex') view = $('initial-view').value;
-    if (provider === 'dsh') view = 'terminal';
+    if (provider === 'dsh' || provider === 'agy') view = 'terminal';
     else preference = view;
     // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
     const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;
@@ -6734,6 +6848,7 @@ $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = te
 $('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });
 $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
+  if (current()?.provider === 'agy') return;
   terminalLayout = 'hidden'; await switchMode('chat');
 });
 for (const input of [$('shared-input')]) input.addEventListener('focus', () => {
@@ -8067,7 +8182,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
       for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
-      $('skip-permissions').checked = false; folder = ''; newDirectory = false;
+      $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); folder = ''; newDirectory = false;
       $('initial-view').value = ''; $('create-profile').replaceChildren();
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
@@ -8110,12 +8225,21 @@ sidebarHoverCard = (() => {
   return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: [surface, $('header')], surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;
 })();
 disposers.push(() => sidebarHoverCard?.dispose(), ui.language.subscribe(() => sidebarHoverCard?.dismiss()));
+const windowTabs = nativeWorkspaceWindowTabs.mount({ api, text: uiText, onLanguage: fn => ui.language.subscribe(fn), onError: toastError });
+disposers.push(() => windowTabs.dispose());
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
 disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); else if (current()?.archived) document.title = sessionWindowTitle(current()); }));
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
 renderInterfaceLanguage();
 
-for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = () => {
+  if (input.value === 'agy' && input.checked) {
+    if (!$('skip-permissions').checked) { $('skip-permissions').checked = true; $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); }
+  } else if (input.checked && $('skip-permissions').getAttribute('data-agy-auto-skip') === 'true') {
+    $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip');
+  }
+  createReadiness();
+};
 $('claude-history-id').oninput = createReadiness;
 $('create-profile').onchange = createReadiness;
 $('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
@@ -8124,7 +8248,7 @@ $('create-space-name').oninput = () => { $('create-space-name').dataset.edited =
 $('claude-history-id').onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
 };
-$('skip-permissions').onchange = createReadiness;
+$('skip-permissions').onchange = () => { $('skip-permissions').removeAttribute('data-agy-auto-skip'); createReadiness(); };
 attempt(async () => {
   state = await api.initial();
   languageWarning = ['unavailable', 'migrationNotSaved'].includes(state.localeWarning) ? state.localeWarning : null; renderInterfaceLanguage();

@@ -4398,6 +4398,60 @@ test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its nex
   assert.deepEqual(plan(idle, [heavy]), []);
 });
 
+// The person, 2026-11-24 (cache-aware handoff): a Claude member that is large and still warm continues in a new session
+// before its next item, instead of being compacted in the middle of it. A cold one would pay for its whole conversation
+// again just to write the handoff (97 of them in two weeks: median 227K input-equivalents cold, 21K warm).
+test('cache-aware rotation: a large warm Claude member is rotated before its next item, a cold, small, young or idle one is not', () => {
+  assert.deepEqual(rules.CONTEXT_LIMITS, { claude: 180000 });
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const dispatch = [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }];
+  const rotate = [{ kind: 'rotate', sessionId: 'a', reason: 'context', contextTokens: 180000 }];
+  const old = { createdAt: NOW - 2 * HOUR };
+  const context = (extra = {}) => ({ contexts: new Map([['a', { tokens: 180000, at: NOW - 60000, ttlMs: HOUR, ...extra }]]) });
+  assert.deepEqual(plan(rooms, [member('a', old)], context()), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ tokens: 179999 })), dispatch, 'not large yet');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 53 * 60000 })), rotate, 'still warm');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 55 * 60000 })), dispatch, 'about to go cold: the handoff itself could miss the cache');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 3 * HOUR })), dispatch, 'cold');
+  // A provider that shortens the lifetime (over the plan: five minutes) shortens the window with it.
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 10 * 60000, ttlMs: 5 * 60000 })), dispatch);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 4 * 60000, ttlMs: 5 * 60000 })), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ ttlMs: null })), dispatch, 'lifetime unknown');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW + 60000 })), dispatch, 'a time ahead of this clock');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ tokens: '180000' })), dispatch, 'not a size');
+  assert.deepEqual(plan(rooms, [member('a', old)]), dispatch, 'no size known');
+  // A successor that read a lot in its first turn does its item first, or it would be replaced again and again.
+  assert.deepEqual(plan(rooms, [member('a', { createdAt: NOW - 59 * 60000 })], context()), dispatch);
+  assert.deepEqual(plan(rooms, [member('a', { ...old, provider: 'codex' })], context()), dispatch, 'Codex is not measured');
+  // With nothing queued there is no item to save, and a new session would only go cold in its turn.
+  const idle = [{ id: 'shared', name: 'Team', queue: [] }];
+  for (const minutes of [2, 10, 30, 50]) {
+    assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], context()), []);
+    assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], { ...context(), butler: 'a' }), []);
+  }
+  // Another reason keeps its own words, and a successor's day of rest does not hold this one.
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), compactions: new Map([['a', 3]]) }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  const successor = { phase: 'kept', keptAt: NOW - HOUR, successorOf: 'before' };
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), rotations: { a: successor } }), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), rotations: { a: { phase: 'kept', keptAt: NOW - HOUR } } }), dispatch, 'an old kept session');
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), deferredRotations: new Set(['a']) }), dispatch, 'the person is using it');
+  // One rotation at a time: the member works on meanwhile, and nothing is reported as stalled for this reason.
+  const gates = new Map();
+  const running = { z: { phase: 'requested', requestedAt: NOW } };
+  assert.deepEqual(plan(rooms, [member('a', old), member('z', { state: 'working' })], { ...context(), rotations: running, rotationGates: gates }), dispatch);
+  assert.equal(gates.has('a'), false);
+  // Two due at once: one is rotated, the other does its item now; a turn that holds the one slot for its whole half
+  // hour holds no item of anyone else's (the PM, 11-24).
+  const two = [{ id: 'shared', name: 'Team', queue: [item('1', { assignee: 'a' }), item('2', { assignee: 'b' })] }];
+  const both = { contexts: new Map(['a', 'b'].map(id => [id, { tokens: 200000, at: NOW - 60000, ttlMs: HOUR }])) };
+  assert.deepEqual(plan(two, [member('a', old), member('b', old)], both).map(action => [action.kind, action.sessionId]), [['rotate', 'a'], ['dispatch', 'b']]);
+  for (const requestedAt of [NOW, NOW - 29 * 60000]) {
+    const busy = { z: { phase: 'handed', requestedAt, handedAt: requestedAt, newId: 'y' } };
+    assert.deepEqual(plan(two, [member('a', old), member('b', old), member('y', { state: 'working' })], { ...both, rotations: busy })
+      .map(action => [action.kind, action.sessionId]), [['dispatch', 'a'], ['dispatch', 'b']]);
+  }
+});
+
 // 11-23: nobody was rotated for 14 hours. The four kinds added on 11-19 were not named beside person-intervened
 // and no-reply, so each counted as a decision its member had asked.
 const WAITING_KINDS = [
@@ -4640,6 +4694,45 @@ test('794d3cd7: a compacted member is asked for its handoff in words that say wh
   assert.equal(client.sends('z').length, 0);
   assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
   assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
+});
+
+test('cache-aware rotation: the size read from the record reaches the request, the space notice and the log in its own words', async t => {
+  const fake = Object.assign(fakeCompactions({ a: 1 }), { contexts: new Map() });
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { cwd: '/tmp', createdAt: NOW - 2 * HOUR })], { compactions: fake });
+  fake.contexts.set('a', { tokens: 183400, at: dispatcher.now() - 60000, ttlMs: HOUR });
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /^【NAW 换会话】这个会话的上下文已到约 183K。为了不再一次次压缩上下文，NAW 会开一个新会话接着做/);
+  assert.equal(room.value.queue[0].status, 'queued', 'the queued item waits for the successor');
+  const requested = room.value.events.find(event => event.uiMessage?.key === 'notice.rotation.requested');
+  assert.match(requested.text, /NAW 换会话（这个会话的上下文已到约 183K）/);
+  const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'context'), 'the log keeps the reason');
+});
+
+test('cache-aware rotation: sizes a failed read left behind are not used', async t => {
+  let fail = false;
+  const fake = Object.assign(fakeCompactions({ a: 1 }), { contexts: new Map() });
+  const counted = fake.sample.bind(fake);
+  fake.sample = async (...args) => { if (fail) throw Error('unreadable'); return counted(...args); };
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { cwd: '/tmp', createdAt: NOW - 2 * HOUR })], { compactions: fake });
+  const size = { tokens: 1000, at: dispatcher.now() - 60000, ttlMs: HOUR };
+  fake.contexts.set('a', size);
+  room.queueAdd('first task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /first task/);
+  assert.equal(dispatcher.contexts.get('a'), size, 'read once');
+  client.reply('a', 'first task finished');
+  await dispatcher.schedule();
+  Object.assign(size, { tokens: 200000, at: dispatcher.now() - 60000 });
+  fail = true;
+  room.queueAdd('second task', 'a');
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.match(client.sends('a').at(-1)[2], /second task/);
 });
 
 test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
@@ -5120,6 +5213,189 @@ for (const use of ['draft', 'human turn']) test(`handoff timeout rolls back whil
   assert.deepEqual(f.fresh.roomIds, ['shared']); assert.equal(f.fresh.state, 'working');
   assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
 });
+const MINUTE = 60 * 1000;
+const advanceTo = (f, minutes) => f.dispatcher.advanceRotations(f.client.snapshot(), NOW + minutes * MINUTE);
+const stopsOf = f => f.client.calls.filter(c => c[0] === 'stopFailedSuccessor').length;
+test('R183: a delivered first turn still running after 3 minutes is neither failed nor stopped, and then confirms', async t => {
+  const f = await firstHandoff(t);
+  for (const minutes of [1, 3, 13.3, 29]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.record.phase, 'handed', `${minutes} minutes`); assert.equal(stopsOf(f), 0); assert.equal(f.fresh.state, 'working');
+    assert.notEqual(f.record.handoffConfirmed, true);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+    assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a', 'decisions move only with the confirmed turn');
+  }
+  f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 29.5);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'b');
+});
+test('R183: a first turn past its own limit rolls back as before', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(stopsOf(f), 1); assert.equal(f.fresh.state, 'ended'); assert.deepEqual(f.fresh.roomIds, []);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a'); assert.equal(f.old.state, 'idle');
+});
+for (const [label, input] of [['unconfirmed', { status: 'unconfirmed', nativeId: undefined, turnId: undefined }],
+  ['awaiting-native', { status: 'awaiting-native', nativeId: undefined, turnId: undefined }],
+  ['bound to another native session', { nativeId: 'native-other' }]])
+test(`R183: a handoff ${label} for 2 minutes still rolls back`, async t => {
+  const f = await firstHandoff(t, { state: 'idle' });
+  Object.assign(f.input, input);
+  await advanceTo(f, 2); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 2.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a handoff whose successor is missing from the start still rolls back after 2 minutes', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 2); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 2.1); assert.equal(f.record.phase, 'failed'); assert.equal(stopsOf(f), 0);
+});
+for (const state of ['ended', 'recoverable', 'background'])
+test(`R183: a delivered first turn whose successor is ${state} keeps the 2-minute limit`, async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1); f.fresh.state = state;
+  await advanceTo(f, 1.5); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 3); assert.equal(f.record.phase, 'failed'); assert.equal(stopsOf(f), f.record.failureCleanup.stop.state === 'done' ? 1 : 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a delivered first turn out of view for a pass, or in an app reopened meanwhile, keeps its limit', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1);
+  const { sessions } = f.client.state;
+  f.client.state.sessions = sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 5); assert.equal(f.record.phase, 'handed', 'its backend is briefly away');
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 6 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed', 'delivery was recorded on disk');
+  f.client.state.sessions = sessions; f.fresh.state = 'disconnected';
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 7 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed');
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 30.1 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'failed');
+});
+for (const failures of [1, Infinity])
+test(`R183: a delivery that cannot be written to disk (${failures === 1 ? 'once' : 'for minutes'}) neither fails the rotation nor stops its successor`, async t => {
+  const f = await firstHandoff(t), save = f.dispatcher.save;
+  let left = failures;
+  f.dispatcher.save = () => { if (left-- > 0) throw Object.assign(Error('no space left on device'), { code: 'ENOSPC' }); return save.call(f.dispatcher); };
+  for (const minutes of [1, 3, 5]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.record.phase, 'handed', `${minutes} minutes`); assert.equal(f.fresh.state, 'working'); assert.deepEqual(f.fresh.roomIds, ['shared']);
+    assert.deepEqual(f.client.calls.filter(c => ['stop', 'stopFailedSuccessor'].includes(c[0])), []);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+  }
+  f.dispatcher.save = save;
+  f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 6);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+});
+test('R183: a delivered first turn whose successor never comes back into view rolls back at its limit and stops nothing', async t => {
+  const f = await firstHandoff(t);
+  await advanceTo(f, 1);
+  f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'b');
+  await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed'); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+// Undelivered at 119 s; native's receipt lands at 121 s; the next pass is at 125 s.
+async function lateReceipt(t, patch, turnId = 'first-turn') {
+  const f = await firstHandoff(t);
+  const receipt = { status: 'submitted', nativeId: 'native-b', turnId };
+  Object.assign(f.input, { status: 'awaiting-native', nativeId: undefined, turnId: undefined });
+  await advanceTo(f, 119 / 60); assert.equal(f.record.phase, 'handed'); assert.notEqual(f.record.handoffDelivered, true);
+  Object.assign(f.input, receipt); Object.assign(f.fresh, patch);
+  return f;
+}
+for (const [label, patch] of [['working', {}], ['with background work, which a rollback may not stop', { background: 1 }], ['waiting on an approval', { state: 'approval', approval: { id: 'synthetic' } }]])
+test(`R183: a receipt after the 2 minutes counts as delivered, its successor ${label}: one session has the work`, async t => {
+  const f = await lateReceipt(t, patch), { state } = f.fresh;
+  for (const minutes of [125 / 60, 10, 29]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b', `${minutes} minutes`);
+    assert.equal(f.record.phase, 'handed'); assert.equal(f.record.handoffDelivered, true);
+    assert.equal(stopsOf(f), 0); assert.equal(f.fresh.state, state);
+  }
+  f.boundary('complete'); Object.assign(f.fresh, { state: 'idle', background: 0, approval: null }); await advanceTo(f, 29.5);
+  assert.equal(f.record.handoffConfirmed, true);
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'b');
+});
+test('R183: a late receipt counts before native has named its turn', async t => {
+  const f = await lateReceipt(t, {}, null);
+  await advanceTo(f, 125 / 60); assert.equal(f.record.phase, 'handed'); assert.equal(f.record.handoffDelivered, true); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+});
+test('R183: a late receipt adds no time: its limit too is counted from the handoff', async t => {
+  const f = await lateReceipt(t);
+  await advanceTo(f, 125 / 60); await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1); assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a first turn that completed before the late receipt was seen confirms', async t => {
+  const f = await lateReceipt(t, { state: 'idle' });
+  f.boundary('complete'); await advanceTo(f, 125 / 60);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+});
+test('R183: delivered while no pass ran (app closed, Mac asleep): the reopened app keeps it', async t => {
+  const f = await firstHandoff(t);
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 10 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed'); assert.equal(reopened.rotations.a.handoffDelivered, true); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+});
+for (const state of ['ended', 'recoverable', 'background'])
+test(`R183: a late receipt whose successor is already ${state} rolls back at that pass`, async t => {
+  const f = await lateReceipt(t, { state });
+  await advanceTo(f, 125 / 60); assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+for (const wait of ['approval', 'nativeInputRequired'])
+test(`R183: a first turn waiting on the person (${wait}) is bounded by the same limit and is not stopped`, async t => {
+  const f = await firstHandoff(t, wait === 'approval' ? { state: 'approval', approval: { id: 'synthetic' } } : { nativeInputRequired: true });
+  await advanceTo(f, 29); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.failureCleanup.stop.state, 'retained');
+  assert.equal(stopsOf(f), 0); assert.deepEqual(f.fresh.roomIds, ['shared']);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+for (const status of ['failed', 'interrupted', 'incomplete'])
+test(`R183: a first turn that ends ${status} after 3 minutes rolls back at once`, async t => {
+  const f = await firstHandoff(t); await advanceTo(f, 3); assert.equal(f.record.phase, 'handed');
+  f.boundary(status); f.fresh.state = 'idle'; await advanceTo(f, 3.1);
+  assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'successor-turn-failed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: the wait for a collaboration is counted from the confirmed first turn', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle';
+  await advanceTo(f, 29); assert.equal(f.record.handoffConfirmed, true); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 31); assert.equal(f.record.phase, 'handed', 'two minutes into the wait');
+  assert.equal(f.old.state, 'idle');
+  f.client.state.rooms[0].run = null; await advanceTo(f, 32);
+  assert.equal(f.old.state, 'ended');
+});
+test('R183: that wait stays bounded', async t => {
+  const f = await firstHandoff(t);
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 29);
+  await advanceTo(f, 59); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 59.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept'); assert.equal(f.old.state, 'idle');
+});
+test('R183: a rotation confirmed by an older version keeps its wait from the handoff', async t => {
+  const f = await firstHandoff(t, { state: 'idle' }); f.boundary('complete');
+  f.record.handoffConfirmed = true; f.dispatcher.save();
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await advanceTo(f, 29); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept');
+});
+
 test('one space notice failing repeatedly does not block another space or duplicate its notice', async t => {
   const f = await firstHandoff(t, { state: 'error' }); f.boundary('failed');
   const other = f.room.create('Synthetic second space'); f.record.roomIds.push(other);

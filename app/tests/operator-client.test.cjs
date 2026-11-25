@@ -101,3 +101,10 @@ for (const kind of ['false-result', 'stale-readback']) test('a global acknowledg
     await assert.rejects(c.call('operatorAction', null, 'enabled', true));
     assert.equal(a.actions().length, 1); assert.equal(b.actions().length, 1); assert.equal(legacy.actions().length, 0);
 });
+
+test('partial operator state names every capable backend without exporting session or grant content', t => {
+ const {a,b,c}=fixture(t);a.state.operatorPolicy.enabled=true;b.state.operatorPolicy.enabled=false;
+ assert.deepEqual(c.snapshot().operatorPolicy.backends,[{key:'a',enabled:true,available:true},{key:'b',enabled:false,available:true}]);
+ b.closed=true;assert.deepEqual(c.snapshot().operatorPolicy.backends[1],{key:'b',enabled:false,available:false});
+ assert.equal(JSON.stringify(c.snapshot().operatorPolicy.backends).includes('PRIVATE_'),false);
+});

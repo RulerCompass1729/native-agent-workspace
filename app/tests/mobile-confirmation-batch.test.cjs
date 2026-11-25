@@ -42,6 +42,14 @@ test('input cards merge with their full text, separately from archive cards', as
   assert.match(cards['in-2'].detail, /second text/, 'Each input row opens to its own complete text');
 });
 
+test('stop cards merge on the phone by what they do: ending and disconnecting are two batches', async t => {
+  const cards = await phone(t, async f => { for (const id of ['A', 'D', 'B', 'E']) await f.askStop(id); });
+  assert.equal(cards['stop-A'].batch, cards['stop-A'].id); assert.equal(cards['stop-B'].batch, cards['stop-A'].id);
+  assert.equal(cards['stop-D'].batch, cards['stop-D'].id); assert.equal(cards['stop-E'].batch, cards['stop-D'].id);
+  assert.equal(cards['stop-A'].batchTitles.zh, '断开 Codex 会话'); assert.equal(cards['stop-D'].batchTitles.zh, '结束会话');
+  assert.equal(cards['stop-D'].detail, 'What ending does', 'Each row opens to its own question');
+});
+
 test('an input card without its full text, or a member without current proof, leaves the cards single', async t => {
   const noText = await phone(t, async f => { await f.askInput('in-1', 'A', 'one'); await f.askInput('in-2', 'B', 'two'); },
     list => { delete list[1].message.backgroundOperation.confirmation.options.detail; });
