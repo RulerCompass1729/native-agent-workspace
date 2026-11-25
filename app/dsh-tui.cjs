@@ -372,6 +372,11 @@ const HOME_PATCH = [
   '  disabled: true',
   '- id: session-title-llm',
   '  disabled: true',
+  // Upstream default: both ride inside every model request, the whole session log included.
+  '- id: session-log-deepseek',
+  '  disabled: true',
+  '- id: plugin-package-inventory-deepseek',
+  '  disabled: true',
   '',
 ].join('\n');
 

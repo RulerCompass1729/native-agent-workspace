@@ -138,7 +138,8 @@ function streamedReply(text) {
 }
 
 // A loopback stand-in for api.deepseek.com. It records method, path, header
-// names, the model and whether the key arrived; never header values or bodies.
+// names, the body's top-level field names, the model and whether the key arrived;
+// never header values or body values.
 function startFakeDeepSeek(certificate) {
   const requests = [];
   const options = { key: fs.readFileSync(certificate.key), cert: fs.readFileSync(certificate.cert) };
@@ -148,9 +149,11 @@ function startFakeDeepSeek(certificate) {
       body += chunk;
     });
     request.on('end', () => {
-      let model = null;
+      let model = null, fields = [];
       try {
-        model = JSON.parse(body).model || null;
+        const parsed = JSON.parse(body);
+        model = parsed.model || null;
+        fields = Object.keys(parsed).sort();
       } catch {
         model = null;
       }
@@ -161,6 +164,7 @@ function startFakeDeepSeek(certificate) {
         path: request.url,
         headers: Object.keys(request.headers).sort(),
         model,
+        fields,
         fakeKeyArrived: headerKey === FAKE_KEY || bearer === `Bearer ${FAKE_KEY}`,
       });
       if (request.method === 'POST' && /\/v1\/messages$/.test(request.url)) {
@@ -337,6 +341,9 @@ async function checkChat(options, where) {
   check('chat: the fake key arrived as the credential', turns.length > 0 && turns.every(request => request.fakeKeyArrived === true));
   const identifying = options.fake.requests.flatMap(request => request.headers.filter(name => name.startsWith('x-deepseek-harness')));
   check('chat: no x-deepseek-harness-* identifiers', identifying.length === 0, identifying.join(',') || 'none');
+  // Upstream sends these by default inside model requests, which the egress proxy cannot see.
+  const uploads = [...new Set(options.fake.requests.flatMap(request => request.fields.filter(name => name.startsWith('dsh_'))))];
+  check('chat: no dsh_session_log or dsh_plugin_packages field', uploads.length === 0, uploads.join(',') || 'none');
   const targets = session.proxy.records().map(item => `${item.target}:${item.verdict}`);
   check('chat: egress saw only api.deepseek.com:443', targets.length > 0 && targets.every(item => item === 'api.deepseek.com:443:allowed'), [...new Set(targets)].join(','));
   await session.stop();
