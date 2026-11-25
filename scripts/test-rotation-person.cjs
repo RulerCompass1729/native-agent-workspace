@@ -487,6 +487,10 @@ const scenarios = {
     assert.equal((await session(id)).terminalInputPending, true);
     await person.erase(id, 5, 'terminal');
     await until(async () => !/typed/.test(await person.screen(id)), 'erase takes it off the native screen');
+    // After an interrupt Claude takes plugin input again only after one native prompt (adapters.cjs nativeInputRequired).
+    assert.equal((await session(id)).nativeInputRequired, true, 'The interrupt holds plugin input');
+    await person.type(id, 'go on', 'terminal'); await person.pressEnter();
+    await until(async () => { const s = await session(id); return s.nativeInputRequired === false && s.messages.some(m => m.role === 'user' && m.text === 'go on') && await ready(id); }, 'one native prompt lets plugin input go on');
     model.rule(/ask first/, { tool: { name: 'Bash', input: { command: 'touch synthetic-card-check', description: 'Synthetic check' } } });
     await person.open(id, 'chat');
     await person.sendMessage(id, 'ask first');
@@ -496,7 +500,7 @@ const scenarios = {
     await person.pressEsc();
     await until(async () => (await session(id)).state === 'idle', 'the request is refused');
     const s = await session(id), end = await personMarks(id);
-    assert.deepEqual(typedBy(s), ['draft kept', 'stop me', 'ask first'], 'The product has exactly what the person sent');
+    assert.deepEqual(typedBy(s), ['draft kept', 'stop me', 'go on', 'ask first'], 'The product has exactly what the person sent');
     assert.equal(fs.existsSync(path.join(s.cwd, 'synthetic-card-check')), false, 'The refused command did not run');
     assert.ok(end.at > kept.at && end.control > kept.control && end.human > 0, 'The product counted the acts as the person\'s: ' + JSON.stringify(end));
   },
