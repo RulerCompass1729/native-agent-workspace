@@ -265,7 +265,7 @@ for (const name of ['workspace.json', 'room-records.json']) {
     ['missing', file => fs.rmSync(file)],
     ['replaced', file => { fs.writeFileSync(`${file}.other`, '{}'); fs.renameSync(`${file}.other`, file); }],
     ['overwritten', file => fs.writeFileSync(file, '{}')],
-    ['rewritten at the same size and time', file => { const { size, atime, mtime } = fs.statSync(file); fs.writeFileSync(file, ' '.repeat(size)); fs.utimesSync(file, atime, mtime); }],
+    ['rewritten at the same size and time', file => { const { size, atimeMs, mtimeMs } = fs.statSync(file); fs.writeFileSync(file, ' '.repeat(size)); fs.utimesSync(file, atimeMs / 1000, mtimeMs / 1000); }],
     ['made readable to others', file => fs.chmodSync(file, 0o644)],
     ['a link to the file saved', file => { fs.renameSync(file, `${file}.moved`); fs.symlinkSync(`${file}.moved`, file); }],
   ]) test(`an unchanged store is written again when ${name} is ${what}`, async t => {
