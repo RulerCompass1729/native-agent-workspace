@@ -9,7 +9,12 @@ const { Workspace } = require('../workspace.cjs');
 const { maintenanceProof } = require('../backend-switch.cjs');
 const { uiError } = require('../ui-errors.cjs');
 const BYPASS = 'bypassPermissions', OTHERS = ['plan', 'default', 'acceptEdits', 'auto', 'dontAsk'];
+const EXIT = Symbol('exit');
 const row = (permissionMode, sessionId) => JSON.stringify({ type: 'permission-mode', permissionMode, sessionId }) + '\n';
+// A turn names the mode it runs in, not one that Claude comes back in.
+const turn = (permissionMode, sessionId) => JSON.stringify({ type: 'user', permissionMode, sessionId }) + '\n';
+// Claude writes this as it exits, and the mode only where it is not the one written last.
+const exit = sessionId => JSON.stringify({ type: 'cost-state', sessionId }) + '\n';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'naw-bypass-left-'));
@@ -17,11 +22,11 @@ function fixture(t) {
   const output = path.join(dir, 'argv.json'), binary = path.join(dir, 'claude');
   fs.writeFileSync(binary, `#!${process.execPath}\nif (process.argv[2] === 'agents') console.log('[]'); else require('node:fs').writeFileSync(${JSON.stringify(output)}, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o700 });
   const host = { binaries: { claude: binary }, privateDir: dir, hookTargets: new Map(), hookSocket: path.join(dir, 'hook.sock'), submitSocket: path.join(dir, 'submit.sock') };
-  // modes: what its transcript says, in order; null: it has none. Returns the --permission-mode it was started with.
+  // modes: what its transcript says, in order, { turn } as a turn says it, EXIT: Claude ended; null: it has none. Returns the --permission-mode it was started with.
   return async function resumed(modes, { record = {}, by = 'update', prepare } = {}) {
     fs.rmSync(output, { force: true });
     const nativeId = randomUUID(), nativeTranscript = path.join(dir, `${nativeId}.jsonl`);
-    if (modes) fs.writeFileSync(nativeTranscript, JSON.stringify({ type: 'user', sessionId: nativeId }) + '\n' + modes.map(mode => row(mode, nativeId)).join(''));
+    if (modes) fs.writeFileSync(nativeTranscript, JSON.stringify({ type: 'user', sessionId: nativeId }) + '\n' + modes.map(mode => mode.turn ? turn(mode.turn, nativeId) : mode === EXIT ? exit(nativeId) : row(mode, nativeId)).join(''));
     const s = { id: randomUUID(), nativeId, nativeTranscript, name: 'Agent A', provider: 'claude', state: 'ended', cwd: dir, owner: 'window', view: 'terminal', model: 'claude-opus-5-5', controlRevision: 3, connectionRevision: 2,
       messages: [], fleet: [], skipPermissions: true, nativePermissionMode: BYPASS, ...record };
     const w = Object.create(Workspace.prototype); EventEmitter.call(w); let runtime;
@@ -55,8 +60,26 @@ test('a session known in another mode is never started in bypass, and in default
   }
   // Claude brings these back by itself.
   for (const known of OTHERS) for (const left of ['plan', 'acceptEdits', 'auto', 'dontAsk']) assert.deepEqual(await resumed([left], { record: { nativePermissionMode: known } }), { asked: null, mode: known }, `${known} ${left}`);
-  for (const usable of [null, [], ['someday']]) for (const known of ['plan', 'default']) assert.deepEqual(await resumed(usable, { record: { nativePermissionMode: known } }), { asked: null, mode: known }, 'Nothing usable: as before');
+  for (const unusable of [null, ['someday']]) for (const known of ['plan', 'default']) assert.deepEqual(await resumed(unusable, { record: { nativePermissionMode: known } }), { asked: null, mode: known }, 'Nothing usable: as before');
+  for (const [unread, prepare] of [[[], (s, file) => { fs.unlinkSync(file); fs.mkdirSync(file); }], [['plan'], s => { s.nativeTranscript = undefined; }]]) assert.deepEqual(await resumed(unread, { prepare, record: { nativePermissionMode: 'plan' } }), { asked: null, mode: 'plan' });
   assert.deepEqual(await resumed([BYPASS], { record: { nativePermissionMode: undefined } }), { asked: null, mode: undefined });
+});
+
+test('killed outright, a session comes back in what its last turn ran in where that allows no more than default', async t => {
+  const resumed = fixture(t);
+  for (const by of ['update', 'person']) {
+    for (const known of ['plan', 'default', 'manual', 'dontAsk']) for (const older of [BYPASS, 'auto', 'acceptEdits']) assert.deepEqual(await resumed([older, { turn: known }], { by, record: { nativePermissionMode: known } }), { asked: known, mode: known }, `${older}, then a turn in ${known}`);
+    assert.deepEqual(await resumed([], { by, record: { nativePermissionMode: 'plan' } }), { asked: 'plan', mode: 'plan' }, 'The end of a long one names no mode');
+    // A key after the turn is lost with the process: nothing looser is asked for than before.
+    for (const known of ['acceptEdits', 'auto']) assert.deepEqual(await resumed([BYPASS, { turn: known }], { by, record: { nativePermissionMode: known } }), { asked: null, mode: known }, known);
+    assert.deepEqual(await resumed(['plan', { turn: BYPASS }], { by }), { asked: BYPASS, mode: BYPASS }, 'Back in bypass with a turn');
+    assert.deepEqual(await resumed(['plan', { turn: BYPASS }, 'default'], { by }), { asked: 'default', mode: 'default' }, 'Left again');
+    assert.deepEqual(await resumed([BYPASS, { turn: BYPASS }], { by, record: { nativePermissionMode: undefined } }), { asked: null, mode: undefined });
+    // A tool's result names no mode; another conversation's turns, and a subagent's, say nothing here.
+    assert.deepEqual(await resumed([BYPASS, { turn: BYPASS }, 'plan'], { by, prepare: (s, file) => fs.appendFileSync(file, JSON.stringify({ type: 'user', sessionId: s.nativeId }) + '\n') }), { asked: 'plan', mode: 'plan' });
+    assert.deepEqual(await resumed([BYPASS, 'plan'], { by, prepare: (s, file) => fs.appendFileSync(file, turn(BYPASS, randomUUID())) }), { asked: 'plan', mode: 'plan' });
+    assert.deepEqual(await resumed([BYPASS, 'plan'], { by, prepare: (s, file) => fs.appendFileSync(file, JSON.stringify({ type: 'user', isSidechain: true, permissionMode: BYPASS, sessionId: s.nativeId }) + '\n') }), { asked: 'plan', mode: 'plan' });
+  }
 });
 
 test('a session that is still in bypass, and one whose record says nothing that can be used, come back as before', async t => {
@@ -85,4 +108,20 @@ test('a resume that is refused leaves what NAW knows of the session alone', asyn
   await attempt({ state: 'idle' }, 'error.workspace.cannotResume', 'person'); assert.equal(s.nativePermissionMode, BYPASS);
   await attempt({ processIdentity: { pid: process.pid } }, 'error.workspace.previousProcessMayRun', 'update'); assert.equal(s.nativePermissionMode, BYPASS);
   await attempt({ nativeContextPending: {} }, 'error.workspace.nativeContextIdentityUnconfirmed', 'person'); assert.equal(s.nativePermissionMode, BYPASS);
+});
+
+test('ended in the mode written last, with a turn in another one between, a session comes back in it though it is not written again', async t => {
+  const resumed = fixture(t);
+  for (const by of ['update', 'person']) {
+    for (const left of ['plan', 'default', 'acceptEdits', 'auto']) assert.deepEqual(await resumed([left, { turn: BYPASS }, EXIT], { by }), { asked: left, mode: left }, `Opened in bypass, back to ${left}`);
+    for (const known of ['acceptEdits', 'auto', 'plan']) assert.deepEqual(await resumed(['default', { turn: known }, EXIT], { by, record: { nativePermissionMode: known } }), { asked: 'default', mode: known }, `${known}, back to default`);
+    assert.deepEqual(await resumed(['plan', { turn: 'auto' }, EXIT], { by, record: { nativePermissionMode: 'auto' } }), { asked: null, mode: 'auto' }, 'Claude restores it');
+    assert.deepEqual(await resumed([BYPASS, { turn: 'auto' }, EXIT], { by, record: { nativePermissionMode: 'auto' } }), { asked: 'auto', mode: 'auto' });
+    assert.deepEqual(await resumed([BYPASS, { turn: BYPASS }, EXIT], { by }), { asked: BYPASS, mode: BYPASS });
+    // Ended before that turn, then killed: as any killed one.
+    assert.deepEqual(await resumed(['plan', EXIT, { turn: BYPASS }], { by }), { asked: BYPASS, mode: BYPASS });
+    assert.deepEqual(await resumed(['auto', EXIT, { turn: 'plan' }], { by, record: { nativePermissionMode: 'plan' } }), { asked: 'plan', mode: 'plan' });
+    assert.deepEqual(await resumed(['plan', { turn: BYPASS }], { by, prepare: (s, file) => fs.appendFileSync(file, exit(randomUUID())) }), { asked: BYPASS, mode: BYPASS }, "Another conversation's end");
+    assert.deepEqual(await resumed([EXIT], { by }), { asked: BYPASS, mode: BYPASS }, 'The end of a long one names no mode');
+  }
 });

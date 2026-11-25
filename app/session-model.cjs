@@ -15,6 +15,7 @@ const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const NATIVE_DEFAULT = '原生默认';
 const CLAUDE_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'manual'];
 const BYPASS = 'bypassPermissions';
+const STRICT_MODES = ['default', 'manual', 'plan', 'dontAsk'];
 const TAIL_BYTES = 256 * 1024;
 // Whether the change was made is not known, or it was and the session did not come back.
 const UNSURE_KEYS = ['error.modelChange.unconfirmed', 'error.modelChange.stopped'];
@@ -51,8 +52,9 @@ function claudeValue(value, record) {
   }
   return { model: value.model, effort: value.effort };
 }
-// What the session's own transcript says: whether there is a conversation to resume, and the permission mode it was
-// last in (written as Claude exits, also when no turn followed the change). Null when it cannot be read.
+// What the session's own transcript says: whether there is a conversation to resume, and the permission mode it was left
+// in. Claude writes that as it exits, also when no turn followed the change, but not where it is the one written last;
+// null where it was killed after a later turn. Null altogether when it cannot be read.
 function claudeTranscript(record) {
   const file = record.nativeTranscript;
   if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${record.nativeId}.jsonl`) return null;
@@ -68,20 +70,28 @@ function claudeTranscript(record) {
     } finally { fs.closeSync(fd); }
   } catch (error) { return error.code === 'ENOENT' ? { conversation: false, permissionMode: null } : null; }
   const result = { conversation: !whole, permissionMode: null };
+  let written = null, left = false;
   for (const line of text.split('\n')) {
     let entry; try { entry = JSON.parse(line); } catch { continue; } // a tail's first line may be cut
     if (['user', 'assistant'].includes(entry?.type)) result.conversation = true;
-    if (entry?.type === 'permission-mode' && entry.sessionId === record.nativeId && typeof entry.permissionMode === 'string') result.permissionMode = entry.permissionMode;
+    if (entry?.sessionId !== record.nativeId) continue;
+    if (entry.type === 'cost-state') left = true; // as it exits, always
+    if (typeof entry.permissionMode !== 'string') continue;
+    if (entry.type === 'permission-mode') { written = entry.permissionMode; left = true; }
+    else if (entry.type === 'user' && entry.isSidechain !== true) left = false;
   }
+  if (left) result.permissionMode = written;
   return result;
 }
-// The mode a resume asks for by name, null where Claude comes back by itself: it does in the mode it was left in, except
+// The mode a resume asks for by name, null where Claude comes back by itself: it does in the mode last written, except
 // from bypass, and from default where the person's own default is another mode. Never bypass unless NAW knew it in it.
 function resumeMode(record) {
-  const known = record.nativePermissionMode, left = claudeTranscript(record)?.permissionMode;
+  const known = record.nativePermissionMode, said = claudeTranscript(record), left = said?.permissionMode;
   if (known === BYPASS) return CLAUDE_MODES.includes(left) ? left : BYPASS;
   if (left === BYPASS) return CLAUDE_MODES.includes(known) ? known : null;
-  return left === 'default' ? left : null;
+  if (left) return left === 'default' ? left : null;
+  // Killed: Claude would go by an older mode. One that allows more than default is not asked for on what may be gone.
+  return said?.conversation && STRICT_MODES.includes(known) ? known : null;
 }
 function applyClaude(record, value) {
   const requested = { ...record.requestedSettings };
