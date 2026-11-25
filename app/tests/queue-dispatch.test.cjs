@@ -958,6 +958,70 @@ test('the dispatcher sends nothing to a session whose model the person is changi
   assert.equal(client.sends().length, 1);
 });
 
+// The change is asked for while the pass, planned without it, reads fresh state before sending.
+function changeDuringSend(t, sessions) {
+  const changing = [];
+  const setup = dispatcherSetup(t, sessions, { modelChanges: () => changing });
+  let armed = false;
+  for (const method of ['dispatch', 'requestHandoff']) {
+    const original = setup.dispatcher[method].bind(setup.dispatcher);
+    setup.dispatcher[method] = (...args) => { armed = true; return original(...args); };
+  }
+  const refresh = setup.client.refresh.bind(setup.client);
+  setup.client.refresh = async () => {
+    if (armed && !changing.length) changing.push('a');
+    return refresh();
+  };
+  return { ...setup, changing, settle: () => { changing.length = 0; armed = false; setup.client.refresh = refresh; } };
+}
+test('an item planned before the person asked for a model change is not sent; it goes out once that is settled', async t => {
+  const f = changeDuringSend(t, [member('a')]);
+  const id = f.room.queueAdd('first task', null);
+  const waits = [], record = f.room.setQueueWaits.bind(f.room);
+  f.room.setQueueWaits = map => { waits.push(map.get(id)); return record(map); };
+  await f.dispatcher.start();
+  assert.deepEqual(f.changing, ['a'], 'the change came after the plan');
+  assert.equal(f.client.sends().length, 0);
+  assert.equal(f.room.queueFind('shared', id).status, 'queued');
+  assert.deepEqual(waits[0], [{ sessionId: 'a', reason: 'model-change' }]);
+  f.settle();
+  f.dispatcher.dirty = true;
+  await f.dispatcher.schedule();
+  assert.equal(f.client.sends().length, 1);
+  assert.equal(f.room.queueFind('shared', id).status, 'sent');
+});
+test('another member is sent its item while one member\'s model is being changed', async t => {
+  const f = changeDuringSend(t, [member('a'), member('b')]);
+  const held = f.room.queueAdd('for a', 'a'), sent = f.room.queueAdd('for b', 'b');
+  await f.dispatcher.start();
+  assert.deepEqual(f.client.sends().map(call => call[4]), [sent]);
+  assert.equal(f.room.queueFind('shared', held).status, 'queued');
+});
+test('a list of model changes that is not a list holds no send, as it holds nothing in the plan', async t => {
+  for (const value of [undefined, null, 'a', { a: true }]) {
+    const f = dispatcherSetup(t, [member('a')], { modelChanges: () => value });
+    f.room.queueAdd('first task', null);
+    await f.dispatcher.start();
+    await f.dispatcher.schedule();
+    assert.equal(f.client.sends().length, 1, JSON.stringify(value));
+    await f.dispatcher.close();
+  }
+});
+test('a rotation planned before the person asked for a model change is not requested; it is once that is settled', async t => {
+  const f = changeDuringSend(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages() })]);
+  f.room.queueAdd('original task', 'a');
+  await f.dispatcher.start();
+  assert.deepEqual(f.changing, ['a'], 'the change came after the plan');
+  assert.equal(f.client.sends().length, 0);
+  assert.equal(f.dispatcher.rotations.a, undefined);
+  assert.deepEqual(rotationReasonEvents(f.room), [], 'a passing change is not told as a rotation that waits');
+  f.settle();
+  f.dispatcher.dirty = true;
+  await f.dispatcher.schedule();
+  assert.equal(f.dispatcher.rotations.a?.phase, 'requested');
+  assert.equal(f.client.sends().length, 1);
+});
+
 // Queue item 6897c6e3, part 1: a member took the work from the board while the same item was queued for it (four
 // sends of one item in the person's data). It claims the item mid-turn; NAW never sends it and settles it by the
 // member's reply when the turn ends, as it would an item it sent; the member's next item then goes out as usual.
