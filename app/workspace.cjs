@@ -2299,34 +2299,49 @@ class Workspace extends EventEmitter {
   }
   async modelChoices(id) {
     const s = this.modelChangeable(id);
-    if (s.provider === 'claude') return sessionModel.claudeChoices(s);
+    if (s.provider === 'claude') { if (s.state === 'idle') this.assertClaudeRestarts(s); return sessionModel.claudeChoices(s); }
     const nativeId = s.nativeId, models = await this.runtime(id).models();
     if (this.sessions.get(id) !== s || s.nativeId !== nativeId) throw uiError('error.modelChange.changed');
     return { provider: 'codex', current: sessionModel.current(s), nativeDefault: false, models };
   }
+  // Stopped, native could not bring it back: no folder to start in, or no conversation to resume yet.
+  assertClaudeRestarts(s) {
+    let folder = false;
+    try { folder = fs.statSync(s.cwd).isDirectory(); } catch { /* as if there were none */ }
+    if (!folder) throw uiError('error.workspace.originalDirectoryUnavailable');
+    const transcript = sessionModel.claudeTranscript(s);
+    if (transcript ? !transcript.conversation : !s.messages.some(m => ['user', 'assistant'].includes(m.role))) throw uiError('error.modelChange.unstarted');
+  }
   // `expected`: for Claude the exact idle session to stop and resume (a sessionPlan stop proof), for Codex its
-  // native identity. The window that had the session keeps it.
+  // native identity. The window that had the session keeps it. An error says whether anything was done: it is
+  // modelChange.unconfirmed or .stopped from the moment the stop began.
   async changeModel(id, value, expected, requireAuto = true) {
     const s = this.modelChangeable(id), nativeId = expected?.nativeId;
     const changed = () => uiError('error.modelChange.changed');
-    if (typeof nativeId !== 'string' || s.nativeId !== nativeId || this.storageWarning) throw changed();
+    if (typeof nativeId !== 'string' || s.nativeId !== nativeId) throw changed();
+    if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
     if (s.provider === 'codex') return this.runtime(id).changeModel(value, () => {
       if (this.closed || this.sessions.get(id) !== s || s.nativeId !== nativeId || this.modelChangeable(id) !== s) throw changed();
     });
-    const wanted = sessionModel.claudeValue(value);
+    const wanted = sessionModel.claudeValue(value, s);
     if (![true, 'typed'].includes(requireAuto)) throw changed();
+    this.assertClaudeRestarts(s);
     const { sameStop, endedByThisStop } = require('./backend-switch.cjs');
     const now = () => ({ ...s, draftRevision: this.draftRevisions.get(id) || 0 });
     let stopped;
     try { stopped = (await this.maintenanceStop(id, expected, requireAuto, 'participant')).stoppedState; }
     catch (error) {
+      const key = error?.uiMessage?.key;
       // A Claude terminal that ends itself during the stop (see endedByThisStop).
-      if (error?.uiMessage?.key === 'error.backendSwitchDisconnectUnconfirmed') stopped = await endedByThisStop({ call: async () => ({ sessions: [now()] }) }, expected, 10000);
-      if (!stopped) throw error;
+      if (key === 'error.backendSwitchDisconnectUnconfirmed') stopped = await endedByThisStop({ call: async () => ({ sessions: [now()] }) }, expected, 10000);
+      if (!stopped) throw key === 'error.backendSwitchSessionChanged' || sameStop(now(), expected) ? error : uiError('error.modelChange.unconfirmed');
     }
-    if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw changed();
+    if (this.closed || this.sessions.get(id) !== s || !['ended', 'recoverable'].includes(s.state) || !sameStop(now(), stopped)) throw uiError('error.modelChange.unconfirmed');
+    // Native comes back in the mode it was left in, except bypass, which the resume asks for: not when it was left for another.
+    const left = sessionModel.claudeTranscript(s)?.permissionMode;
+    if (s.nativePermissionMode === 'bypassPermissions' && sessionModel.CLAUDE_MODES.includes(left)) s.nativePermissionMode = left;
     sessionModel.applyClaude(s, wanted); this.changed(); this.persist();
-    await this.resume(id, s.owner);
+    try { await this.resume(id, s.owner, true); } catch { throw uiError('error.modelChange.stopped'); }
     return wanted;
   }
   maintenanceResume(id, expected, owner) {
@@ -2400,7 +2415,7 @@ class Workspace extends EventEmitter {
     if (!maintenance) begin();
     return operation;
   }
-  async resume(id, owner) {
+  async resume(id, owner, participantOnly = false) {
     const s = this.get(id);
     if (s.worktreePreparation && s.worktreePreparation.status !== 'ready') throw uiError("error.workspace.gitRecoveryUnconfirmed", { arg1: s.worktreePreparation.target, arg2: s.worktreePreparation.branch });
     if (s.nativeContextPending) throw uiError("error.workspace.nativeContextIdentityUnconfirmed");
@@ -2440,7 +2455,9 @@ class Workspace extends EventEmitter {
     if (!fs.statSync(s.cwd).isDirectory()) throw uiError("error.workspace.originalDirectoryUnavailable");
     s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect'); s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
     // Membership is retained, but an interrupted automatic run never restarts.
-    this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]); this.changed();
+    if (participantOnly) this.pauseParticipant(id, '恢复原生会话后，请重新选择本次协作任务。', false, uiActivity('notice.run.resumedTask')[1]);
+    else this.pause('恢复原生会话后，请重新选择本次协作任务。', undefined, false, uiActivity('notice.run.resumedTask')[1]);
+    this.changed();
     let runtime;
     const generation = s.connectionRevision;
     try {

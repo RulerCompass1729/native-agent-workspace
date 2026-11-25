@@ -2,6 +2,8 @@
 // proven idle and resumed as the same native session with other flags; Codex takes the change over its
 // own protocol, from the next turn on.
 'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
 const { uiError } = require('./ui-errors.cjs');
 
 const CAPABILITY = 'sessionModelV1';
@@ -11,6 +13,10 @@ const EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,39}$/;
 const CLAUDE_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-haiku-5-5'];
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const NATIVE_DEFAULT = '原生默认';
+const CLAUDE_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'manual'];
+const TAIL_BYTES = 256 * 1024;
+// Whether the change was made is not known, or it was and the session did not come back.
+const UNSURE_KEYS = ['error.modelChange.unconfirmed', 'error.modelChange.stopped'];
 
 function validValue(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
@@ -35,12 +41,36 @@ function claudeChoices(record) {
     models: names.map(model => ({ model, efforts: CLAUDE_EFFORTS })) };
 }
 
-// A Claude value as its launch flags: null is the person's own native default.
-function claudeValue(value) {
-  if (!validValue(value) || value.effort !== null && !CLAUDE_EFFORTS.includes(value.effort)) {
+// A Claude value as its launch flags: null is the person's own native default. Native takes any model name without
+// a word, so it has to be one the session can choose.
+function claudeValue(value, record) {
+  if (!validValue(value) || value.effort !== null && !CLAUDE_EFFORTS.includes(value.effort) ||
+      value.model !== null && !claudeChoices(record).models.some(entry => entry.model === value.model)) {
     throw uiError('error.modelChange.unknown', { model: String(value?.model ?? '') });
   }
   return { model: value.model, effort: value.effort };
+}
+// What the session's own transcript says: whether there is a conversation to resume, and the permission mode it was
+// last in (written as Claude exits, also when no turn followed the change). Null when it cannot be read.
+function claudeTranscript(record) {
+  const file = record.nativeTranscript;
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${record.nativeId}.jsonl`) return null;
+  let text, whole;
+  try {
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const { size } = fs.fstatSync(fd), buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
+      fs.readSync(fd, buffer, 0, buffer.length, size - buffer.length);
+      text = buffer.toString('utf8'); whole = size <= TAIL_BYTES;
+    } finally { fs.closeSync(fd); }
+  } catch (error) { return error.code === 'ENOENT' ? { conversation: false, permissionMode: null } : null; }
+  const result = { conversation: !whole, permissionMode: null };
+  for (const line of text.split('\n')) {
+    let entry; try { entry = JSON.parse(line); } catch { continue; } // a tail's first line may be cut
+    if (['user', 'assistant'].includes(entry?.type)) result.conversation = true;
+    if (entry?.type === 'permission-mode' && entry.sessionId === record.nativeId && typeof entry.permissionMode === 'string') result.permissionMode = entry.permissionMode;
+  }
+  return result;
 }
 function applyClaude(record, value) {
   const requested = { ...record.requestedSettings };
@@ -69,7 +99,7 @@ function refused(session, capabilities, value) {
   if (!['claude', 'codex'].includes(session.provider) || session.provider === 'codex' && session.vendor && session.vendor !== 'openai' || session.requestedSettings?.profile) return uiError('error.modelChange.unsupported');
   if (!capabilities?.includes(CAPABILITY)) return uiError('error.modelChange.backend');
   try {
-    if (session.provider === 'claude') claudeValue(value);
+    if (session.provider === 'claude') claudeValue(value, session);
     else if (!validValue(value) || value.model === null || value.effort === null) throw uiError('error.modelChange.unknown', { model: String(value?.model ?? '') });
   } catch (error) { return error; }
   return null;
@@ -94,4 +124,4 @@ function codexModels(rows) {
   return models;
 }
 
-module.exports = { CAPABILITY, CLAUDE_MODELS, CLAUDE_EFFORTS, NATIVE_DEFAULT, validValue, current, claudeChoices, claudeValue, applyClaude, refused, codexValue, codexModels };
+module.exports = { CAPABILITY, CLAUDE_MODELS, CLAUDE_EFFORTS, CLAUDE_MODES, NATIVE_DEFAULT, UNSURE_KEYS, validValue, current, claudeChoices, claudeValue, claudeTranscript, applyClaude, refused, codexValue, codexModels };

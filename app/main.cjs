@@ -1096,8 +1096,8 @@ function displayState(snapshot, context, read = null, toPage = false) {
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
-    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
+    ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;
 }
@@ -1232,7 +1232,10 @@ function modelChanges() {
     rotations: () => queueDispatcher?.rotations || {},
     engaged: () => queueDispatcher?.integration?.holding() || [],
     humanAt: () => queueDispatcher?.humanAt || new Map(),
-    saveTerminal: id => queueRules.saveTerminalScreen(owner => connect(dataDir, owner, { page: false }), 'naw-model', path.join(dataDir, 'rotation-terminals'), id, Date.now()),
+    saveTerminal: async id => {
+      const file = await queueRules.saveTerminalScreen(owner => connect(dataDir, owner, { page: false }), 'naw-model', path.join(dataDir, 'rotation-terminals'), id, Date.now());
+      return file && path.join(dataDir, file);
+    },
     changed: () => { broadcastRoom().catch(() => {}); queueDispatcher?.schedule(); },
     done: notifyModelChange,
   });
@@ -2763,7 +2766,8 @@ async function boot() {
       return result;
     } catch (error) {
       // Refused before anything was done: the person who confirmed it is told, and the agent gets the reason.
-      if (!error?.uiMessage?.key?.startsWith('error.modelChange.') || error.uiMessage.key === 'error.modelChange.unconfirmed') throw error;
+      const key = error?.uiMessage?.key;
+      if (!key?.startsWith('error.modelChange.') || require('./session-model.cjs').UNSURE_KEYS.includes(key)) throw error;
       notifyModelChange({ sessionId: id, model: value?.model ?? null, effort: value?.effort ?? null, error: error.message, errorUiMessage: error.uiMessage });
       return { status: 'refused', reason: error.message };
     }

@@ -113,6 +113,16 @@ const overflow = () => page.evaluate(() => {
   await page.locator('#model-cancel').click(); assert.equal((await session(claude)).model, 'claude-sonnet-5-5'); assert.deepEqual((await snapshot()).modelChanges, []);
   checks.push('Running background work refuses the change in the dialog with its reason; nothing is stopped');
 
+  // 4b. A session nobody has talked with yet is refused as the dialog opens; one that does not come back is named as stopped.
+  const fresh = await create('Claude New', 'claude'), gone = await create('Claude Lost', 'claude');
+  await menu(fresh); await changeItem().first().click(); await page.locator('#model-error').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#model-error').innerText(), say('error.modelChange.unstarted')); assert.equal(await page.locator('#model-list input').count(), 0); assert.deepEqual(await overflow(), []); await dialogShot('zh-dialog-unstarted');
+  await page.locator('#model-cancel').click(); assert.equal((await session(fresh)).state, 'idle');
+  await openDialog(gone); await choose('claude-opus-5-5', 'high'); await dialog().waitFor({ state: 'hidden' });
+  await until(async () => await toast() === say('model.unsure', { name: 'Claude Lost', value: 'claude-opus-5-5 · high', reason: say('error.modelChange.stopped') }), 'Told that it stopped'); await page.getByRole('button', { name: say('header.resume') }).first().waitFor({ state: 'visible' }); await shot('zh-stopped');
+  assert.deepEqual([(await session(gone)).state, (await session(gone)).requestedSettings.model, (await snapshot()).modelChanges], ['ended', 'claude-opus-5-5', []]);
+  checks.push('A session not talked with yet is refused as the dialog opens; one that does not come back is named as stopped, not as unchanged');
+
   // 5. Codex: its own list, in effect from the next turn also while it works.
   await fixture('state', codex, 'working'); await openDialog(codex);
   assert.deepEqual(await rows(), [say('model.now', { model: 'gpt-6.2-sol' }), 'gpt-6.2-luna']); assert.deepEqual(await overflow(), []); await dialogShot('zh-dialog-codex');

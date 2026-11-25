@@ -19,7 +19,11 @@ NativeHost.prototype.create = function (record) {
       return taken;
     };
   }
+  // One that was talked with, unless it is named as new; one named so does not come back after a stop.
+  if (record.provider === 'claude' && !record.messages.length && !/New/.test(record.name)) record.messages.push({ id: 'first', role: 'user', text: 'Synthetic first message', status: 'complete', time: 1 });
+  const lost = record.recovering && /Lost/.test(record.name);
   runtime.start = async () => {
+    if (lost) { runtime.emit('state', 'ended'); return; }
     runtime.emit('model', record.requestedSettings?.model || (record.provider === 'codex' ? 'gpt-6.2-sol' : 'claude-fable-5-2'));
     runtime.emit('state', 'idle');
   };

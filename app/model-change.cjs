@@ -14,11 +14,15 @@ const HUMAN_QUIET_MS = 10000;
 // How long a turn's end may take to report its background work.
 const REPORT_GRACE_MS = 20000;
 const ATTEMPTS = 5;
-const APPLY_TIMEOUT_MS = 90000;
+// How long a change that was sent may take to show in the session before it is reported as not confirmed.
+const SETTLE_MS = 120000;
 const KEEP_MS = 24 * 3600 * 1000;
 const FILE = 'model-changes.json';
-const LIVE_STATES = ['idle', 'working', 'starting', 'approval', 'stopping'];
+const LIVE_STATES = ['idle', 'working', 'approval'];
+const MOVING_STATES = ['starting', 'stopping'];
 const OPEN_WAKES = ['staged', 'held', 'sending', 'consumed'];
+// The change may have been made all the same.
+const LOST_KEYS = ['error.confirmationTimeout', 'error.serviceClosed', 'error.modelChange.unconfirmed'];
 const GRACE_KEYS = ['error.planBackgroundUnreported'];
 // What a turn that is still under way, or an answer to it, settles by itself.
 const PASSING_KEYS = ['error.planPendingInput', 'error.planPendingApproval', 'error.planPendingQuestion', 'error.planContextChanging', 'error.planRelayRunning', 'error.planCapacityScheduled'];
@@ -40,7 +44,7 @@ function openWake(sessions, id) {
 // { ready: plan, typed } | { wait: reason key } | { refuse: uiMessage }, from the state as the app holds it now.
 function gate(session, input) {
   const { snapshot, entryState, rotations, engaged, humanAt, now, unreportedSince } = input;
-  if (['working', 'starting', 'approval', 'stopping'].includes(session.state)) return { wait: session.state === 'approval' ? 'approval' : 'turn' };
+  if (session.state !== 'idle' && [...LIVE_STATES, ...MOVING_STATES].includes(session.state)) return { wait: session.state === 'approval' ? 'approval' : 'turn' };
   const running = new Set([...runningIn(snapshot), ...runningIn(entryState)]);
   // Text perhaps typed in the native terminal is saved before the stop, as a migration saves it.
   const plan = sessionPlan({ ...session, terminalInputPending: false }, session.state, running);
@@ -50,8 +54,9 @@ function gate(session, input) {
   }
   if (!plan.auto) {
     const key = innerKey(plan.reasonUiMessage);
-    if (GRACE_KEYS.includes(key) && (unreportedSince === null || now - unreportedSince < REPORT_GRACE_MS)) return { wait: 'report', unreported: true };
-    return { refuse: inner(plan.reasonUiMessage) };
+    const unreported = GRACE_KEYS.includes(key);
+    if (unreported && (unreportedSince === null || now - unreportedSince < REPORT_GRACE_MS)) return { wait: 'report', unreported };
+    return { refuse: inner(plan.reasonUiMessage), unreported };
   }
   if (queueRules.engagedSessions(rotations, snapshot.rooms).has(session.id) || engaged.includes(session.id)) return { wait: 'queue' };
   if (openWake(snapshot.sessions, session.id)) return { wait: 'message' };
@@ -60,13 +65,10 @@ function gate(session, input) {
   return { ready: plan, typed: session.terminalInputPending !== false };
 }
 
-const timeout = (promise, ms) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(uiError('error.modelChange.unconfirmed')), ms);
-  promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
-});
-
 const same = (a, b) => a.model === b.model && a.effort === b.effort;
 const named = value => value.model !== null && value.effort !== null;
+const matches = (value, now) => ['model', 'effort'].every(part => value[part] === null || value[part] === now[part]);
+const keyOf = error => error?.uiMessage?.key;
 
 // What still waited when the app closed. A change that was being made then is only looked up, never made again.
 function readPending(file, now) {
@@ -76,7 +78,7 @@ function readPending(file, now) {
     sessionModel.validValue(row.value) && Number.isFinite(row.at) && now >= row.at && now - row.at < KEEP_MS);
 }
 function writePending(file, entries) {
-  const rows = entries.map(({ id, nativeId, value, at, applying, unconfirmed }) => ({ id, nativeId, value, at, applying: applying || unconfirmed }));
+  const rows = entries.map(({ id, nativeId, value, at, applying }) => ({ id, nativeId, value, at, applying }));
   if (!rows.length) return fs.rmSync(file, { force: true });
   const next = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(next, JSON.stringify({ version: 1, changes: rows }), { mode: 0o600 });
@@ -95,18 +97,18 @@ class ModelChanges {
     this.done = options.done || (() => {});
     this.now = options.now || Date.now;
     this.tickMs = options.tickMs ?? TICK_MS;
-    this.applyTimeoutMs = options.applyTimeoutMs ?? APPLY_TIMEOUT_MS;
     this.file = options.dataDir ? path.join(options.dataDir, FILE) : null;
     this.pending = new Map();
     this.timer = null;
     this.passing = null;
     this.closed = false;
     for (const row of this.file ? readPending(this.file, this.now()) : []) {
-      this.pending.set(row.id, { ...this.entry(row.id, row.nativeId, row.value, row.at), unconfirmed: row.applying === true });
+      const answer = row.applying === true ? { error: uiError('error.modelChange.unconfirmed') } : null;
+      this.pending.set(row.id, { ...this.entry(row.id, row.nativeId, row.value, row.at), applying: Boolean(answer), answer });
     }
   }
   entry(id, nativeId, value, at) {
-    return { id, nativeId, value: { model: value.model, effort: value.effort }, at, waiting: null, applying: false, unconfirmed: false, attempts: 0, unreportedSince: null, screen: null };
+    return { id, nativeId, value: { model: value.model, effort: value.effort }, at, waiting: null, applying: false, answer: null, settleAt: null, attempts: 0, unreportedSince: null, screen: null };
   }
   // Best effort: a change that cannot be saved still waits in this run.
   moved() {
@@ -123,7 +125,8 @@ class ModelChanges {
     const session = snapshot.sessions.find(s => s.id === id);
     if (!session) throw uiError('error.sessionMissing');
     const target = client.route(id);
-    if (session.archived || !target.state.capabilities?.includes(sessionModel.CAPABILITY)) throw uiError('error.modelChange.backend');
+    if (session.archived) throw uiError('error.modelChange.unavailable');
+    if (!target.state.capabilities?.includes(sessionModel.CAPABILITY)) throw uiError('error.modelChange.backend');
     return { snapshot, session, target };
   }
   currentClient() {
@@ -135,13 +138,16 @@ class ModelChanges {
     const { target } = this.read(this.currentClient(), id);
     return { ...await target.client.call('modelChoices', id), pending: this.view().find(entry => entry.sessionId === id) || null };
   }
-  inspect(entry, client) {
+  // Its backend is away for a moment, as while the app starts.
+  away(entry, client) {
     const held = this.apply(client.snapshot()).sessions.find(s => s.id === entry.id);
-    // Its backend is away for a moment, as while the app starts.
-    if (!held || held.backendUnavailable) return { result: { wait: 'backend' } };
+    return !held || Boolean(held.backendUnavailable);
+  }
+  inspect(entry, client) {
+    if (this.away(entry, client)) return { result: { wait: 'backend' } };
     const { snapshot, session, target } = this.read(client, entry.id);
     if (session.nativeId !== entry.nativeId) throw uiError('error.modelChange.changed');
-    if (!LIVE_STATES.includes(session.state)) throw uiError('error.modelChange.unavailable');
+    if (![...LIVE_STATES, ...MOVING_STATES].includes(session.state)) throw uiError('error.modelChange.unavailable');
     const result = gate(session, { snapshot, entryState: target.state, rotations: this.rotations(), engaged: this.engaged() || [], humanAt: this.humanAt(), now: this.now(), unreportedSince: entry.unreportedSince });
     if (!result.unreported) entry.unreportedSince = null;
     else if (entry.unreportedSince === null) entry.unreportedSince = this.now();
@@ -167,7 +173,7 @@ class ModelChanges {
       return { status: 'applied' };
     }
     if (session.provider !== 'claude') throw uiError('error.modelChange.unsupported');
-    sessionModel.claudeValue(value);
+    sessionModel.claudeValue(value, session);
     if (named(value) && same(value, sessionModel.current(session))) {
       if (this.pending.delete(id)) this.moved();
       throw uiError('error.modelChange.same');
@@ -207,7 +213,7 @@ class ModelChanges {
     for (const entry of [...this.pending.values()]) {
       if (this.pending.get(entry.id) !== entry) continue;
       try { await this.step(entry, client); }
-      catch (error) { this.finish(entry, { error }); }
+      catch (error) { this.finish(entry, { error: entry.answer ? uiError('error.modelChange.unconfirmed') : error }); }
     }
   }
   wait(entry, reason) {
@@ -216,15 +222,16 @@ class ModelChanges {
     this.changed();
   }
   async step(entry, client) {
+    if (this.now() - entry.at >= KEEP_MS) throw uiError('error.modelChange.expired');
+    if (entry.answer) return this.settle(entry, client);
     const first = this.inspect(entry, client).result;
-    if (first.wait && (first.wait === 'backend' || !entry.unconfirmed)) return this.wait(entry, first.wait);
+    if (first.wait) return this.wait(entry, first.wait);
     try { await client.refresh(); }
     catch { return this.wait(entry, 'backend'); }
     if (this.pending.get(entry.id) !== entry) return;
     const { session, target, result } = this.inspect(entry, client);
     if (result.wait === 'backend') return this.wait(entry, result.wait);
     if (named(entry.value) && same(entry.value, sessionModel.current(session))) return this.finish(entry);
-    if (entry.unconfirmed) return this.finish(entry, { error: uiError('error.modelChange.unconfirmed') });
     if (result.refuse) return this.finish(entry, { error: refusal(result.refuse) });
     if (result.wait) return this.wait(entry, result.wait);
     const guard = client.operationGuard(target); guard();
@@ -234,16 +241,36 @@ class ModelChanges {
       try { entry.screen = { file: await this.saveTerminal(entry.id) }; }
       catch { throw uiError('error.modelChange.screen'); }
     }
+    guard();
     try {
-      guard();
-      await timeout(target.client.call('changeModel', entry.id, entry.value, result.ready.stop, result.typed ? 'typed' : true), this.applyTimeoutMs);
+      await target.client.call('changeModel', entry.id, entry.value, result.ready.stop, result.typed ? 'typed' : true);
+      entry.answer = {};
     } catch (error) {
       // Something moved between this read and the stop: nothing was changed, so it waits again.
-      if (error?.uiMessage?.key !== 'error.backendSwitchSessionChanged' || ++entry.attempts >= ATTEMPTS) throw error;
-      entry.applying = false; entry.screen = null; entry.waiting = 'turn';
-      return this.moved();
+      if (keyOf(error) === 'error.backendSwitchSessionChanged') {
+        if (++entry.attempts >= ATTEMPTS) throw uiError('error.modelChange.moving');
+        entry.applying = false; entry.screen = null; entry.waiting = 'turn';
+        return this.moved();
+      }
+      if (!LOST_KEYS.includes(keyOf(error))) throw error;
+      entry.answer = { error };
     }
-    this.finish(entry);
+    return this.settle(entry, client);
+  }
+  // The answer is not yet the outcome: the resumed Claude is only starting, and a lost answer leaves it open. The
+  // session itself shows what became of it.
+  async settle(entry, client) {
+    try { await client.refresh(); }
+    catch { return this.wait(entry, 'backend'); }
+    if (this.away(entry, client)) return this.wait(entry, 'backend');
+    const session = this.apply(client.snapshot()).sessions.find(s => s.id === entry.id), lost = Boolean(entry.answer.error);
+    const unsure = () => this.finish(entry, { error: uiError('error.modelChange.unconfirmed') });
+    if (session.nativeId !== entry.nativeId) return unsure();
+    entry.settleAt ??= this.now() + SETTLE_MS;
+    const over = this.now() >= entry.settleAt, live = LIVE_STATES.includes(session.state);
+    if (live && (lost ? named(entry.value) && same(entry.value, sessionModel.current(session)) : matches(entry.value, sessionModel.current(session)))) return this.finish(entry);
+    if (!live && !MOVING_STATES.includes(session.state) && (!lost || over)) return this.finish(entry, { error: uiError('error.modelChange.stopped') });
+    return over ? unsure() : this.wait(entry, 'applying');
   }
   finish(entry, { error = null } = {}) {
     if (this.pending.get(entry.id) === entry) this.pending.delete(entry.id);
@@ -263,4 +290,4 @@ function refusal(reason) {
   return uiError('error.modelChange.busy', { reason: cause.message }, { cause, param: 'reason' });
 }
 
-module.exports = { ModelChanges, gate, openWake, HUMAN_QUIET_MS, REPORT_GRACE_MS };
+module.exports = { ModelChanges, gate, openWake, HUMAN_QUIET_MS, REPORT_GRACE_MS, SETTLE_MS, KEEP_MS };

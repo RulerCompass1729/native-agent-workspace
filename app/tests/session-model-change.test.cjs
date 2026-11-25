@@ -3,7 +3,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { EventEmitter } = require('node:events');
-const sessionModel = require('../session-model.cjs'), { ModelChanges, gate, openWake, HUMAN_QUIET_MS, REPORT_GRACE_MS } = require('../model-change.cjs');
+const sessionModel = require('../session-model.cjs'), { ModelChanges, gate, openWake, HUMAN_QUIET_MS, REPORT_GRACE_MS, SETTLE_MS, KEEP_MS } = require('../model-change.cjs');
 const { Workspace } = require('../workspace.cjs'), { Codex, Claude } = require('../adapters.cjs');
 const { sessionPlan, maintenanceProof } = require('../backend-switch.cjs');
 const operation = require('../background-operation.cjs'), { uiError } = require('../ui-errors.cjs');
@@ -35,8 +35,10 @@ test('Claude can be given a listed model or the native default; a model it runs 
   assert.deepEqual([choices.provider, choices.nativeDefault, choices.current], ['claude', true, { model: 'claude-fable-5-2', effort: 'high' }]);
   assert.deepEqual(choices.models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(sessionModel.claudeChoices(CLAUDE({ model: 'claude-opus-4-9' })).models[0].model, 'claude-opus-4-9');
-  assert.deepEqual(sessionModel.claudeValue(OPUS), OPUS); assert.deepEqual(sessionModel.claudeValue({ model: null, effort: null }), { model: null, effort: null });
-  for (const value of [{ model: 'claude-opus-5-5', effort: 'ultra' }, { model: '--x', effort: null }, null]) assert.throws(() => sessionModel.claudeValue(value), refuses('error.modelChange.unknown'));
+  assert.deepEqual(sessionModel.claudeValue(OPUS, CLAUDE()), OPUS); assert.deepEqual(sessionModel.claudeValue({ model: null, effort: null }, CLAUDE()), { model: null, effort: null });
+  // Native takes any name without a word, so an unlisted one is refused unless the session runs it.
+  for (const value of [{ model: 'claude-opus-5-5', effort: 'ultra' }, { model: '--x', effort: null }, { model: 'claude-opus-4-9', effort: 'low' }, null]) assert.throws(() => sessionModel.claudeValue(value, CLAUDE()), refuses('error.modelChange.unknown'));
+  assert.equal(sessionModel.claudeValue({ model: 'claude-opus-4-9', effort: 'low' }, CLAUDE({ model: 'claude-opus-4-9' })).model, 'claude-opus-4-9');
 });
 
 test('a Claude change is kept as the settings the session is started with; the native default leaves them out and keeps the rest', () => {
@@ -120,15 +122,17 @@ test('text perhaps left in the terminal does not block the change; the screen is
   assert.equal(seen({ terminalInputPending: true }), 'ready-typed'); assert.equal(seen({ terminalInputPending: undefined }), 'ready-typed'); assert.equal(seen({ terminalInputPending: false }), 'ready');
 });
 
+// The session as it is once the change has been made: live, with what was named.
+function runs(session, value) { session.state = 'idle'; if (value.model) session.model = value.model; if (value.effort) session.nativeEffort = value.effort; }
 // The app's own list of changes, over one backend that can be made to refuse, hang or move.
 function app(session, options = {}) {
   const calls = [], notices = [], state = { sessions: [session], rooms: [{ id: 'shared', queue: [] }], capabilities: options.capabilities ?? [sessionModel.CAPABILITY] };
-  const backend = { modelChoices: async () => ({ provider: session.provider, models: [] }), changeModel: async () => null, ...options.backend };
+  const backend = { modelChoices: async () => ({ provider: session.provider, models: [] }), changeModel: async (_id, value) => { runs(session, value); return value; }, ...options.backend };
   const target = { state, client: { call: async (method, ...args) => { calls.push([method, ...structuredClone(args)]); return backend[method](...args); } } };
   const client = { snapshot: () => state, refresh: async () => { calls.push(['refresh']); await options.refresh?.(); }, route: () => target, operationGuard: () => () => { calls.push(['guard']); options.guard?.(); } };
   const clock = { now: options.now ?? NOW };
   const changes = new ModelChanges({ client: () => options.offline ? null : client, apply: value => value, rotations: options.rotations, engaged: options.engaged, humanAt: options.humanAt, saveTerminal: options.saveTerminal || (async id => { calls.push(['screen', id]); return '/saved/' + id; }),
-    changed: () => calls.push(['changed']), done: notice => notices.push(notice), now: () => clock.now, tickMs: 3600000, applyTimeoutMs: options.applyTimeoutMs, dataDir: options.dataDir });
+    changed: () => calls.push(['changed']), done: notice => notices.push(notice), now: () => clock.now, tickMs: 3600000, dataDir: options.dataDir });
   changes.schedule = () => {};
   const changeCalls = () => calls.filter(([method]) => method === 'changeModel').map(([, ...args]) => args);
   return { changes, calls, notices, state, clock, changeCalls, backend };
@@ -168,7 +172,7 @@ test('the value, the native session, the backend and the state are checked befor
   for (const [session, args, name, extra] of [
     [CLAUDE(), ['a', { ...OPUS, x: 1 }, 'native-a'], 'error.modelChange.unknown'], [CLAUDE(), ['a', { model: 'claude-opus-5-5', effort: 'ultra' }, 'native-a'], 'error.modelChange.unknown'],
     [CLAUDE(), ['a', OPUS, 'another'], 'error.modelChange.changed'], [CLAUDE(), ['a', OPUS, undefined], 'error.modelChange.changed'], [CLAUDE(), ['gone', OPUS, 'native-a'], 'error.sessionMissing'],
-    [CLAUDE({ archived: true }), ['a', OPUS, 'native-a'], 'error.modelChange.backend'], [CLAUDE(), ['a', OPUS, 'native-a'], 'error.modelChange.backend', { capabilities: ['maintenanceStop'] }],
+    [CLAUDE({ archived: true }), ['a', OPUS, 'native-a'], 'error.modelChange.unavailable'], [CLAUDE(), ['a', { model: 'claude-nothing-9', effort: 'low' }, 'native-a'], 'error.modelChange.unknown'], [CLAUDE(), ['a', OPUS, 'native-a'], 'error.modelChange.backend', { capabilities: ['maintenanceStop'] }],
     [CLAUDE({ model: 'claude-opus-5-5', nativeEffort: 'xhigh' }), ['a', OPUS, 'native-a'], 'error.modelChange.same'], [CLAUDE({ provider: 'dsh' }), ['a', OPUS, 'native-a'], 'error.modelChange.unsupported'],
     [CLAUDE({ state: 'ended' }), ['a', OPUS, 'native-a'], 'error.modelChange.unavailable'], [CLAUDE(), ['a', OPUS, 'native-a'], 'error.modelChange.unavailable', { offline: true }],
   ]) {
@@ -209,6 +213,18 @@ test('it is refused over what the backend says now, not over what the app held b
   assert.equal(f.changeCalls().length, 1); assert.deepEqual(f.notices, [{ sessionId: 'a', ...OPUS }]);
 });
 
+test('a session that never reports its background work is refused after the moment it had, also when it is read again for it', async () => {
+  const session = CLAUDE({ background: null }), f = app(session);
+  assert.deepEqual(await f.changes.request('a', OPUS, 'native-a'), { status: 'pending', waiting: 'report' });
+  f.clock.now += REPORT_GRACE_MS - 1; await f.changes.pass(); assert.deepEqual([f.notices, f.changes.view()[0].waiting], [[], 'report']);
+  f.clock.now += 1; await f.changes.pass();
+  assert.deepEqual([f.changeCalls(), f.changes.ids(), f.notices.map(notice => notice.errorUiMessage.key)], [[], [], ['error.modelChange.busy']]);
+  // It starts again once a turn ran or it reported meanwhile.
+  const again = CLAUDE({ background: null }), g = app(again); await g.changes.request('a', OPUS, 'native-a'); g.clock.now += REPORT_GRACE_MS - 1;
+  again.state = 'working'; await g.changes.pass(); again.state = 'idle'; g.clock.now += 1; await g.changes.pass(); assert.deepEqual([g.notices, g.changes.view()[0].waiting], [[], 'report']);
+  again.background = 0; await g.changes.pass(); assert.deepEqual(g.notices, [{ sessionId: 'a', ...OPUS }]);
+});
+
 test('the native default is never what a session already has: what it stands for is not known', async () => {
   const f = app(CLAUDE({ model: '原生默认', nativeEffort: undefined }));
   assert.equal((await f.changes.request('a', { model: null, effort: null }, 'native-a')).status, 'pending'); await f.changes.pass();
@@ -216,7 +232,7 @@ test('the native default is never what a session already has: what it stands for
 });
 
 test('while it is being changed it can be neither withdrawn nor changed again', async () => {
-  let release; const f = app(CLAUDE(), { backend: { changeModel: () => new Promise(resolve => { release = resolve; }) } });
+  let release; const session = CLAUDE(), f = app(session, { backend: { changeModel: () => new Promise(resolve => { release = () => { runs(session, OPUS); resolve(OPUS); }; }) } });
   await f.changes.request('a', OPUS, 'native-a'); const pass = f.changes.pass();
   while (!release) await new Promise(setImmediate);
   assert.equal(f.changes.view()[0].applying, true); assert.throws(() => f.changes.cancel('a'), refuses('error.modelChange.applying'));
@@ -235,16 +251,77 @@ test('something that moves between the read and the stop makes it wait again, fi
   await f.changes.request('a', OPUS, 'native-a');
   for (let n = 1; n <= 4; n++) { await f.changes.pass(); assert.equal(f.changeCalls().length, n); assert.deepEqual(f.changes.view().map(entry => [entry.waiting, entry.applying]), [['turn', false]]); assert.deepEqual(f.notices, []); }
   await f.changes.pass(); await f.changes.pass();
-  assert.equal(f.changeCalls().length, 5); assert.equal(f.notices.length, 1); assert.equal(f.notices[0].errorUiMessage.key, 'error.backendSwitchSessionChanged'); assert.deepEqual(f.changes.ids(), []);
+  assert.equal(f.changeCalls().length, 5); assert.equal(f.notices.length, 1); assert.equal(f.notices[0].errorUiMessage.key, 'error.modelChange.moving'); assert.deepEqual(f.changes.ids(), []);
 });
 
-test('any other failure is not tried again, and one that never answers is unconfirmed', async () => {
-  const failed = app(CLAUDE(), { backend: { changeModel: async () => { throw Error('gone'); } } });
-  await failed.changes.request('a', OPUS, 'native-a'); await failed.changes.pass(); await failed.changes.pass();
-  assert.equal(failed.changeCalls().length, 1); assert.equal(failed.notices[0].error, 'gone');
-  const silent = app(CLAUDE(), { applyTimeoutMs: 5, backend: { changeModel: () => new Promise(() => {}) } });
-  await silent.changes.request('a', OPUS, 'native-a'); await silent.changes.pass();
-  assert.equal(silent.notices[0].errorUiMessage.key, 'error.modelChange.unconfirmed'); assert.deepEqual(silent.changes.ids(), []);
+test('a failure the backend names is reported once, as it was named; nothing is tried again', async () => {
+  for (const [error, name] of [[Error('gone'), undefined], [uiError('error.modelChange.unstarted'), 'error.modelChange.unstarted'], [uiError('error.workspace.originalDirectoryUnavailable'), 'error.workspace.originalDirectoryUnavailable'],
+    [uiError('error.modelChange.stopped'), 'error.modelChange.stopped'], [uiError('error.serviceDisconnected'), 'error.serviceDisconnected']]) {
+    const f = app(CLAUDE(), { backend: { changeModel: async () => { throw error; } } });
+    await f.changes.request('a', OPUS, 'native-a'); await f.changes.pass(); await f.changes.pass();
+    assert.equal(f.changeCalls().length, 1); assert.deepEqual(f.notices.map(notice => [notice.error, notice.errorUiMessage?.key]), [[error.message, name]]); assert.deepEqual(f.changes.ids(), []);
+  }
+});
+
+test('it is changed only once the resumed session is there with it; a session that does not come back is named as stopped', async () => {
+  const session = CLAUDE(), f = app(session, { backend: { changeModel: async (_id, value) => { runs(session, value); session.state = 'starting'; return value; } } });
+  await f.changes.request('a', OPUS, 'native-a'); await f.changes.pass(); await f.changes.pass();
+  assert.deepEqual([f.notices, f.changes.view()], [[], [{ sessionId: 'a', ...OPUS, waiting: 'applying', applying: true }]]);
+  assert.throws(() => f.changes.cancel('a'), refuses('error.modelChange.applying'));
+  session.state = 'idle'; await f.changes.pass(); assert.deepEqual([f.notices, f.changes.ids()], [[{ sessionId: 'a', ...OPUS }], []]); assert.equal(f.changeCalls().length, 1);
+  for (const state of ['ended', 'recoverable', 'error', 'disconnected', 'background']) {
+    const gone = CLAUDE(), g = app(gone, { backend: { changeModel: async (_id, value) => { runs(gone, value); gone.state = 'starting'; return value; } } });
+    await g.changes.request('a', OPUS, 'native-a'); await g.changes.pass(); gone.state = state; await g.changes.pass();
+    assert.deepEqual([g.notices.map(notice => notice.errorUiMessage.key), g.changes.ids()], [['error.modelChange.stopped'], []], state);
+  }
+  // The native default says nothing about what it stands for: live again is what there is to see.
+  const plain = CLAUDE(), h = app(plain); await h.changes.request('a', { model: null, effort: 'low' }, 'native-a'); await h.changes.pass(); assert.deepEqual(h.notices, [{ sessionId: 'a', model: null, effort: 'low' }]);
+});
+
+test('a session that came back as something else, or never finishes starting, is not confirmed after two minutes', async () => {
+  for (const after of [session => { session.model = 'claude-sonnet-5-5'; }, session => { session.nativeEffort = 'low'; }, session => { session.state = 'starting'; }, session => { session.state = 'stopping'; }]) {
+    const session = CLAUDE(), f = app(session, { backend: { changeModel: async (_id, value) => { runs(session, value); after(session); return value; } } });
+    await f.changes.request('a', OPUS, 'native-a'); await f.changes.pass(); f.clock.now += SETTLE_MS - 1; await f.changes.pass(); assert.deepEqual(f.notices, [], String(after));
+    f.clock.now += 1; await f.changes.pass(); assert.deepEqual([f.notices.map(notice => notice.errorUiMessage.key), f.changes.ids()], [['error.modelChange.unconfirmed'], []], String(after));
+  }
+  const other = CLAUDE(), g = app(other, { backend: { changeModel: async (_id, value) => { runs(other, value); other.nativeId = 'native-b'; return value; } } });
+  await g.changes.request('a', OPUS, 'native-a'); await g.changes.pass(); assert.deepEqual(g.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
+});
+
+test('a lost answer says nothing: the session does, and it is not changed again', async () => {
+  for (const name of ['error.confirmationTimeout', 'error.serviceClosed', 'error.modelChange.unconfirmed']) {
+    const lost = after => { const session = CLAUDE(), f = app(session, { backend: { changeModel: async (_id, value) => { after(session, value); throw uiError(name); } } }); return { ...f, session }; };
+    const made = lost((session, value) => { runs(session, value); session.state = 'stopping'; }); await made.changes.request('a', OPUS, 'native-a'); await made.changes.pass(); assert.deepEqual(made.notices, []);
+    made.session.state = 'starting'; await made.changes.pass(); made.session.state = 'idle'; await made.changes.pass(); assert.deepEqual(made.notices, [{ sessionId: 'a', ...OPUS }], name);
+    const same = lost(() => {}); await same.changes.request('a', OPUS, 'native-a'); await same.changes.pass(); same.clock.now += SETTLE_MS - 1; await same.changes.pass(); assert.deepEqual(same.notices, [], 'It may still be under way');
+    same.clock.now += 1; await same.changes.pass(); assert.deepEqual([same.notices.map(notice => notice.errorUiMessage.key), same.changeCalls().length], [['error.modelChange.unconfirmed'], 1]);
+    const ended = lost(session => { session.state = 'ended'; }); await ended.changes.request('a', OPUS, 'native-a'); await ended.changes.pass(); assert.deepEqual(ended.notices, [], 'It may be between the stop and the resume');
+    ended.clock.now += SETTLE_MS; await ended.changes.pass(); assert.deepEqual(ended.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.stopped']);
+    // The native default cannot be told from what ran before.
+    const plain = lost(() => {}); await plain.changes.request('a', { model: null, effort: 'high' }, 'native-a'); await plain.changes.pass(); assert.deepEqual(plain.notices, []);
+    plain.clock.now += SETTLE_MS; await plain.changes.pass(); assert.deepEqual(plain.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
+    const native = lost(() => {}); Object.assign(native.session, { model: '原生默认', nativeSettings: null, nativeEffort: undefined }); await native.changes.request('a', { model: null, effort: null }, 'native-a'); await native.changes.pass(); assert.deepEqual(native.notices, []);
+    native.clock.now += SETTLE_MS; await native.changes.pass(); assert.deepEqual(native.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
+  }
+  // Nor does a failure to look it up.
+  const torn = CLAUDE(), t = app(torn, { backend: { changeModel: async () => { torn.state = 'starting'; throw uiError('error.serviceClosed'); } } }); await t.changes.request('a', OPUS, 'native-a'); await t.changes.pass();
+  t.state.sessions = null; await t.changes.pass(); assert.deepEqual(t.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
+  // Nothing is looked up while the backend is away, and the two minutes begin once it is back.
+  const session = CLAUDE(); let refresh = null;
+  const f = app(session, { refresh: () => refresh?.(), backend: { changeModel: async () => { session.backendUnavailable = true; throw uiError('error.serviceClosed'); } } });
+  await f.changes.request('a', OPUS, 'native-a'); await f.changes.pass(); assert.deepEqual(f.changes.view(), [{ sessionId: 'a', ...OPUS, waiting: 'backend', applying: true }]);
+  f.clock.now += SETTLE_MS; await f.changes.pass(); session.backendUnavailable = false; refresh = () => { throw Error('away'); }; await f.changes.pass();
+  refresh = () => { session.backendUnavailable = true; }; await f.changes.pass(); assert.deepEqual([f.notices, f.changes.view()[0].waiting], [[], 'backend']);
+  session.backendUnavailable = false; refresh = null; await f.changes.pass(); assert.deepEqual([f.notices, f.changes.view()[0].waiting], [[], 'applying']);
+  f.clock.now += SETTLE_MS; await f.changes.pass(); assert.deepEqual(f.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
+});
+
+test('what could not be changed within a day no longer waits, and one under way is then not confirmed', async () => {
+  const session = CLAUDE({ state: 'working' }), f = app(session);
+  await f.changes.request('a', OPUS, 'native-a'); f.clock.now += KEEP_MS - 1; await f.changes.pass(); assert.deepEqual(f.notices, []);
+  f.clock.now += 1; session.state = 'idle'; await f.changes.pass(); assert.deepEqual([f.changeCalls(), f.notices.map(notice => notice.errorUiMessage.key), f.changes.ids()], [[], ['error.modelChange.expired'], []]);
+  const away = CLAUDE(), g = app(away, { backend: { changeModel: async () => { away.backendUnavailable = true; throw uiError('error.serviceClosed'); } } });
+  await g.changes.request('a', OPUS, 'native-a'); await g.changes.pass(); g.clock.now += KEEP_MS; await g.changes.pass(); assert.deepEqual(g.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
 });
 
 test('text perhaps left in the terminal is saved before the stop and named with the result; without the copy nothing is stopped', async () => {
@@ -263,7 +340,7 @@ test('a backend that is away for a moment makes it wait; the connection is read 
   assert.deepEqual([f.changes.view()[0].waiting, f.changeCalls()], ['backend', []]);
   session.backendUnavailable = false; const held = f.state.sessions; f.state.sessions = []; await f.changes.pass(); assert.equal(f.changes.view()[0].waiting, 'backend');
   f.state.sessions = held; f.calls.length = 0; await f.changes.pass();
-  assert.deepEqual(f.calls.filter(([name]) => ['refresh', 'guard', 'changeModel'].includes(name)).map(([name]) => name), ['refresh', 'guard', 'guard', 'changeModel']);
+  assert.deepEqual(f.calls.filter(([name]) => ['refresh', 'guard', 'changeModel'].includes(name)).map(([name]) => name), ['refresh', 'guard', 'guard', 'changeModel', 'refresh']);
   // A turn that began while it was read again.
   const late = CLAUDE(), g = app(late, { refresh: () => { if (g.changes.ids().length) late.state = 'working'; } });
   await g.changes.request('a', OPUS, 'native-a'); await g.changes.pass(); assert.deepEqual([g.changeCalls(), g.changes.view()[0].waiting], [[], 'turn']);
@@ -303,12 +380,14 @@ test('what waits survives the app; a change that was being made then is only loo
   session.state = 'idle'; await again.changes.pass(); assert.equal(again.changeCalls().length, 1); assert.equal(fs.existsSync(file), false);
   const write = changes => fs.writeFileSync(file, JSON.stringify({ version: 1, changes }));
   const row = { id: 'a', nativeId: 'native-a', value: OPUS, at: NOW - 1000, applying: true };
-  write([row]); const unsure = app(CLAUDE(), { dataDir: dir }); await unsure.changes.pass();
+  write([row]); const unsure = app(CLAUDE(), { dataDir: dir }); assert.equal(unsure.changes.view()[0].applying, true); assert.throws(() => unsure.changes.cancel('a'), refuses('error.modelChange.applying'));
+  await unsure.changes.pass(); assert.deepEqual(unsure.notices, []); unsure.clock.now += SETTLE_MS; await unsure.changes.pass();
   assert.deepEqual(unsure.changeCalls(), []); assert.equal(unsure.notices[0].errorUiMessage.key, 'error.modelChange.unconfirmed');
   write([row]); const made = app(CLAUDE({ model: 'claude-opus-5-5', nativeEffort: 'xhigh' }), { dataDir: dir }); await made.changes.pass();
   assert.deepEqual([made.changeCalls(), made.notices], [[], [{ sessionId: 'a', ...OPUS }]]);
   // Not as a refusal either, whatever runs there now: it may have been made.
-  write([row]); const ran = app(CLAUDE({ background: 1 }), { dataDir: dir }); await ran.changes.pass(); assert.deepEqual([ran.changeCalls(), ran.notices[0].errorUiMessage.key], [[], 'error.modelChange.unconfirmed']);
+  write([row]); const ran = app(CLAUDE({ background: 1 }), { dataDir: dir }); await ran.changes.pass(); ran.clock.now += SETTLE_MS; await ran.changes.pass(); assert.deepEqual([ran.changeCalls(), ran.notices[0].errorUiMessage.key], [[], 'error.modelChange.unconfirmed']);
+  write([row]); const gone = app(CLAUDE({ state: 'ended' }), { dataDir: dir }); await gone.changes.pass(); gone.clock.now += SETTLE_MS; await gone.changes.pass(); assert.deepEqual([gone.changeCalls(), gone.notices[0].errorUiMessage.key], [[], 'error.modelChange.stopped']);
   // Saved again before it is looked up, it is still only looked up.
   write([row]); const held = app(CLAUDE({ backendUnavailable: true }), { dataDir: dir }); await held.changes.pass(); held.changes.moved();
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).changes[0].applying, true);
@@ -318,7 +397,7 @@ test('what waits survives the app; a change that was being made then is only loo
 
 test('the waiting is NAW\'s own work, also when an agent\'s confirmed call asked for it', async () => {
   let inside = 'unset'; const session = CLAUDE();
-  const f = app(session, { backend: { changeModel: async () => { inside = operation.current() ?? null; } }, refresh: () => { inside = operation.current() ?? null; } });
+  const f = app(session, { backend: { changeModel: async (_id, value) => { inside = operation.current() ?? null; runs(session, value); } }, refresh: () => { inside = operation.current() ?? null; } });
   await operation.run({ id: 'agent', name: 'Agent', nativeId: 'native-agent', provider: 'claude', callId: 'call', turnId: 'turn', operationId: 'operation' }, () => f.changes.request('a', OPUS, 'native-a'));
   assert.equal(inside, null);
 });
@@ -331,13 +410,13 @@ test('the choices carry what still waits for the session', async () => {
 
 // The backend's change of a Claude session.
 function workspace(extra = {}, options = {}) {
-  const s = CLAUDE({ requestedSettings: { permissionMode: 'auto' }, ...extra }), calls = [];
+  const s = CLAUDE({ cwd: os.tmpdir(), messages: [{ role: 'user', text: 'one' }], requestedSettings: { permissionMode: 'auto' }, ...extra }), calls = [];
   const r = Object.create(Claude.prototype); EventEmitter.call(r);
   const w = Object.create(Workspace.prototype); EventEmitter.call(w);
   Object.assign(r, { record: s, stop: async () => { calls.push('stop'); if (options.selfEnd) { w.endNativeContext(s, r, { nativeId: s.nativeId, reason: 'other' }); w.runtimes.delete(s.id); } s.state = 'ended'; return { state: options.onStop?.(s) || 'ended' }; } });
   Object.assign(w, { sessions: new Map([[s.id, s]]), runtimes: new Map([[s.id, r]]), draftRevisions: new Map(), drafts: new Map(), pendingDrafts: new Map(), stops: new Map(), rooms: new Map([['shared', { run: null }]]), approvalRoutes: new Map(),
     pause: () => calls.push('pause'), pauseParticipant: () => calls.push('pauseParticipant'), changed: () => {}, persist: () => calls.push('persist:' + s.state + ':' + JSON.stringify(s.requestedSettings ?? null)),
-    resume: async (id, owner) => { calls.push(['resume', id, owner, structuredClone(s.requestedSettings ?? null)]); s.state = 'idle'; } });
+    resume: async (id, owner, participantOnly) => { calls.push(['resume', id, owner, participantOnly, structuredClone(s.requestedSettings ?? null), s.nativePermissionMode]); if (options.onResume) options.onResume(s); s.state = 'starting'; } });
   return { w, s, r, calls, expected: structuredClone(sessionPlan(s, s.state).stop) };
 }
 
@@ -346,7 +425,7 @@ test('Claude is stopped in exactly the idle state that was read and resumed as t
     const f = workspace({}, { selfEnd });
     assert.deepEqual(await f.w.changeModel('a', OPUS, f.expected, true), OPUS);
     assert.equal(f.calls.includes('pause'), false, 'Only what this session is in is paused');
-    assert.deepEqual(f.calls.filter(call => Array.isArray(call)), [['resume', 'a', 'window', { permissionMode: 'auto', ...OPUS }]]);
+    assert.deepEqual(f.calls.filter(call => Array.isArray(call)), [['resume', 'a', 'window', true, { permissionMode: 'auto', ...OPUS }, undefined]]);
     assert.ok(f.calls.indexOf('stop') < f.calls.findIndex(call => String(call).startsWith('persist:ended') && String(call).includes('claude-opus-5-5')), 'The choice is saved before the resume');
     assert.deepEqual([f.s.nativeId, f.s.owner, f.s.model, f.s.nativeEffort], ['native-a', 'window', 'claude-opus-5-5', 'xhigh']);
   }
@@ -388,16 +467,71 @@ test('an invalid request never reaches the stop', async () => {
   for (const [extra, name] of [[{ state: 'ended' }, 'error.modelChange.unavailable'], [{ recovering: true }, 'error.modelChange.unavailable'], [{ nativeContextPending: { id: 'x' } }, 'error.modelChange.unavailable'], [{ provider: 'dsh' }, 'error.modelChange.unsupported'], [{ requestedSettings: { profile: 'p' } }, 'error.modelChange.unsupported']]) {
     const g = workspace(extra); await assert.rejects(g.w.changeModel('a', OPUS, g.expected, true), refuses(name)); await assert.rejects(g.w.modelChoices('a'), refuses(name)); assert.equal(g.calls.includes('stop'), false);
   }
-  const stored = workspace(); stored.w.storageWarning = 'disk'; await assert.rejects(stored.w.changeModel('a', OPUS, stored.expected, true), refuses('error.modelChange.changed'));
+  const stored = workspace(); stored.w.storageWarning = 'disk'; stored.w.storageWarningUiMessage = { key: 'error.workspace.automaticRecordUnsaved', params: {} };
+  await assert.rejects(stored.w.changeModel('a', OPUS, stored.expected, true), error => error.message === 'disk' && key(error) === 'error.workspace.automaticRecordUnsaved'); assert.equal(stored.calls.includes('stop'), false);
+  const unlisted = workspace(); await assert.rejects(unlisted.w.changeModel('a', { model: 'claude-nothing-9', effort: 'low' }, unlisted.expected, true), refuses('error.modelChange.unknown')); assert.equal(unlisted.calls.includes('stop'), false);
+  const own = workspace({ model: 'claude-own-1' }); await own.w.changeModel('a', { model: 'claude-own-1', effort: 'low' }, own.expected, true); assert.ok(own.calls.includes('stop'));
 });
 
-test('a session that came out of the stop as something else is left as it is, without a resume', async () => {
+test('what would keep the session from coming back is found before it is stopped', async t => {
+  const dir = scratch(t), nativeTranscript = path.join(dir, 'native-a.jsonl'), write = (...rows) => fs.writeFileSync(nativeTranscript, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  const mode = { type: 'permission-mode', permissionMode: 'default', sessionId: 'native-a' }, turn = { type: 'user', sessionId: 'native-a' };
+  const refused = async (extra, name) => {
+    const f = workspace(extra); await assert.rejects(f.w.changeModel('a', OPUS, f.expected, true), refuses(name)); await assert.rejects(f.w.modelChoices('a'), refuses(name));
+    assert.deepEqual([f.calls.includes('stop'), f.s.state, f.s.requestedSettings], [false, 'idle', { permissionMode: 'auto' }]);
+  };
+  const changed = async extra => { const f = workspace(extra); await f.w.modelChoices('a'); await f.w.changeModel('a', OPUS, f.expected, true); assert.ok(f.calls.includes('stop')); };
+  await refused({ cwd: path.join(dir, 'gone') }, 'error.workspace.originalDirectoryUnavailable');
+  write(mode); await refused({ cwd: nativeTranscript }, 'error.workspace.originalDirectoryUnavailable');
+  // Its transcript says whether there is a conversation, whatever is left here of an earlier one.
+  await refused({ nativeTranscript }, 'error.modelChange.unstarted'); fs.rmSync(nativeTranscript); await refused({ nativeTranscript }, 'error.modelChange.unstarted');
+  write(mode, turn); await changed({ nativeTranscript, messages: [] }); write({ type: 'assistant' }); await changed({ nativeTranscript, messages: [] });
+  // Larger than what is read of it: there is one.
+  write(turn, ...Array.from({ length: 3000 }, () => ({ type: 'system', text: 'x'.repeat(100) }))); assert.ok(fs.statSync(nativeTranscript).size > 256 * 1024); await changed({ nativeTranscript, messages: [] });
+  // Where none was reported for this conversation, or it is no file of its own, the messages here say so.
+  for (const other of [undefined, path.join(dir, 'native-b.jsonl'), 'native-a.jsonl']) { await changed({ nativeTranscript: other }); await refused({ nativeTranscript: other, messages: [] }, 'error.modelChange.unstarted'); }
+  fs.rmSync(nativeTranscript); fs.writeFileSync(path.join(dir, 'else.jsonl'), JSON.stringify(mode)); fs.symlinkSync(path.join(dir, 'else.jsonl'), nativeTranscript); await changed({ nativeTranscript });
+  // A turn under way may not be in it yet: the choices are shown.
+  const first = workspace({ nativeTranscript: path.join(dir, 'x', 'native-a.jsonl'), state: 'working' }); assert.equal((await first.w.modelChoices('a')).provider, 'claude');
+});
+
+test('a session left in another mode than bypass is not put back into bypass; any other mode is native\'s own to keep', async t => {
+  const dir = scratch(t), nativeTranscript = path.join(dir, 'native-a.jsonl');
+  const left = (...modes) => s => { fs.appendFileSync(nativeTranscript, modes.map(permissionMode => JSON.stringify({ type: 'permission-mode', permissionMode, sessionId: s?.other || 'native-a' }) + '\n').join('')); };
+  const resumed = async (nativePermissionMode, onStop) => {
+    fs.writeFileSync(nativeTranscript, JSON.stringify({ type: 'user', sessionId: 'native-a' }) + '\n' + JSON.stringify({ type: 'permission-mode', permissionMode: nativePermissionMode, sessionId: 'native-a' }) + '\n');
+    const f = workspace({ nativeTranscript, nativePermissionMode }, { onStop: s => { onStop?.(s); } }); await f.w.changeModel('a', OPUS, f.expected, true); return f.calls.find(Array.isArray)[5];
+  };
+  for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']) assert.equal(await resumed('bypassPermissions', left(mode)), mode);
+  assert.equal(await resumed('bypassPermissions', left('plan', 'auto')), 'auto', 'The last one counts'); assert.equal(await resumed('bypassPermissions', left('auto', 'bypassPermissions')), 'bypassPermissions');
+  assert.equal(await resumed('bypassPermissions'), 'bypassPermissions'); assert.equal(await resumed('bypassPermissions', left('someday')), 'bypassPermissions'); assert.equal(await resumed('bypassPermissions', () => left('auto')({ other: 'native-b' })), 'bypassPermissions', 'Another conversation\'s');
+  // However long the conversation: the end of the file is what is read.
+  const long = s => { fs.appendFileSync(nativeTranscript, Array.from({ length: 3000 }, () => JSON.stringify({ type: 'system', text: 'x'.repeat(100) }) + '\n').join('')); left('plan')(s); };
+  assert.equal(await resumed('bypassPermissions', long), 'plan');
+  // Never the other way: what is written there gives no session more than NAW knew it had, and no other mode is touched.
+  for (const mode of ['default', 'plan', undefined]) { assert.equal(await resumed(mode, left('bypassPermissions')), mode); assert.equal(await resumed(mode, left('acceptEdits')), mode); }
+});
+
+test('once the stop began, an error says that the outcome is open, or that the session stopped; nothing is resumed as something else', async () => {
   for (const onStop of [s => { s.nativeId = 'native-b'; }, s => { s.owner = 'other'; }, s => { s.controlRevision++; s.connectionRevision++; s.nativeId = 'native-b'; }, () => 'background', () => 'disconnected']) {
-    const f = workspace({}, { onStop }); await assert.rejects(f.w.changeModel('a', OPUS, f.expected, true));
+    const f = workspace({}, { onStop }); await assert.rejects(f.w.changeModel('a', OPUS, f.expected, true), refuses('error.modelChange.unconfirmed'), String(onStop));
     assert.deepEqual(f.calls.filter(Array.isArray), []); assert.deepEqual(f.s.requestedSettings, { permissionMode: 'auto' });
   }
-  const failed = workspace(); failed.r.stop = async () => { throw Error('native did not end'); };
-  await assert.rejects(failed.w.changeModel('a', OPUS, failed.expected, true)); assert.deepEqual(failed.calls.filter(Array.isArray), []);
+  const failed = workspace(); failed.r.stop = async () => { throw uiError('error.workspace.nativeEndUnconfirmed'); };
+  await assert.rejects(failed.w.changeModel('a', OPUS, failed.expected, true), refuses('error.modelChange.unconfirmed')); assert.deepEqual([failed.calls.filter(Array.isArray), failed.s.state], [[], 'error']);
+  // Before it began, with the session as it was: the reason itself.
+  const before = workspace(); before.r.stopForMaintenance = async () => { throw uiError('error.modelChange.applying'); };
+  await assert.rejects(before.w.changeModel('a', OPUS, before.expected, true), refuses('error.modelChange.applying')); assert.equal(before.s.state, 'idle');
+  // Stopped, its choice kept, and not back.
+  const down = workspace({}, { onResume: () => { throw uiError('error.workspace.previousProcessMayRun'); } });
+  await assert.rejects(down.w.changeModel('a', OPUS, down.expected, true), refuses('error.modelChange.stopped')); assert.deepEqual([down.s.state, down.s.requestedSettings.model], ['ended', 'claude-opus-5-5']);
+});
+
+test('a resume for one session pauses what that session is in; any other resume still pauses everything', async () => {
+  for (const [args, pauses] of [[['a', 'window'], ['pause']], [['a', 'window', true], ['pauseParticipant']]]) {
+    const f = workspace({ state: 'ended' }); delete f.w.resume; f.w.runtimes.clear(); f.w.bind = () => {}; f.w.host = { create: () => ({}) };
+    await f.w.resume(...args); assert.deepEqual(f.calls.filter(call => /^pause/.test(call)), pauses); assert.equal(f.s.state, 'starting');
+  }
 });
 
 // Codex's own change.

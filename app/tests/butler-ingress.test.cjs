@@ -185,6 +185,7 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
     { rotations: { previous: { phase: 'created', newId: 'agent-a' } } },
     { actions: [{ kind: 'dispatch', sessionId: 'agent-a' }] },
     { actions: [{ kind: 'rotate', sessionId: 'agent-a' }] },
+    { modelChanges: ['agent-a'] },
   ];
   for (const changes of cases) assert.equal(queueVacancies(vacancyInput(changes))[0].active, false);
   assert.equal(queueVacancies(vacancyInput({ rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'done' }] }] }))[0].active, true);
@@ -233,6 +234,15 @@ test('default settle time records one vacancy through ordinary empty-queue maint
   const f = fixture(t), window = passiveWindow(t, f);
   for (let elapsed = 0; elapsed <= 120000; elapsed += 3000) await window.tick(elapsed);
   assert.equal(f.ledger.snapshot().events.filter(event => event.kind === 'queue-empty').length, 1);
+});
+
+test('a session whose model the person is changing is not reported as free for work until that is settled', async t => {
+  let changing = ['agent-a']; const f = fixture(t), window = passiveWindow(t, f, { modelChanges: () => changing }), free = () => window.projections.at(-1)[0].candidateIds;
+  for (let elapsed = 0; elapsed <= 120000; elapsed += 3000) await window.tick(elapsed);
+  assert.deepEqual([free(), f.ledger.snapshot().events.length], [[], 0]);
+  changing = [];
+  for (let elapsed = 123000; elapsed <= 240000; elapsed += 3000) await window.tick(elapsed);
+  assert.deepEqual(free(), ['agent-a']);
 });
 
 test('a restarted default dispatcher preserves its existing vacancy while fresh readiness settles', async t => {

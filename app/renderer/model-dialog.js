@@ -2,6 +2,7 @@
 (function (global) {
   'use strict';
   const WAITS = ['applying', 'approval', 'backend', 'input', 'message', 'person', 'question', 'queue', 'relay', 'report', 'turn'];
+  const UNSURE = ['error.modelChange.stopped', 'error.modelChange.unconfirmed'];
   const valueOf = choice => choice === '' ? null : choice;
   const same = (a, b) => a.model === b.model && a.effort === b.effort;
   function valueText(value, text) {
@@ -13,7 +14,7 @@
   function noticeText(notice, record, text, display) {
     const params = { name: record?.name || notice.sessionId, value: valueText(notice, text) };
     if (notice.waiting) return text('model.waiting', { ...params, reason: waitText(notice.waiting, text) });
-    const line = notice.error ? text('model.failed', { ...params, reason: display(notice.error, notice.errorUiMessage) })
+    const line = notice.error ? text(UNSURE.includes(notice.errorUiMessage?.key) ? 'model.unsure' : 'model.failed', { ...params, reason: display(notice.error, notice.errorUiMessage) })
       : text(record?.provider === 'codex' ? 'model.doneCodex' : 'model.done', params);
     return notice.screen ? line + text('model.screen', { path: notice.screen }) : line;
   }

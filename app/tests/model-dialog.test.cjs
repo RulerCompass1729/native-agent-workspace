@@ -3,7 +3,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const locale = require('../ui-locale.js'), { uiError } = require('../ui-errors.cjs');
-const modelDialog = require('../renderer/model-dialog.js');
+const modelDialog = require('../renderer/model-dialog.js'), { UNSURE_KEYS } = require('../session-model.cjs');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const renderer = read('renderer/renderer.js'), html = read('renderer/index.html'), main = read('main.cjs');
 const cut = (source, from, to) => { const start = source.indexOf(from), end = source.indexOf(to, start + from.length); assert.ok(start > 0 && end > start, from); return source.slice(start, end); };
@@ -78,7 +78,7 @@ test('Codex offers its own models, each with its own efforts, and no native defa
 test('a refusal stays in the dialog with its reason and nothing is said elsewhere; a second try is possible', async () => {
   const refusal = uiError('error.modelChange.busy', { reason: '有 2 个后台任务在跑' });
   const p = page({ change: refusal }); await p.dialog.open('a'); p.pick('claude-opus-5-5'); await p.dialog.confirm();
-  assert.deepEqual([p.$('model-dialog').open, p.$('model-error').hidden, p.$('model-error').textContent, p.notices, p.$('model-confirm').disabled], [true, false, '现在不能换，重启会断掉它：有 2 个后台任务在跑', [], false]);
+  assert.deepEqual([p.$('model-dialog').open, p.$('model-error').hidden, p.$('model-error').textContent, p.notices, p.$('model-confirm').disabled], [true, false, '现在不能换：有 2 个后台任务在跑', [], false]);
   const closed = page({ choices: uiError('error.modelChange.backend') }); await closed.dialog.open('a');
   assert.deepEqual([closed.$('model-error').hidden, closed.$('model-loading').hidden, closed.$('model-confirm').disabled, closed.rows()], [false, true, true, []]);
 });
@@ -121,7 +121,12 @@ test('what happened is said in one line, with the reason it waits or failed for'
   assert.equal(line({}), '「Worker」已换成 claude-opus-5-5 · xhigh，同一个会话接着聊。');
   assert.equal(line({}, S({ provider: 'codex' })), '「Worker」从下一轮起用 claude-opus-5-5 · xhigh。');
   assert.equal(line({ error: 'x', errorUiMessage: uiError('error.modelChange.screen').uiMessage }), '「Worker」没换成 claude-opus-5-5 · xhigh：没能保存终端里没发出的字，所以没换模型。');
-  assert.equal(line({ screen: '/saved/a' }).endsWith('/saved/a'), true); assert.equal(line({ model: null, effort: null }).includes('原生默认'), true);
+  // Not known to have failed, so it does not say that it did.
+  assert.equal(line({ error: 'x', errorUiMessage: uiError('error.modelChange.unconfirmed').uiMessage }), '给「Worker」换 claude-opus-5-5 · xhigh：没能确认换成了没有。先看这个会话现在的模型，再决定要不要再换一次。');
+  assert.equal(line({ error: 'x', errorUiMessage: uiError('error.modelChange.stopped').uiMessage }), '给「Worker」换 claude-opus-5-5 · xhigh：它停下了，没能自动接回来。点「继续原生会话」接着聊，再看它现在的模型。');
+  assert.deepEqual(read('renderer/model-dialog.js').match(/UNSURE = \[([^\]]+)\]/)[1].match(/error[.\w]+/g).sort(), [...UNSURE_KEYS].sort());
+  assert.ok(zh('error.modelChange.stopped').includes(zh('header.resume')) && locale.format('en', 'error.modelChange.stopped').includes(locale.format('en', 'header.resume')));
+  assert.equal(line({ screen: '/saved/a' }).endsWith('可能没发出的字存在 /saved/a'), true); assert.equal(line({ model: null, effort: null }).includes('原生默认'), true);
   assert.equal(line({ waiting: 'later-reason' }).endsWith('等这一轮结束'), true); assert.equal(line({}, null).startsWith('「a」'), true);
 });
 
@@ -167,7 +172,7 @@ test('every module the page loads is in the bundle, and this one is there before
 // The app's handlers, as written.
 function handlers(request) {
   const registered = new Map(), notices = [], asked = [], changes = { choices: async id => ({ id }), request: async (...args) => { asked.push(args); return request(...args); }, cancel: id => id };
-  const context = vm.createContext({ register: (name, handler) => registered.set(name, handler), applicationHandlers: registered, modelChanges: () => changes, notifyModelChange: notice => notices.push(JSON.parse(JSON.stringify(notice))) });
+  const context = vm.createContext({ register: (name, handler) => registered.set(name, handler), applicationHandlers: registered, modelChanges: () => changes, notifyModelChange: notice => notices.push(JSON.parse(JSON.stringify(notice))), require: name => require(path.join(__dirname, '..', name)) });
   vm.runInContext(cut(main, "  register('modelChoices',", "  register('interfaceSettings',"), context);
   const client = { snapshot: () => ({ sessions: [{ id: 'a', nativeId: 'native-a' }] }) };
   return { registered, notices, asked, person: (...args) => registered.get('changeModel')({ client }, ...args), agent: (...args) => registered.get('changeModel')({ client, background: true }, ...args) };
@@ -186,5 +191,5 @@ test('an agent cannot name a conversation; the person who confirmed its card is 
   const refused = handlers(() => { throw uiError('error.modelChange.busy', { reason: 'x' }); }), answer = await refused.agent('a', VALUE);
   assert.equal(answer.status, 'refused'); assert.equal(answer.reason, refused.notices[0].error); assert.equal(refused.notices[0].errorUiMessage.key, 'error.modelChange.busy');
   // Whether it took place is not known, or it is another kind of failure: the record keeps it open.
-  for (const error of [uiError('error.modelChange.unconfirmed'), Error('gone')]) { const f = handlers(() => { throw error; }); await assert.rejects(f.agent('a', VALUE), thrown => thrown === error); assert.deepEqual(f.notices, []); }
+  for (const error of [uiError('error.modelChange.unconfirmed'), uiError('error.modelChange.stopped'), Error('gone')]) { const f = handlers(() => { throw error; }); await assert.rejects(f.agent('a', VALUE), thrown => thrown === error); assert.deepEqual(f.notices, []); }
 });

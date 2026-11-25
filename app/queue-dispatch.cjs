@@ -1090,6 +1090,7 @@ function queueVacancies(input) {
   const busy = new Set((input.actions || []).filter(action => ['dispatch', 'rotate'].includes(action.kind)).map(action => action.sessionId));
   // The same sessions the planner was told are engaged (B6: the holder of an open handoff) are not vacant either.
   for (const id of Array.isArray(input.engaged) ? input.engaged : []) busy.add(id);
+  for (const id of Array.isArray(input.modelChanges) ? input.modelChanges : []) busy.add(id);
   for (const id of input.heldSessions || []) busy.add(id);
   if (input.quarantineUnknown) for (const session of input.sessions || []) busy.add(session.id);
   for (const [id, rotation] of Object.entries(input.rotations || {})) {
@@ -3338,7 +3339,7 @@ class QueueDispatcher {
       idleSince: this.vacancySince, humanAt: this.humanAt, now: current.now,
       settleMs: this.settleMs, humanQuietMs: this.humanQuietMs,
       rotations: Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id))),
-      actions, engaged, handedOff, ...this.trustAdmission() }));
+      actions, engaged, modelChanges: this.modelChanges(), handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged, quietPending);
     if ((this.answerNotices || this.versionNotices) && !this.closed) await this.notifyAnswers(current, engaged);
