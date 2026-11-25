@@ -7,6 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 const operation = require('./background-operation.cjs');
 const { roomId: validRoomId, roomIds } = require('./collaboration-spaces.cjs');
 const history = require('./record-history.cjs');
+const { answers } = require('./person-actions.cjs');
 const clone = v => JSON.parse(JSON.stringify(v));
 const MAX_RECORD_BYTES = 32 * 1024 * 1024;
 // Records kept whole (the person, 2026-11-11: 「全保留，然后切分成小块（比如按天保持）」). A record that has settled (it
@@ -276,11 +277,11 @@ class BackgroundControl {
     if (prior) rows[rows.indexOf(prior)] = record; else rows.push(record);
     this.archivedBySession.set(record.actor.id, rows);
   }
-  // The native sessions whose card for operation `id`, asked as session `sessionId`, the person answered. Usually one:
-  // an operation id can be used again after the native session changed in place.
-  askers(sessionId, id) {
-    return [...this.data.records, ...(this.archivedBySession.get(sessionId) || [])]
-      .filter(r => r.id === id && r.actor.id === sessionId && Number.isSafeInteger(r.humanDecision)).map(r => r.actor.nativeId);
+  // The native session whose card the person answered in `event` (person-actions.cjs), or null when no record tells.
+  asker(event) {
+    const { memberId } = event.payload;
+    return [...this.data.records, ...(this.archivedBySession.get(memberId) || [])]
+      .find(r => r.actor.id === memberId && answers(r, event))?.actor.nativeId ?? null;
   }
   // A settled record that changes later (a send confirmed on a later receipt) is added to its block again.
   reappend(record) {

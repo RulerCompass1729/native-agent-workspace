@@ -34,12 +34,12 @@ function fixture(t, sessions) {
   f.open = () => {
     const room = new RoomState(dir), ledger = new ButlerLedger(dir, { now }), ingress = new ButlerIngress(dir, { roomState: room, ledger, now });
     const actions = new PersonActions({ ingress, now });
-    f.role = new StewardRole(dir);
+    f.role = new StewardRole(dir); f.ledger = ledger;
     f.control = new BackgroundControl({ dataDir: dir, now, changed: () => actions.observe({}, f.control?.data?.records || []),
       handlers: new Map([['stop', async c => { await dialog(c, 'message', { message: 'Stop?', buttons: ['Cancel', 'Stop'], cancelId: 0 }); return null; }]]),
       context: async (actor, saved) => ({ background: true, view: saved || { selected: actor.id, draft: '' }, confirmationActors: () => [actor], checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } }) });
     actions.observe({}, f.control.data.records);
-    f.wake = new StewardWake(dir, { ledger: () => ledger, selected: () => f.role.selected, now, record() {}, changed() {}, askers: (...args) => f.control.askers(...args) });
+    f.wake = new StewardWake(dir, { ledger: () => ledger, selected: () => f.role.selected, now, record() {}, changed() {}, asker: event => f.control.asker(event) });
     f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now, settleMs: 8000, tickMs: 3000,
       steward: () => { const current = f.role.current(); return current && { ...current, duty: '' }; }, stewardWake: f.wake, transcriptRoot: path.join(dir, 'none'),
       sampleProcesses: async () => '', samplePressure: async () => '', compactions: { async sample() { return new Map(); } } });
@@ -64,6 +64,7 @@ function fixture(t, sessions) {
 // in which the person has just used the butler, which holds an ordinary event for two minutes.
 async function kept(t, { asker, then, sessions, decision = 1, card = null, opened = () => {} }) {
   const f = fixture(t, sessions);
+  await f.card(as('earlier', 'native-earlier'), 1, 'op-earlier'); // A record with no event at all has no position to keep.
   f.role.set(named(asker)); f.wake.set(true); f.position = f.wake.state.woken;
   if (card) await card(f); else await f.card(asker, decision);
   await then(f);
@@ -130,30 +131,49 @@ test('a record that goes round ends at the holder already listed, and an entry w
   assert.deepEqual(of(as('last', 'native-last')), [['last', 'native-last']]); assert.deepEqual(f.dispatcher.holders(null), []); assert.deepEqual(f.dispatcher.holders({ sessionId: 'one' }), []);
 });
 
-test('an operation id both native sessions used, one whose record is gone and one that cannot be read make no click and lose nothing', async t => {
-  const one = as('butler', 'native-1'), two = as('butler', 'native-2');
-  const both = [session('butler', 'native-1', working)];
-  await ordinary(await kept(t, { asker: one, sessions: both, then: async f => { both[0].nativeId = 'native-2'; f.designate(two); await f.card(two); } }));
-  for (const askers of [() => [], () => { throw Error('SYNTHETIC'); }])
-    await ordinary(await kept(t, { asker: one, sessions: [session('butler', 'native-1', working)], then: () => {}, opened: f => { f.wake.askers = askers; } }));
+test('whatever its operation id, also one used before by another native session', async t => {
+  const one = as('butler', 'native-1'), two = as('butler', 'native-2'), changed = sessions => async f => { sessions[0].nativeId = 'native-2'; f.designate(two); };
+  // An id the event cannot carry: not plain, or too long for it.
+  for (const operation of ['派活 1', 'lane/x-1', 'a b', '😀'.repeat(50)]) {
+    told(await kept(t, { asker: one, sessions: [session('butler', 'native-1', working)], card: f => f.card(one, 1, operation), then: () => {} }));
+    const sessions = [session('butler', 'native-1', working)];
+    await ordinary(await kept(t, { asker: one, sessions, card: f => f.card(one, 1, operation), then: changed(sessions) }));
+    // The one before it used that id too, answered the same or the other way.
+    for (const decision of [1, 0]) {
+      const both = [session('butler', 'native-1', working)];
+      told(await kept(t, { asker: one, sessions: both, card: f => f.card(one, decision, operation), then: async f => { await changed(both)(f); f.clock.now += SEC; await f.card(two, 1, operation); } }));
+    }
+  }
+  const plain = [session('butler', 'native-1', working)];
+  told(await kept(t, { asker: one, sessions: plain, then: async f => { await changed(plain)(f); await f.card(two); } }));
+  // Neither of two earlier ones is the session designated now.
+  const third = [session('butler', 'native-1', working)];
+  await ordinary(await kept(t, { asker: one, sessions: third, card: async f => { await f.card(one); await f.card(two); }, then: f => { third[0].nativeId = 'native-3'; f.designate(as('butler', 'native-3')); } }));
 });
 
-test('background control tells the native session that asked: answered cards only, after a restart and after they moved to the history', async t => {
-  const f = fixture(t, [session('butler', 'native-1')]), one = as('butler', 'native-1'), two = as('butler', 'native-2');
-  await f.card(one, 1, 'op-yes'); await f.card(one, 0, 'op-no'); await f.card(as('other', 'native-other'), 1, 'op-yes');
-  await f.control.call({ sender: { ...one, provider: 'claude', name: 'Asker' }, identity: { nativeId: 'native-1', sessionId: 's', turnId: 't', callId: 'c' }, valid: () => true }, { action: 'invoke', operation_id: 'op-open', method: 'stop', arguments: [] });
-  const check = () => {
-    assert.deepEqual(['op-yes', 'op-no', 'op-open', 'op-none', undefined].map(id => f.control.askers('butler', id)), [['native-1'], ['native-1'], [], [], []]);
-    assert.deepEqual(f.control.askers('other', 'op-yes'), ['native-other']); assert.deepEqual(f.control.askers('nobody', 'op-yes'), []);
-  };
-  check(); await f.restart(); check();
+test('an answer whose record is gone or cannot be read is no click and is not lost', async t => {
+  for (const asker of [() => null, () => undefined, () => { throw Error('SYNTHETIC'); }])
+    await ordinary(await kept(t, { asker: as('butler', 'native-1'), sessions: [session('butler', 'native-1', working)], then: () => {}, opened: f => { f.wake.asker = asker; } }));
+});
+
+test('background control tells the native session that asked: each answer its own, after a restart and after they moved to the history', async t => {
+  const f = fixture(t, [session('butler', 'native-1')]), one = as('butler', 'native-1'), two = as('butler', 'native-2'), other = as('other', 'native-other');
+  await f.card(one, 1, 'op-yes'); await f.card(one, 0, 'op-no'); await f.card(two, 1, 'op-yes'); await f.card(other, 1, 'op-yes'); await f.card(two, 0, '派活 1'); await f.card(one, 1, '派活 1');
+  const read = () => f.ledger.eventsAfter(null, 100, { ids: true }).events, asked = () => read().map(e => f.control.asker(e));
+  const expected = ['native-1', 'native-1', 'native-2', 'native-other', 'native-2', 'native-1'];
+  assert.deepEqual(asked(), expected); await f.restart(); assert.deepEqual(asked(), expected);
+  const [event] = read();
+  for (const changed of [{ ...event, eventId: undefined }, { ...event, eventId: read()[2].eventId.replace(/.$/u, c => c === '0' ? '1' : '0') },
+    { ...event, payload: { ...event.payload, memberId: 'other' } }, { ...event, payload: { ...event.payload, itemId: 'op-no' } }, { ...event, payload: { ...event.payload, reason: 'person-action:confirmation:reject' } }])
+    assert.equal(f.control.asker(changed), null);
   f.clock.now += 48 * HOUR; await f.card(two, 1, 'op-later'); await f.card(two, 1, 'op-again');
   assert.ok(f.control.archivedBySession.get('butler')?.some(r => r.id === 'op-yes'), 'moved to the history');
-  assert.deepEqual(f.control.askers('butler', 'op-yes'), ['native-1']); await f.restart(); assert.deepEqual(f.control.askers('butler', 'op-yes'), ['native-1']); assert.deepEqual(f.control.askers('butler', 'op-later'), ['native-2']);
+  assert.deepEqual(asked(), [...expected, 'native-2', 'native-2']); await f.restart(); assert.deepEqual(asked(), [...expected, 'native-2', 'native-2']);
+  assert.ok(f.ledger.eventsAfter(null, 100).events.every(e => Object.keys(e).sort().join() === 'kind,payload,sequence,time'), 'the butler reads what it read before');
 });
 
 test('main.cjs gives the wake background control\'s own answer', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
   const wired = main.slice(main.indexOf('stewardWake ||= new StewardWake('), main.indexOf('} catch { stewardWake = null; }'));
-  assert.match(wired, /askers: \(sessionId, id\) => backgroundControl\?\.askers\(sessionId, id\) \|\| \[\],/u);
+  assert.match(wired, /asker: event => backgroundControl\?\.asker\(event\) \?\? null,/u);
 });
