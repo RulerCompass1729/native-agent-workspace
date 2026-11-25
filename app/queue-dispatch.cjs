@@ -514,6 +514,9 @@ function sessionReady(session, wakePolicy) {
   return { ready: true, reason: '' };
 }
 
+// The session as if its backend were in no quiet window.
+const pastWindow = session => session && { ...session, quietWindow: undefined };
+
 // While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
 // each of its own turns). busy stays not-idle: an approval or question flagged on the session belongs to the turn (a
 // native permission prompt sets no flag). So do its own delivery and Claude's background report, stale until the turn
@@ -3322,11 +3325,17 @@ class QueueDispatcher {
       const steward = this.stewardOutside(current.snapshot.sessions);
       const skip = reason => this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined);
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
-      if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(heldReason(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy) || 'not-settled');
+      const listed = current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
+      // The person's own act is told past a quiet window (R200), and past nothing else. The turn it starts makes the move
+      // wait for its quiet again; the window's deadline stays. No idle clock runs in a window: its last activity counts.
+      const past = Boolean(event && listed.quietWindow && this.stewardWake.personActed()), butler = past ? pastWindow(listed) : listed;
+      const idle = past ? sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs)
+        : settled(steward.sessionId, this.idleSince, current.now, this.settleMs);
+      if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
       if (quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
-      const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why);
+      const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why, past);
       if (!fresh) return skip(why.reason || 'state-unavailable');
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
@@ -3600,7 +3609,8 @@ class QueueDispatcher {
   }
 
   // Read fresh state once, right before sending; skip if the member moved on (`why.reason` says how, when given).
-  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}) {
+  // `past`: a quiet window does not hold this send (wakeSteward).
+  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, past = false) {
     const held = () => {
       if (this.isolation.unknown) return 'trust-unknown';
       if (Object.hasOwn(this.isolation.holds, sessionId)) return 'trust-hold';
@@ -3613,7 +3623,7 @@ class QueueDispatcher {
     why.reason = held();
     if (why.reason) return null;
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
-    const ready = sessionReady(session, current.snapshot.wakePolicy);
+    const ready = sessionReady(past ? pastWindow(session) : session, current.snapshot.wakePolicy);
     if (!ready.ready) {
       why.reason = ready.reason;
       return null;

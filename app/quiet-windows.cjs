@@ -2,7 +2,8 @@
 // A quiet window before a migration (the PM's 11-23 brief, approved by the butler): when the person's migration
 // setting is on and an old backend waits only for its sessions to stop and stay quiet, NAW stops starting new work
 // there for a bounded time, so the running turns can end and the existing quiet rule can be met. The dispatcher
-// sends that backend's sessions no new item or NAW message (queue-dispatch.cjs sessionReady 'quiet-window'); a
+// sends that backend's sessions no new item or NAW message (queue-dispatch.cjs sessionReady 'quiet-window'), except
+// the butler's wake for the person's own act (wakeSteward); a
 // backend on this code holds the automatic messages its sessions send there (session-wake.cjs). Nothing running is
 // interrupted and the quiet rule itself is unchanged. The window closes when the move is made or failed, when the
 // setting is turned off, when the backend stops waiting only for quiet, or at its deadline; after a timeout NAW

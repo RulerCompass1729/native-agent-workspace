@@ -208,7 +208,8 @@ test('the butler in a window is held with its own reason, shown to the person in
   const d = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, steward: () => identity, stewardWake: wake, now: () => clock.now,
     settleMs: 8000, tickMs: 3600000, observePersonActions: s => actions.observe(s, []), transcriptRoot: path.join(dir, 'none'), ...(quiet ? { quietWindows: quiet } : {}) });
   t.after(() => d.close());
-  actions.call('operatorAction', ['member', 'grant', {}], 'synthetic-domain');
+  // An ordinary event: the person's own act is told inside the window (steward-wake-person-window.test.cjs).
+  ingress.record({ eventId: 'synthetic:1', sourceRef: 'synthetic:1', kind: 'failure', payload: { spaceId: 'shared', itemId: 'item', reason: 'Synthetic failure' } });
   await d.schedule(); clock.now += 9000; await d.schedule();
   assert.deepEqual(calls.filter(c => c === 'dispatch'), [], 'not woken inside the window');
   assert.equal(wake.blocked?.reason, 'quiet-window');
