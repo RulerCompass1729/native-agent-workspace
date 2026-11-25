@@ -70,7 +70,8 @@ function staleWake(state, s, m) {
   }
   return { id: m.wake.id ?? null, sender: sender.id, turnId: m.wake.turnId ?? null, reason: 'staged; sender idle and the wake turn is not its current turn' };
 }
-// A relay or automatic message in flight would be paused or withdrawn by the new app's startup.
+// A relay in flight is paused by the new app's startup; an automatic message stays on its way (an older app withdraws it).
+// Both still block the install.
 // A held wake still goes out from the butler limit timer, so it blocks too. Each blocker says who and where.
 function quietBlockers(view) {
   const blockers = [], stale = [];

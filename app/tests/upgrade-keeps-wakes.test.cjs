@@ -102,6 +102,10 @@ test('a newer version leaves messages on their way, and what a turn may still se
   for (const [to, body] of [[idle, 'MESSAGE-STAGED'], [home, 'MESSAGE-BACK'], [idleLate, 'MESSAGE-LATE']]) {
     await until(async () => (await w.received(to)).some(text => text.includes(body)), body + ' arrives');
   }
+  await until(async () => (await Promise.all([a, back, late].map(id => w.sent(id)))).every(s => s === 'submitted'), 'all three are submitted');
+  for (const [to, body] of [[idle, 'MESSAGE-STAGED'], [home, 'MESSAGE-BACK'], [idleLate, 'MESSAGE-LATE']]) {
+    assert.equal((await w.received(to)).filter(text => text.includes(body)).length, 1, body + ' arrives once');
+  }
   assert.equal(await w.sent(held), 'held', 'the held one still waits for its receiver');
   assert.equal((await w.received(busy)).some(text => text.includes('MESSAGE-HELD')), false);
 });
@@ -134,5 +138,55 @@ test("after a newer version started, the person's own stops still withdraw what 
   assert.equal(await w.message(switched, switchedTo, 'MESSAGE-SWITCH'), 'staged');
   await w.call(switched, 'wakePolicy', null, false);
   assert.equal(await w.sent(switched), 'cancelled/switch');
-  for (const name of names) assert.equal((await w.received(to[name])).some(text => text.includes('MESSAGE-')), false, name);
+  for (const id of [from.kept, from['kept-two'], switched]) await w.finish(id);
+  await delay(500);
+  assert.deepEqual([await w.sent(from.kept), await w.sent(from['kept-two']), await w.sent(switched)], ['cancelled/pause', 'cancelled/pause', 'cancelled/switch']);
+  for (const id of [...names.map(name => to[name]), switchedTo]) assert.equal((await w.received(id)).some(text => text.includes('MESSAGE-')), false);
+});
+
+test('an interrupt and a takeover before a newer version starts are still refused when the turn ends after it', { timeout: 60000 }, async t => {
+  const w = await world(t);
+  const names = ['taken', 'stopped'], from = {}, to = {};
+  for (const name of names) { from[name] = await w.member(ONE, 'Sender ' + name); to[name] = await w.member(TWO, 'Receiver ' + name, false); }
+  for (const name of names) assert.equal(await w.message(from[name], to[name], 'BEFORE-' + name), 'staged', name);
+  await w.call(from.stopped, 'interrupt', from.stopped);
+  await w.claimElsewhere(from.taken);
+
+  await w.upgrade();
+
+  assert.deepEqual(await Promise.all(names.map(name => w.sent(from[name]))), ['staged', 'staged'], 'a swap leaves the decision to the end of the turn');
+  for (const name of names) await w.finish(from[name]);
+  await until(async () => (await Promise.all(names.map(name => w.sent(from[name])))).every(s => s !== 'staged'), 'both settle');
+  for (const name of names) assert.equal(await w.sent(from[name]), 'cancelled/source-identity-changed', name);
+  await delay(500);
+  for (const name of names) assert.equal((await w.received(to[name])).some(text => text.includes('BEFORE-')), false, name);
+});
+
+test('the switch for automatic messages off before a newer version starts stays off after it', { timeout: 60000 }, async t => {
+  const w = await world(t);
+  const sender = await w.member(ONE, 'Sender off'), receiver = await w.member(TWO, 'Receiver off', false);
+  assert.equal(await w.message(sender, receiver, 'BEFORE-off'), 'staged');
+  await w.call(sender, 'wakePolicy', null, false);
+  assert.equal(await w.sent(sender), 'cancelled/switch');
+  await w.upgrade();
+  await w.finish(sender);
+  await delay(500);
+  assert.equal(await w.sent(sender), 'cancelled/switch');
+  const next = await w.member(ONE, 'Next sender');
+  assert.equal(await w.message(next, receiver, 'AFTER-off'), '自动消息已关闭，本回合的自动消息授权已撤销。');
+  assert.equal((await w.received(receiver)).some(text => /BEFORE-|AFTER-/.test(text)), false);
+});
+
+test('pause all before a newer version starts stays in force after it', { timeout: 60000 }, async t => {
+  const w = await world(t);
+  const sender = await w.member(ONE, 'Sender pause'), receiver = await w.member(TWO, 'Receiver pause', false);
+  assert.equal(await w.message(sender, receiver, 'BEFORE-pause'), 'staged');
+  await w.all('pause', { withdrawWakes: true });
+  assert.equal(await w.sent(sender), 'cancelled/pause');
+  await w.upgrade();
+  assert.equal(await w.message(sender, receiver, 'STILL-PAUSED'), '全部交接已暂停，本回合的自动消息授权已撤销。');
+  await w.finish(sender);
+  await delay(500);
+  assert.equal(await w.sent(sender), 'cancelled/pause');
+  assert.equal((await w.received(receiver)).some(text => /BEFORE-|STILL-/.test(text)), false);
 });
