@@ -104,16 +104,16 @@ function fixture({ row, chain = null, records = [{ ...OLD }, { ...NEXT }] } = {}
 const next = { id: 'new', name: 'Old one · 续' };
 // [row, zh, en, buttons, the person's own step ends it]
 const STATES = {
-  who: [{ state: 'due', gate: 'person-quiet', at: AT, now: true }, '换会话：等你停用，最早 {time}', 'Rotation: waiting for you to stop, earliest {time}', ['now']],
+  who: [{ state: 'due', gate: 'person-quiet', at: AT, now: true }, '换会话：等你停一会儿，最早 {time}', 'Rotation: waiting for you to pause, earliest {time}', ['now']],
   turn: [{ state: 'due', gate: 'busy', now: true }, '换会话：等这一轮结束', 'Rotation: waiting for this turn to end', ['now']],
   turnAsked: [{ state: 'requested', gate: 'not-idle', undo: true }, '换会话：这一轮结束就换', 'Rotation: rotates when this turn ends', ['undo']],
   writing: [{ state: 'writing', undo: true }, '换会话：正在写交接', 'Rotation: writing the handoff', ['undo']],
   taking: [{ state: 'taking' }, '换会话：新会话在接手', 'Rotation: the new session is taking over', []],
   takingButler: [{ state: 'taking', butler: true }, '换会话：新会话在接手，换完后它是大管家', 'Rotation: the new session is taking over; it will be the butler', []],
-  handed: [{ state: 'handed', gate: 'person-quiet', at: AT, next, now: true }, '这段已交给「Old one · 续」 · 等你停用，最早 {time}',
-    'This segment was handed over to “Old one · 续” · waiting for you to stop, earliest {time}', ['now', 'go']],
-  handedButler: [{ state: 'handed', gate: 'person-quiet', at: AT, next, now: true, butler: true }, '这段已交给「Old one · 续」，换完后它是大管家 · 等你停用，最早 {time}',
-    'This segment was handed over to “Old one · 续”, which will be the butler · waiting for you to stop, earliest {time}', ['now', 'go']],
+  handed: [{ state: 'handed', gate: 'person-quiet', at: AT, next, now: true }, '这段已交给「Old one · 续」 · 等你停一会儿，最早 {time}',
+    'This segment was handed over to “Old one · 续” · waiting for you to pause, earliest {time}', ['now', 'go']],
+  handedButler: [{ state: 'handed', gate: 'person-quiet', at: AT, next, now: true, butler: true }, '这段已交给「Old one · 续」，换完后它是大管家 · 等你停一会儿，最早 {time}',
+    'This segment was handed over to “Old one · 续”, which will be the butler · waiting for you to pause, earliest {time}', ['now', 'go']],
   draft: [{ state: 'requested', gate: 'person-typing', undo: true }, '换会话：有没发出的草稿，发出或清空后换', 'Rotation: unsent draft; send or clear it first', ['undo'], true],
   background: [{ state: 'requested', gate: 'background-work', undo: true }, '换会话：后台命令在跑，结束后换', 'Rotation: background command running; rotates when it ends', ['undo']],
   team: [{ state: 'due', gate: 'team-running', now: true }, '换会话：队友在运行，结束后换', 'Rotation: teammates running; rotates when they end', ['now']],
@@ -122,7 +122,7 @@ const STATES = {
   model: [{ state: 'requested', gate: 'model-unknown', undo: true }, '换会话：还不知道它的模型，跑一轮后换', 'Rotation: model not known yet; run a turn first', ['undo'], true],
   spaces: [{ state: 'requested', gate: 'several-spaces', undo: true }, '换会话：它在两个空间里，留下一个后换', 'Rotation: it is in two spaces; leave one first', ['undo'], true],
   old: [{ state: 'requested', gate: 'backend-cannot-carry-settings', undo: true }, '换会话：后台太旧，带不了模型和设置', 'Rotation: backend too old to carry model and settings', ['update', 'undo'], true],
-  slot: [{ state: 'requested', gate: 'no-slot', undo: true }, '换会话：另一个会话在换，轮到后开始', 'Rotation: another session is rotating; this one is next', ['undo']],
+  slot: [{ state: 'requested', gate: 'no-slot', undo: true }, '换会话：另一个会话在换，轮到后开始', 'Rotation: another session is rotating; this one starts in its turn', ['undo']],
 };
 const WORDS = {
   now: ['现在就换', 'Rotate now'], undo: ['撤销', 'Undo'], go: ['前往「Old one · 续」', 'Go to “Old one · 续”'],
@@ -149,7 +149,7 @@ for (const [name, [row, zh, en, buttons, blocked]] of Object.entries(STATES)) {
 
 test('R207: every gate a rotation can wait at has words, and the gate of nothing of its own has no row', () => {
   const groups = {
-    turn: ['not-idle', 'busy', 'sent-item-open', 'send-unconfirmed', 'previous-item', 'took-item', 'native-goal-active', 'settling', 'space-run'],
+    turn: ['not-idle', 'busy', 'sent-item-open', 'send-unconfirmed', 'previous-item', 'took-item', 'settling', 'turn-running', 'space-run'], goal: ['native-goal-active'],
     draft: ['person-typing', 'terminal-input'], background: ['background-work'], team: ['team-running'], decisions: ['decisions-stay'],
     model: ['model-unknown', 'waiting-model'], spaces: ['several-spaces'], old: ['backend-cannot-carry-settings', 'backend-update-needed'], slot: ['no-slot'], mode: ['permission-mode'],
   };
@@ -182,11 +182,101 @@ test('R207: every gate a rotation can wait at has words, and the gate of nothing
   }
 });
 
+const rowLine = key => locale.format('zh', 'rotation.row', { line: locale.format('zh', key) });
 test('R207: a handoff being written says what holds it, and only that', () => {
-  for (const [gate, key] of [['not-idle', 'rotation.writing'], ['background-work', 'rotation.wait.background'], ['person-typing', 'rotation.wait.draft'], ['paused', 'rotation.writing']]) {
+  for (const [gate, key] of [['not-idle', 'rotation.writing'], ['busy', 'rotation.writing'], ['background-work', 'rotation.wait.background'], ['person-typing', 'rotation.wait.draft'],
+    ['paused', 'stewardWake.reason.paused'], ['automatic-messages-off', 'stewardWake.reason.automatic-messages-off'], ['native-goal-active', 'rotation.wait.goal']]) {
     const f = fixture({ row: { state: 'writing', gate, undo: true } });
-    assert.equal(f.paint().children[0].textContent, locale.format('zh', 'rotation.row', { line: locale.format('zh', key) }), gate);
+    assert.equal(f.paint().children[0].textContent, rowLine(key), gate);
     assert.equal(f.binding.chainNotice.children[1].textContent, '撤销', gate);
+  }
+  for (const [state, key] of [['working', 'rotation.writing'], ['starting', 'rotation.writing'], ['approval', 'rotation.wait.answer'], ['error', 'rotation.wait.error'], ['disconnected', 'rotation.wait.disconnected']]) {
+    const f = fixture({ row: { state: 'writing', undo: true } });
+    f.record.state = state;
+    assert.equal(f.paint().children[0].textContent, rowLine(key), state);
+    assert.equal(f.binding.chainNotice.className.includes('rotation-blocked'), state === 'approval', state);
+  }
+});
+
+test('R207: a session that is not idle or not free says its turn, its question, or that it is not there', () => {
+  const cases = [
+    [{ state: 'working' }, 'rotation.wait.turnAsked', 'rotation.wait.turn', false], [{ state: 'starting' }, 'rotation.wait.turnAsked', 'rotation.wait.turn', false],
+    [{ state: 'idle', pendingTag: 'x' }, 'rotation.wait.turnAsked', 'rotation.wait.turn', false],
+    [{ state: 'approval' }, 'rotation.wait.answer', 'rotation.wait.answer', true], [{ state: 'working', approval: { id: 1 } }, 'rotation.wait.answer', 'rotation.wait.answer', true],
+    [{ state: 'idle', claudeQuestion: { pending: 1 } }, 'rotation.wait.answer', 'rotation.wait.answer', true],
+    [{ state: 'idle', nativeInputRequired: true }, 'rotation.wait.answer', 'rotation.wait.answer', true],
+    [{ state: 'error' }, 'rotation.wait.error', 'rotation.wait.error', false], [{ state: 'disconnected' }, 'rotation.wait.disconnected', 'rotation.wait.disconnected', false],
+    [{ state: 'stopping' }, 'stewardWake.reason.unavailable', 'stewardWake.reason.unavailable', false],
+  ];
+  for (const [fields, asked, due, red] of cases) {
+    for (const gate of ['not-idle', 'busy']) {
+      for (const [row, key] of [[{ state: 'requested', gate, undo: true }, asked], [{ state: 'due', gate, now: true }, due]]) {
+        const f = fixture({ row });
+        Object.assign(f.record, fields);
+        assert.equal(f.paint().children[0].textContent, rowLine(key), JSON.stringify([fields, row]));
+        assert.equal(f.binding.chainNotice.className.includes('rotation-blocked'), red, JSON.stringify([fields, row]));
+      }
+    }
+  }
+  // The words follow the session while the row itself stays as it was.
+  const f = fixture({ row: { state: 'requested', gate: 'not-idle', undo: true } });
+  f.record.state = 'working';
+  const line = f.paint().children[0];
+  f.record.state = 'approval';
+  assert.equal(f.paint().children[0], line);
+  assert.equal(line.textContent, rowLine('rotation.wait.answer'));
+  f.language('en');
+  assert.equal(line.textContent, 'Rotation: it is waiting for your reply; rotates after it');
+});
+
+test('R207: one handed over says what its old session still waits for', () => {
+  const handed = { state: 'handed', next, now: true };
+  const said = (gate, fields = {}) => {
+    const f = fixture({ row: { ...handed, gate } });
+    Object.assign(f.record, fields);
+    return [f.paint().children[0].textContent.split(' · ').slice(1).join(' · ').replace(/^续」 ?·? ?/, ''), f.binding.chainNotice.className.includes('rotation-blocked')];
+  };
+  for (const [gate, key, red] of [['turn-running', 'rotation.wait.turn', false], ['settling', 'rotation.wait.turn', false], ['state-approval', 'rotation.wait.answer', true], ['state-error', 'rotation.wait.error', false],
+    ['state-disconnected', 'rotation.wait.disconnected', false], ['state-starting', 'rotation.wait.turn', false], ['state-stopping', 'stewardWake.reason.unavailable', false],
+    ['terminal-input', 'rotation.wait.draft', true], ['paused', 'stewardWake.reason.paused', true], ['native-goal-active', 'rotation.wait.goal', false], ['person-message', null, false]]) {
+    const [text, blocked] = said(gate);
+    assert.equal(text, key ? locale.format('zh', key) : '', gate);
+    assert.equal(blocked, red, gate);
+  }
+});
+
+test('R207: unsent text in a Codex terminal ends with a message, in a Claude terminal with the prompt cleared too', () => {
+  for (const [provider, key] of [['codex', 'rotation.wait.terminal'], ['claude', 'rotation.wait.draft']]) {
+    for (const state of ['requested', 'handed']) {
+      const f = fixture({ row: { state, gate: 'terminal-input', undo: true, next } });
+      f.record.provider = provider;
+      assert.ok(f.paint().children[0].textContent.endsWith(locale.format('zh', key)), provider + state);
+      assert.equal(f.binding.chainNotice.className.includes('rotation-blocked'), true);
+    }
+  }
+});
+
+test('R207: red only where only the person can end it', () => {
+  const red = (gate, state = 'requested') => {
+    const f = fixture({ row: { state, gate, undo: true } });
+    return f.paint().className.includes('rotation-blocked');
+  };
+  for (const gate of ['paused', 'automatic-messages-off', 'native-terminal-dialog', 'rotation-control-unresolved', 'person-typing', 'terminal-input', 'decisions-stay', 'permission-mode', 'several-spaces', 'backend-update-needed']) {
+    assert.equal(red(gate), true, gate);
+  }
+  for (const gate of ['not-idle', 'busy', 'settling', 'no-slot', 'background-work', 'background-unconfirmed', 'team-running', 'quiet-window', 'native-goal-active', 'usage-limit-exceeded', 'waiting-provider', 'trust-hold', 'unavailable', 'handoff-request-not-sent', 'missing']) {
+    assert.equal(red(gate), false, gate);
+  }
+});
+
+test('R207: Enter held down from 现在就换 does not press the 撤销 that takes its place', () => {
+  const f = fixture({ row: { state: 'requested', gate: 'busy', undo: true } });
+  const undo = f.paint().children[1], keys = undo.listeners.filter(l => l.type === 'keydown');
+  assert.equal(keys.length, 1);
+  for (const repeat of [true, false]) {
+    let prevented = false;
+    keys[0].listener({ key: 'Enter', repeat, preventDefault() { prevented = true; } });
+    assert.equal(prevented, repeat);
   }
 });
 
@@ -251,7 +341,7 @@ test('R207: a successor that is gone or renamed, and segments handed over before
     { id: 'old', name: 'Old one', successors: [{ id: 'new', time: 1 }, { id: 'earlier', time: 0 }], continuedAt: null, record: {} },
     { id: 'new', name: 'Old one · 续', successors: [], record: {} }, { id: 'earlier', name: 'Earlier', successors: [], record: {} }] } });
   const texts = () => f.paint().children.map(child => child.textContent);
-  assert.match(texts()[0], /^这段已交给「Old one · 续」 · 等你停用，最早 \S+ · 这段已交给「Earlier」$/);
+  assert.match(texts()[0], /^这段已交给「Old one · 续」 · 等你停一会儿，最早 \S+ · 这段已交给「Earlier」$/);
   assert.deepEqual(texts().slice(1), ['现在就换', '前往「Old one · 续」', '前往「Earlier」']);
   f.state.sessions[1].name = 'Renamed';
   assert.match(texts()[0], /这段已交给「Renamed」/);

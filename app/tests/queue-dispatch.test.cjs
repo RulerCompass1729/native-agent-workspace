@@ -7180,7 +7180,7 @@ test('R207: looked at, typed into and not sent: the draft holds the end, the loo
 test('R207: a handoff cut off by the person is asked for again, not failed', async t => {
   const f = await askedSetup(t);
   await f.now();
-  // Interrupted before anything was written; the person's own message and its answer follow.
+  // Nothing of it was written: the person's message and its answer took its place. Their Esc is rotation-asked-stop.test.cjs.
   f.person('先别写，回答这个');
   f.old.messages.at(-1).text = '好的';
   await f.pass(); await f.pass();
@@ -7313,13 +7313,176 @@ test('R207: asked for and not sent, what came due on its own does not take its p
   assert.deepEqual([tries, f.row()?.gate, f.dispatcher.rotations.a], [1, 'handoff-request-not-sent', undefined]);
 });
 
-test('R207: keys typed in its own terminal a moment ago hold it as an unsent draft, then it goes', async t => {
+test('R207: keys typed in a Claude terminal a moment ago hold it, then its own prompt says whether there is a draft', async t => {
   const f = await askedSetup(t);
   f.dispatcher.noteHuman('a', 'input');
   await f.now();
   assert.deepEqual([f.row().gate, rotated(f.client).length], ['terminal-input', 0]);
   await f.pass(1);
   assert.equal(rotated(f.client).length, 1);
+});
+
+// Codex's own terminal cannot be asked what its prompt holds: what was typed there and not followed by a message is held.
+const typed = f => JSON.parse(fs.readFileSync(f.dispatcher.file, 'utf8')).typed;
+const codex = { provider: 'codex', model: 'model-a', effort: 'high', collaborationMode: 'default', backgroundStale: undefined, terminalInputPending: true };
+test('R207: keys typed in a Codex terminal and not sent hold it as an unsent draft until a message follows, however long', async t => {
+  const f = await askedSetup(t, { extra: codex });
+  f.dispatcher.noteHuman('a', 'input', 'half a prompt');
+  await f.pass(5);
+  await f.now();
+  assert.deepEqual([rotated(f.client), f.row()], [[], { state: 'requested', gate: 'terminal-input', undo: true }]);
+  await f.pass(24 * 60);
+  assert.deepEqual([rotated(f.client), f.row().gate], [[], 'terminal-input']);
+  // NAW's own message and another agent's are not theirs; Esc adds nothing and clears nothing.
+  f.old.messages.push({ id: 'auto', role: 'user', text: 'from NAW', origin: 'naw-dispatch', status: 'submitted', time: f.clock });
+  f.dispatcher.noteHuman('a', 'input', '\x1b');
+  await f.pass(5);
+  assert.deepEqual([rotated(f.client), f.row().gate], [[], 'terminal-input']);
+  f.person('sent');
+  await f.pass(1); await f.pass(1);
+  assert.deepEqual([rotated(f.client).length, f.dispatcher.typed], [1, {}]);
+});
+
+test('R207: that is kept across a restart, before the click and after it, with the last key of the episode', async t => {
+  for (const asked of [false, true]) {
+    const f = await askedSetup(t, { extra: codex });
+    f.dispatcher.noteHuman('a', 'input', 'h');
+    assert.deepEqual(typed(f), { a: { at: f.clock } }, 'written with the first key');
+    const first = f.clock;
+    if (asked) await f.now();
+    f.advance(2000);
+    f.dispatcher.noteHuman('a', 'input', 'i');
+    f.dispatcher.close();
+    assert.equal(typed(f).a.at, first + 2000, 'and the last one when NAW ends');
+    f.dispatcher = f.restarted();
+    t.after(() => f.dispatcher.close());
+    await f.dispatcher.start();
+    f.advance(60000);
+    if (asked) await f.pass(); else await f.now();
+    assert.deepEqual([rotated(f.client), f.row().gate], [[], 'terminal-input']);
+    f.person('sent');
+    await f.pass(1); await f.pass(1);
+    assert.equal(rotated(f.client).length, 1);
+  }
+});
+
+test('R207: keys are written down at most once each five seconds', async t => {
+  const f = await askedSetup(t, { extra: codex });
+  let saves = 0;
+  const save = f.dispatcher.save;
+  f.dispatcher.save = function () { saves += 1; return save.call(this); };
+  for (let key = 0; key < 5; key++) {
+    f.dispatcher.noteHuman('a', 'input', 'x');
+    f.advance(999);
+  }
+  assert.equal(saves, 1);
+  f.advance(5);
+  f.dispatcher.noteHuman('a', 'input', 'x');
+  assert.equal(saves, 2);
+  assert.equal(typed(f).a.at, f.clock);
+});
+
+test('R207: what does not leave a prompt in a Codex terminal does not hold it', async t => {
+  const cases = {
+    'a message after the keys': f => { f.dispatcher.noteHuman('a', 'input', 'x'); f.advance(1000); f.person('sent'); },
+    'Esc alone': f => f.dispatcher.noteHuman('a', 'input', '\x1b'),
+    'Ctrl-C alone': f => f.dispatcher.noteHuman('a', 'input', '\x03'),
+    'a look': f => f.dispatcher.noteHuman('a', 'terminal'),
+    'a mark of another provider\'s terminal': f => { f.old.provider = 'claude'; f.dispatcher.typed.a = { at: f.clock }; },
+    'a new native process': f => { f.dispatcher.noteHuman('a', 'input', 'x'); f.old.terminalInputPending = false; },
+  };
+  for (const [name, act] of Object.entries(cases)) {
+    const f = await askedSetup(t, { extra: codex });
+    act(f);
+    await f.pass(1);
+    await f.now();
+    assert.equal(rotated(f.client).length, 1, name);
+  }
+});
+
+test('R207: typed while it waits for its turn: held when the turn ends, and the mark of what was sent is gone', async t => {
+  const f = await askedSetup(t, { extra: { ...codex, state: 'working' } });
+  await f.now();
+  f.dispatcher.noteHuman('a', 'input', 'x');
+  f.old.state = 'idle';
+  await f.pass(1); await f.pass(1);
+  assert.deepEqual([rotated(f.client), f.row().gate], [[], 'terminal-input']);
+  f.person('sent'); await f.pass(1); await f.pass(1);
+  assert.equal(typed(f), undefined);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+test('R207: 现在就换 on one handed over by itself does not end a Codex session with keys typed before its request', async t => {
+  const f = await askedSetup(t, { extra: codex });
+  f.dispatcher.noteHuman('a', 'input', 'x');
+  f.advance(60000);
+  const gate = record => f.dispatcher.oldGate('a', f.old, record, { ...f.client.snapshot(), wakePolicy: { enabled: true } }, f.clock);
+  assert.equal(gate({ phase: 'handed', person: { at: f.clock, by: 'person' } }), 'terminal-input');
+  assert.equal(gate({ phase: 'handed', usedAt: f.clock }), 'person-quiet', 'an automatic one is as it was');
+  f.person('sent');
+  assert.notEqual(gate({ phase: 'handed', person: { at: f.clock, by: 'person' } }), 'terminal-input');
+});
+
+test('R207: an unreadable mark of typed keys is dropped; a store that cannot be written is not in the way of the key', async t => {
+  const f = await askedSetup(t, { extra: codex });
+  f.dispatcher.close();
+  fs.writeFileSync(f.dispatcher.file, JSON.stringify({ version: 1, rotations: {}, typed: { a: { at: 'x' }, b: 1, c: { at: NOW } } }), { mode: 0o600 });
+  f.dispatcher = f.restarted();
+  t.after(() => f.dispatcher.close());
+  assert.deepEqual(f.dispatcher.typed, { c: { at: NOW } });
+  f.dispatcher.save = () => { throw Error('disk full'); };
+  f.dispatcher.noteHuman('a', 'input', 'x');
+  assert.ok(f.dispatcher.typed.a);
+  // A store that could not be read is not replaced for a key.
+  const g = await askedSetup(t, { extra: codex });
+  g.dispatcher.close();
+  fs.writeFileSync(g.dispatcher.file, '{broken', { mode: 0o600 });
+  g.dispatcher = g.restarted();
+  t.after(() => g.dispatcher.close());
+  g.dispatcher.noteHuman('a', 'input', 'x');
+  assert.equal(fs.readFileSync(g.dispatcher.file, 'utf8'), '{broken');
+  assert.ok(g.dispatcher.typed.a);
+});
+
+test('R207: a message of the person\'s in place of the handoff: theirs is asked for again, the butler\'s own is not', async t => {
+  for (const [by, again] of [['person', 1], ['steward', 0]]) {
+    const f = await askedSetup(t, { butler: true });
+    await f.now('a', by);
+    f.person('先别写，回答这个');
+    f.old.messages.at(-1).text = '好的';
+    await f.pass(); await f.pass(); await f.pass();
+    assert.equal(rotated(f.client).length, 1 + again, by);
+    assert.equal(f.lines('failed').length, 0);
+  }
+});
+
+test('R207: what cannot be saved is not asked for and not withdrawn', async t => {
+  const f = await askedSetup(t, { butler: true });
+  const { save } = f.dispatcher;
+  const fails = async action => {
+    f.dispatcher.save = () => { throw Error('disk full'); };
+    await assert.rejects(action(), /disk full/);
+    f.dispatcher.save = save;
+  };
+  f.old.state = 'working';
+  await fails(() => f.dispatcher.requestRotation('a', 'person'));
+  assert.deepEqual([f.dispatcher.requests, f.dispatcher.withdrawals], [{}, {}]);
+  await f.now('a', 'steward');
+  await fails(() => f.dispatcher.requestRotation('a', 'person'));
+  assert.equal(f.dispatcher.requests.a.by, 'steward');
+  const asked = f.dispatcher.requests.a;
+  await fails(() => f.dispatcher.withdrawRotation('a'));
+  assert.deepEqual([f.dispatcher.requests.a === asked, f.dispatcher.withdrawals], [true, {}]);
+  f.old.state = 'idle';
+  await f.pass(1);
+  const before = { ...f.dispatcher.rotations.a };
+  assert.equal(before.phase, 'requested');
+  await fails(() => f.dispatcher.withdrawRotation('a'));
+  assert.deepEqual([f.dispatcher.rotations.a, f.dispatcher.withdrawals], [before, {}]);
+  await f.undo();
+  const withdrawn = { ...f.dispatcher.rotations.a };
+  await fails(() => f.dispatcher.requestRotation('a', 'person'));
+  assert.deepEqual([f.dispatcher.rotations.a, Object.keys(f.dispatcher.withdrawals)], [withdrawn, ['a']]);
 });
 
 test('R207: after undo, what came due on its own waits for quiet again', async t => {

@@ -70,6 +70,8 @@ const HUMAN_QUIET_MS = 2 * 60 * 1000;
 // What the person answered on an agent's own cards waits only this long after their last input to that session: the
 // answer is for that agent to go on with, but a line half typed in its terminal leaves no draft (answer-notices.cjs).
 const ANSWER_QUIET_MS = 20 * 1000;
+// Keys in a terminal are written down at most this often.
+const TYPED_SAVE_MS = 5000;
 // A sent item whose send never returned a tag is not resent (no silent replay).
 const UNCONFIRMED_SEND_MS = 120000;
 // A refusal before anything was sent returns the item to the queue at most this often.
@@ -267,11 +269,26 @@ function readRequests(value) {
   }
   return requests;
 }
+// When the person last typed in a Codex terminal (noteTyped).
+function readTyped(value) {
+  const typed = {};
+  for (const [id, mark] of Object.entries(dictionary(value) ? value : {})) {
+    if (validId(id) && dictionary(mark) && validTime(mark.at)) {
+      typed[id] = { at: mark.at };
+    }
+  }
+  return typed;
+}
+// The turn of NAW's own request to write the handoff, if it was interrupted.
+function cutTurn(session, tag) {
+  const input = session.messages.find(m => m.id === tag);
+  return validId(input?.turnId) && session.messages.find(m => m.kind === 'turn' && m.nativeId === session.nativeId && m.turnId === input.turnId && m.status === 'interrupted');
+}
 // What an unreadable waiting record loses is asked for again; none of it ends a session on its own.
 function cleanWait(record) {
   const seen = value => dictionary(value) && (value.id === null || validId(value.id)) && validTime(value.at);
   for (const key of ['waitSince', 'usedAt', 'typedAt', 'controlAt']) if (record[key] !== undefined && !validTime(record[key])) delete record[key];
-  for (const key of ['person', 'withdrawn']) if (record[key] !== undefined && !validAsk(record[key])) delete record[key];
+  for (const key of ['person', 'withdrawn', 'stopped']) if (record[key] !== undefined && !validAsk(record[key])) delete record[key];
   if (record.seen !== undefined && !seen(record.seen)) delete record.seen;
   for (const key of ['gates', 'left']) if (!Array.isArray(record[key]) || !record[key].every(value => typeof value === 'string')) delete record[key];
   const m = record.missed, s = record.supplement;
@@ -2586,6 +2603,7 @@ function readRotations(file, now, faults = {}) {
   if (data.quarantinedRotations && typeof data.quarantinedRotations === 'object' && !Array.isArray(data.quarantinedRotations)) faults.rejected = { ...data.quarantinedRotations };
   faults.requests = readRequests(data.requests);
   faults.withdrawals = readRequests(data.withdrawals);
+  faults.typed = readTyped(data.typed);
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
@@ -2728,6 +2746,7 @@ class QueueDispatcher {
     this.humanAt = new Map();
     // The last key the person typed in a session's terminal here.
     this.typedAt = new Map();
+    this.typedSaved = new Map();
     this.rotationWaitReasons = new Map();
     this.pending = null;
     this.again = false;
@@ -2750,6 +2769,7 @@ class QueueDispatcher {
     this.requests = this.rotationRead.requests || {};
     // What the person took back, kept until they next act on that session: the butler does not ask for it meanwhile.
     this.withdrawals = this.rotationRead.withdrawals || {};
+    this.typed = this.rotationRead.typed || {};
     this.requestGates = new Map();
     // When an unsent prompt in its own terminal refused the request (FINISH_RETRY_MS).
     this.requestTried = new Map();
@@ -3194,6 +3214,7 @@ class QueueDispatcher {
     fs.writeFileSync(temp, JSON.stringify({ version: 1, rotations: this.rotations,
       ...(Object.keys(this.requests).length ? { requests: this.requests } : {}),
       ...(Object.keys(this.withdrawals).length ? { withdrawals: this.withdrawals } : {}),
+      ...(Object.keys(this.typed).length ? { typed: this.typed } : {}),
       ...(Object.keys(this.rejectedRotations).length ? { quarantinedRotations: this.rejectedRotations } : {}) }), { mode: 0o600 });
     fs.renameSync(temp, this.file);
   }
@@ -3209,23 +3230,75 @@ class QueueDispatcher {
   }
 
   close() {
+    if (!this.closed && this.typedUnsaved) this.saveQuietly();
     this.closed = true;
     clearInterval(this.timer);
     this.listen(null);
     this.dropOwnClient();
   }
 
-  // The person's own input, takeover or view of a session (main.cjs IPC).
-  noteHuman(sessionId, method, data) {
+  // The person's own input, takeover or view of a session (main.cjs IPC); `viewOwner`: the window it came from.
+  noteHuman(sessionId, method, data, viewOwner) {
     if (typeof sessionId === 'string' && sessionId) {
+      const interrupt = method === 'interrupt' || method === 'input' && terminalInterrupt(data);
       this.humanAt.set(sessionId, this.now());
       if (method === 'input') this.typedAt.set(sessionId, this.now());
+      if (method === 'input' && !interrupt) this.noteTyped(sessionId);
+      if (interrupt || method === 'claim' && this.takenOver(sessionId, viewOwner)) this.noteStop(sessionId);
       // Their stop of a continuation the last pass saw scheduled is their decision, not a stall (noteErrorStalls).
-      if (method === 'interrupt' || method === 'input' && terminalInterrupt(data)) {
+      if (interrupt) {
         for (const stall of this.errorStalls.values()) if (stall.memberId === sessionId && stall.scheduled) stall.stopped = stall.scheduled;
       }
       this.vacancySince.delete(sessionId); this.vacancyIdentity.delete(sessionId);
       this.dirty = true;
+    }
+  }
+
+  // Esc, an interrupt, or taking the session over from another window while the handoff asked for by hand is written:
+  // that rotation ends with the turn and is not asked for again. A look, keys and messages do not stop it (R207).
+  noteStop(sessionId) {
+    const record = this.rotations[sessionId];
+    if (record?.phase !== 'requested' || !record.person || record.stopped) return;
+    record.stopped = { at: this.now(), by: 'person' };
+    this.saveQuietly();
+  }
+
+  // Claimed by another window than the one that has it; its own window only shows its other side.
+  takenOver(sessionId, viewOwner) {
+    if (this.rotations[sessionId]?.phase !== 'requested' || typeof viewOwner !== 'string') return false;
+    const owner = (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId)?.owner;
+    return typeof owner === 'string' && owner !== viewOwner;
+  }
+
+  // Keys in a Codex terminal may be a prompt not sent, which NAW cannot see there; a restart does not forget them.
+  noteTyped(sessionId) {
+    const now = this.now(), mark = this.typed[sessionId];
+    if (mark) {
+      mark.at = now;
+      this.typedUnsaved = true;
+    }
+    if (now - (this.typedSaved.get(sessionId) ?? -Infinity) < TYPED_SAVE_MS) return;
+    this.typedSaved.set(sessionId, now);
+    const session = (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId);
+    if (session && session.provider !== 'codex') return;
+    this.typed[sessionId] = { at: now };
+    this.saveQuietly();
+  }
+
+  unsentTyping(session) {
+    const mark = session.provider === 'codex' && this.typed[session.id];
+    // A new native process starts with an empty prompt (workspace.cjs bind).
+    return Boolean(mark) && session.terminalInputPending !== false && !personSince(session, mark.at);
+  }
+
+  // For the person's own key: a store that cannot be written is never in its way, and one that could not be read is left.
+  saveQuietly() {
+    if (this.rotationRead.error && this.rotationRead.error !== 'missing') return;
+    try {
+      this.save();
+      this.typedUnsaved = false;
+    } catch {
+      // Held in memory.
     }
   }
 
@@ -4171,9 +4244,9 @@ class QueueDispatcher {
   }
 
   // Whether what the person did since stops this rotation. One asked for by hand goes on: that click, and what they type
-  // after it, is no use of the session, and their messages are told to the successor (R207).
+  // after it, is no use of the session, and their messages are told to the successor (R207); their stop is (noteStop).
   interrupted(old, record, reply) {
-    return record.person ? old.nativeId !== record.oldNativeId : !this.untouched(old, record, reply);
+    return record.person ? Boolean(record.stopped) || old.nativeId !== record.oldNativeId : !this.untouched(old, record, reply);
   }
 
   // The handoff turn reports the mode the person left the session in: its successor has bypass only if it still has.
@@ -4738,14 +4811,16 @@ class QueueDispatcher {
       if (result?.epoch !== record.episodeEpoch || result.tag !== record.tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
     }
     delete this.rotations[oldId];
-    if (record.person && !record.withdrawn) {
-      // Still asked for: its handoff was cut off, so it is asked for again once the session is free.
+    if (record.stopped) {
+      this.withdrawals[oldId] = { ...record.stopped, nativeId: record.oldNativeId };
+    } else if (record.person?.by === 'person' && !record.withdrawn) {
+      // Still asked for: their message came before its handoff, so it is asked for again once the session is free.
       this.requests[oldId] = { ...record.person, nativeId: record.oldNativeId };
     }
     this.save();
     this.deferredAt.set(oldId, { at: now, due });
     this.appendLog('waiting', record, { reason: record.withdrawn ? 'withdrawn' : 'person-active' });
-    this.roomState.rotationEvent(record.roomIds, record.withdrawn ? 'withdrawn' : 'deferred', this.label(oldId, record.name));
+    this.roomState.rotationEvent(record.roomIds, record.withdrawn || record.stopped ? 'withdrawn' : 'deferred', this.label(oldId, record.name));
     await this.broadcast();
   }
 
@@ -4755,7 +4830,7 @@ class QueueDispatcher {
   async requestRotation(sessionId, by = 'person') {
     const session = await this.requested(sessionId);
     const record = this.rotations[sessionId], now = this.now();
-    if (by === 'steward' && (record?.withdrawn || this.takenBack(session) || this.unusedSuccessor(session))) {
+    if (by === 'steward' && (record?.withdrawn || record?.stopped || this.takenBack(session) || this.unusedSuccessor(session))) {
       throw uiError('error.rotation.personFirst');
     }
     if (record && !RESTING_PHASES.includes(record.phase) && !waitingOld(record) && record.phase !== 'requested') {
@@ -4763,10 +4838,12 @@ class QueueDispatcher {
       if (record.phase === 'waiting-provider') throw uiError('error.rotation.unavailable');
       return this.rotationRow(sessionId, session, now);
     }
+    const restore = this.askState(sessionId);
     if (record?.phase === 'requested' || waitingOld(record)) {
-      if (record.person && !record.withdrawn) return this.rotationRow(sessionId, session, now);
+      if (record.person && !record.withdrawn && !record.stopped) return this.rotationRow(sessionId, session, now);
       record.person = { at: now, by };
       delete record.withdrawn;
+      delete record.stopped;
     } else if (!this.requests[sessionId]) {
       if (record && (trustRecoveryPending(record) || failedHandoffPending(record))) throw uiError('error.rotation.unavailable');
       this.requests[sessionId] = { at: now, by, nativeId: session.nativeId || null };
@@ -4780,7 +4857,21 @@ class QueueDispatcher {
     if (by === 'person') {
       delete this.withdrawals[sessionId];
     }
-    return this.requestSaved('asked', sessionId, session, by, now);
+    return this.requestSaved('asked', sessionId, session, by, now, restore);
+  }
+
+  // What a request or a withdrawal changes, to put back when it cannot be saved: the window reports that error.
+  askState(sessionId) {
+    const record = this.rotations[sessionId], request = this.requests[sessionId], by = request?.by;
+    const kept = [[this.requests, sessionId], [this.withdrawals, sessionId], ...(record ? ['person', 'withdrawn', 'stopped'].map(key => [record, key]) : [])]
+      .map(([map, key]) => [map, key, map[key]]);
+    return () => {
+      for (const [map, key, value] of kept) {
+        if (value === undefined) delete map[key];
+        else map[key] = value;
+      }
+      if (request) request.by = by;
+    };
   }
 
   // 甲: what the person took back stays so until they next act on that session (a message there, or their own click).
@@ -4805,6 +4896,7 @@ class QueueDispatcher {
     const record = this.rotations[sessionId], now = this.now();
     if (!this.requests[sessionId] && (record?.phase !== 'requested' || record.withdrawn)) throw uiError('error.rotation.cannotUndo');
     const session = await this.requested(sessionId);
+    const restore = this.askState(sessionId);
     if (this.requests[sessionId]) {
       delete this.requests[sessionId];
       this.requestGates.delete(sessionId);
@@ -4817,7 +4909,7 @@ class QueueDispatcher {
       throw uiError('error.rotation.cannotUndo');
     }
     this.withdrawals[sessionId] = { at: now, by, nativeId: session.nativeId || null };
-    return this.requestSaved('withdrawn', sessionId, session, by, now);
+    return this.requestSaved('withdrawn', sessionId, session, by, now, restore);
   }
 
   async requested(sessionId) {
@@ -4833,14 +4925,19 @@ class QueueDispatcher {
     return session;
   }
 
-  requestSaved(event, sessionId, session, by, now) {
+  requestSaved(event, sessionId, session, by, now, restore) {
     let spaces = [];
     try {
       spaces = roomIds(session);
     } catch {
       // The line is still written without its spaces.
     }
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      restore();
+      throw error;
+    }
     this.appendLog(event, { oldId: sessionId, oldNativeId: session.nativeId, name: this.name(session), roomIds: spaces }, { by });
     const row = this.rotationRow(sessionId, session, now);
     if (row) {
@@ -4888,6 +4985,14 @@ class QueueDispatcher {
         this.appendLog('dropped', { oldId: id, oldNativeId: request.nativeId, name: session ? this.name(session) : id, roomIds: [] }, { reason, by: request.by });
       }
     }
+    for (const id of Object.keys(this.typed)) {
+      const session = snapshot.sessions.find(s => s.id === id);
+      if (session && !this.unsentTyping(session)) {
+        delete this.typed[id];
+        this.typedSaved.delete(id);
+        changed = true;
+      }
+    }
     for (const [id, taken] of Object.entries(this.withdrawals)) {
       const session = snapshot.sessions.find(s => s.id === id);
       const other = session && taken.nativeId && session.nativeId && session.nativeId !== taken.nativeId;
@@ -4917,6 +5022,7 @@ class QueueDispatcher {
       }
       // A prompt not sent may be in its terminal.
       const tried = now - (this.requestTried.get(id) ?? -Infinity) < FINISH_RETRY_MS;
+      if (!refusal && session && this.unsentTyping(session)) refusal = 'terminal-input';
       if (!refusal && (tried || humanRecent(id, this.typedAt, now, Math.min(this.humanQuietMs, ANSWER_QUIET_MS)))) {
         refusal = this.requestGates.get(id) === 'handoff-request-not-sent' ? 'handoff-request-not-sent' : 'terminal-input';
       }
@@ -4941,7 +5047,7 @@ class QueueDispatcher {
       return row;
     }
     if (record?.phase === 'requested') {
-      if (record.withdrawn) return null;
+      if (record.withdrawn || record.stopped) return null;
       const ready = session.state === 'idle' ? sessionReady({ ...session, rotationEpisode: null }, policy).reason : '';
       return { state: 'writing', undo: true, ...(ready ? { gate: ready } : {}) };
     }
@@ -5212,11 +5318,16 @@ class QueueDispatcher {
       if (!old) {
         throw Error('old-session-missing');
       }
-      if (old.state !== 'idle' || old.pendingTag || !record.withdrawn && !settled(oldId, this.idleSince, now, this.settleMs)) {
+      if (old.state !== 'idle' || old.pendingTag || !(record.withdrawn || record.stopped) && !settled(oldId, this.idleSince, now, this.settleMs)) {
         return;
       }
       const reply = replyAfter(old, record.tag, record.requestedAt);
-      if (record.withdrawn || this.interrupted(old, record, reply)) {
+      // Cut off where no window of this NAW saw it (a phone, the native CLI). A click after it asks anew.
+      const cut = record.person && cutTurn(old, record.tag);
+      if (cut && !(record.person.at > cut.time)) {
+        record.stopped ??= { at: now, by: 'person' };
+      }
+      if (record.withdrawn || cut || this.interrupted(old, record, reply)) {
         throw Error('person-active');
       }
       // Asked for by hand: what the person sent meanwhile is told afterwards (record.seen), not taken as the handoff.
@@ -5556,7 +5667,7 @@ class QueueDispatcher {
     const ready = sessionReady({ ...old, archived: false }, snapshot.wakePolicy);
     if (!ready.ready) return ready.reason !== 'not-idle' ? ready.reason : old.state === 'working' ? 'turn-running' : `state-${old.state}`;
     // Claude's own prompt says whether it holds text when NAW asks it (NATIVE_DRAFT_KEY); Codex's cannot be asked.
-    if (record.typedAt !== undefined && old.provider === 'codex') return 'terminal-input';
+    if (old.provider === 'codex' && (record.typedAt !== undefined || record.person && this.unsentTyping(old))) return 'terminal-input';
     const butler = this.stewardSession(snapshot.sessions)?.steward.sessionId;
     if (!record.person && now - (record.usedAt ?? 0) < this.personQuiet(oldId, record.reason, butler)) return 'person-quiet';
     if (this.collaborating(oldId, record, snapshot)) return 'collaborating';

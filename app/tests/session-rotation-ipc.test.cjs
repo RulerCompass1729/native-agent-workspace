@@ -173,3 +173,7 @@ test('R207 甲: a local call the butler finds in the catalog, and each call is a
     assert.ok(zh[key] && en[key], key);
   }
 });
+
+test('R207: the dispatcher is told which window the person acted in, so a takeover is told from a look', () => {
+  assert.match(source, /else if \(humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method, args\[1\], context\.view\?\.owner\);/);
+});

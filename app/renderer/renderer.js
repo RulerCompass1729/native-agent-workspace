@@ -3723,46 +3723,57 @@ function renderSessionChain() {
 }
 // 「现在就换」 (R207): what a session's rotation waits for, by the gate NAW gives (queue-dispatch.cjs rotationRow).
 const ROTATION_WAITS = Object.assign(Object.create(null), {
-  'person-quiet': 'person', 'background-work': 'background', 'team-running': 'team', 'decisions-stay': 'decisions', 'several-spaces': 'spaces', 'no-slot': 'slot',
+  'person-quiet': 'person', 'native-goal-active': 'goal', 'background-work': 'background', 'team-running': 'team', 'decisions-stay': 'decisions', 'several-spaces': 'spaces', 'no-slot': 'slot',
 });
-for (const gate of ['not-idle', 'busy', 'sent-item-open', 'send-unconfirmed', 'previous-item', 'took-item', 'native-goal-active', 'settling']) ROTATION_WAITS[gate] = 'turn';
+for (const gate of ['sent-item-open', 'send-unconfirmed', 'previous-item', 'took-item', 'settling', 'turn-running']) ROTATION_WAITS[gate] = 'turn';
 for (const gate of ['person-typing', 'terminal-input']) ROTATION_WAITS[gate] = 'draft';
 for (const gate of ['permission-mode', 'collaboration-mode']) ROTATION_WAITS[gate] = 'mode';
 for (const gate of ['model-unknown', 'waiting-model']) ROTATION_WAITS[gate] = 'model';
 for (const gate of ['backend-cannot-carry-settings', 'backend-update-needed']) ROTATION_WAITS[gate] = 'old';
 // Only the person's own step ends these.
-const ROTATION_BLOCKED = ['draft', 'decisions', 'mode', 'model', 'spaces', 'old'];
+const ROTATION_BLOCKED = ['draft', 'decisions', 'mode', 'model', 'spaces', 'old', 'answer', 'paused', 'automatic-messages-off', 'native-terminal-dialog', 'rotation-control-unresolved'];
 // Asked for, and held by what holds a wake too.
 const ROTATION_HELD = ['automatic-messages-off', 'background-unconfirmed', 'missing', 'native-terminal-dialog', 'paused', 'quiet-window', 'rotation-control-unresolved', 'trust-hold', 'trust-unknown', 'unavailable', 'usage-limit-exceeded', 'waiting-provider'];
 function rotationTime(at) {
   return new Date(at).toLocaleTimeString(ui.language.getSnapshot().active, { hour: 'numeric', minute: '2-digit' });
 }
-function rotationWait(row) {
-  const wait = ROTATION_WAITS[row.gate];
+// A session not idle or not free: its turn, what it asks the person, or that it is not there.
+function rotationStateWait(s, at) {
+  if (at === 'approval' || s.approval || s.claudeQuestion || s.nativeInputRequired) return 'answer';
+  if (at === 'error' || at === 'disconnected') return at;
+  return ['idle', 'working', 'starting'].includes(at) ? 'turn' : 'unavailable';
+}
+function rotationWait(row, s) {
+  const own = ['not-idle', 'busy'].includes(row.gate) ? s.state : row.gate.startsWith('state-') ? row.gate.slice(6) : null;
+  const wait = own === null ? ROTATION_WAITS[row.gate] : rotationStateWait(s, own);
   if (wait === 'person') return { wait, key: 'rotation.wait.person', params: () => ({ time: rotationTime(row.at) }) };
-  if (wait === 'turn') return { wait, key: row.now ? 'rotation.wait.turn' : 'rotation.wait.turnAsked' };
+  if (wait === 'turn') return { wait, key: row.state === 'requested' ? 'rotation.wait.turnAsked' : 'rotation.wait.turn' };
+  if (row.gate === 'terminal-input' && s.provider === 'codex') return { wait, key: 'rotation.wait.terminal' };
+  if (wait === 'unavailable') return { wait, key: 'stewardWake.reason.unavailable' };
   if (wait) return { wait, key: row.gate === 'collaboration-mode' ? 'notice.rotation.cause.mode' : 'rotation.wait.' + wait };
   if (row.gate === 'spaces-unreadable') return { wait: 'spaces', key: 'notice.rotation.cause.spaces' };
+  if (row.state !== 'due' && ROTATION_HELD.includes(row.gate)) return { wait: row.gate, key: 'stewardWake.reason.' + row.gate };
   if (row.state !== 'requested') return null;
   if (row.gate === 'space-run') return { wait: 'turn', key: 'rotation.wait.turnAsked' };
-  if (row.gate === 'handoff-request-not-sent') return { key: 'notice.rotation.cause.handoffRequest' };
-  return { key: ROTATION_HELD.includes(row.gate) ? 'stewardWake.reason.' + row.gate : 'notice.rotation.cause.notReady' };
+  return { wait: row.gate, key: row.gate === 'handoff-request-not-sent' ? 'notice.rotation.cause.handoffRequest' : 'notice.rotation.cause.notReady' };
 }
 // The line and the steps of the row, or null where there is nothing to say.
 function sessionRotationView(s) {
   const row = s && state.sessionRotations?.[s.id];
   if (!row || s.archived || typeof api.sessionRotation !== 'function') return null;
-  const wait = row.gate ? rotationWait(row) : null;
+  // While its handoff is written the session's own state says what that turn waits for.
+  const gate = row.gate || (row.state === 'writing' ? 'not-idle' : '');
+  const wait = gate ? rotationWait({ ...row, gate }, s) : null;
   const line = (key, params) => uiText('rotation.row', { line: uiText(key, params?.()) });
   if (row.state === 'taking') return { text: () => line(row.butler ? 'rotation.takingButler' : 'rotation.taking'), steps: [] };
   const steps = [...(wait?.wait === 'old' && backendUpdateAction(s).length ? ['update'] : []), ...(row.undo ? ['undo'] : []), ...(row.now ? ['now'] : [])];
   if (row.state === 'handed') {
     const name = () => { const next = state.sessions.find(item => item.id === row.next?.id); return next ? archivedName(next, next.name) : row.next?.name || ''; };
-    return { blocked: ROTATION_BLOCKED.includes(wait?.wait), steps, next: row.next?.id || null, nextName: name,
+    return { blocked: ROTATION_BLOCKED.includes(wait?.wait), key: wait?.key, steps, next: row.next?.id || null, nextName: name,
       text: () => uiText(row.butler ? 'rotation.handedButler' : 'chain.handedTo', { name: name() }) + (wait ? ' · ' + uiText(wait.key, wait.params?.()) : '') };
   }
   if (row.state === 'writing' && (!wait || wait.wait === 'turn')) return { text: () => line('rotation.writing'), steps };
-  return wait ? { blocked: ROTATION_BLOCKED.includes(wait.wait), steps, text: () => line(wait.key, wait.params) } : null;
+  return wait ? { blocked: ROTATION_BLOCKED.includes(wait.wait), key: wait.key, steps, text: () => line(wait.key, wait.params) } : null;
 }
 async function rotateSession(id, action) {
   await api.sessionRotation(id, action);
@@ -3775,6 +3786,8 @@ function rotationButton(id, step) {
   button.disabled = disconnected;
   // 撤销 takes the place of 现在就换: the second click of a double-click is not an undo.
   button.addEventListener('click', event => { if (event.detail > 1) event.stopImmediatePropagation(); }, true);
+  // Nor is Enter still held down from it.
+  button.addEventListener('keydown', event => { if (event.repeat) event.preventDefault(); });
   return button;
 }
 function renderSessionHandoff(binding, s) {
@@ -3788,7 +3801,7 @@ function renderSessionHandoff(binding, s) {
   }
   const notice = binding.chainNotice; notice.hidden = false;
   notice.className = 'session-chain-notice' + (rotation?.blocked ? ' rotation-blocked' : '');
-  const signature = JSON.stringify([link?.continuedAt, edges, model?.sessions.map(s => [s.id, s.name, Boolean(s.record), Boolean(s.record?.archived)]), rotation && [s.id, disconnected, state.sessionRotations[s.id], rotation.steps, rotation.nextName?.()]]);
+  const signature = JSON.stringify([link?.continuedAt, edges, model?.sessions.map(s => [s.id, s.name, Boolean(s.record), Boolean(s.record?.archived)]), rotation && [s.id, disconnected, state.sessionRotations[s.id], rotation.key, rotation.steps, rotation.nextName?.()]]);
   if (notice.dataset.signature === signature) return;
   notice.dataset.signature = signature;
   // Kept while it lives: read out when its words change, not each time it is made.
