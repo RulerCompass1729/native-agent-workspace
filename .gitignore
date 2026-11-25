@@ -31,6 +31,8 @@ screenshots/
 *.pfx
 auth.json
 credentials.json
+# A maintainer's private rules overlay (see CLAUDE.md).
+CLAUDE.local.md
 
 # Keep native transcripts, credentials, downloaded source archives, and
 # personal research outside this public repository.

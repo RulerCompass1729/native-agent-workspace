@@ -8,10 +8,41 @@ from datetime import datetime
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import contextmanager
+from zoneinfo import ZoneInfo
 
 spec = importlib.util.spec_from_file_location('watch', Path(__file__).with_name('competitor-watch.py'))
 watch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watch)
+
+# The runner uses the system zone. Tests pin it so results do not depend on this machine's setting.
+PACIFIC = ZoneInfo('America/Los_Angeles')
+SAVED_TZ = os.environ.get('TZ')
+
+
+def set_system_zone(name):
+    if name is None:
+        os.environ.pop('TZ', None)
+    else:
+        os.environ['TZ'] = name
+    time.tzset()
+
+
+def setUpModule():
+    set_system_zone('America/Los_Angeles')
+
+
+def tearDownModule():
+    set_system_zone(SAVED_TZ)
+
+
+@contextmanager
+def system_zone(name):
+    set_system_zone(name)
+    try:
+        yield
+    finally:
+        set_system_zone('America/Los_Angeles')
 
 
 class ScheduleTests(unittest.TestCase):
@@ -37,7 +68,7 @@ class ScheduleTests(unittest.TestCase):
                 'Path('+repr(str(captured))+').write_text(sys.stdin.read())\n'
                 'Path(sys.argv[sys.argv.index("-o")+1]).write_text('+repr(body)+')\n')
             helper.chmod(0o700)
-            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            now = datetime(2026,10,21,19,tzinfo=PACIFIC)
             result = watch.run(base/'runs', helper, now, positioning_dir=positioning)
             self.assertEqual(result['status'], 'completed')
             prompt = captured.read_text()
@@ -77,11 +108,34 @@ class ScheduleTests(unittest.TestCase):
         ]:
             self.assertEqual(watch.due_date(datetime.fromisoformat(instant)), expected)
 
+    def test_due_date_follows_the_system_zone_at_local_19(self):
+        # One instant, two system zones: each due date turns at its own local 19:00.
+        for zone, instant, expected in [
+            ('America/Los_Angeles', '2026-10-22T11:30:00+00:00', '2026-10-21'),
+            ('Asia/Shanghai', '2026-10-22T11:30:00+00:00', '2026-10-22'),
+            ('Asia/Shanghai', '2026-10-22T10:59:00+00:00', '2026-10-21'),
+            ('Asia/Shanghai', '2026-10-22T11:00:00+00:00', '2026-10-22'),
+        ]:
+            with system_zone(zone):
+                self.assertEqual(watch.due_date(datetime.fromisoformat(instant)), expected, (zone, instant))
+
+    def test_first_run_and_prompt_use_the_system_zone(self):
+        with tempfile.TemporaryDirectory() as temp, system_zone('Asia/Shanghai'):
+            base = Path(temp)
+            early = datetime.fromisoformat('2026-10-22T10:59:00+00:00')
+            self.assertEqual(watch.run(base/'early', Path('/missing'), early)['status'], 'not-due')
+            captured = base/'prompt.txt'; helper = base/'helper'
+            helper.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\n'
+                'Path('+repr(str(captured))+').write_text(sys.stdin.read())\n')
+            helper.chmod(0o700)
+            watch.run(base/'due', helper, datetime.fromisoformat('2026-10-22T11:00:00+00:00'))
+            self.assertTrue(captured.read_text().endswith('本次报告日期（CST）：2026-10-22'))
+
     def test_no_early_run_and_no_repeat_after_uncertain_failure(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
-            self.assertEqual(watch.run(base, Path('/missing'), datetime(2026,10,21,18,tzinfo=watch.PT))['status'], 'not-due')
-            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            self.assertEqual(watch.run(base, Path('/missing'), datetime(2026,10,21,18,tzinfo=PACIFIC))['status'], 'not-due')
+            now = datetime(2026,10,21,19,tzinfo=PACIFIC)
             self.assertEqual(watch.run(base, Path('/missing'), now)['status'], 'failed')
             self.assertEqual(watch.run(base, Path('/missing'), now)['status'], 'already-attempted')
             self.assertIn('证据不足', (base/'2026-10-21-failure.md').read_text())
@@ -90,7 +144,7 @@ class ScheduleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             watch.save(base/'state.json', {'attempted_date': '2026-10-18', 'status': 'completed'})
-            result = watch.run(base, Path('/missing'), datetime(2026,10,22,8,tzinfo=watch.PT), dry_run=True)
+            result = watch.run(base, Path('/missing'), datetime(2026,10,22,8,tzinfo=PACIFIC), dry_run=True)
             self.assertEqual(result['date'], '2026-10-21')
             self.assertEqual(json.loads((base/'state.json').read_text())['attempted_date'], '2026-10-18')
 
@@ -101,7 +155,7 @@ class ScheduleTests(unittest.TestCase):
             body = '结论：证据不足\n发现与变化\n重合与价值\n下一步\n未知与审查\n跟踪名单\n基础设施测试，不是竞品研究。'
             helper.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nsys.stdin.read()\nPath(sys.argv[sys.argv.index("-o")+1]).write_text('+repr(body)+')\n')
             helper.chmod(0o700)
-            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            now = datetime(2026,10,21,19,tzinfo=PACIFIC)
             self.assertEqual(watch.run(base/'success', helper, now)['status'], 'completed')
             helper.write_text('#!/usr/bin/python3\nimport time\ntime.sleep(30)\n')
             result = watch.run(base/'timeout', helper, now, timeout=0.1)
@@ -120,7 +174,7 @@ class ScheduleTests(unittest.TestCase):
             hook.write_text('import json\ndef archive(date, body, usage):\n'
                             '    with open('+repr(str(calls))+', "a") as f: f.write(json.dumps([date, body, usage])+"\\n")\n'
                             '    return {"report_id": "rr-1", "archived_sources": 3}\n')
-            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            now = datetime(2026,10,21,19,tzinfo=PACIFIC)
             # No hook configured: the report is kept and stays pending, nothing is archived.
             self.assertEqual(watch.run(base/'unfiled', helper, now)['status'], 'completed')
             self.assertNotIn('report_id', json.loads((base/'unfiled'/'state.json').read_text()))
@@ -167,8 +221,9 @@ class ScheduleTests(unittest.TestCase):
             helper.chmod(0o700)
             script = ('import sys\nfrom pathlib import Path\nfrom datetime import datetime\n'
                       'sys.path.insert(0, '+repr(str(Path(__file__).parent))+')\n'
-                      'import importlib\nw=importlib.import_module("competitor-watch")\n'
-                      'w.run(Path('+repr(str(base/'state'))+'),Path('+repr(str(helper))+'),datetime(2026,10,21,19,tzinfo=w.PT))')
+                      'import importlib\nfrom zoneinfo import ZoneInfo\nw=importlib.import_module("competitor-watch")\n'
+                      'w.run(Path('+repr(str(base/'state'))+'),Path('+repr(str(helper))+'),'
+                      'datetime(2026,10,21,19,tzinfo=ZoneInfo("America/Los_Angeles")))')
             runner = subprocess.Popen([sys.executable, '-c', script])
             try:
                 deadline = time.monotonic()+5
@@ -182,7 +237,7 @@ class ScheduleTests(unittest.TestCase):
                     os.kill(child_pid, 0)
                 result = json.loads((base/'state/state.json').read_text())
                 self.assertEqual(result['status'], 'interrupted')
-                self.assertEqual(watch.run(base/'state', helper, datetime(2026,10,21,20,tzinfo=watch.PT))['status'], 'already-attempted')
+                self.assertEqual(watch.run(base/'state', helper, datetime(2026,10,21,20,tzinfo=PACIFIC))['status'], 'already-attempted')
             finally:
                 if runner.poll() is None:
                     runner.kill()
