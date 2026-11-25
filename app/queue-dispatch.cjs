@@ -1805,6 +1805,7 @@ function dispatchText(roomName, item, notes = '', manager = false) {
 const ROTATION_CAUSES = [
   [/^person-active$/, 'personActive'],
   [/^handoff-missing$/, 'handoffMissing'],
+  [/^handoff-interrupted$/, 'handoffInterrupted'],
   [/^handoff-request-/, 'handoffRequest'],
   [/^handoff-unconfirmed$/, 'handoffUnconfirmed'],
   [/^successor-turn-failed$/, 'successorTurnFailed'],
@@ -1837,7 +1838,9 @@ const ROTATION_WAIT_CODES = new Set(['missing', 'archived', 'backend-update-need
   'not-idle', 'busy', 'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'native-goal-active',
   'team-running', 'quiet-window', 'person-recent', 'trust-unknown', 'trust-hold', 'refresh-failed', 'refresh-timeout',
   'handoff-request-not-sent', 'handoff-request-failed', 'rotation-failed']);
-const ROTATION_FAILURE_CODES = new Set(['person-active', 'handoff-missing', 'handoff-request-unconfirmed',
+// The old session is let go at once: nothing rests and nothing holds it (deferRotation).
+const RELEASED_REASONS = ['person-active', 'handoff-interrupted'];
+const ROTATION_FAILURE_CODES = new Set([...RELEASED_REASONS, 'handoff-missing', 'handoff-request-unconfirmed',
   'handoff-request-timeout', 'handoff-unconfirmed', 'successor-turn-failed', 'old-session-missing', 'new-session-missing',
   'new-session-not-ready', 'new-session-ambiguous', 'create-timeout', 'new-session-model-unreported',
   'join-timeout', 'leave-timeout', 'stop-timeout', 'native-stop-unconfirmed', 'guarded-stop-unavailable',
@@ -3305,13 +3308,15 @@ class QueueDispatcher {
     const record = this.rotations[sessionId];
     if (record?.phase !== 'requested' || !record.person || record.stopped) return;
     record.stopped = { at: this.now(), by: 'person' };
+    // Whatever becomes of the record: not sent, not released, released by the butler.
+    this.withdrawals[sessionId] = { ...record.stopped, nativeId: record.oldNativeId };
     this.saveQuietly();
   }
 
   // Claimed by another window than the one that has it; its own window only shows its other side.
   takenOver(sessionId, viewOwner) {
     if (this.rotations[sessionId]?.phase !== 'requested' || typeof viewOwner !== 'string') return false;
-    const owner = (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId)?.owner;
+    const owner = this.knownSession(sessionId)?.owner;
     return typeof owner === 'string' && owner !== viewOwner;
   }
 
@@ -3324,10 +3329,19 @@ class QueueDispatcher {
     }
     if (now - (this.typedSaved.get(sessionId) ?? -Infinity) < TYPED_SAVE_MS) return;
     this.typedSaved.set(sessionId, now);
-    const session = (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId);
+    const session = this.knownSession(sessionId);
     if (session && session.provider !== 'codex') return;
     this.typed[sessionId] = { at: now };
     this.saveQuietly();
+  }
+
+  // For the person's own key: a state that cannot be read is never in its way.
+  knownSession(sessionId) {
+    try {
+      return (this.client || this.clients())?.snapshot().sessions.find(s => s.id === sessionId);
+    } catch {
+      return undefined;
+    }
   }
 
   unsentTyping(session) {
@@ -3673,7 +3687,8 @@ class QueueDispatcher {
         current = this.view();
       }
     }
-    if (rotating || recoveringTrust || Object.values(this.rotations).some(record => record.phase === 'waiting-provider' || waitingOld(record))) {
+    if (rotating || recoveringTrust || Object.values(this.rotations).some(record => record.phase === 'waiting-provider' || waitingOld(record) ||
+        record.person && record.phase === 'failed' && RELEASED_REASONS.includes(record.reason))) {
       await this.advanceRotations(current.snapshot, current.now);
       current = this.view();
     }
@@ -4581,8 +4596,12 @@ class QueueDispatcher {
       }
       if (notSent(error) && asked) {
         delete this.rotations[session.id];
-        if (!record.withdrawn) {
-          this.requests[session.id] = asked;
+        if (record.stopped) {
+          // Stopped while it was being sent: ended, as one stopped in its turn is (deferRotation).
+          this.appendLog('waiting', record, { reason: 'person-active' });
+          this.roomState.rotationEvent(record.roomIds, 'withdrawn', this.label(session.id, record.name));
+        } else if (!record.withdrawn) {
+          this.requests[session.id] = { ...asked, ...record.person };
           this.requestTried.set(session.id, this.now());
           this.requestGates.set(session.id, errorKey(error) === NATIVE_DRAFT_KEY ? 'terminal-input'
             : error?.message === 'backend-update-needed' ? 'backend-update-needed' : 'handoff-request-not-sent');
@@ -4623,6 +4642,8 @@ class QueueDispatcher {
       const session = snapshot.sessions.find(s => s.id === id), episode = session?.rotationEpisode;
       if (!record.failureCleanup && (session?.nativeId === record.oldNativeId && episode?.state === 'released' && episode.nativeId === record.oldNativeId &&
           episode.epoch === record.episodeEpoch && episode.tag === record.tag || this.retiredProviderWait(session, record))) {
+        // Released by NAW, whose answer was lost.
+        if (record.phase === 'failed' && episode?.disposition?.actor?.kind === 'naw') this.keepAsked(id, record);
         delete this.rotations[id]; this.save();
       }
     }
@@ -4637,7 +4658,7 @@ class QueueDispatcher {
       }
     }
     for (const [id, record] of Object.entries(this.rotations)) {
-      if (record.phase === 'failed' && record.reason === 'person-active' && record.episodeEpoch &&
+      if (record.phase === 'failed' && RELEASED_REASONS.includes(record.reason) && record.episodeEpoch &&
           !record.newId && !record.handoffConfirmed && !trustRecord(record)) {
         try { await this.deferRotation(id, record, null, now); }
         catch { /* Keep the exact unresolved record until its release is confirmed. */ }
@@ -4796,7 +4817,7 @@ class QueueDispatcher {
       record.oldId = oldId;
     }
     // A successor in a moved directory is held under this record (holdTrustSuccessor); it keeps the failed record.
-    if (reason === 'person-active' && stopped && !record.handoffConfirmed && !movedSuccessor(record)) {
+    if (RELEASED_REASONS.includes(reason) && stopped && !record.handoffConfirmed && !movedSuccessor(record)) {
       await this.deferRotation(oldId, record, due, now);
       return;
     }
@@ -4886,10 +4907,26 @@ class QueueDispatcher {
     if (cleanupComplete(record)) this.releaseTrustSuccessor(record);
   }
 
+  // Still asked for: their message came before its handoff, so it is asked for again once the session is free.
+  keepAsked(oldId, record) {
+    if (record.person?.by === 'person' && !record.withdrawn && !record.stopped && record.reason === 'person-active') {
+      this.requests[oldId] = { ...record.person, nativeId: record.oldNativeId };
+    }
+  }
+
   // The person used the old session while it was being rotated (the 11-14 drill, finding 1: a week's rest for it).
   // Nothing failed: the record goes, and the member is rotated again once quiet (personDeferred). No OS notice, since
   // the person is at that session; the space says why the request stopped. Each new attempt asks for a handoff again.
   async deferRotation(oldId, record, due, now) {
+    const cut = record.reason === 'handoff-interrupted';
+    if (cut && !record.cutReported) {
+      // Not known to be the person's stop: they are told, also where the session is in no space, and may ask again.
+      record.cutReported = true;
+      this.save();
+      this.appendLog('failed', record, { reason: record.reason });
+      this.failedEvent(record.roomIds, oldId, record);
+      this.notify('failed', record);
+    }
     if (record.episodeEpoch) {
       const entry = this.client.route(oldId);
       const result = await withTimeout(entry.client.call('invalidateRotation', oldId, record.oldNativeId, record.episodeEpoch,
@@ -4897,16 +4934,13 @@ class QueueDispatcher {
       if (result?.epoch !== record.episodeEpoch || result.tag !== record.tag || result.state !== 'released') throw Error('handoff-purpose-unconfirmed');
     }
     delete this.rotations[oldId];
-    if (record.stopped) {
-      this.withdrawals[oldId] = { ...record.stopped, nativeId: record.oldNativeId };
-    } else if (record.person?.by === 'person' && !record.withdrawn) {
-      // Still asked for: their message came before its handoff, so it is asked for again once the session is free.
-      this.requests[oldId] = { ...record.person, nativeId: record.oldNativeId };
-    }
+    this.keepAsked(oldId, record);
     this.save();
     this.deferredAt.set(oldId, { at: now, due });
-    this.appendLog('waiting', record, { reason: record.withdrawn ? 'withdrawn' : 'person-active' });
-    this.roomState.rotationEvent(record.roomIds, record.withdrawn || record.stopped ? 'withdrawn' : 'deferred', this.label(oldId, record.name));
+    if (!cut) {
+      this.appendLog('waiting', record, { reason: record.withdrawn ? 'withdrawn' : 'person-active' });
+      this.roomState.rotationEvent(record.roomIds, record.withdrawn || record.stopped ? 'withdrawn' : 'deferred', this.label(oldId, record.name));
+    }
     await this.broadcast();
   }
 
@@ -5404,14 +5438,16 @@ class QueueDispatcher {
       if (!old) {
         throw Error('old-session-missing');
       }
-      if (old.state !== 'idle' || old.pendingTag || !(record.withdrawn || record.stopped) && !settled(oldId, this.idleSince, now, this.settleMs)) {
+      const cut = record.person && cutTurn(old, record.tag);
+      // A turn cut off does not settle: Claude reports its background work again only at the end of the next one.
+      if (old.state !== 'idle' || old.pendingTag || !(record.withdrawn || record.stopped || cut) && !settled(oldId, this.idleSince, now, this.settleMs)) {
         return;
       }
       const reply = replyAfter(old, record.tag, record.requestedAt);
-      // Cut off where no window of this NAW saw it (a phone, the native CLI). A click after it asks anew.
-      const cut = record.person && cutTurn(old, record.tag);
-      if (cut && !(record.person.at > cut.time)) {
-        record.stopped ??= { at: now, by: 'person' };
+      // Interrupted where no window of this NAW saw a stop: a phone, the native CLI, an agent, a restart. A click after
+      // it asks anew.
+      if (cut && !record.withdrawn && !record.stopped && !(record.person.at > cut.time)) {
+        throw Error('handoff-interrupted');
       }
       if (record.withdrawn || cut || this.interrupted(old, record, reply)) {
         throw Error('person-active');

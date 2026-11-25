@@ -29,7 +29,11 @@ async function fixture(t, provider = 'codex') {
     route: () => ({ client, state: { capabilities: CAPABILITIES } }),
     call: async (method, ...args) => {
       if (method === 'initial') return w.snapshot();
-      if (method === 'invalidateRotation') return w.invalidateRotation(...args);
+      if (method === 'invalidateRotation') {
+        if (f.lose === 'answer' && args[3]) w.invalidateRotation(...args);
+        if (f.lose && args[3]) throw Error('connection lost');
+        return w.invalidateRotation(...args);
+      }
       if (method === 'completeRotation') return w.completeRotation(...args);
       if (method === 'dispatch') return w.send(args[0], args[1], 'naw-dispatcher', null, null, null, null, null, null, null, { itemId: args[3], control: args[4] });
       throw Error('Unexpected call: ' + method);
@@ -53,6 +57,18 @@ async function fixture(t, provider = 'codex') {
   };
   // What the window's calls do here: main.cjs tells the dispatcher, then the service acts.
   f.esc = () => { f.dispatcher.noteHuman('a', 'input', '\x1b', 'window'); w.input('a', '\x1b', 'window'); };
+  f.takeover = () => { f.dispatcher.noteHuman('a', 'claim', 'chat', 'window-2'); w.claim('a', 'window-2', 'chat'); };
+  f.asButler = () => { f.butler = true; s.roomId = null; s.roomIds = []; };
+  // What happens while the request is on its way; the real guard of the send then decides.
+  f.sending = async (by, act) => {
+    const send = runtime.send;
+    runtime.send = async (...args) => { runtime.send = send; await act(); return send(...args); };
+    if (by) await f.dispatcher.requestRotation('a', by);
+    await f.dispatcher.schedule();
+    assert.equal(runtime.send, send, 'it was being sent');
+  };
+  f.stored = () => JSON.parse(fs.readFileSync(f.dispatcher.file, 'utf8'));
+  f.said = () => (f.room.value.events || []).map(e => e.uiMessage?.key).filter(key => /rotation\.(withdrawn|deferred|failed)$/.test(key));
   f.interrupt = async () => { f.dispatcher.noteHuman('a', 'interrupt', undefined, 'window'); await w.interrupt('a', 'window'); };
   // As the adapters report it: Claude's `interrupted` (adapters.cjs finishInterrupted), Codex's failed turn (finishTurn).
   f.cut = (text = '') => {
@@ -76,14 +92,28 @@ async function fixture(t, provider = 'codex') {
     assert.equal(s.rotationEpisode.state, 'released');
     assert.deepEqual([f.notices, f.log().filter(e => e.event === 'failed')], [[], []]);
     assert.equal(f.log().findLast(e => e.event === 'waiting').reason, 'person-active');
-    const said = (f.room.value.events || []).map(e => e.uiMessage?.key).filter(key => /rotation\.(withdrawn|deferred|failed)$/.test(key));
-    assert.deepEqual(said, s.roomIds.length ? ['notice.rotation.withdrawn'] : [], 'its space is not told it will be tried again');
+    assert.deepEqual(f.said(), s.roomIds.length ? ['notice.rotation.withdrawn'] : [], 'its space is not told it will be tried again');
+    await f.free();
+  };
+  f.free = async () => {
     // Claude's next turn end reports its background work, as after any Esc.
     s.backgroundStale = false;
     const ready = rules.sessionReady(w.snapshot().sessions[0], { enabled: true });
     assert.deepEqual([ready.ready, ready.reason], [true, ''], 'the next input, a wake included, is not held');
     await f.pass(60 * 60 * 1000);
     assert.equal(f.writes.length, 1, 'not asked again by itself');
+  };
+  // Cut off with no stop known here: let go as well, told as not finished, and no withdrawal of the person's.
+  f.interrupted = async () => {
+    await f.pass(); await f.pass();
+    assert.deepEqual([f.dispatcher.rotations, f.dispatcher.requests, f.dispatcher.withdrawals], [{}, {}, {}]);
+    assert.equal(s.rotationEpisode.state, 'released');
+    assert.deepEqual(f.notices, ['failed'], 'the person is told, in no space too');
+    assert.deepEqual(f.log().filter(e => e.event === 'failed').map(e => e.reason), ['handoff-interrupted']);
+    assert.deepEqual(f.said(), s.roomIds.length ? ['notice.rotation.failed'] : []);
+    assert.equal(rules.rotationCause({ reason: 'handoff-interrupted' }).uiMessage.key, 'notice.rotation.cause.handoffInterrupted');
+    await f.free();
+    assert.deepEqual(f.notices, ['failed'], 'once');
   };
   return f;
 }
@@ -156,13 +186,172 @@ test('R207: keys and messages alone do not stop it: the handoff is taken', async
   assert.deepEqual([f.dispatcher.rotations.a.phase !== 'requested' || f.dispatcher.rotations.a.phase, f.s.rotationEpisode.state, f.dispatcher.rotations.a.handoff], [true, 'complete', 'Synthetic handoff']);
 });
 
-test('R207: cut off where this NAW saw no key (a phone, the native CLI): the interrupted turn says so', async t => {
+for (const provider of ['claude', 'codex']) {
+  for (const [name, act] of [['Esc', f => f.esc()], ['a takeover from another window', f => f.takeover()]]) {
+    for (const by of ['person', 'steward']) {
+      test(`R207: ${name} while ${provider} is being sent the request of the ${by}: stopped, not asked for again, and the butler may not`, async t => {
+        const f = await fixture(t, provider);
+        if (by === 'steward') f.asButler();
+        await f.sending(by, () => {
+          assert.deepEqual([f.dispatcher.rotations.a.phase, f.dispatcher.rotations.a.tag], ['requested', null]);
+          act(f);
+          assert.equal(f.stored().withdrawals.a.by, 'person', 'saved at the key, not when the record is settled');
+        });
+        assert.deepEqual([f.dispatcher.rotations, f.dispatcher.requests, f.writes, f.notices], [{}, {}, [], []]);
+        assert.deepEqual(f.said(), by === 'person' ? ['notice.rotation.withdrawn'] : []);
+        assert.deepEqual([f.log().at(-1).event, f.log().at(-1).reason], ['waiting', 'person-active']);
+        await f.pass(60 * 60 * 1000); await f.pass(WEEK);
+        assert.deepEqual([f.writes, f.dispatcher.rotations], [[], {}], 'not asked again by itself');
+        f.asButler();
+        const refused = error => error?.uiMessage?.key === 'error.rotation.personFirst';
+        await assert.rejects(f.dispatcher.requestRotation('a', 'steward'), refused);
+        f.dispatcher.close();
+        f.dispatcher = f.make();
+        await f.dispatcher.start();
+        await assert.rejects(f.dispatcher.requestRotation('a', 'steward'), refused, 'after a restart too');
+        await f.dispatcher.requestRotation('a', 'person');
+        assert.deepEqual([f.dispatcher.requests.a.by, f.dispatcher.withdrawals], ['person', {}], 'their own click is the later word');
+      });
+    }
+  }
+}
+
+test('R207: not sent with no stop: asked for again; a click after the Esc keeps it, as theirs', async t => {
+  const f = await fixture(t);
+  f.asButler();
+  await f.sending('steward', () => { throw Object.assign(Error('not-sent'), { notSent: true }); });
+  assert.deepEqual([f.dispatcher.requests.a.by, f.dispatcher.withdrawals, f.dispatcher.rotations], ['steward', {}, {}]);
+  f.clock += 60 * 60 * 1000;
+  f.dispatcher.dirty = true;
+  await f.sending(null, async () => {
+    f.esc();
+    await f.dispatcher.requestRotation('a', 'person');
+  });
+  assert.deepEqual([f.dispatcher.requests.a?.by, f.dispatcher.withdrawals, f.writes], ['person', {}, []]);
+});
+
+test('R207: a stop outlives its record: a release the butler makes does not let it ask again', async t => {
+  const f = await fixture(t, 'claude');
+  f.asButler();
+  await f.ask('steward');
+  f.esc();
+  f.lose = true;
+  f.cut();
+  await f.pass();
+  assert.deepEqual([f.dispatcher.rotations.a.phase, f.s.rotationEpisode.state], ['failed', 'invalid'], 'its release did not go through');
+  const { epoch, tag } = f.s.rotationEpisode;
+  f.w.releaseRotation('a', 'native-a', epoch, tag, { kind: 'steward', id: 'a' }, 'released');
+  f.lose = false;
+  delete f.dispatcher.rotations.a;
+  await assert.rejects(f.dispatcher.requestRotation('a', 'steward'), error => error?.uiMessage?.key === 'error.rotation.personFirst');
+});
+
+for (const provider of ['claude', 'codex']) {
   for (const text of ['', 'half']) {
+    test(`R207: ${provider}'s handoff turn interrupted ${text ? 'half written ' : ''}with no stop seen here (native CLI, an agent, a restart): let go, told, nobody's withdrawal`, async t => {
+      for (const by of ['person', 'steward']) {
+        const f = await fixture(t, provider);
+        if (by === 'steward') f.asButler();
+        await f.ask(by);
+        f.cut(text);
+        await f.interrupted();
+        if (by === 'steward') assert.ok(await f.dispatcher.requestRotation('a', 'steward'), 'the person took nothing back');
+        else assert.deepEqual([await f.dispatcher.requestRotation('a', 'person').then(() => f.dispatcher.requests.a.by)], ['person']);
+      }
+    });
+  }
+}
+
+test('R207: an interrupted turn whose release is not confirmed is told at once, kept, and told once', async t => {
+  for (const restart of [false, true]) {
     const f = await fixture(t);
     await f.ask('person');
-    f.cut(text);
-    await f.stopped();
+    f.lose = true;
+    f.cut();
+    await f.pass(); await f.pass();
+    assert.deepEqual([f.dispatcher.rotations.a.phase, f.dispatcher.rotations.a.reason, f.notices], ['failed', 'handoff-interrupted', ['failed']]);
+    if (restart) {
+      f.dispatcher.close();
+      f.dispatcher = f.make();
+      await f.dispatcher.start();
+    }
+    f.lose = false;
+    await f.pass(61000);
+    await f.interrupted();
   }
+});
+
+test('R207: released with its answer lost: their later click still stands, a stop still stands, an interruption is told once', async t => {
+  for (const [act, after] of [
+    ['click', f => assert.deepEqual([f.dispatcher.requests.a?.by, f.notices], ['person', []])],
+    ['stop', f => assert.deepEqual([f.dispatcher.requests, f.dispatcher.withdrawals.a?.by, f.notices], [{}, 'person', []])],
+    ['none', f => assert.deepEqual([f.dispatcher.requests, f.dispatcher.withdrawals, f.notices], [{}, {}, ['failed']])],
+  ]) {
+    const f = await fixture(t);
+    await f.ask('person');
+    if (act !== 'none') f.esc();
+    f.clock += 5000;
+    if (act === 'click') await f.dispatcher.requestRotation('a', 'person');
+    f.cut();
+    if (act === 'click') f.s.messages.findLast(m => m.kind === 'turn').time = f.clock - 1000;
+    f.lose = 'answer';
+    await f.pass();
+    assert.deepEqual([f.dispatcher.rotations.a.phase, f.s.rotationEpisode.state], ['failed', 'released'], act);
+    f.lose = false;
+    f.s.state = 'working';
+    await f.pass(61000);
+    assert.deepEqual(f.dispatcher.rotations, {}, act);
+    after(f);
+  }
+});
+
+test('R207: what the person releases by hand does not come back as their request', async t => {
+  const f = await fixture(t);
+  await f.ask('person');
+  f.esc();
+  f.clock += 5000;
+  await f.dispatcher.requestRotation('a', 'person');
+  f.cut();
+  f.s.messages.findLast(m => m.kind === 'turn').time = f.clock - 1000;
+  f.lose = true;
+  await f.pass();
+  const { epoch, tag } = f.s.rotationEpisode;
+  f.w.releaseRotation('a', 'native-a', epoch, tag, { kind: 'person', id: 'person' }, 'released');
+  f.lose = false;
+  await f.pass(61000);
+  assert.deepEqual([f.dispatcher.rotations, f.dispatcher.requests], [{}, {}]);
+});
+
+test('R207: one that came due by itself, its handoff turn interrupted, fails as before', async t => {
+  const f = await fixture(t);
+  await f.ask('person');
+  delete f.dispatcher.rotations.a.person;
+  f.cut();
+  await f.pass(); await f.pass(61000);
+  assert.deepEqual([f.dispatcher.rotations.a.phase, f.dispatcher.rotations.a.reason, f.s.rotationEpisode.state], ['failed', 'handoff-missing', 'invalid']);
+});
+
+test('R207: a turn interrupted after the person took the rotation back, or after their Esc, is theirs and not a failure', async t => {
+  const f = await fixture(t);
+  await f.ask('person');
+  await f.dispatcher.withdrawRotation('a');
+  f.cut();
+  await f.pass(); await f.pass();
+  assert.deepEqual([f.dispatcher.rotations, f.dispatcher.requests, f.notices], [{}, {}, []]);
+  assert.deepEqual(f.said(), ['notice.rotation.withdrawn']);
+});
+
+test('R207: the person\'s own key is not stopped by a state that cannot be read', async t => {
+  const f = await fixture(t);
+  await f.ask('person');
+  const snapshot = f.client.snapshot;
+  f.client.snapshot = () => { throw Error('not now'); };
+  f.dispatcher.noteHuman('a', 'input', 'k', 'window');
+  f.dispatcher.noteHuman('a', 'claim', 'chat', 'window-2');
+  assert.deepEqual([f.dispatcher.typed.a.at, f.dispatcher.rotations.a.stopped], [f.clock, undefined]);
+  f.dispatcher.noteHuman('a', 'input', '\x1b', 'window');
+  assert.equal(f.dispatcher.rotations.a.stopped.by, 'person', 'an Esc needs no state');
+  f.client.snapshot = snapshot;
 });
 
 test('R207: a turn that ended with no handoff and no stop is still a failure, and one the provider failed is not the person\'s', async t => {
@@ -171,6 +360,18 @@ test('R207: a turn that ended with no handoff and no stop is still a failure, an
   f.written('');
   await f.pass();
   assert.deepEqual([f.dispatcher.rotations.a.phase, f.dispatcher.rotations.a.reason, f.s.rotationEpisode.state], ['failed', 'handoff-missing', 'invalid']);
+  for (const text of ['', 'half']) {
+    const g = await fixture(t);
+    await g.ask('person');
+    if (text) g.runtime.emit('nativeBlock', { id: 'response-1', kind: 'response', nativeId: 'native-a', turnId: 'turn-1', status: 'complete', text });
+    g.runtime.emit('nativeBlock', { id: 'turn:turn-1', kind: 'turn', nativeId: 'native-a', turnId: 'turn-1', status: 'failed', text: '' });
+    g.runtime.emit('state', 'idle');
+    g.runtime.emit('failed', 'the provider failed', { tag: g.tag });
+    await g.pass();
+    const record = g.dispatcher.rotations.a;
+    assert.deepEqual([record.phase, record.stopped, g.dispatcher.withdrawals, g.s.rotationEpisode.state, g.notices], ['failed', undefined, {}, 'invalid', ['failed']], text);
+    assert.equal(record.handoff, undefined, 'half a handoff is not one');
+  }
 });
 
 test('R207: asked for again after the Esc, in the same turn: the click is the later word', async t => {
@@ -238,5 +439,5 @@ test('R207: a damaged mark of a stop is dropped on reading; the cut turn still e
   assert.equal(f.dispatcher.rotations.a.stopped, undefined);
   await f.dispatcher.start();
   f.cut();
-  await f.stopped();
+  await f.interrupted();
 });
