@@ -33,8 +33,9 @@ or start paid model runs as a side effect of editing documents.
   leaves new tasks for the person. New tasks enter the queue only through the
   person, the person-designated project manager of that space (项目经理, its own
   space's queue only), or the person-designated butler (大管家). The butler queues
-  only the person's own requests; a project manager, those and the steps of work
-  the person gave its space; other agents cannot add items. Cancelling and marking items complete
+  only the person's own requests; a project manager, those and the steps needed
+  to finish work the person gave its space, not new outcomes; other agents cannot
+  add items. Cancelling and marking items complete
   are for the person and the butler; NAW records which of them did it. Neither
   claims board tasks itself (the person, 2026-11-08:
   agents claiming the same task by themselves). A session is such a member once
@@ -82,15 +83,18 @@ or start paid model runs as a side effect of editing documents.
   work left waiting, time to a usable result, and avoidable handoffs/rework from
   existing records instead of creating polling/model activity to look busy.
 - For each space the person designates at most one project manager, a member of
-  it, through the member's or the space's menu, and can replace or revoke it; a new
-  space arranges one by default, which the person can leave out. The role grants
-  only queue addition in that space, not execution tools, model calls, or other
-  queue controls; what it reads through NAW is that space, not other sessions'
-  private conversations, and agents' messages from other spaces are refused. It
+  it, through the member's or the space's menu, and can replace or revoke it; a
+  space the person creates arranges one by default, which the person can leave out.
+  The role grants only queue addition in that space, not execution tools, model
+  calls, or other queue controls; the separately metered native-session, consent
+  and cost conditions in product V12 remain in force. What it reads through NAW is
+  that space, not other sessions' private conversations, and agents' messages from
+  other spaces are refused. It
   invokes `spaceAction` with `[roomId, "queueAdd", [text, null]]`, normally omits
   the assignee and lets NAW select an idle member, never itself or another project
   manager. If a request is unclear or belongs to another space, it asks the person
-  in its own conversation. The role follows a single unambiguous handoff only when
+  in its own conversation before adding it. It does not route new work from another
+  agent. The role follows a single unambiguous handoff only when
   its rotation log says `event=done`; `kept` and branching successors do not
   transfer it. No automatic heartbeat or routing model is added.
 - NAW-owned collaboration tools and provider-native execution tools remain
