@@ -223,3 +223,103 @@ test('a Claude record is found where the CLI reported it, or under the folder as
   assert.deepEqual(await counting.claudeFiles(r.claudeRoot, claude({ cwd: link, nativeTranscript: reported })),
     [reported, path.join(r.claudeRoot, link.replace(/[^a-zA-Z0-9]/g, '-'), `${ID}.jsonl`), path.join(resolvedDir, `${ID}.jsonl`)]);
 });
+
+// A Claude request's usage as the CLI writes it on each assistant line (fields measured 2026-11-24; values made up).
+function claudeUsage({ read = 0, write1h = 0, write5m = 0, input = 2, at = '2026-11-24T10:00:00.000Z', ...extra } = {}) {
+  return JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'assistant', sessionId: ID, timestamp: at,
+    message: {
+      role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'x' }],
+      usage: { input_tokens: input, cache_creation_input_tokens: write1h + write5m, cache_read_input_tokens: read, output_tokens: 5,
+        cache_creation: { ephemeral_1h_input_tokens: write1h, ephemeral_5m_input_tokens: write5m } },
+    },
+    ...extra,
+  });
+}
+const AT = Date.parse('2026-11-24T10:00:00.000Z');
+async function contextOf(t, lines) {
+  const r = roots(t);
+  fs.writeFileSync(r.claudeFile, [...lines, ''].join('\n'));
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0 });
+  await counter.sample([claude()], 0);
+  return { counter, file: r.claudeFile, context: () => counter.contexts.get('s1') };
+}
+
+test('the context size, time and cache lifetime come from the session\'s own last request', async t => {
+  const { counter, file, context } = await contextOf(t, [
+    claudeUsage({ read: 100000, write1h: 500 }),
+    claudeUsage({ read: 181000, write1h: 900, input: 3 }),
+  ]);
+  assert.deepEqual(context(), { tokens: 181903, at: AT, ttlMs: 60 * 60000 });
+  fs.appendFileSync(file, `${claudeUsage({ read: 190000, write5m: 100, at: '2026-11-24T10:05:00.000Z' })}\n`);
+  await counter.sample([claude()], 1);
+  assert.deepEqual(context(), { tokens: 190102, at: AT + 5 * 60000, ttlMs: 5 * 60000 }, 'a five-minute write (over the plan, or a changed policy)');
+  fs.appendFileSync(file, `${claudeUsage({ read: 190200, at: '2026-11-24T10:06:00.000Z' })}\n`);
+  await counter.sample([claude()], 2);
+  assert.deepEqual(context(), { tokens: 190202, at: AT + 6 * 60000, ttlMs: 5 * 60000 }, 'a request that wrote nothing keeps the lifetime last seen');
+});
+
+test('a subagent\'s, another session\'s, a synthetic or a malformed line is not the session\'s context', async t => {
+  const own = claudeUsage({ read: 150000, write1h: 10 });
+  const { context } = await contextOf(t, [
+    own,
+    claudeUsage({ read: 900000, write1h: 10, isSidechain: true }),
+    claudeUsage({ read: 900000, write1h: 10, sessionId: OTHER }),
+    claudeUsage({ read: 900000, write1h: 10, type: 'user' }),
+    claudeUsage({ read: 900000, write1h: 10, message: { model: '<synthetic>', usage: { cache_read_input_tokens: 900000, input_tokens: 0, cache_creation_input_tokens: 0 } } }),
+    claudeUsage({ read: 900000, write1h: 10, at: 'not a time' }),
+    claudeUsage({ read: -1, write1h: 10 }),
+    claudeUsage({ read: 0, input: 0 }),
+    claudeTurn('quoting "cache_read_input_tokens":900000 in a reply'),
+    '{"cache_read_input_tokens" not json',
+  ]);
+  assert.deepEqual(context(), { tokens: 150012, at: AT, ttlMs: 60 * 60000 });
+});
+
+test('a compaction forgets the size before it; a record replaced is read again; a lifetime never seen stays unknown', async t => {
+  const { counter, file, context } = await contextOf(t, [claudeUsage({ read: 200000, write1h: 10 }), claudeCompaction()]);
+  assert.equal(context(), undefined, 'nothing was requested since the compaction');
+  fs.appendFileSync(file, `${claudeUsage({ read: 20000, write1h: 60000 })}\n`);
+  await counter.sample([claude()], 1);
+  assert.equal(context().tokens, 80002);
+  fs.appendFileSync(file, `${claudeUsage({ read: 90000, write1h: 10 })}\n${claudeCompaction()}\n${claudeUsage({ read: 21000, write1h: 10 })}\n`);
+  await counter.sample([claude()], 2);
+  assert.equal(context().tokens, 21012, 'the last request after the compaction in one read');
+  fs.writeFileSync(file, `${claudeUsage({ read: 5000 })}\n`);
+  await counter.sample([claude()], 3);
+  assert.deepEqual(context(), { tokens: 5002, at: AT, ttlMs: null });
+  await counter.sample([], 4);
+  assert.equal(counter.contexts.size, 0, 'a session that leaves is forgotten');
+});
+
+test('the lifetime is the last one written at, the shorter when a request wrote both, also when one read holds several requests', async t => {
+  const { counter, file, context } = await contextOf(t, [claudeUsage({ read: 1000, write1h: 10 })]);
+  fs.appendFileSync(file, `${claudeUsage({ read: 2000, write5m: 10 })}\n${claudeUsage({ read: 3000 })}\n${claudeUsage({ read: 4000 })}\n`);
+  await counter.sample([claude()], 1);
+  assert.deepEqual(context(), { tokens: 4002, at: AT, ttlMs: 5 * 60000 }, 'not the hour of the read before');
+  fs.appendFileSync(file, `${claudeUsage({ read: 5000, write1h: 900, write5m: 10 })}\n`);
+  await counter.sample([claude()], 2);
+  assert.equal(context().ttlMs, 5 * 60000);
+  fs.appendFileSync(file, `${claudeUsage({ read: 6000, write1h: 10 })}\n`);
+  await counter.sample([claude()], 3);
+  assert.equal(context().ttlMs, 60 * 60000);
+});
+
+test('a compaction read on its own forgets the size from the read before', async t => {
+  const { counter, file, context } = await contextOf(t, [claudeUsage({ read: 200000, write1h: 10 })]);
+  assert.equal(context().tokens, 200012);
+  fs.appendFileSync(file, `${claudeCompaction()}\n`);
+  await counter.sample([claude()], 1);
+  assert.equal(context(), undefined);
+});
+
+test('a Codex record gives no context size: what its rotation saves is not measured', async t => {
+  const r = roots(t);
+  const day = path.join(r.codexRoot, '2026', '11', '24');
+  fs.mkdirSync(day, { recursive: true });
+  fs.writeFileSync(path.join(day, `rollout-2026-11-24T10-00-00-${THREAD}.jsonl`),
+    `${codexCompaction()}\n${JSON.stringify({ timestamp: '2026-11-24T10:00:01.000Z', type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 300000, cached_input_tokens: 1 } } } })}\n`);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot });
+  assert.equal((await counter.sample([codex()], 0)).get('s2'), 1);
+  assert.equal(counter.contexts.has('s2'), false);
+});

@@ -2,7 +2,8 @@
 
 // How many times each native session's own conversation has been compacted, read from the
 // native record the CLI writes (queue 794d3cd7: the person, 2026-11-13, 「compact conversation
-// 的次数过多我觉得也需要继承然后新开继承之后的会话了」). Only counts leave this module; no text.
+// 的次数过多我觉得也需要继承然后新开继承之后的会话了」), and how large and how warm a Claude conversation
+// is after its last request. Only counts leave this module; no text.
 //
 // Claude: the record the CLI itself reported (hooks' transcript_path, kept as nativeTranscript), else
 // ~/.claude/projects/<cwd with every character other than a letter or digit as "-">/<native id>.jsonl
@@ -31,6 +32,7 @@ const SAMPLE_MS = 30 * 1000;
 // A Codex record not found yet (the CLI writes it with the first turn) is looked for again after this.
 const MISSING_RETRY_MS = 10 * 60 * 1000;
 const CLAUDE_MARKER = Buffer.from('"subtype":"compact_boundary"');
+const CLAUDE_USAGE = Buffer.from('"cache_read_input_tokens"');
 const CODEX_LINE = /^\{"timestamp":"[^"\\]{1,64}",(?:"ordinal":\d{1,20},)?"type":"compacted","payload":/;
 
 // Where Claude keeps its records: <CLAUDE_CONFIG_DIR or ~/.claude>/projects.
@@ -74,7 +76,28 @@ function compactionLine(line, provider, nativeId) {
     entry.sessionId === nativeId && entry.isSidechain === false;
 }
 
-// Reads on from state.offset; returns the bytes read. state: { dev, ino, offset, count, skipping }.
+// The conversation after one Claude request: { tokens, at, ttlMs }, or null for any other line. ttlMs is the
+// lifetime that request's cache write was billed at (one hour within the plan, five minutes beyond it), or null
+// when it wrote nothing.
+function contextLine(line, nativeId) {
+  let entry;
+  try {
+    entry = JSON.parse(line.toString('utf8'));
+  } catch {
+    return null;
+  }
+  const usage = entry?.message?.usage;
+  if (!usage || entry.type !== 'assistant' || entry.sessionId !== nativeId || entry.isSidechain !== false ||
+      entry.message.model === '<synthetic>') return null;
+  const parts = [usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens];
+  const tokens = parts.reduce((sum, part) => sum + part, 0), at = Date.parse(entry.timestamp);
+  if (!parts.every(part => Number.isSafeInteger(part) && part >= 0) || !tokens || !Number.isFinite(at)) return null;
+  const written = usage.cache_creation || {};
+  const ttlMs = written.ephemeral_5m_input_tokens > 0 ? 5 * 60 * 1000 : written.ephemeral_1h_input_tokens > 0 ? 60 * 60 * 1000 : null;
+  return { tokens, at, ttlMs };
+}
+
+// Reads on from state.offset; returns the bytes read. state: { dev, ino, offset, count, skipping, context }.
 async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
   let handle;
   try {
@@ -87,7 +110,7 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
     if (!stat.isFile()) return -1;
     // Another file at the path, or one cut shorter: counted again from its start.
     if (state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.offset) {
-      Object.assign(state, { dev: stat.dev, ino: stat.ino, offset: 0, count: 0, skipping: false });
+      Object.assign(state, { dev: stat.dev, ino: stat.ino, offset: 0, count: 0, skipping: false, context: null });
     }
     const length = Math.min(stat.size - state.offset, maxBytes);
     if (length <= 0) return 0;
@@ -100,6 +123,7 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
     }
     const data = buffer.subarray(0, read);
     let start = 0;
+    let requests = [];
     for (;;) {
       const end = data.indexOf(10, start);
       if (end === -1) break;
@@ -107,9 +131,24 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
         state.skipping = false;
       } else if (compactionLine(data.subarray(start, end), provider, nativeId)) {
         state.count += 1;
+        // What was requested before a compaction is no longer the conversation's size.
+        requests = [];
+        state.context = null;
+      } else if (provider === 'claude' && data.subarray(start, end).includes(CLAUDE_USAGE)) {
+        requests.push([start, end]);
       }
       start = end + 1;
     }
+    // The last request, and the lifetime last written at, so usually one line is parsed however much was read.
+    let latest = null;
+    for (const [from, to] of requests.reverse()) {
+      const context = contextLine(data.subarray(from, to), nativeId);
+      if (!context) continue;
+      latest ||= context;
+      latest.ttlMs ??= context.ttlMs;
+      if (latest.ttlMs !== null) break;
+    }
+    if (latest) state.context = { ...latest, ttlMs: latest.ttlMs ?? state.context?.ttlMs ?? null };
     // The rest is a line still being written, read again next time; one longer than the cap is skipped.
     if (state.skipping || (start === 0 && data.length >= lineCap)) {
       state.skipping = true;
@@ -133,6 +172,8 @@ class CompactionCounter {
     this.sampleMs = options.sampleMs ?? SAMPLE_MS;
     this.missingRetryMs = options.missingRetryMs ?? MISSING_RETRY_MS;
     this.states = new Map();
+    // Session id -> { tokens, at, ttlMs } after its last request, Claude only; renewed by each sample.
+    this.contexts = new Map();
     this.codexFiles = new Map();
     this.turn = 0;
     this.last = null;
@@ -156,7 +197,7 @@ class CompactionCounter {
     const order = listed.length ? listed.slice(this.turn % listed.length).concat(listed.slice(0, this.turn % listed.length)) : [];
     this.turn += 1;
     let budget = this.passBytes;
-    const counts = new Map();
+    const counts = new Map(), contexts = new Map();
     for (const session of order) {
       const file = await this.fileOf(session, now);
       let state = this.states.get(session.id);
@@ -165,7 +206,7 @@ class CompactionCounter {
         continue;
       }
       if (!state || state.file !== file || state.nativeId !== session.nativeId) {
-        state = { file, nativeId: session.nativeId, provider: session.provider, dev: null, ino: null, offset: 0, count: 0, skipping: false };
+        state = { file, nativeId: session.nativeId, provider: session.provider, dev: null, ino: null, offset: 0, count: 0, skipping: false, context: null };
         this.states.set(session.id, state);
       }
       if (budget > 0) {
@@ -179,7 +220,9 @@ class CompactionCounter {
         budget -= read;
       }
       if (state.dev !== null) counts.set(session.id, state.count);
+      if (state.context) contexts.set(session.id, state.context);
     }
+    this.contexts = contexts;
     this.last = { at: now, counts };
     return counts;
   }
