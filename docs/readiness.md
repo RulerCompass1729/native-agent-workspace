@@ -1588,6 +1588,68 @@ prompt and an allowed Desktop read. This is one verified permission-continuity
 case, not a guarantee against every filesystem stall. No Full Disk Access or
 system-trust change was made.
 
+## Antigravity terminal members (2026-11-24)
+
+The Antigravity CLI (`agy`) runs as a terminal-only member. This section states what
+NAW's source does; [privacy](privacy.md#antigravity-members-2026-11-24)
+states who receives its content.
+
+What it can do:
+
+- Offered in the create window only when `agy` is found. It opens in the terminal;
+  there is no conversation view, history picker or branch, and NAW keeps its view on
+  the terminal.
+- An idle member whose composer is seen empty on its screen, with no typing just
+  before and nothing else being sent, takes a message from a space, a queue, another
+  session or the person as one paste plus Enter. It counts as delivered when the hook
+  reports the turn's start; with no report in 15 seconds it is recorded as
+  unconfirmed.
+- The final reply of a completed turn goes back to the space that asked, if NAW could
+  read it and the session's identity, membership, control and connection have not
+  changed since. Otherwise it is not shared. A cancelled or failed turn returns no
+  reply.
+- It can send workspace messages under the checks every session has: the
+  automatic-message switch, cooldown, streak and recipient checks or, inside a
+  directed discussion, that discussion's authorization, members and step limit. It
+  does not get the background or operator tools.
+- A session with a known conversation id can be resumed; one without it is kept as
+  ended.
+
+Known limits:
+
+- A working member takes nothing more: NAW neither queues a message in the program
+  nor adds one to its running turn.
+- A command running under the same macOS account, including one the session runs,
+  can read the two local tokens (in the session's environment and in an owner-only
+  file) and could have NAW accept a workspace message as that session's. NAW requires
+  a running turn and a matching reported call, but the hook token, with the
+  conversation id, can report both, and can also report that a message was received
+  or that a turn ended. This is not equivalent to Claude's root lease or Codex's
+  app-server connection. The limits on automatic messages, or those of the directed
+  discussion, still apply.
+- NAW sees a draft only by reading the terminal screen. After typing that does not
+  show as a draft, for example typed and erased in one screen update, NAW sends this
+  member nothing until it sees a draft or a turn start, rather than risk submitting
+  an unseen draft. It also sends nothing while it does not recognize the screen as
+  an empty composer.
+- The directory-trust question, permission prompts and sign-in are answered in the
+  terminal. NAW does not show them as approvals.
+- NAW's own interrupt does not reach the program; use its keys in the terminal.
+- At start, if the composer is empty, nobody has typed and the message tool is not
+  listed yet, NAW types `/mcp` once and closes the list when it recognizes it. If the
+  listing is not confirmed, the member cannot send workspace messages; it still
+  receives messages once its composer is seen empty.
+- NAW does not rotate these sessions automatically, cannot move them to a new
+  backend, and shows no usage, subagents or background tasks for them. A live one
+  keeps its backend from being moved automatically.
+- NAW does not check or pin the `agy` version. The screens in its tests, and one hook
+  payload, are labeled 1.5.16.
+
+Not verified: the tests use a synthetic terminal and program, and this repository
+records no acceptance run with the real one. Sign-in, permission prompts, subagents,
+long conversations, context compaction and physical input in this terminal have no
+record either.
+
 ## Current priority: a dependable single conversation
 
 Use the installed product for real Claude/Codex development. Preserve the native
@@ -1667,8 +1729,8 @@ The current change/evidence record belongs in the ledger; README and this page
 are milestone summaries rather than duplicate release diaries.
 
 Multi-level rooms remain [future design research](scoped-collaboration.md), with
-no new implementation authorized by the current single-agent goal. Additional
-providers/platforms and consumer distribution remain later work.
+no new implementation authorized by the current single-agent goal. Providers beyond
+those named above, other platforms and consumer distribution remain later work.
 
 ## How the shared context works
 
@@ -1693,7 +1755,7 @@ same version do not hot-patch an already-running service.
 | A real external-session migration case is available | External-session discovery and supported attach/resume | No concurrent resume of a running native session; distinguish attach/history/reference import |
 | Daily-use feedback identifies terminal limitations | Preferred-terminal connector and selected visual preferences | Same managed session with one input owner; no secret/config import or replacement agent |
 | Consumer distribution is requested | Developer ID/notarization, release artifact review and wider accessibility/device matrix | Reviewed exact binary, Gatekeeper path and broader installed acceptance |
-| Two-provider lifecycle is stable and users need it | Additional agents/rooms and Windows/Linux | Provider-specific capabilities and platform lifecycle tests |
+| Two-provider lifecycle is stable and users need it | Agents beyond those named above, more rooms and Windows/Linux | Provider-specific capabilities and platform lifecycle tests |
 
 ## Preferred terminal: retained analysis
 
