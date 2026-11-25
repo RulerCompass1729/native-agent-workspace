@@ -176,7 +176,8 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   const own = '你只做排期和汇报，不写代码。\n要我定的事攒成一张清单。';
   await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: say('menu.stewardChange'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
   assert.deepEqual((await picks())[0], ['Claude 主会话', say('steward.choose.current'), false, true]);
-  assert.deepEqual([await page.locator('#steward-confirm').isDisabled(), await page.locator('#steward-confirm').innerText()], [false, say('steward.choose.resend')]);
+  await until(async () => !(await page.locator('#steward-confirm').isDisabled()), 'the permission has been read');
+  assert.equal(await page.locator('#steward-confirm').innerText(), say('steward.choose.resend'));
   await page.locator('#steward-duty').fill(own); await page.locator('#steward-confirm').click(); await dialog.waitFor({ state: 'hidden' });
   let got = await fixture('stats', main); sends++;
   assert.deepEqual([got.stats.sends, got.lastSend.text, JSON.parse(fs.readFileSync(path.join(profile, 'steward.json'), 'utf8')).duty], [sends, say('steward.duty.header') + '\n' + own, own]);

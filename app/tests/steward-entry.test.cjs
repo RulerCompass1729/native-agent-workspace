@@ -318,7 +318,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
   assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
-  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n    \}\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n[^\n]*\n[^\n]*standingLost = true;\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs', 'session-wake.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }
@@ -332,7 +332,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // The record module shares nothing writable with the other two roles.
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
-  // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
+  // Designating writes the record (and, when the person was asked, the permission's), and tells the windows; no more.
   const handler = cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
@@ -455,5 +455,9 @@ test('an agent cannot carry it, and a permission that cannot be saved is said wh
   await f.call('outside');
   f.context.refuseSubmit = Object.assign(Error('x'), { uiMessage: { key: 'error.steward.dutyBusy' } });
   const both = await f.call('other', null, true); assert.deepEqual([both.standingLost, both.duty.state], [true, 'not-sent']);
-  await f.call('outside'); assert.equal(Object.hasOwn(await f.call('other', null, false), 'standingLost'), false, 'taken back: the new one does not have it either way');
+  await f.call('outside'); const left = await f.call('other', null, false); assert.deepEqual([left.standingLost, s.on(), s.read().on], [true, false, true], 'taken back but not saved: said, since the previous one would have it again');
+  // Turned off elsewhere while the dialog was open: nothing is carried, and that is said; not asked, nothing is said.
+  const g = fixture(t), off = standing(g); await g.call('outside'); off.turn(true); off.turn(false);
+  assert.equal((await g.call('other', null, true)).standingLost, true); assert.equal(off.on(), false);
+  for (const value of [false, null]) { await g.call('outside'); assert.equal(Object.hasOwn(await g.call('other', null, value), 'standingLost'), false); }
 });

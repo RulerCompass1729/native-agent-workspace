@@ -28,9 +28,9 @@ function fixture({ sessions, steward = null, order = [], disconnected = false, r
   const state = { sessions, steward, sidebar: { order }, rooms: [{ id: 'shared', name: '网站改版' }] };
   const context = vm.createContext({ state, $, disconnected, document: { activeElement: null }, window: { nativeWorkspaceSpaces: spaces },
     api: { ...(standing === undefined ? {} : { stewardStanding: async () => { if (standing instanceof Error) throw standing; return standing; } }), steward: async (id, text, keep) => { calls.push(id); duties.push(text); standings.push(keep); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; return duty === undefined ? (id === null ? null : { duty: { state: 'sent' } }) : duty; }, initial: async () => state },
-    toastMessage: (key, params) => toasts.push(locale.format('zh', key, params?.())),
+    toast: () => {}, toastMessage: (key, params) => toasts.push(locale.format('zh', key, params?.())),
     uiText: (key, params) => locale.format('zh', key, params), updateState: next => { calls.push('state'); return next; }, render: () => calls.push('render'), select: async id => { selected.push(id); },
-    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, slot, read) => { if (slot === 'text') el.textContent = read(); else el.setAttribute(slot, read()); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
+    ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, slot, read) => { if (slot === 'text') { el.textContent = read(); if (el === $('toast-text')) toasts.push(el.textContent); } else el.setAttribute(slot, read()); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
       errorText: error => error.uiMessage ? locale.format('zh', error.uiMessage.key, error.uiMessage.params) : error.message },
     node: (tag, text, cls) => { const el = new Element(tag, text); if (cls) el.className = cls; return el; }, icon: provider => new Element('span', provider),
     spaceRecord: id => state.rooms.find(room => room.id === id), spaceName: room => room.name, sidebarPresentation: record => ({ compact: record.state === 'working' ? '正在工作' : '会话就绪' }),
@@ -179,12 +179,26 @@ test('choosing another butler shows one line for the permission that is on, chec
   // Not saved: said, and the new butler is shown.
   const lost = await open(on, 'a'); const send = lost.context.api.steward; lost.context.api.steward = async (...args) => ({ ...await send(...args), standingLost: true });
   await lost.run('confirmSteward()'); assert.deepEqual([lost.toasts, lost.selected], [[zh('standing.notKept')], ['a']]);
+  // Taken back and not saved: what that leaves is said, not that it can be turned on.
+  const left = await open(on, 'a'); const leave = left.context.api.steward; left.context.api.steward = async (...args) => ({ ...await leave(...args), standingLost: true });
+  left.$('steward-standing-keep').checked = false; await left.run('confirmSteward()'); assert.deepEqual(left.toasts, [zh('standing.notOff')]);
+  // With the duty statement not sent too: both in the dialog that stays, or both in the toast of one dismissed meanwhile.
+  const notSent = { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } }, standingLost: true };
+  const both = zh('steward.duty.notSent', { reason: zh('error.steward.dutyBusy') }) + ' ' + zh('standing.notKept');
+  const stays = fixture({ sessions, steward: { ...steward }, standing: on, duty: notSent }); stays.run('openStewardChooser()'); await settle(); stays.pick('a'); await stays.run('confirmSteward()');
+  assert.deepEqual([stays.$('steward-error').textContent, stays.toasts], [both, []]);
+  stays.pick('b'); assert.equal(stays.$('steward-standing').hidden, true, 'the new butler does not have it: nothing to ask');
+  const gone = fixture({ sessions, steward: { ...steward }, standing: on, duty: notSent }); gone.run('openStewardChooser()'); await settle(); gone.pick('a');
+  const sending = gone.run('confirmSteward()'); gone.$('steward-dialog').close(); await sending; assert.deepEqual(gone.toasts, [both]);
+  // The butler's session in another native conversation is not the same butler: asked.
+  const moved = fixture({ sessions: [S('butler', { nativeId: 'native-after-clear' }), S('a')], steward: { ...steward }, standing: on }); moved.run('openStewardChooser()'); await settle();
+  assert.deepEqual([line(moved), moved.$('steward-confirm').textContent], [[false, true], zh('steward.choose.resend')]); await moved.run('confirmSteward()'); assert.deepEqual(moved.standings, [true]);
   // Taken back, then the duty statement did not go in: the dialog that stays open does not ask again.
   const back = fixture({ sessions, steward: { ...steward }, standing: on, duty: { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } } } });
   back.run('openStewardChooser()'); await settle(); back.pick('a'); back.$('steward-standing-keep').checked = false; await back.run('confirmSteward()'); back.pick('b');
   assert.equal(back.$('steward-standing').hidden, true);
   assert.match(html, /<\/textarea><label id="steward-standing" class="steward-standing" hidden><input id="steward-standing-keep" type="checkbox"><span data-naw-text="standing\.keep"><\/span><\/label><p id="steward-error"/);
-  for (const language of ['zh', 'en']) for (const key of ['standing.keep', 'standing.notKept']) assert.notEqual(locale.format(language, key), key);
+  for (const language of ['zh', 'en']) for (const key of ['standing.keep', 'standing.notKept', 'standing.notOff']) assert.notEqual(locale.format(language, key), key);
   assert.equal(locale.format('zh', 'standing.keep'), '也允许新大管家直接整理本机工作');
 });
 

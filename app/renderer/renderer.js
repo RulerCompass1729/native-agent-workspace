@@ -3752,8 +3752,9 @@ function renderStewardChooser() {
   $('steward-duty').hidden = $('steward-duty-label').hidden = !$('steward-none').hidden;
   // Confirming the session that already is the butler sends it the duty statement again, and says so.
   const again = Boolean(stewardChoice) && stewardChoice === state.steward?.sessionId;
-  // The same butler keeps the permission; another one is given it here, or not.
-  $('steward-standing').hidden = !stewardStandingOn || !stewardChoice || again;
+  // The same butler keeps the permission; another one, or its session in another native conversation, is given it here, or not.
+  const kept = again && candidates.find(item => item.record.id === stewardChoice)?.record.nativeId === state.steward.nativeId;
+  $('steward-standing').hidden = !stewardStandingOn || !stewardChoice || kept;
   $('steward-confirm').disabled = disconnected || !stewardChoice || stewardStandingOn === null;
   ui.display.text($('steward-confirm'), again ? 'steward.choose.resend' : 'steward.choose.confirm');
 }
@@ -3784,16 +3785,17 @@ async function confirmSteward() {
   try {
     const result = await api.steward(id, duty, standing);
     updateState(await api.initial());
-    if (standing === false) stewardStandingOn = false;
-    if (result?.standingLost) toastMessage('standing.notKept');
+    const lost = result?.standingLost ? standing === false ? 'standing.notOff' : 'standing.notKept' : '';
+    if (standing === false || lost) stewardStandingOn = false;
     // Designated, but the duty statement did not go in: the dialog stays open and says why.
     // Dismissed meanwhile: said once in the toast instead.
     if (result?.duty?.state === 'not-sent') {
-      const reason = result.duty.error || {}, params = () => ({ reason: ui.errorText(reason) });
-      if (!currentDialogTicket(ticket)) { toastMessage('steward.duty.notSent', params); return; }
-      ui.display.computed($('steward-error'), 'text', () => uiText('steward.duty.notSent', params()));
+      const reason = result.duty.error || {}, said = () => uiText('steward.duty.notSent', { reason: ui.errorText(reason) }) + (lost ? ' ' + uiText(lost) : '');
+      if (!currentDialogTicket(ticket)) { toast(''); ui.display.computed($('toast-text'), 'text', said); return; }
+      ui.display.computed($('steward-error'), 'text', said);
       $('steward-error').hidden = false; renderStewardChooser(); return;
     }
+    if (lost) toastMessage(lost);
     // The person chose it from a list: show what they chose. Not if they have dismissed the chooser and moved on.
     if (currentDialogTicket(ticket)) { $('steward-dialog').close(); await select(id); }
   } catch (error) {

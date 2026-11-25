@@ -2475,7 +2475,9 @@ async function boot() {
       try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
       const keep = typeof standing === 'boolean' ? standing : again || null;
-      if (carry && keep !== null) try { carry(keep); } catch { standingLost = keep; }
+      if (carry && keep !== null) try { carry(keep); } catch { standingLost = true; }
+      // Left on in the dialog, and turned off elsewhere meanwhile: said too.
+      if (standing === true && !stewardStanding?.view().on) standingLost = true;
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
