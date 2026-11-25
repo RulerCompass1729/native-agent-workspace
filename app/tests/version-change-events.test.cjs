@@ -53,7 +53,7 @@ function app(t, { dir, entries, settings = { auto: true, migrate: true }, secret
   const client = { entries: [...entries, current], active: current, control, socket: { destroyed: false },
     snapshot() { return { sessions: this.entries.flatMap(e => e.state.sessions) }; }, sessionState: value => value.state };
   const context = { client, view: { owner: 'synthetic-owner' }, win: { isDestroyed: () => false } };
-  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, butlerIngress: ingress, queueSecretary,
+  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, runMark: events?.RunMark ? new events.RunMark(dir, { version: NEW }) : null, butlerIngress: ingress, queueSecretary,
     stewardRole: { current: () => steward }, app: { getVersion: () => NEW }, dataDir: dir, continuationStatus, uiError,
     roomState: { apply: state => state }, backendSwitch: { ...backendSwitch, readSettings: () => settings }, windows: new Map([[1, context]]),
     backendSwitching: null, autoSwitchFailed: new Set(), queueDispatcher: null, queueRules: rules, runningRelays: () => new Set(),
@@ -91,7 +91,7 @@ test('286 to 287: the butler gets one event and the secretary one notice, with v
   assert.equal(event.payload.outcome, `${OLD}->${NEW}`);
   assert.match(event.payload.title, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/u);
   const text = event.payload.text;
-  assert.match(text, new RegExp(`^【NAW 版本】已装 ${NEW}（原来是 ${OLD}），\\d{4}-\\d\\d-\\d\\dT[\\d:]+Z 重启完成。\n还有 2 个后台不在 0\\.1\\.0-alpha\\.287：\n`, 'u'));
+  assert.match(text, new RegExp(`^【NAW 版本】已装 ${NEW}（原来是 ${OLD}），\\d{4}-\\d\\d-\\d\\dT[\\d:]+Z 重启完成。没有上次退出的记录。\n还有 2 个后台不在 0\\.1\\.0-alpha\\.287：\n`, 'u'));
   assert.match(text, /- e2b6a43（0\.1\.0-alpha\.286；大管家、项目经理、A、B）：4 个会话里 1 个（A）在干活或等人回答，都停下并连续安静 10 分钟/u);
   assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；C）：1 个会话里 1 个（C）还没连续安静 10 分钟，安静后自动迁/u);
   assert.match(text, /迁完或失败时再发一条。$/u);
@@ -130,7 +130,7 @@ test('the butler is woken for the event and the secretary is sent its notice, bo
 
 test('a restart on the same version says 「重启完成」 and does not say 「已装」 again; a first start without a record does', t => {
   const dir = directory(t);
-  const first = app(t, { dir, entries: [] }); first.observe();
+  const first = app(t, { dir, entries: [] }); first.observe(); first.scope.runMark?.exitClean();
   assert.equal(first.recorded()[0].payload.reason, 'version-installed');
   assert.match(first.recorded()[0].payload.text, /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 没有记录），/u);
   assert.match(first.recorded()[0].payload.text, /\n后台都已在 0\.1\.0-alpha\.287。$/u);
@@ -140,9 +140,10 @@ test('a restart on the same version says 「重启完成」 and does not say 「
     const last = rows[rows.length - 1];
     assert.equal(rows.length, 2 + start, 'one event per start');
     assert.equal(last.payload.reason, 'version-restarted');
-    assert.match(last.payload.text, /^【NAW 版本】重启完成：0\.1\.0-alpha\.287，\d{4}-[\d-]+T[\d:]+Z。\n后台都已在 0\.1\.0-alpha\.287。$/u);
+    assert.match(last.payload.text, /^【NAW 版本】重启完成：0\.1\.0-alpha\.287，\d{4}-[\d-]+T[\d:]+Z。上次正常退出。\n后台都已在 0\.1\.0-alpha\.287。$/u);
     assert.doesNotMatch(last.payload.text, /已装/u);
     assert.equal(again.scope.versionEvents?.pending(), false, 'nothing left to watch');
+    again.scope.runMark?.exitClean();
   }
 });
 

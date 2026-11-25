@@ -523,13 +523,22 @@ function sessionReady(session, wakePolicy) {
 }
 
 // While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
-// each of its own turns). busy stays not-idle: a delivery, approval or question in flight belongs to the turn.
+// each of its own turns). busy stays not-idle: an approval or question flagged on the session belongs to the turn (a
+// native permission prompt sets no flag). So do its own delivery and Claude's background report, stale until the turn
+// ends (workspace.cjs 'working'); R198: they hid a quiet window.
 function heldReason(session, wakePolicy) {
   const reason = sessionReady(session, wakePolicy).reason;
   if (reason !== 'not-idle') {
     return reason;
   }
-  const after = sessionReady({ ...session, state: 'idle' }, wakePolicy).reason;
+  const ended = { ...session, state: 'idle' };
+  if (['working', 'approval'].includes(session.state)) {
+    ended.pendingTag = null;
+    if (session.backgroundStale === true) {
+      Object.assign(ended, { backgroundStale: false, background: 0, scheduled: 0 });
+    }
+  }
+  const after = sessionReady(ended, wakePolicy).reason;
   return after && after !== 'busy' ? after : reason;
 }
 
@@ -3345,8 +3354,8 @@ class QueueDispatcher {
       const event = this.stewardWake.due(), work = event ? null : this.openWork(current);
       const minutes = work ? this.stewardWake.patrolDue(work.idleMs, work) : null;
       if (!event && minutes === null) { this.stewardWake.clearBlocked(); return; }
-      const skip = reason => this.stewardWake.skip(reason);
       const steward = this.stewardOutside(current.snapshot.sessions);
+      const skip = reason => this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined);
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
       if (!settled(steward.sessionId, this.idleSince, current.now, this.settleMs)) return skip(heldReason(current.snapshot.sessions.find(s => s.id === steward.sessionId), current.snapshot.wakePolicy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));

@@ -36,7 +36,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
-const { VersionEvents, VersionNotices } = require('./version-events.cjs');
+const { VersionEvents, VersionNotices, RunMark } = require('./version-events.cjs');
 const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
 const { ButlerLedger } = require('./butler-ledger.cjs');
@@ -169,6 +169,12 @@ if (testParent > 1) {
 }
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
+// How this run ends is recorded from here on (version-events.cjs), as early as this run is known to be the only one.
+let runMark = null;
+if (primary) try {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true, mode: 0o700 });
+  runMark = new RunMark(app.getPath('userData'), { version: app.getVersion() });
+} catch { /* Without a mark of its own this run is told by what is left there, if anything. */ }
 const windows = new Map();
 const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
@@ -1873,7 +1879,7 @@ async function boot() {
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
   // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
   try {
-    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),
+    versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(), run: runMark,
       record: event => {
         if (!butlerIngress) throw Error('The butler record is unavailable');
         butlerIngress.record(event);
@@ -2549,6 +2555,11 @@ async function boot() {
     try { state = on === undefined ? stewardWake.view({ held: c.background === true }) : stewardWake.set(on); }
     catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
     if (wasOn && !state.on) try { stewardRecord?.wakeOff(); } catch { /* The record shows that a line could not be written. */ }
+    // The butler's own read also lists the open migration quiet windows and what waits behind each; null: not known.
+    if (c.background && on === undefined) {
+      let open = null; try { open = quietWindows ? quietWindows.holding([roomState.value, ...roomState.spaces.rooms], roomState.queueWaits) : null; } catch { open = null; }
+      state = { ...state, quietWindows: open };
+    }
     return state;
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
@@ -3201,6 +3212,8 @@ app.on('before-quit', event => {
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
 app.on('will-quit', () => {
+  // First: whatever fails below, this run ended on its own path.
+  try { runMark?.exitClean(); } catch { /* The next start says it did not end normally. */ }
   discoveries?.dispose();
   backgroundNotifications?.dispose();
   notificationScreen?.dispose();

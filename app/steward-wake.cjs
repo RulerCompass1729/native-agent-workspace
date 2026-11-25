@@ -119,10 +119,14 @@ class StewardWake {
   // A held wake is said whether or not anything is due now. The person sees it after STALL_MS; `held` (the butler's
   // own read) says it at once: after the 286 install restart, the butler read none for ten minutes and took the
   // rotation block as cleared (2026-11-23 04:52Z).
+  // since and minutes are the current reason's; waitingSince and waitingMinutes the whole wait, when that is longer.
   view({ held = false } = {}) {
-    const on = this.active(), blocked = on && this.blocked?.reason && (this.blocked.visible || held) ? {
-      since: this.blocked.since, reason: this.blocked.reason, minutes: Math.floor(Math.max(0, this.now() - this.blocked.since) / 60000),
-      ...(this.blocked.step ? { step: this.blocked.step, ...this.undelivered() } : {}),
+    const on = this.active(), b = this.blocked, minutes = since => Math.floor(Math.max(0, this.now() - since) / 60000);
+    const blocked = on && b?.reason && (b.visible || held) ? {
+      since: b.reasonSince, reason: b.reason, minutes: minutes(b.reasonSince),
+      ...(b.since < b.reasonSince ? { waitingSince: b.since, waitingMinutes: minutes(b.since) } : {}),
+      ...(b.reason === 'quiet-window' && b.deadline ? { deadline: b.deadline } : {}),
+      ...(b.step ? { step: b.step, ...this.undelivered() } : {}),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(on && this.state.patrol ? { patrol: this.state.patrol } : {}), ...(blocked ? { blocked } : {}) };
   }
@@ -146,14 +150,21 @@ class StewardWake {
   }
   // An event or a patrol is waiting to go out.
   pending() { return this.due() || this.patrolWanted && this.active(); }
-  skip(reason) {
+  // The reason holding it now; its own clock starts when it changes. `deadline`: when a quiet window ends at the latest.
+  reasonNow(blocked, reason, now, deadline = null) {
+    const cause = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable';
+    if (blocked.cause !== cause || now < blocked.reasonSince) { blocked.cause = cause; blocked.reasonSince = now; }
+    blocked.reason = cause;
+    blocked.deadline = Number.isSafeInteger(deadline) && deadline > 0 ? deadline : null;
+  }
+  skip(reason, deadline = null) {
     // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
     if (this.blocked?.step) return;
     if (!this.pending()) { this.clearBlocked(); return; }
     const now = this.now();
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked, previous = blocked.reason;
-    blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable';
+    this.reasonNow(blocked, reason, now, deadline);
     // The refusal limit is said at once: no later pass would clear it by itself.
     if (now - blocked.since < STALL_MS && blocked.reason !== 'control-refused-limit') return;
     if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
@@ -174,7 +185,8 @@ class StewardWake {
     const previous = before && `${before.reason}/${before.step}`;
     if (!before) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked;
-    blocked.reason = BLOCK_REASONS.includes(reason) ? reason : 'state-unavailable'; blocked.step = HOLD_STEPS.includes(step) ? step : 'release';
+    this.reasonNow(blocked, reason, now);
+    blocked.step = HOLD_STEPS.includes(step) ? step : 'release';
     if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
       blocked.recordedReason = blocked.reason; blocked.records++;
       try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); } catch { /* The step is still said. */ }
