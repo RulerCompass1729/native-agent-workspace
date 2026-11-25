@@ -453,19 +453,43 @@ test('a save that replaced workspace.json and failed on the room records told no
   assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
   assert.equal(f.to(f.b).length, 0, 'nothing is sent again');
 });
-for (const [name, fail, marked] of [
-  ['neither file', (save, file) => save === 2 && file === 'workspace.json', undefined],
-  ['only workspace.json', (save, file) => save === 2 && file === 'room-records.json', true],
-]) test(`the save of the mark that wrote ${name}: the answer tells the loss, and it is never left untold`, async t => {
+test('the save of the mark that wrote neither file: the answer does not tell the loss, and one later answer does', async t => {
   const f = await lossOf(t);
-  const { answer, refused, saves } = await saving(f, fail, f.next);
-  assert.deepEqual([answer.status, refused.length, saves], ['staged', 1, 2]);
-  assert.ok(answer.message.includes('「While it works.」'));
-  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [true, marked]);
+  f.source.get(f.a).messages.push({ id: randomUUID(), role: 'system', kind: 'notice', origin: 'agent-wake-intent', text: 'Old.', wake: { nativeId: f.source.get(f.a).nativeId, status: 'cancelled', heldAt: 1, recipientId: f.b, body: 'Another lost.' } });
+  const { answer, refused } = await saving(f, (save, file) => save === 2 && file === 'workspace.json', f.next);
+  assert.deepEqual([answer.status, refused], ['staged', ['2 workspace.json']]);
+  assert.ok(!answer.message.includes('你之前存着等送的一条'), answer.message);
+  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [undefined, undefined]);
+  const later = JSON.parse(f.source.storeSnapshot(undefined, true).workspace).sessions.find(s => s.id === f.a).messages;
+  assert.equal(later.find(m => m.id === f.row.id).wake.senderTold, undefined, 'nor in what is saved later');
   assert.ok(saved(f).some(m => m.wake?.body === 'Next.' && m.wake.status === 'staged'), 'what was answered is saved');
   f.source.storageWarning = null; f.source.storageFailure = null;
   await f.end(); f.advance(MIN); f.begin('three');
-  assert.ok(!(await f.call('Third.', 'call-three', f.other)).message.includes('「While it works.」'), 'not again by the same backend');
+  const told = (await f.call('Third.', 'call-three', f.other)).message;
+  assert.deepEqual(told.split('「').slice(1).map(part => part.split('」')[0]), ['While it works.', 'Another lost.'], 'once the warning is cleared');
+  assert.equal(f.onDisk(), true);
+  await f.end(); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+});
+test('the save of the mark that wrote neither file, then a restart: one later answer tells the loss', async t => {
+  const f = await lossOf(t);
+  const { answer } = await saving(f, (save, file) => save === 2 && file === 'workspace.json', f.next);
+  assert.ok(!answer.message.includes('「While it works.」'));
+  reopen(f); f.advance(MIN); f.begin('three');
+  const told = await f.call('Third.', 'call-three', f.other);
+  assert.ok(told.message.includes(LOSS) && told.message.includes('「While it works.」'), told.message);
+  reopen(f); f.advance(MIN); f.begin('four');
+  assert.ok(!(await f.call('Fourth.', 'call-four', f.other)).message.includes('「While it works.」'), 'once');
+  assert.equal(f.to(f.b).length, 0, 'nothing is sent again');
+});
+test('the save of the mark that wrote only workspace.json: the answer tells the loss, and none after it', async t => {
+  const f = await lossOf(t);
+  const { answer, refused } = await saving(f, (save, file) => save === 2 && file === 'room-records.json', f.next);
+  assert.deepEqual([answer.status, refused], ['staged', ['2 room-records.json']]);
+  assert.ok(answer.message.includes('「While it works.」'));
+  assert.deepEqual([f.row.wake.senderTold, f.onDisk()], [true, true]);
+  reopen(f); f.advance(MIN); f.begin('three');
+  assert.ok(!(await f.call('Third.', 'call-three', f.other)).message.includes('「While it works.」'), 'not again after a restart');
 });
 test('an answer that tells of nothing is saved once', async t => {
   const f = await fixture(t); f.begin('one');

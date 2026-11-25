@@ -381,17 +381,22 @@ async function stageOnce(w, s, r, native, args) {
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
   // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
   if (intent.quietWindow || waits) intent.saidHeld = true;
-  const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
+  const lost = untold(s, native.nativeId);
+  let missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
   try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
-  // Marked once the answer is saved, and saved before it is given: a save that fails partway can leave on disk what it
-  // was to save, and a loss marked there in an answer never given would not be told.
+  // Told in this answer only with its mark on disk. Marked after the answer's own save, which can fail partway and
+  // leave on disk what it was to save. If the mark is not saved, a later answer tells it.
   if (lost.length) {
     for (const { wake: told } of lost) told.senderTold = true;
-    try { durable(w); } catch { /* Told in this answer; unsaved, it may be told again after a restart. */ }
+    w.changed();
+    if (!w.persist()) {
+      for (const { wake: told } of lost) delete told.senderTold;
+      w.edited?.(s); missed = '';
+    }
   }
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
