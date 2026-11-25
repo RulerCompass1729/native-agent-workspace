@@ -9,6 +9,7 @@ const { CompactionCounter } = require('../compaction-count.cjs');
 const { RoomState } = require('../room-state.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
+const { QuietWindows } = require('../quiet-windows.cjs');
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
@@ -4807,6 +4808,21 @@ test('R221: until then the size is no reason at all: nothing is held for it, not
   assert.deepEqual(plan(idleRooms, [idleMember(50, { messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
 });
 
+test('R221: nor within two minutes of its migration window closing; the other reasons are as they were', () => {
+  const told = () => ({ quietPending: new Map(), rotationGates: new Map() });
+  const closed = (extra = {}) => idleMember(50, { quietWindowClosed: true, ...extra });
+  for (const butler of [undefined, 'a']) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), ...pass, butler }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0]);
+  }
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), memory: new Map([['a', 4 * 1024 ** 3]]), memoryLimit: 1024 ** 3 }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), compactions: new Map([['a', 3]]) }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idleRooms, [closed({ messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  const queued = [{ id: 'shared', name: 'Team', queue: [{ id: 'item', text: 'task', assignee: 'a', status: 'queued' }] }];
+  assert.deepEqual(plan(queued, [closed()], idleSize(50)), idleRotate(), 'before an item as before');
+});
+
 test('R221: the butler outside every space is rotated the same, and only as the butler', () => {
   const butler = (minutes, extra) => idleMember(minutes, { roomIds: [], roomId: null, ...extra }, 'b');
   const outside = { outside: ['b'], butler: 'b' };
@@ -5104,6 +5120,73 @@ for (const [name, change] of [
   f.record.counter.recheck = recheck;
   await f.pass(1);
   assert.equal(rotated(f.client).length, 1);
+});
+
+// What is held for a session because of its window is looked at once a minute (session-wake.cjs QUIET_CHECK_MS): a window
+// that closes early leaves it held for up to a minute that no gate shows, and a rotation in it ends it as not sent.
+const WINDOW_KEY = 'backends/aaaaaaaaaaaaaaaaaaaa';
+function idleWindow(f, { opened = 30, left = 10, ids = ['a'], wait = { code: 'busy', ids: ['z'] } } = {}) {
+  const at = f.dispatcher.now();
+  fs.writeFileSync(path.join(f.dir, 'quiet-windows.json'), JSON.stringify({ format: 1, history: [], windows: [{ id: NATIVE_A, scope: `backend:${WINDOW_KEY}`, reason: 'migration',
+    openedBy: 'naw', openedAt: at - opened * 60000, deadline: at + left * 60000, waited: 'busy', sessions: ids }] }), { mode: 0o600 });
+  f.windows = () => f.dispatcher.quietWindows = new QuietWindows(f.dir, { now: f.dispatcher.now, moveWait: () => wait });
+  const open = f.windows();
+  f.judge = (extra = {}) => open.pass({ options: [{ backendKey: WINDOW_KEY, sessions: ids.map(id => ({ id })) }], settings: { migrate: true }, sessions: [],
+    humanAt: new Map(), failed: new Set(), ...extra }).closed.map(window => window.code);
+}
+const windowEnds = [
+  ['still-busy', {}, f => f.judge()],
+  ['person', { opened: 5 }, f => f.judge({ humanAt: new Map([['z', NOW]]) })],
+  ['not-waiting', { opened: 5, wait: { code: 'draft', ids: ['z'] } }, f => f.judge()],
+  ['migrate-off', { opened: 5 }, f => f.judge({ settings: { migrate: false } })],
+  ['gone', { opened: 5 }, f => f.judge({ options: [] })],
+  ['moved', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'moved').code]],
+  ['move-failed', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'move-failed').code]],
+  ['timeout', { opened: 5, left: 1, wait: { code: 'quiet-10m', ids: [] } }, f => { f.advance(60000); return f.judge(); }],
+  ['timeout, not recorded yet', { opened: 5, left: 1 }, f => f.advance(60000)],
+];
+for (const [code, window, close] of windowEnds) test(`R221: a migration window closed (${code}): the session is asked two minutes later, not before`, async t => {
+  const closed = () => {
+    const f = idleSetup(t, 46 - (window.left === 1 ? 1 : 0));
+    idleWindow(f, window);
+    const codes = close(f);
+    if (codes) assert.deepEqual(codes, [code]);
+    return f;
+  };
+  const f = closed();
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), [], `at ${f.dispatcher.now() - NOW} ms`);
+  }
+  assert.deepEqual(f.log(), [], 'nothing is told of it');
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
+  for (const [ms, asked] of [[119999, 0], [120000, 1]]) {
+    const edge = closed();
+    await edge.pass(ms / 60000);
+    assert.equal(rotated(edge.client).length, asked, `${ms} ms after it`);
+  }
+});
+
+test('R221: the two minutes hold after NAW starts again; another backend\'s window holds nothing; inside its own nothing is asked', async t => {
+  const again = idleSetup(t, 46);
+  idleWindow(again);
+  assert.deepEqual(again.judge(), ['still-busy']);
+  again.windows();
+  await again.pass(0.1);
+  assert.deepEqual(rotated(again.client), []);
+  await again.pass(2);
+  assert.equal(rotated(again.client).length, 1);
+  const other = idleSetup(t, 46);
+  idleWindow(other, { ids: ['z'] });
+  assert.deepEqual(other.judge(), ['still-busy']);
+  await other.pass(0.1);
+  assert.equal(rotated(other.client).length, 1);
+  const open = idleSetup(t, 46);
+  idleWindow(open, { opened: 5 });
+  for (const forward of [0.1, 1, 1]) await open.pass(forward);
+  assert.deepEqual(rotated(open.client), []);
 });
 
 test('R221: a rotation of the size that the person interrupts waits for its own 45 minutes', t => {
@@ -5931,6 +6014,18 @@ test('R221: the butler left alone is asked at 45 minutes; the designation moves 
   assert.equal(f.role.current().sessionId, f.next.id);
   for (let n = 0; n < 3; n++) await f.pass(1);
   assert.equal(f.client.state.sessions.length, 2, 'one successor');
+});
+test('R221: the butler is asked two minutes after its migration window closed, not before', async t => {
+  const f = idleButler(t, 46);
+  idleWindow(f);
+  assert.deepEqual(f.judge(), ['still-busy']);
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), []);
+  }
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
 });
 for (const [name, fail] of [
   ['cannot be created', f => {

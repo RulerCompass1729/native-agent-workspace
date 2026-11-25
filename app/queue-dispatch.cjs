@@ -121,6 +121,9 @@ const CONTEXT_WARM_SHARE = 0.9;
 // With no item waiting it does, the butler too, only once idle for this long (R221): nearly cold, so that whoever writes to
 // it next pays for a small conversation, and before the CLI compacts it by itself at 0.9 of an hour.
 const QUIET_CONTEXT_MS = 45 * 60 * 1000;
+// Two looks at what is held for a migration window (session-wake.cjs QUIET_CHECK_MS): from one that closed on, what
+// was held for its sessions has reached them by then, and they are no longer idle.
+const QUIET_WINDOW_CLOSED_MS = 2 * 60 * 1000;
 // A new member that never becomes ready (for example a startup prompt) ends the rotation.
 const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 // The window client refuses a space pause or a member move while NAW replaces one backend (after an install,
@@ -1554,7 +1557,7 @@ function planDispatch(input) {
       const ready = readiness.ready && !humanRecent(id, humanAt, now, humanQuietMs);
       const lastActivity = lastActivityOf(session, now);
       // No reason at all until it has been idle that long: it holds no wake, and no other reason's quiet.
-      const contextIdleMs = lastActivity !== null && now - lastActivity >= quietContextMs ? quietContextMs : null;
+      const contextIdleMs = lastActivity !== null && now - lastActivity >= quietContextMs && !session.quietWindowClosed ? quietContextMs : null;
       const reason = ready ? rotationReason(session, now, rotationOptions, rotations, contextIdleMs) : null;
       if (!reason) {
         if (!readiness.ready) {
@@ -3291,6 +3294,12 @@ class QueueDispatcher {
     // Copies (room-state.cjs apply): marking them changes nothing a backend holds.
     const quiet = this.quietWindows ? this.quietWindows.sessionIds(now) : null;
     if (quiet && quiet.size) for (const session of snapshot.sessions) if (quiet.has(session.id)) session.quietWindow = quiet.get(session.id);
+    const windows = this.quietWindows, closed = new Set();
+    // One past its deadline that is not recorded as closed yet holds nothing either.
+    for (const window of [...windows?.history || [], ...windows?.windows || []]) {
+      if (now - (window.closedAt ?? window.deadline) < QUIET_WINDOW_CLOSED_MS) for (const id of window.sessions) closed.add(id);
+    }
+    if (closed.size) for (const session of snapshot.sessions) if (closed.has(session.id)) session.quietWindowClosed = true;
     for (const session of snapshot.sessions) {
       // A live control needs an idle clock; this does not grant delivery readiness.
       const ownRequest = this.rotations[session.id];
