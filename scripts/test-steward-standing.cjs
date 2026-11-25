@@ -124,6 +124,13 @@ async function main() {
   await dialog.getByRole('button', { name: '完成', exact: true }).click();
   record('once the person turned it off the butler cannot turn it on; the person can');
   const sessionsBefore = (await page.evaluate(() => workspace.initial())).sessions.length;
+  // What the window shows of the member is no current native report (steward-standing.cjs settingMatches): the same settings ask.
+  const shown = await control('create', [{ provider: 'claude', cwd: profile, name: '只有显示值', skipPermissions: true,
+    settings: { model: 'synthetic-model-a', effort: 'low' } }]);
+  assert.equal(shown.state, 'confirmation-required'); assert.equal(shown.approvedBy, undefined);
+  await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), shown);
+  record('settings equal only to what the window shows ask');
+  await fixture('observeSettings', peer, { model: 'synthetic-model-a', effort: 'low' });
   const changed = await control('create', [{ provider: 'claude', cwd: profile, name: '需确认的配置', skipPermissions: true,
     settings: { model: 'synthetic-model-b', effort: 'max' } }]);
   assert.equal(changed.state, 'confirmation-required'); assert.equal(changed.approvedBy, undefined);
@@ -140,9 +147,10 @@ async function main() {
   assert.equal(effortOnly.state, 'confirmation-required');
   await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), effortOnly);
   record('changed model or effort asks before creating a session; the real card contains both selections');
+  await fixture('observeSettings', peer, { model: 'synthetic-model-a', effort: 'low' }); // Reported again: good for a minute only.
   const matching = await control('create', [{ provider: 'claude', cwd: profile, name: '同配置成员', skipPermissions: true,
     settings: { model: 'synthetic-model-a', effort: 'low' } }]);
-  assert.equal(matching.state, 'complete');assert.equal(matching.approvedBy, 'standing');
+  assert.equal(matching.state, 'complete', JSON.stringify(matching));assert.equal(matching.approvedBy, 'standing');
   assert.deepEqual(matching.standing.creation, { model: 'synthetic-model-a', effort: 'low' });
   const created = await control('create', [{ provider: 'claude', cwd: profile, name: '新开发成员', skipPermissions: true, view: 'chat' }]);
   assert.equal(created.state, 'complete', JSON.stringify(created)); assert.equal(created.approvedBy, 'standing');
