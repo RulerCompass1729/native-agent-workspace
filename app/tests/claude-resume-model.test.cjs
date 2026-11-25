@@ -2,7 +2,9 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { once } = require('node:events');
+const { EventEmitter } = require('node:events');
 const { Claude } = require('../adapters.cjs');
+const { Workspace } = require('../workspace.cjs');
 const { carrySettings } = require('../queue-dispatch.cjs');
 
 function fixture(t) {
@@ -82,4 +84,47 @@ test('new sessions without a requested model still use native defaults', async t
   const launch = fixture(t), result = await launch({ model: 'claude-opus-5-5' });
   assert.equal(result.argv.includes('--model'), false);
   assert.equal(result.model, 'claude-fable-5-2');
+});
+
+function followed(t, values) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-resume-choice-'));
+  const host = { binaries: {}, close() {} }, workspace = new Workspace(host, dir), runtime = new EventEmitter();
+  t.after(() => { workspace.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const record = { id: randomUUID(), nativeId: randomUUID(), name: 'Synthetic session', provider: 'claude', roomId: null, cwd: dir,
+    view: 'chat', state: 'idle', messages: [], controlRevision: 0, memberRevision: 0, ...values };
+  workspace.sessions.set(record.id, record); workspace.runtimes.set(record.id, runtime); workspace.bind(record, runtime);
+  return { workspace, runtime, record, saved: () => { workspace.persist();
+    const reopened = new Workspace(host, dir), row = reopened.sessions.get(record.id); reopened.close(); return row; } };
+}
+const resumeModel = async (t, row) => {
+  const { requestedSettings, model, nativeEffort, nativePermissionMode } = row;
+  const { argv } = await fixture(t)({ recovering: true, requestedSettings, model, nativeEffort, nativePermissionMode });
+  assert.equal(argv.filter(value => value === '--model').length, 1);
+  return argv[argv.indexOf('--model') + 1];
+};
+
+test('resume follows the model the person chose in the session, saved with it, not the one it was created with', async t => {
+  const f = followed(t, { requestedSettings: { model: 'claude-fable-5-2', effort: 'xhigh' }, model: 'claude-fable-5-2' });
+  f.runtime.emit('modelSelected', 'claude-opus-5-5'); f.runtime.emit('model', 'claude-opus-5-5');
+  assert.equal(await resumeModel(t, f.saved()), 'claude-opus-5-5');
+  f.runtime.emit('model', 'claude-sonnet-5-5');
+  assert.equal(await resumeModel(t, f.saved()), 'claude-opus-5-5', 'A later native report does not replace the choice');
+  assert.deepEqual(f.saved().requestedSettings, { model: 'claude-opus-5-5', effort: 'xhigh' });
+});
+
+test('a session whose model the person never changed resumes exactly as before', async t => {
+  const asked = followed(t, { requestedSettings: { model: 'claude-fable-5-2' }, model: 'claude-fable-5-2' });
+  asked.runtime.emit('model', 'claude-opus-5-5');
+  assert.equal(await resumeModel(t, asked.saved()), 'claude-fable-5-2');
+  const plain = followed(t, { model: '原生默认' });
+  plain.runtime.emit('model', 'claude-opus-5-5');
+  assert.equal(plain.saved().requestedSettings, undefined);
+  assert.equal(await resumeModel(t, plain.saved()), 'claude-opus-5-5');
+});
+
+test('a choice reported by a runtime this session no longer runs is ignored', t => {
+  const f = followed(t, { requestedSettings: { model: 'claude-fable-5-2' }, model: 'claude-fable-5-2' });
+  f.workspace.runtimes.set(f.record.id, new EventEmitter());
+  f.runtime.emit('modelSelected', 'claude-opus-5-5');
+  assert.deepEqual(f.record.requestedSettings, { model: 'claude-fable-5-2' });
 });

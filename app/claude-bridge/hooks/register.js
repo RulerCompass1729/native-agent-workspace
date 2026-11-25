@@ -1017,7 +1017,9 @@ export function register(on) {
       // inside this hook can still see the previous value on retained runtimes.
       if (watching && !stopped && rootBinding === binding && generation === ownGeneration && revision === modelReadRevision &&
         typeof e.to_model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(e.to_model)) {
-        enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model }, binding);
+        // Native names the cause: a person's command or picker, else sdk, auto (its own fallback) or resume.
+        const selected = e.source === 'command' || e.source === 'picker';
+        enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model, ...(selected ? { selected } : {}) }, binding);
       }
       return result;
     } finally {
