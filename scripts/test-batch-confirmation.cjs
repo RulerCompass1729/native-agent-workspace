@@ -95,8 +95,8 @@ async function run() {
   const rpc = mcp(); await rpc('initialize');
   assert.ok((await rpc('tools/list')).tools.some(t => t.name === 'workspace_control'));
   const win = await app.browserWindow(page);
-  async function archive(target) {
-    const args = { action: 'invoke', method: 'archiveSession', arguments: [target], operation_id: randomUUID() };
+  async function ask(method, target) {
+    const args = { action: 'invoke', method, arguments: [target], operation_id: randomUUID() };
     const proof = await fixture('backgroundProof', source, { callId: randomUUID(), arguments: args });
     const result = await rpc('tools/call', { name: 'workspace_control', arguments: args,
       _meta: { threadId: proof.nativeId, sessionId: proof.sessionId, callId: proof.callId,
@@ -106,8 +106,9 @@ async function run() {
     assert.equal(stored(record.id).state, 'confirmation-required'); await card(record).waitFor();
     return record;
   }
-  async function create(name) {
-    const id = await client.call('create', { provider: 'codex', cwd, name, view: 'chat' });
+  const archive = target => ask('archiveSession', target);
+  async function create(name, provider = 'codex') {
+    const id = await client.call('create', { provider, cwd, name, view: 'chat' });
     await until(async () => (await client.call('initial')).sessions.find(s => s.id === id)?.state === 'idle', 'Synthetic session ready');
     return id;
   }
@@ -142,7 +143,23 @@ async function run() {
     assert.equal(await all.count(), 1, 'Exactly one Confirm all button');
     assert.equal(await batch.getByRole('button', { name: '取消这 4 项', exact: true }).count(), 1, 'Cancel names its four items');
     assert.equal(await page.locator('#messages .background-controls button').count(), 3, 'No other card keeps buttons');
-    assert.equal(await page.locator('#messages .background-note').filter({ hasText: '已并入「全部确认（4）」' }).count(), 3, 'Older cards point to the batch');
+    const merged = page.locator('#messages .background-merged').filter({ hasText: '已并入「全部确认（4）」' });
+    assert.equal(await merged.count(), 3, 'The other cards point to the batch');
+    assert.equal(await page.locator('#messages .background-card:has(.background-merged)').count(), 0, 'and look like nothing to answer');
+    // Parked at the bottom under a long answer, the input box's timer and any merged line lead to the batch's buttons.
+    await fixture('event', source, { method: 'item/completed', params: { threadId: records[0].actor.nativeId, turnId: 'fixture-control-turn', item: { id: randomUUID(), type: 'agentMessage', text: 'Synthetic answer. '.repeat(160) } } });
+    const inView = () => all.evaluate(el => { const r = el.getBoundingClientRect(), v = document.querySelector('#messages').getBoundingClientRect(); return r.top >= v.top && r.bottom <= v.bottom; });
+    const park = async () => { await page.locator('#messages').evaluate(el => { el.scrollTop = el.scrollHeight; }); await until(async () => !await inView(), 'The batch is scrolled out of view'); };
+    await park();
+    assert.match(await page.locator('#session-timers .session-timer').textContent(), /^去确认 · 剩余 \d+:\d\d$/);
+    await page.locator('#session-timers .session-timer').click();
+    await until(inView, 'The timer leads to the batch');
+    await until(async () => await page.locator('[data-search-target]').count() === 0, 'The mark clears');
+    await merged.last().evaluate(el => el.scrollIntoView({ block: 'start' })); await wait(300);
+    assert.equal(await inView(), false, 'Only the merged line is in view');
+    await merged.last().getByRole('button', { name: '去确认', exact: true }).click();
+    assert.equal(await card(records[0]).getAttribute('data-search-target'), 'true');
+    await until(inView, 'A merged line leads to the batch');
     const more = page.locator('#stream-waiting-more');
     if (await more.count() && await more.isVisible()) {
       if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
@@ -190,6 +207,45 @@ async function run() {
     await until(() => records.every(r => stored(r.id).state === 'complete'), 'Both quick clicks run, one after the other');
     assert.doesNotMatch(await toastText(), /no longer current|不再有效/);
   });
+  await check('stop-cards-merge-by-what-they-do-and-resume-cards-merge', async () => {
+    await language('zh'); await page.emulateMedia({ colorScheme: 'light' }); await win.evaluate(w => w.setContentSize(1240, 820));
+    const claude = [], codex = [];
+    for (const name of ['A', 'B', 'C', 'D']) claude.push(await create('Synthetic Claude ' + name, 'claude'));
+    for (const name of ['A', 'B']) codex.push(await create('Synthetic Codex ' + name));
+    // Asked in turn, so neither kind sits next to its own.
+    const asked = new Map();
+    for (const id of [claude[0], codex[0], claude[1], claude[2], codex[1], claude[3]]) asked.set(id, await ask('stop', id));
+    const ends = claude.map(id => asked.get(id)), disconnects = codex.map(id => asked.get(id));
+    const batch = count => page.locator('#messages .background-batch').filter({ has: page.getByRole('button', { name: `全部确认（${count}）`, exact: true }) });
+    await until(async () => await batch(4).count() === 1 && await batch(2).count() === 1, 'Ending and disconnecting are two merged cards');
+    const read = async count => ({ title: await batch(count).locator('.background-sentence').textContent(), risks: await batch(count).locator('.background-risk').allTextContents(),
+      rows: await batch(count).locator('.background-batch-target').allTextContents(), details: await batch(count).locator('.background-batch-details pre').allTextContents() });
+    const end = await read(4), disconnect = await read(2); save('stop-batches', { end, disconnect });
+    assert.equal(end.title, '结束会话 · 4 项'); assert.equal(disconnect.title, '断开 Codex 会话 · 2 项');
+    assert.deepEqual([end.risks, disconnect.risks], [['会停下正在进行的工作'], ['会停下正在进行的工作']]);
+    assert.ok(end.rows.every(row => /Synthetic Claude/.test(row)) && disconnect.rows.every(row => /Synthetic Codex/.test(row)));
+    assert.ok(end.details.length === 4 && end.details.every(text => /^这会停止本应用托管的原生主进程/.test(text)));
+    assert.ok(disconnect.details.length === 2 && disconnect.details.every(text => /^关闭本应用终端连接/.test(text)));
+    await batch(4).evaluate(el => el.scrollIntoView({ block: 'center' })); await page.screenshot({ path: path.join(pictures, 'stop-pending-zh-light.png') });
+    await batch(4).getByRole('button', { name: '全部确认（4）', exact: true }).click();
+    await until(() => ends.every(r => stored(r.id).state === 'complete'), 'One click ends all four, each with its own receipt');
+    save('stop-receipts', [...ends, ...disconnects].map(r => ({ id: r.id, state: stored(r.id).state, humanDecision: stored(r.id).humanDecision ?? null })));
+    assert.ok(disconnects.every(r => stored(r.id).state === 'confirmation-required'), 'The Codex batch still waits');
+    const states = async ids => { const all = (await state()).sessions; return ids.map(id => all.find(s => s.id === id)?.state); };
+    assert.deepEqual(await states(claude), ['ended', 'ended', 'ended', 'ended']);
+    await batch(2).getByRole('button', { name: '全部确认（2）', exact: true }).click();
+    await until(() => disconnects.every(r => stored(r.id).state === 'complete'), 'The earlier stops did not void the other batch');
+    save('stopped', { claude: await states(claude), codex: await states(codex) });
+    const resumes = [];
+    for (const id of claude) resumes.push(await ask('resume', id));
+    await until(async () => await batch(4).count() === 1, 'Four resume cards are one');
+    assert.equal(await batch(4).locator('.background-sentence').textContent(), '恢复运行 · 4 项');
+    await batch(4).evaluate(el => el.scrollIntoView({ block: 'center' })); await page.screenshot({ path: path.join(pictures, 'resume-pending-zh-light.png') });
+    await batch(4).getByRole('button', { name: '全部确认（4）', exact: true }).click();
+    await until(() => resumes.every(r => stored(r.id).state === 'complete'), 'One click resumes all four');
+    save('resumed', { claude: await states(claude), receipts: resumes.map(r => stored(r.id).state) });
+    assert.doesNotMatch(await toastText(), /no longer current|不再有效/);
+  });
   const stats = await fixture('stats'); save('fixture-stats', stats);
   assert.equal(stats.nativeProcesses, 0); assert.equal(stats.modelCalls, 0);
   assert.deepEqual(stats.sends, []); assert.deepEqual(stats.inputs, []);
@@ -208,7 +264,7 @@ async function run() {
       if (owner.token === token) fs.rmSync(slot, { recursive: true });
     } catch (e) { cleanupError = e.stack; console.error(cleanupError); }
     const passed = checks.filter(c => c.passed).length, failed = checks.length - passed;
-    const ok = !fatal && !cleanupError && failed === 0 && checks.length === 2;
+    const ok = !fatal && !cleanupError && failed === 0 && checks.length === 3;
     save('result', { passed, failed, ok, checks, fatal, cleanupError, errors, pictures, syntheticNative: true, installed: false });
     console.log(`RESULT passed=${passed} failed=${failed} fatal=${Boolean(fatal)} cleanup=${cleanupError ? 'failed' : 'complete'}`);
     if (!ok) process.exitCode = 1;

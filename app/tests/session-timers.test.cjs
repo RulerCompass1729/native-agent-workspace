@@ -35,14 +35,14 @@ test('a countdown that reached zero says so for five seconds, even once its card
   assert.deepEqual(view(collect({ sessionId: 'agent', cards: [], place, held: gone, now: 10000 + HOLD_MS })), []);
   assert.deepEqual(view(collect({ sessionId: 'agent', cards: [], place, held: first, now: 9500 })), [], 'cancelled before its deadline: no expired notice');
 });
-test('labels reuse the card words; names spell out the time and the jump', () => {
+test('a countdown says where it leads, the rest reuse the card words; names spell out the time and the jump', () => {
   const zh = (key, params) => locale.format('zh', key, params), en = (key, params) => locale.format('en', key, params);
   const words = (fmt, l) => [l.text.map(([key, params]) => fmt(key, params)).join(' '), fmt(...l.name)];
-  assert.deepEqual(words(zh, label({ kind: 'countdown', at: 83000 }, 0)), ['等你确认 · 剩余 1:23', '等你确认，剩余 1 分 23 秒，跳到这条消息']);
+  assert.deepEqual(words(zh, label({ kind: 'countdown', at: 83000 }, 0)), ['去确认 · 剩余 1:23', '去确认，剩余 1 分 23 秒，跳到这条消息']);
   assert.deepEqual(words(zh, label({ kind: 'running', at: 0 }, 10400)), ['执行中 · 已 10 秒', '执行中，已 10 秒，跳到这条消息']);
   assert.deepEqual(words(zh, label({ kind: 'expired', at: 0 }, 1000)), ['已到期 · 未执行', '已到期，未执行，跳到这条消息']);
-  assert.deepEqual(words(zh, label({ kind: 'countdown', at: 23000 }, 0)), ['等你确认 · 剩余 0:23', '等你确认，剩余 23 秒，跳到这条消息']);
-  assert.deepEqual(words(en, label({ kind: 'countdown', at: 83000 }, 0)), ['Waiting for confirmation · 1:23 left', 'Waiting for confirmation, 1 min 23 s left. Jump to this message']);
+  assert.deepEqual(words(zh, label({ kind: 'countdown', at: 23000 }, 0)), ['去确认 · 剩余 0:23', '去确认，剩余 23 秒，跳到这条消息']);
+  assert.deepEqual(words(en, label({ kind: 'countdown', at: 83000 }, 0)), ['Go to card · 1:23 left', 'Go to card, 1 min 23 s left. Jump to this message']);
   assert.deepEqual(words(en, label({ kind: 'running', at: 0 }, 10400)), ['Running · 10s elapsed', 'Running, 10 s elapsed. Jump to this message']);
   assert.equal(shape([{ target: 'a', kind: 'countdown', at: 1 }]), shape([{ target: 'a', kind: 'countdown', at: 2 }]));
   assert.notEqual(shape([{ target: 'a', kind: 'countdown' }]), shape([{ target: 'a', kind: 'expired' }]));

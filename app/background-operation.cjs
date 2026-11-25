@@ -182,7 +182,10 @@ function operationSummary(command, actor, names = {}) {
   const session = id => named(names.sessions, id), room = id => named(names.rooms, id);
   // Display classification only; the maintenance/consent policy above is unchanged.
   const clearsHistory = method === 'clearSharedHistory' || method === 'spaceAction' && args[1] === 'clearSharedHistory';
-  const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || (askedByHandler.includes(method) ? method : null);
+  // stop asks by provider (main.cjs): Codex is disconnected, every other session is ended. An unknown session gets neither.
+  const stopped = method === 'stop' && Array.isArray(names.sessions) ? names.sessions.find(item => item?.id === args[0])?.provider : undefined;
+  const stopAction = stopped ? stopped === 'codex' ? 'disconnectCodex' : 'endSession' : null;
+  const action = clearsHistory ? 'clearSharedHistory' : maintenanceAction(method, args, actor) || stopAction || (askedByHandler.includes(method) ? method : null);
   const withMessage = method === 'create' && typeof args[0]?.initialMessage === 'string';
   const summary = { action: withMessage ? 'createWithFirstMessage' : action, method: visibleText(method), risks: [] };
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
@@ -227,7 +230,7 @@ function operationSummary(command, actor, names = {}) {
   if (clearsHistory) summary.risks.push('deletesSharedHistory');
   if (Array.isArray(command.paths) && command.paths.length) { put('file', last(command.paths[0])); if (command.paths.length > 1) summary.files = command.paths.length; }
   if (method === 'approve' && args[2] === 'accept') summary.risks.push('approvePermission');
-  if (['interrupt', 'pause', 'quitService'].includes(action)) summary.risks.push('stopsWork');
+  if (['interrupt', 'pause', 'quitService', 'disconnectCodex', 'endSession'].includes(action)) summary.risks.push('stopsWork');
   if (method === 'saveLocalFile') summary.risks.push('writesFile');
   return summary;
 }

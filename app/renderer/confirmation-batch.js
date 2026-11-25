@@ -1,15 +1,28 @@
 // Waiting cards that one "Confirm all" may answer together: the same agent, the same reversible method with no risk
 // mark, each actionable on its own. Creation may carry its permission risk: it is part of the shared configuration
 // shown once, and every card is still checked and receipted one by one in the main process. Input joins a batch only
-// with its complete text, which each row opens to.
+// with its complete text, which each row opens to. Stopping sessions may carry its own mark, shown once; ending a
+// session and disconnecting Codex, or two different answers, are never one card.
 (function (root) {
-  const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession', 'input']);
+  const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession', 'input', 'stop']);
+  const STOPS = new Set(['endSession', 'disconnectCodex']);
+  function riskless(summary) {
+    if (!Array.isArray(summary?.risks)) return false;
+    if (summary.method === 'stop') return STOPS.has(summary.action) && summary.risks.every(risk => risk === 'stopsWork');
+    return summary.risks.length === 0 || summary.method === 'create';
+  }
+  function groupKey(card) {
+    const { method, createKey, action } = card.summary, key = [card.sessionId, card.nativeId, method];
+    if (method === 'create') key.push(createKey);
+    if (method === 'stop') key.push(action, ...card.message.backgroundOperation.confirmation.options.buttons);
+    return key.join('\n');
+  }
   function batchable(card) {
     const op = card?.message?.backgroundOperation, summary = card?.summary;
-    const riskless = Array.isArray(summary?.risks) && (summary.risks.length === 0 || summary.method === 'create');
     return Boolean(card && op && card.state === 'confirmation-required' && card.actionable === true && !card.replacedBy && !op.replacedBy &&
       !op.repeated && !op.answer && !op.disposition && op.confirmation?.kind === 'message' && METHODS.has(summary?.method) &&
-      riskless && (summary.method !== 'create' || typeof summary.createKey === 'string' && summary.createKey) &&
+      riskless(summary) && (summary.method !== 'create' || typeof summary.createKey === 'string' && summary.createKey) &&
+      (summary.method !== 'stop' || Array.isArray(op.confirmation.options?.buttons)) &&
       (summary.method !== 'input' || typeof op.confirmation.options?.detail === 'string' && op.confirmation.options.detail !== ''));
   }
   // `started`: batches the person already answered, by the card keys they covered, kept together until they are gone.
@@ -24,9 +37,7 @@
     const groups = new Map();
     for (const card of list) {
       if (used.has(card.key) || !batchable(card)) continue;
-      const key = card.summary.method === 'create'
-        ? [card.sessionId, card.nativeId, 'create', card.summary.createKey].join('\n')
-        : [card.sessionId, card.nativeId, card.summary.method].join('\n');
+      const key = groupKey(card);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(card);
     }
