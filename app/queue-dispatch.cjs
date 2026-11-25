@@ -711,6 +711,7 @@ function replyAfter(session, tag, sentAt, untilHuman = false, expected) {
       (m.status === 'failed' || m.status === 'interrupted') &&
       (failedReplies.has(m.turnId) || !m.inputTag || m.inputTag === tag));
   return { found: true, text: kept.join('\n\n'), last, humanAfter, parts: kept,
+    ...(messages[index]?.status === 'unconfirmed' ? { unconfirmed: true } : {}),
     ...(failedReplies.size && !recovered ? { failedTurnIds: [...failedReplies] } : {}) };
 }
 
@@ -1418,6 +1419,9 @@ function planDispatch(input) {
         status = 'waiting';
         const quota = codexQuotaBlock(member);
         reason = quota && reply.failedTurnIds.includes(quota.turnId) ? 'usage-limit-exceeded' : 'native-turn-failed';
+      } else if (reply.unconfirmed && !reply.last.trim()) {
+        status = 'failed';
+        reason = 'send-unconfirmed';
       } else if (!reply.last.trim()) {
         status = 'waiting';
         reason = 'no-reply';
@@ -3866,7 +3870,12 @@ class QueueDispatcher {
     }
     const call = control ? entry.client.call('dispatch', session.id, text, session.nativeId, itemId, control)
       : entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
-    const result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout');
+    let result;
+    try { result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout'); }
+    catch (error) {
+      if (errorKey(error) === 'error.confirmationTimeout') result = await this.heldTag(session, itemId);
+      if (!result) throw error;
+    }
     this.idleSince.delete(session.id);
     if (typeof result === 'string') {
       return result;
@@ -3875,6 +3884,15 @@ class QueueDispatcher {
       return result.tag;
     }
     throw Error('NAW did not receive a delivery tag');
+  }
+
+  // The call's own limit passed while the backend still waits for native (a member compacting its context,
+  // claude-submit.cjs): its row for this very send, not yet settled, is what the item follows from here.
+  async heldTag(session, itemId) {
+    try { await withTimeout(this.client.refresh(), CALL_TIMEOUT_MS, 'refresh-timeout'); } catch { return null; }
+    const now = this.view().snapshot.sessions.find(s => s.id === session.id);
+    const row = now?.pendingTag && now.nativeId === session.nativeId && (now.messages || []).find(m => m?.id === now.pendingTag);
+    return row && row.dispatchItem === itemId && ['awaiting-native', 'submitted'].includes(row.status) ? row.id : null;
   }
 
   async dispatch(action, waits = null) {

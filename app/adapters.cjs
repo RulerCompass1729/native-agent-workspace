@@ -645,7 +645,7 @@ class Claude extends EventEmitter {
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'PreCompact', 'SessionEnd']) {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
     // A question may be answered in the chat view before the native dialog opens.
@@ -1356,6 +1356,8 @@ class Claude extends EventEmitter {
     if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
       typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
+    if (event.hook_event_name === 'PreCompact') { this.submission?.compaction?.(true); return; }
+    if (['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure'].includes(event.hook_event_name)) this.submission?.compaction?.(false);
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;
     // Only an authenticated root settings event selects the journal. The

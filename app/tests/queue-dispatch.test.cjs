@@ -1687,6 +1687,85 @@ test('a connection being updated holds the item without recording a send or usin
   assert.equal(client.sends().length, 1);
 });
 
+// edbc6b7f (11-25): the call has its own 40 s limit, and a member that compacts its context answers after it
+// (claude-submit.cjs). The member's row says what became of the send.
+function heldSend(t, row = {}, after = {}) {
+  const f = dispatcherSetup(t, [member('a'), member('b')]), call = f.client.call.bind(f.client);
+  f.first = f.room.queueAdd('held task', 'a');
+  f.client.call = async (method, ...args) => {
+    if (method !== 'dispatch' || args[0] !== 'a') return call(method, ...args);
+    await call(method, ...args);
+    const session = f.client.state.sessions[0];
+    if (row === null) session.messages.pop(); else Object.assign(session.messages.at(-1), { status: 'awaiting-native' }, row);
+    Object.assign(session, { state: 'idle', pendingTag: `tag-${f.client.sequence}` }, after);
+    throw Object.assign(Error('timed out'), { uiMessage: { key: f.key || 'error.confirmationTimeout' } });
+  };
+  f.item = () => f.room.queueFind('shared', f.first);
+  return f;
+}
+test('an item whose row still waits for native when the call times out stays sent, and its reply settles it', async t => {
+  const { room, client, dispatcher, item } = heldSend(t);
+  const next = room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.deepEqual([item().status, item().tag, item().reason], ['sent', 'tag-1', undefined]);
+  assert.equal(client.sends('a').length, 1, 'nothing is sent twice, and nothing else to a member that still holds it');
+  const session = client.state.sessions[0];
+  Object.assign(session.messages.at(-1), { status: 'submitted' }); session.state = 'working';
+  await dispatcher.schedule();
+  assert.equal(item().status, 'sent');
+  session.pendingTag = null; client.reply('a', 'held task finished');
+  await dispatcher.schedule();
+  assert.deepEqual([item().status, item().reply], ['done', 'held task finished']);
+  assert.deepEqual([room.queueFind('shared', next).status, client.sends('a').length], ['sent', 2], 'then its next item');
+});
+test('the call\'s own limit is the error the dispatcher looks the row up for', async t => {
+  const { ServiceClient } = require('../service-connection.cjs');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const socket = new EventEmitter(); Object.assign(socket, { setEncoding() {}, write() {}, destroyed: false });
+  const call = new ServiceClient(socket).call('dispatch', 'a', 'task', 'native-a', 'item-1').then(() => null, error => error);
+  t.mock.timers.tick(39999); t.mock.timers.tick(1);
+  assert.equal((await call).uiMessage.key, 'error.confirmationTimeout');
+});
+test('an item native accepted between the call\'s limit and the look is sent too', async t => {
+  const { dispatcher, item } = heldSend(t, { status: 'submitted' }, { state: 'working' });
+  await dispatcher.start();
+  assert.deepEqual([item().status, item().tag], ['sent', 'tag-1']);
+});
+for (const answered of [false, true]) test(`a held send that ends unconfirmed settles its item ${answered ? 'done when its reply is there' : 'failed'}`, async t => {
+  const { client, dispatcher, item } = heldSend(t);
+  await dispatcher.start();
+  assert.equal(item().status, 'sent');
+  Object.assign(client.state.sessions[0].messages.at(-1), { status: 'unconfirmed' }); client.state.sessions[0].pendingTag = null;
+  if (answered) client.reply('a', 'held task finished');
+  dispatcher.dirty = true;
+  await dispatcher.schedule(); await dispatcher.schedule();
+  assert.deepEqual([item().status, item().reason ?? null], answered ? ['done', null] : ['failed', 'send-unconfirmed']);
+});
+for (const fails of [false, true]) test(`a held row is looked for in state read after the call's limit${fails ? ', and a read that fails leaves the call\'s own failure' : ''}`, async t => {
+  const f = heldSend(t), call = f.client.call.bind(f.client), refresh = f.client.refresh.bind(f.client), snapshot = f.client.snapshot.bind(f.client);
+  let before = null;
+  f.client.snapshot = () => before ? structuredClone(before) : snapshot();
+  f.client.refresh = async () => { if (before && fails) throw Error('read failed'); before = null; return refresh(); };
+  f.client.call = async (method, ...args) => {
+    if (method === 'dispatch') before = snapshot();
+    return call(method, ...args);
+  };
+  await f.dispatcher.start();
+  assert.deepEqual([f.item().status, f.item().tag ?? null, f.item().reason ?? null], fails ? ['failed', null, 'timed out'] : ['sent', 'tag-1', null]);
+  assert.equal(f.client.sends('a').length, 1);
+});
+for (const [name, row, after, key] of [
+  ['with no row', null, {}], ['whose row is already unconfirmed', { status: 'unconfirmed' }, {}],
+  ['whose row is another item\'s', { dispatchItem: 'another-item' }, {}], ['of a session that moved to another context', {}, { nativeId: 'native-other' }],
+  ['whose backend connection closed', {}, {}, 'error.serviceClosed'], ['whose native submission is unconfirmed', {}, {}, 'error.nativeSubmissionUnconfirmed']])
+  test(`a send ${name} is failed at once, as before`, async t => {
+    const f = heldSend(t, row, after); f.key = key;
+    await f.dispatcher.start();
+    assert.equal(f.item().status, 'failed');
+    assert.equal(f.client.sends('a').length, 1, 'and never sent again');
+  });
+
 test('the old session is not stopped while a space collaboration is running', async t => {
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
