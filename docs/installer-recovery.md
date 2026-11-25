@@ -60,9 +60,9 @@ a separate five-minute maximum: a real signed bundle with over 25,000 entries
 exceeded the former generic 60-second command limit after upgrade verification.
 GUI waiting remains bounded to 20 seconds and backend activation to 210 seconds:
 60 for the backend, and 150 for the DSH runtime copy that startup finishes first
-(30 seconds clearing an interrupted copy, 120 seconds copying). The wait ends as
-soon as the new backend is active. Other platform commands keep their 60-second
-bound. An archive timeout still preserves the old copy and reports cleanup
+(30 seconds clearing an interrupted copy, 120 seconds copying from one source; an
+unqualified source is followed by the next). The wait ends as soon as the new
+backend is active. Other platform commands keep their 60-second bound. An archive timeout still preserves the old copy and reports cleanup
 failure, never partial deletion. A targeted `lsof` check
 before archiving and again before removal refuses a bundle still in use, including
 a mapped backend executable, or one whose use cannot be determined. If archive/removal fails,

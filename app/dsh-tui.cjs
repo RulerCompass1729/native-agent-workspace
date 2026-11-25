@@ -157,7 +157,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
   };
   const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.uid === b.uid && a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && b.nlink === 1;
   async function tree(root, links = true) {
-    const entries = new Map(), dirs = ['']; let bytes = 0, count = 0;
+    const entries = new Map(), dirs = ['']; let bytes = 0, count = 0, yielded = performance.now();
     while (dirs.length) {
       const rel = dirs.shift(), dir = path.join(root, rel); directory(dir);
       for (const name of fs.readdirSync(dir)) {
@@ -174,7 +174,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
         else throw refusal('Unsafe runtime entry', file, s);
         if (bytes > 2 * 1024 * 1024 * 1024) throw Error('Runtime byte limit');
         entries.set(relative, entry); step();
-        if (count % 128 === 0) await new Promise(resolve => setImmediate(resolve));
+        if (count % 128 === 0 || performance.now() - yielded > 50) { await new Promise(resolve => setImmediate(resolve)); yielded = performance.now(); }
       }
     }
     // Resolve links from the inventory, never by following an unchecked path on disk.
@@ -224,7 +224,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     if (!rootState(sourceDataDir, source)) return { status: 'absent' };
     if (target.root.startsWith(source.root + path.sep) || source.root.startsWith(target.root + path.sep)) throw Error('Overlapping runtime roots');
     begin(COPY_LIMIT_MS); enter('inventory');
-    const inventory = await tree(source.root); verifyRuntime(sourceDataDir); tick();
+    const inventory = await tree(source.root); verifyRuntime(sourceDataDir); moved();
     staging = await io.mkdtemp(path.join(targetDataDir, '.dsh-tui-inherit-')); stagingIdentity = directory(staging);
     const staged = paths(staging); await io.mkdir(staged.root, { recursive: true, mode: 0o700 });
     enter('directories');
@@ -267,7 +267,7 @@ async function inheritRuntime(sourceDataDir, targetDataDir, { cleanStaging = fal
     enter('verify');
     const copied = await tree(staged.root);
     if (copied.bytes !== inventory.bytes || copied.entries.size !== inventory.entries.size) throw Error('Incomplete runtime copy');
-    verifyRuntime(staging); verifyRuntime(sourceDataDir); tick(); enter('publish');
+    verifyRuntime(staging); moved(); verifyRuntime(sourceDataDir); moved(); enter('publish');
     await io.mkdir(target.base, { recursive: true, mode: 0o700 }); const parent = directory(target.base);
     // An exclusive empty reservation prevents rename from replacing another install's directory.
     try { await io.mkdir(target.root, { mode: 0o700 }); placeholder = directory(target.root); }
