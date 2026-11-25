@@ -4883,15 +4883,15 @@ class QueueDispatcher {
     return now - this.outSince.get(id) < (session ? HANDOFF_ACCEPT_MS : STOP_WAIT_MS) ? 'settling' : '';
   }
 
-  // The session that holds the handoff now: the successor, or the one a finished rotation replaced it with.
+  // The session that holds the handoff now: the confirmed successor, or the one its own finished rotation replaced it
+  // with, by the rule the designation follows. null when that rule cannot say.
   handoffHolder(record) {
-    let at = { id: record.newId, nativeId: record.newNativeId || null };
-    for (const seen = new Set(); !seen.has(at.id);) {
-      seen.add(at.id);
-      const entry = this.log.findLast(e => e.event === 'done' && e.old?.id === at.id && e.old.nativeId === at.nativeId && validId(e.new?.id));
-      if (entry) at = { id: entry.new.id, nativeId: entry.new.nativeId || null };
-    }
-    return at;
+    let edges = [], at;
+    try { edges = rotationEdges(this.logFile); } catch (error) { if (error.code !== 'ENOENT') return null; }
+    try { at = successor({ sessionId: record.newId, nativeId: record.newNativeId }, edges); } catch { return null; }
+    // It was replaced, and by whom is not certain.
+    if (edges.some(e => e.event === 'done' && e.old?.id === at.sessionId && e.old.nativeId === at.nativeId)) return null;
+    return { id: at.sessionId, nativeId: at.nativeId };
   }
 
   // When the person last used a waiting old session: kept on the record, so that a restart does not forget it.
@@ -4953,10 +4953,11 @@ class QueueDispatcher {
     if (record.roomIds.length) return false;
     let steward;
     try { steward = this.steward(); } catch { return 'unreadable'; }
-    return Boolean(steward && ![oldId, record.newId, holder.id].includes(steward.sessionId));
+    return Boolean(steward && ![oldId, record.newId, holder?.id].includes(steward.sessionId));
   }
 
-  // For the designated butler: whether the change, once logged, moves the designation to the successor and nowhere else.
+  // For the designated butler: whether the change, once logged, moves the designation to the session that holds the
+  // handoff now and nowhere else.
   designationFollows(oldId, record) {
     let steward;
     try { steward = this.steward(); } catch { return false; }
@@ -4982,6 +4983,7 @@ class QueueDispatcher {
     const holder = this.handoffHolder(record), moved = this.designationMoved(oldId, record, holder);
     if (moved === true) return this.keepOld(oldId, record, 'designation-changed', now);
     if (moved) return note('designation-unreadable');
+    if (!holder) return note('identity-ambiguous');
     const outGate = this.outGate(oldId, old, now), out = outGate && !old ? 'old-missing' : outGate;
     // What it added already is told all the same.
     if (out && !['ready', 'sending', 'sent'].includes(record.supplement?.state)) return note(out);
@@ -4989,12 +4991,12 @@ class QueueDispatcher {
     const away = this.outGate(holder.id, fresh, now);
     const gone = fresh && (fresh.archived || fresh.state === 'ended' && !away);
     // One whose native session is another one now no longer has the handoff, and keeps what it was given since.
-    if (gone || fresh?.nativeId && holder.nativeId && fresh.nativeId !== holder.nativeId) {
+    if (gone || fresh?.nativeId && fresh.nativeId !== holder.nativeId) {
       // Nothing can be given back to one that is out of view.
       if (out && !old) return note(out);
       return this.dropSuccessor(oldId, record, old, holder, gone, now);
     }
-    if (!fresh || SUCCESSOR_GONE_STATES.includes(fresh.state)) return note('successor-unavailable');
+    if (!fresh || SUCCESSOR_GONE_STATES.includes(fresh.state) || fresh.nativeId !== holder.nativeId) return note('successor-unavailable');
     if (!record.seen) record.seen = handoffSeen(old, record);
     const live = old && !['ended', 'background'].includes(old.state);
     if (live) this.noteUse(old, record, now);
@@ -5017,7 +5019,7 @@ class QueueDispatcher {
     if (rows.length || live && record.typedAt !== undefined) {
       const missed = record.missed;
       if (live && missed?.last === (rows.at(-1)?.id ?? null) && now - missed.at < HANDOFF_TURN_MS * 2 ** (missed.tries - 1)) return note('supplement-missing');
-      if (live) return note(await this.askSupplement(oldId, record, now));
+      if (live) return note(await this.askSupplement(oldId, record, holder.id === record.newId ? record.newName || record.name : this.name(fresh), now));
       record.supplement = { id: randomUUID(), state: 'ready', at: now, text: SUPPLEMENT_NONE, seen: seenRow(old, now) };
       this.save();
       return note(await this.tellSuccessor(oldId, record, old, fresh, snapshot, now, live) || 'supplement');
@@ -5032,7 +5034,7 @@ class QueueDispatcher {
 
   // The old session is asked once, for what its handoff does not cover. Written down before it is sent: a restart looks
   // for the row and does not send again.
-  async askSupplement(oldId, record, now) {
+  async askSupplement(oldId, record, holderName, now) {
     const why = {};
     let current = await this.freshReady(oldId, this.humanQuietMs, why);
     if (why.reason === 'archived') {
@@ -5048,7 +5050,7 @@ class QueueDispatcher {
     record.supplement = ask;
     this.save();
     try {
-      ask.tag = await this.send(current.session, supplementRequestText(record.newName || record.name), ask.item);
+      ask.tag = await this.send(current.session, supplementRequestText(holderName), ask.item);
       ask.state = 'asked';
       // Its prompt held nothing of the person's.
       delete record.typedAt;
@@ -5067,7 +5069,8 @@ class QueueDispatcher {
     }
   }
 
-  // The old session's answer, taken to the same successor and confirmed there as its handoff was. '' once it is.
+  // The old session's answer, taken to the session that holds the handoff now (handoffHolder) and confirmed there as
+  // its handoff was. '' once it is.
   async tellSuccessor(oldId, record, old, fresh, snapshot, now, live) {
     const s = record.supplement, to = (state, released) => { s.state = state; s.at = now; if (released) s.released = true; else delete s.released; this.save(); };
     const sentRow = (session, item) => conversation(session).findLast(m => m.dispatchItem === item);
@@ -5245,9 +5248,9 @@ class QueueDispatcher {
       this.log.splice(this.log.indexOf(doneEntry), 1);
       return 'log-unwritten';
     }
-    const holder = this.handoffHolder(record);
+    const holder = this.handoffHolder(record)?.id ?? record.newId;
     for (const roomId of record.roomIds) {
-      try { this.roomState.queueReassign(roomId, oldId, holder.id); } catch { /* The space may be gone. */ }
+      try { this.roomState.queueReassign(roomId, oldId, holder); } catch { /* The space may be gone. */ }
     }
     this.roomState.rotationEvent(record.roomIds, 'done', oldLabel, newLabel);
     this.notify(record.terminalFile ? 'saved' : 'done', record);

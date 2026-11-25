@@ -42,3 +42,31 @@ session in `error` after being asked waits. A send that timed out and is deliver
 
 Not verified: the installed app, real Claude and Codex sessions, and an interruption by a real person. The item stays open
 until one such rotation has finished by itself in daily use.
+
+## Correction after the integration review (finding B2, 2026-11-25): who the addition is told to
+
+The record above says the addition is told to "the same successor". The code told it to the session that holds the handoff
+at that moment, which is another one when the confirmed successor has itself been replaced by a finished rotation meanwhile.
+The wording was wrong, and the rule that followed the replacement was looser than the one the butler designation follows.
+
+| When the old session is free | Told to | Why |
+|---|---|---|
+| The confirmed successor is still it (also while its own rotation waits) | The confirmed successor | It has the work and the designation goes to it |
+| Its own rotation was finished, on one certain chain of `done` edges | The session at the end of the chain | The confirmed one is ended and archived. Read literally, the addition has nowhere to go, the work is given back to the old session while another one has it, and a second successor is made |
+| Its own rotation was finished, but the chain is not certain (kept and then finished, two targets, a target with two sources, a native identity that is missing, a log that cannot be read) | Nobody | Nothing is sent, ended or given back. It waits at `identity-ambiguous` (`designation-unreadable` for the butler with an unreadable log), logged once and told like any long wait |
+| The recipient is another native session now, or was when it was replaced | Nobody | It no longer has the handoff: the rotation fails as `successor-gone` and the old session is due again, as before |
+| The recipient's native identity is not reported now | Nobody yet | It waits at `successor-unavailable` and goes on when the identity is back |
+| The old session has already ended | As in the rows above | The note that it left something unsaid takes the same way, and the change is finished after it is confirmed there |
+
+Change. `handoffHolder` now uses the designation's own rule (`successor` over the whole log) instead of a walk of its own
+over the last thousand lines, and answers null when that rule stops at a session that a finished rotation replaced. The
+addition is confirmed at the recipient before the old session is ended, as before. The request to the old session names the
+session that will be told. No timer, poll or model call is added. Designation and revocation are unchanged.
+
+Checked without a model: red first, 15 of 27 new tests failed on 99d58b1d (no type error), the other 12 pin behaviour that
+was right already. R206 88/88; queue-dispatch, steward-entry and queue-secretary 494/494; 118 related files 2,777/2,777;
+nothing skipped. 12 mutations, all killed. One of them is the literal reading: always the confirmed successor. With it 12
+tests fail, the addition reaches nobody and the rotation is logged failed.
+
+A limit: with a rotation log that cannot be read, a member's waiting rotation now waits too, where it went by what was in
+memory before. Independent review of this delta: pending, with the integration reviewer who raised the finding.

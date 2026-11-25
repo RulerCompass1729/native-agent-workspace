@@ -5393,7 +5393,7 @@ for (const change of ['native context', 'person input', 'draft']) test(`r3 ${cha
 
 // R206 (2026-11-24: 「这是个 bug:一旦错过就不再继续,这个肯定不行.」): a rotation kept from ending its old session waits
 // for it and is then finished. The session under test is a, at the pass that has its handoff confirmed.
-const ROWS = f => fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+const ROWS = f => fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').filter(line => line.startsWith('{"time"')).map(line => JSON.parse(line));
 const eventsOf = (f, id = 'a') => ROWS(f).filter(e => e.old.id === id && ['kept', 'done', 'failed'].includes(e.event)).map(e => e.event);
 const gatesOf = (f, id = 'a') => ROWS(f).filter(e => e.old.id === id && e.event === 'waiting').map(e => e.reason);
 const NO_SAMPLES = { sampleProcesses: async () => { throw Error('no sample'); } };
@@ -5926,6 +5926,113 @@ test('R206: a successor changed for another meanwhile: the old session is finish
   await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); assert.equal(f.tells().length, 0);
   f.client.reply('n2', '收到。'); await f.pass();
   assert.equal(f.session('a').state, 'ended'); assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' });
+});
+
+// Its own finished rotation replaced the confirmed successor with n2.
+const ONWARD = f => ({ oldId: f.newId, oldNativeId: `native-${f.newId}`, name: 'x', newId: 'n2', newNativeId: 'native-n2', newName: 'y', roomIds: [] });
+function replaced(f, edges = [['done', {}]], ids = ['n2']) {
+  for (const id of ids) f.client.state.sessions.push(member(id, f.role.selected ? { roomIds: [], roomId: null } : {}));
+  for (const [event, change] of edges) f.dispatcher.appendLog(event, { ...ONWARD(f), ...change });
+  f.session(f.newId).state = 'ended';
+}
+const butlers = f => f.client.state.sessions.filter(s => s.state !== 'ended' && s.id === f.role.current().sessionId && s.nativeId === f.role.current().nativeId).length;
+
+for (const at of ['waiting', 'asked', 'sent', 'ended']) for (const again of [false, true])
+test(`R206: a successor replaced by its own rotation while the old one is ${at}${again ? ', across a restart' : ''}: what it added goes to the session that has the work now, once`, async t => {
+  const f = await handedOver(t), on = async () => { if (again) await f.restart(); replaced(f); if (again) await f.restart(); };
+  const call = f.client.call.bind(f.client); let boundary = null;
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'dispatch' && args[0] === 'n2') boundary = f.session('n2').messages.pop();
+    return result;
+  };
+  f.person(); await f.pass(); await f.pass(1);
+  if (at === 'ended') f.old.state = 'ended';
+  if (at === 'waiting' || at === 'ended') await on();
+  await f.pass(31); await f.pass(1); await f.pass(1);
+  if (at !== 'ended') {
+    assert.equal(f.asks().length, 1); assert.ok(f.asks()[0][2].includes(`已经交给「${at === 'waiting' ? f.dispatcher.name(f.session('n2')) : f.session(f.newId).name}」`), 'it names the one that is told');
+    if (at === 'asked') await on();
+    f.client.reply('a', '补。'); await f.pass();
+  }
+  if (at === 'sent') { assert.equal(f.tells().length, 1); f.session(f.newId).messages.pop(); await on(); await f.pass(31); }
+  for (let i = 0; i < 4 && !f.tells('n2').length; i += 1) await f.pass(31);
+  assert.equal(f.tells('n2').length, 1); assert.equal(f.tells().length, at === 'sent' ? 1 : 0, 'nothing more to the one that is gone');
+  assert.match(f.tells('n2')[0][2], at === 'ended' ? /没有补写就结束了/ : /补。/);
+  await f.pass(1); await f.pass(1); assert.equal(f.stopped('a'), false, 'not ended before it is confirmed there'); assert.deepEqual(eventsOf(f), []);
+  f.session('n2').messages.push(boundary); f.client.reply('n2', '收到。'); for (let i = 0; i < 3 && f.dispatcher.rotations.a; i += 1) await f.pass(1);
+  assert.equal(f.session('a').state, 'ended'); assert.deepEqual(eventsOf(f), ['done']); assert.equal(f.asks().length, at === 'ended' ? 0 : 1);
+  assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' }); assert.equal(butlers(f), 1); assert.equal(f.client.calls.filter(c => c[0] === 'create').length, 1);
+});
+
+// Who has the work now is read by the rule the designation follows: where that stops at one that is gone, nothing is
+// sent, ended or given back, and the old session stays what it is.
+for (const [what, edges, ids] of [
+  ['kept, and then finished', f => [['kept', { newId: 'n1', newNativeId: 'native-n1' }], ['done', {}]], ['n1', 'n2']],
+  ['finished to two', f => [['done', {}], ['done', { newId: 'n3', newNativeId: 'native-n3' }]], ['n2', 'n3']],
+  ['finished to one that replaced another too', f => [['done', {}], ['done', { oldId: 'z', oldNativeId: 'native-z' }]], ['n2']],
+  ['finished to one whose native session is not known', f => [['done', { newNativeId: null }]], ['n2']],
+  ['finished, with a line that cannot be read', f => [['done', {}]], ['n2']],
+]) for (const butler of [true, false])
+test(`R206: a successor ${what}: nothing is chosen for the ${butler ? 'butler' : 'member'}, and it waits and says so`, async t => {
+  const f = await handedOver(t, { butler });
+  f.person(); await f.pass(); await f.pass(1);
+  const task = butler ? null : f.room.queueAdd('给继任的', f.newId);
+  replaced(f, edges(f), ids);
+  if (what.includes('cannot be read')) fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), '{"event":"done"\n');
+  const told = () => [f.newId, ...ids].flatMap(id => f.tells(id)).length;
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); await f.pass(1);
+  if (!what.includes('cannot be read')) await f.restart();
+  for (const minutes of [1, 31, 25 * 60]) await f.pass(minutes);
+  assert.equal(told(), 0); assert.equal(f.asks().length, 0); assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []);
+  assert.equal(gatesOf(f).at(-1), butler && what.includes('cannot be read') ? 'designation-unreadable' : 'identity-ambiguous'); assert.equal(f.dispatcher.rotations.a.phase, 'handed'); assert.ok(f.dispatcher.rotations.a.told, 'the person is told once');
+  if (task) assert.equal(f.room.value.queue.find(i => i.id === task).assignee, f.newId);
+  if (butler && !what.includes('cannot be read')) { assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1); }
+});
+
+for (const [what, change] of [['another one now', s => { s.nativeId = 'native-other'; }], ['not known', s => { s.nativeId = null; }]])
+for (const onward of [false, true]) test(`R206: ${onward ? 'the one that replaced the successor' : 'a successor'} whose native session is ${what} is not told`, async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  if (onward) replaced(f);
+  const id = onward ? 'n2' : f.newId, native = f.session(id).nativeId; change(f.session(id));
+  await f.pass(31); if (f.asks().length) f.client.reply('a', '补。'); await f.pass(); await f.pass(1); await f.pass(1);
+  assert.equal(f.tells(id).length, 0); assert.equal(f.stopped('a'), false); assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1);
+  if (what === 'another one now') { assert.deepEqual(eventsOf(f), ['failed']); return; }
+  assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'successor-unavailable'); assert.equal(f.asks().length, 0);
+  f.session(id).nativeId = native; await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells(id).length, 1);
+});
+
+test('R206: a successor that was another native session before its own rotation had the handoff no more: its replacement is not told', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  replaced(f, [['done', { oldNativeId: 'native-other' }]]);
+  for (const minutes of [1, 1, 1]) await f.pass(minutes);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.equal(f.tells('n2').length, 0); assert.equal(f.stopped('a'), false); assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1);
+});
+
+test('R206: a successor whose own rotation was kept still has the handoff, as the designation says', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  replaced(f, [['kept', { newId: 'n1', newNativeId: 'native-n1' }]], ['n1']); f.session(f.newId).state = 'idle';
+  await f.pass(31); await supplemented(f); assert.equal(f.tells('n1').length, 0); finished(f); assert.equal(f.role.current().sessionId, f.newId);
+});
+
+test('R206: what the old session still had in its space\'s queue goes to the one that replaced its successor', async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); f.client.reply('n2', '收到。');
+  const task = f.room.queueAdd('给旧会话的', 'a'); await f.pass(); assert.equal(f.session('a').state, 'ended');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'n2');
+});
+
+test('R206: a successor whose native session was never recorded is not told', async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); f.dispatcher.rotations.a.newNativeId = null;
+  await f.pass(31); if (f.asks().length) f.client.reply('a', '补。'); await f.pass(); await f.pass(1);
+  assert.equal(f.tells().length, 0); assert.equal(f.asks().length, 0); assert.equal(f.stopped('a'), false); assert.equal(gatesOf(f).at(-1), 'identity-ambiguous');
+});
+
+test('R206: who replaced the successor is read from the whole log, not from its last thousand lines', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  for (let i = 0; i < 1001; i += 1) f.dispatcher.appendLog('requested', { oldId: `o${i}`, oldNativeId: `native-o${i}`, name: 'x', roomIds: [] });
+  await f.pass(31); await f.pass(1); assert.deepEqual(eventsOf(f), []); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1);
+  f.client.reply('n2', '收到。'); await f.pass(); assert.equal(f.session('a').state, 'ended'); assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' });
 });
 
 test('R206: an identity that does not match is never upgraded', async t => {
