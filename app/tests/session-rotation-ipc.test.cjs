@@ -2,10 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { uiError } = require('../ui-errors.cjs');
+const background = require('../background-control.cjs');
 
 // R207: who may ask for a rotation now, and who may take it back (main.cjs sessionRotation). Synthetic sessions only.
 const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
 const refusal = key => error => error?.uiMessage?.key === key;
+// The butler's: not executed, with a reason (background-control.cjs HandlerRefused).
+const refused = (key, reason) => error => error instanceof background.HandlerRefused && error.reason === reason && error.message === uiError(key).message;
 const REGION = ["  register('sessionRotation'", "  register('modelChoices'"];
 function handlers({ person = true, dispatcher, ...globals } = {}) {
   const start = source.indexOf(REGION[0]), end = source.indexOf(REGION[1], start);
@@ -19,7 +22,7 @@ function handlers({ person = true, dispatcher, ...globals } = {}) {
   let told = 0;
   vm.runInContext(source.slice(start, end), vm.createContext({
     register: (name, fn) => { registered.set(name, fn); applicationHandlers.set(name, fn); },
-    applicationHandlers, queueDispatcher, uiError, broadcastRoom: async () => { told += 1; },
+    applicationHandlers, queueDispatcher, uiError, background, broadcastRoom: async () => { told += 1; },
     isCurrentHumanContext: c => !c.background && person, ...globals,
   }));
   return { calls, registered, applicationHandlers, told: () => told,
@@ -79,7 +82,7 @@ function butlerSetup(t, { sessions, dispatcher, actor, stewardRecord, globals = 
 }
 const OWN = { id: 'butler', nativeId: 'native-butler', name: 'Synthetic butler', state: 'working', roomIds: [], roomId: null };
 const OTHER = { id: 'other', nativeId: 'native-other', name: 'Other', state: 'working', roomIds: [], roomId: null };
-const butlerOnly = refusal('error.rotation.butlerOnly');
+const butlerOnly = refused('error.rotation.butlerOnly', 'rotation-caller');
 
 test('R207 甲: the designated butler asks for its own rotation, and only its own', async t => {
   const asked = [], dispatcher = { requestRotation: async (...args) => { asked.push(args); return { state: 'requested', gate: 'not-idle', undo: true, next: { id: 'x', name: 'private' } }; } };
@@ -115,7 +118,7 @@ test('R207 甲: the designated butler asks for its own rotation, and only its ow
 
 test('R207 甲: asked only as a step written in its record: none, one that takes no lines, or a call it did not write is refused', async t => {
   const asked = [], dispatcher = { requestRotation: async (...args) => { asked.push(args); return null; } };
-  const unwritten = refusal('error.steward.recordUnavailable');
+  const unwritten = refused('error.steward.recordUnavailable', 'rotation-unrecorded');
   const given = { sessions: [OWN], dispatcher, actor: { id: 'butler', nativeId: 'native-butler' } };
   const f = butlerSetup(t, given);
   f.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
@@ -135,7 +138,7 @@ test('R207 甲: asked only as a step written in its record: none, one that takes
   missing.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
   await assert.rejects(missing.unrecorded(), unwritten, 'no record at all');
   f.record.failed = true;
-  await assert.rejects(f.rotate(), unwritten, 'it takes no lines');
+  await assert.rejects(f.rotate(), refusal('error.steward.recordUnavailable'), 'it takes no lines: the record itself refuses the call');
   await assert.rejects(f.record.calls.run({ id: 'butler', nativeId: 'native-butler', open: true }, () => f.unrecorded()), unwritten, 'it failed while the call ran');
   assert.equal(asked.length, 1, 'nothing is asked for');
 });
@@ -149,11 +152,46 @@ test('R207 甲: the refusal only the butler reads is not written to the person',
   }
 });
 
+test('R207 甲: what is refused before anything is asked for comes back as not executed, with the reason; a failed save does not', async t => {
+  const actor = { id: 'butler', nativeId: 'native-butler' };
+  let thrown = null;
+  const f = butlerSetup(t, { sessions: [OWN], actor, dispatcher: { requestRotation: async () => { if (thrown) throw thrown; return { state: 'requested' }; } } });
+  f.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
+  const client = { call: async () => ({ sessions: [OWN] }), entries: [], refresh: async () => {}, snapshot: () => ({ sessions: [OWN], rooms: [] }), close() {} };
+  const controller = new background.BackgroundControl({ dataDir: f.dir, handlers: new Map([['stewardRotate', f.registered.get('stewardRotate')]]),
+    context: () => ({ background: true, actor, view: {}, client, win: { destroy() {} }, checkActor: async () => {}, fingerprint: () => ({ sessions: [], auditRooms: ['shared'] }) }) });
+  t.after(() => controller.close());
+  let calls = 0;
+  const sender = { ...actor, provider: 'claude', name: 'Synthetic butler' };
+  const direct = (...args) => {
+    const call = { action: 'invoke', method: 'stewardRotate', arguments: args, operation_id: `asked-${calls += 1}` };
+    return controller.call({ sender, identity: { callId: `call-${calls}`, turnId: 'turn' }, valid: () => true }, call);
+  };
+  const ask = (...args) => f.record.around(sender, { action: 'invoke', method: 'stewardRotate', arguments: args, operation_id: `asked-${calls + 1}` }, () => direct(...args));
+  assert.equal((await ask()).state, 'complete');
+  for (const [key, reason] of [['error.rotation.personFirst', 'rotation-person-first'], ['error.rotation.unavailable', 'rotation-unavailable']]) {
+    thrown = uiError(key);
+    const answer = await ask();
+    assert.deepEqual([answer.state, answer.reason, answer.error], ['not-executed', reason, uiError(key).message]);
+  }
+  const other = await ask('other');
+  assert.deepEqual([other.state, other.reason], ['not-executed', 'rotation-caller']);
+  thrown = Error('disk full');
+  assert.equal((await ask()).state, 'unconfirmed');
+  thrown = null;
+  const unwritten = await direct();
+  assert.deepEqual([unwritten.state, unwritten.reason], ['not-executed', 'rotation-unrecorded']);
+  const shown = fs.readFileSync(path.join(__dirname, '../renderer/steward-record.js'), 'utf8'), texts = require('../ui-messages.js');
+  for (const reason of ['rotation-caller', 'rotation-unrecorded', 'rotation-person-first', 'rotation-unavailable']) {
+    assert.ok(shown.includes(`'${reason}'`) && texts.zh[`stewardRecord.reason.${reason}`] && texts.en[`stewardRecord.reason.${reason}`], reason);
+  }
+});
+
 test('R207 甲: not a call of the person\'s window, refused while NAW sends nothing, and the butler has no undo', async t => {
   const f = butlerSetup(t, { sessions: [OWN], dispatcher: null, actor: { id: 'butler', nativeId: 'native-butler' } });
   f.role.set({ sessionId: 'butler', nativeId: 'native-butler' });
   await assert.rejects(f.registered.get('stewardRotate')({ background: false, client: { call: async () => ({ sessions: [OWN] }) } }), butlerOnly, 'the person has their own');
-  await assert.rejects(f.rotate(), refusal('error.rotation.unavailable'));
+  await assert.rejects(f.rotate(), refused('error.rotation.unavailable', 'rotation-unavailable'));
   assert.deepEqual([...f.registered.keys()], ['sessionRotation', 'stewardRotate']);
   assert.equal(fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8').includes('stewardRotate'), false);
   const body = source.slice(source.indexOf("register('stewardRotate'"), source.indexOf("register('modelChoices'"));

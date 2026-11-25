@@ -40,7 +40,8 @@ const admissionReasons = new Set(['confirmation-limit', 'originating-session-una
 const validOriginCheck = value => typeof value === 'string' && /^(?:(?:admission|confirmation)-(?:roster|missing|native-id|archived|context-pending)|confirmation-(?:refresh|native-call|closed|fingerprint))$/.test(value);
 const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable', 'model-change-unavailable']);
 // Codes of a handler that refused before any effect; such a call is not executed, never unconfirmed.
-const handlerRefusals = new Set(['standing-caller', 'standing-invalid', 'standing-unrecorded', 'standing-person-off', 'standing-unchanged']);
+const handlerRefusals = new Set(['standing-caller', 'standing-invalid', 'standing-unrecorded', 'standing-person-off', 'standing-unchanged',
+  'rotation-caller', 'rotation-unrecorded', 'rotation-person-first', 'rotation-unavailable']);
 const summarizedReasons = new Set([...admissionReasons, 'another-operation-running', 'explicit-paths-required', ...preconditionReasons]);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };

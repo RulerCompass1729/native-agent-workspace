@@ -2923,11 +2923,19 @@ async function boot() {
   // 甲 (R207; the person, 2026-11-25: 「「权限可以」 同意」): the designated butler asks for its own rotation now. Itself
   // only, never another session, and it cannot take one back. The call is a step in its record, as its others are.
   register('stewardRotate', async (c, ...args) => {
+    const refuse = (key, reason) => new background.HandlerRefused(uiError(key), reason);
     const steward = await stewardCaller(c);
-    if (!steward || args.length > 1 || args.length === 1 && args[0] !== steward.id) throw uiError('error.rotation.butlerOnly');
-    if (!stewardRecord || stewardRecord.failed || !stewardRecord.recording(backgroundOperation.current())) throw uiError('error.steward.recordUnavailable');
-    if (!queueDispatcher) throw uiError('error.rotation.unavailable');
-    const row = await queueDispatcher.requestRotation(steward.id, 'steward');
+    if (!steward || args.length > 1 || args.length === 1 && args[0] !== steward.id) throw refuse('error.rotation.butlerOnly', 'rotation-caller');
+    if (!stewardRecord || stewardRecord.failed || !stewardRecord.recording(backgroundOperation.current())) throw refuse('error.steward.recordUnavailable', 'rotation-unrecorded');
+    if (!queueDispatcher) throw refuse('error.rotation.unavailable', 'rotation-unavailable');
+    let row;
+    try {
+      row = await queueDispatcher.requestRotation(steward.id, 'steward');
+    } catch (error) {
+      // Both are thrown before anything is asked for; a save that failed is not.
+      const key = error?.uiMessage?.key, reason = { 'error.rotation.personFirst': 'rotation-person-first', 'error.rotation.unavailable': 'rotation-unavailable' }[key];
+      throw reason ? refuse(key, reason) : error;
+    }
     return row ? { state: row.state, ...(row.gate ? { gate: row.gate } : {}) } : null;
   });
   register('modelChoices', (c, id) => modelChanges().choices(id));
