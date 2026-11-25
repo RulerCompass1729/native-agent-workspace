@@ -264,7 +264,7 @@ test('what counts as a stop in the terminal is what the workspace takes for one,
   for (const data of [undefined, null, 3, {}, ['\x1b']]) assert.equal(rules.terminalInterrupt(data), false);
   for (const data of ['\x1b', '\x03']) assert.equal(rules.terminalReplyOnly(data), false);
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
-  assert.match(main, /humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method, args\[1\]\);/);
+  assert.match(main, /humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method, args\[1\], context\.view\?\.owner\);/);
 });
 test('the clock set back: the three minutes start again from there', async t => {
   const f = setup(t);
