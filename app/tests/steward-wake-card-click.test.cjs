@@ -147,6 +147,14 @@ test('an idle clock that runs decides, whatever the last activity says', async t
   soon(f, ended, 14 * SEC); assert.ok(f.wakes()[0].at - ended >= 8 * SEC);
 });
 
+test('a rotation record that cannot be read makes no event a click, and stops no pass', async t => {
+  const f = fixture(t);
+  f.dispatcher.continuedFrom = () => { throw Error('SYNTHETIC'); };
+  await f.run(MIN); f.dispatcher.noteHuman('butler', 'send'); const used = f.clock.now;
+  f.event(); await f.run(5 * MIN);
+  assert.equal(f.wakes().length, 1); assert.ok(f.wakes()[0].at - used >= 2 * MIN);
+});
+
 test('every click is told once: several before a wake in one, one after it in the next', async t => {
   const f = fixture(t);
   await f.run(MIN);
