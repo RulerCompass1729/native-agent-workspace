@@ -401,7 +401,8 @@ is not a claim that the provider keeps the content private.
 An Antigravity member is the person's installed Antigravity CLI (`agy`) running in
 NAW's terminal. NAW offers it only when it finds that program and does not install
 or update it. This section was read from NAW's source; the program's own behavior
-was not audited.
+was not audited. Where 1.5.16 and 1.5.17 are named, the checks were non-interactive runs
+(`-p`) without network or model calls; NAW starts it interactively, which was not checked.
 
 **Who receives its content.** The CLI handles the member's prompts, the files it
 reads, its command and tool output, and whatever a space, a queue or another
@@ -421,8 +422,12 @@ untick it. Unticked, NAW passes no permission option and leaves that to Antigrav
 The session keeps the choice when it is resumed. The program inherits NAW's
 environment, including any keys in it, without NAW's hook and service variables, those
 of the terminal program NAW was started from and the session variables of an agent NAW was
-started from; NAW then adds this session's hook token and socket path. NAW neither
-reads nor writes Antigravity's sign-in or settings files.
+started from; NAW then adds this session's hook token and socket path and
+`AGY_CLI_DISABLE_AUTO_UPDATE=true`, whatever that was set to before. With it, 1.5.16
+and 1.5.17 logged that auto-update was disabled; without it, or with `TRUE` or `1`,
+they started a background update. It covers only the program NAW starts: one the
+person starts elsewhere still updates the shared installation, and NAW then starts the
+new version. NAW neither reads nor writes Antigravity's sign-in or settings files.
 
 **What NAW stores.** `workspace.json` (above) keeps the folder, conversation id,
 model name and permission choice, the messages sent to it through NAW, and the final
@@ -445,16 +450,19 @@ transcript path and whether there was an error. A workspace message call is NAW'
 `workspace_message` through `call_mcp_tool`, or any tool whose name ends that way;
 for it the hook also passes the fixed tool name, the call id and, before the call,
 the recipient id and SHA-256 of the message. For any other MCP call it sends nothing
-and returns no decision. Before a workspace message call it answers `allow` once the
-event is written to NAW's socket; if that fails, or the event cannot be read, it
-returns no decision. NAW's sending rules still decide whether the message goes out.
-If the session's token or socket path is missing from its environment it sends
-nothing and answers `allow` to the tool call it was run for. The message tool itself
-hands NAW the recipient id and the message.
+and answers `{}`, which 1.5.16 and 1.5.17 treated as a denial before a call. Before a
+workspace message call it answers `allow` once the event is written to NAW's socket; if
+that fails, or the event cannot be read, it answers `{}`. In the same checks `allow` did
+not skip Antigravity's own permission check. NAW's sending rules still decide whether
+the message goes out. If the session's token or socket path is missing from its
+environment it sends nothing and, before a call, writes nothing back, which had the same
+result as no hook at all. The message tool itself hands NAW the recipient id and the
+message.
 
 **Not audited.** The servers Antigravity contacts for each model; its telemetry,
-crash reports, update checks and how they default; what it keeps under its own
-folders and for how long; what it does with the folder passed with `--add-dir`, the
-permission option or the hook's answer. Antigravity's handling and retention follow
+crash reports, update checks and how they default; what it keeps under its own folders
+and for how long; what it does with the folder passed with `--add-dir` or the permission
+option; and, with the hook's answer, its interactive screen, MCP tools it loads up front
+and other versions. Antigravity's handling and retention follow
 its own terms; this section discloses a recipient and is not a claim that the content
 stays private.
