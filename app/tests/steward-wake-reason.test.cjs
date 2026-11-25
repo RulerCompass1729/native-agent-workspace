@@ -255,7 +255,7 @@ test('only the butler\'s own read lists the open windows; a list that cannot be 
 test('the catalog tells the butler what its read says', () => {
   const { BackgroundControl } = require('../background-control.cjs');
   const entry = new BackgroundControl({ dataDir: os.tmpdir(), handlers: new Map([['stewardWake', () => null]]) }).catalog().find(item => item.method === 'stewardWake');
-  for (const word of ['blocked', 'waitingMinutes', 'waitingSince', 'quietWindows', 'openedAt', 'deadline', 'queued', 'last dispatch pass', 'milliseconds']) assert.ok(entry.parameters[0].includes(word), word);
+  for (const word of ['blocked', 'waitingMinutes', 'waitingSince', 'quietWindows', 'openedAt', 'deadline', 'queued', 'last dispatch pass', 'milliseconds', 'the person\'s own act']) assert.ok(entry.parameters[0].includes(word), word);
 });
 
 test('the person\'s banner counts the whole wait, not the current reason\'s minutes', () => {

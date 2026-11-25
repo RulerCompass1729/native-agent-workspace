@@ -5,7 +5,8 @@
 // dispatcher's pass that runs it (queue-dispatch.cjs wakeSteward):
 // (1) the message carries only a position: the butler reads stewardEvents from it itself (main.cjs);
 // (2) a butler at work is not called; once it is idle (the same readiness, idle settling and quiet after the person as a
-//     member before its next queue item), one message covers everything recorded since;
+//     member before its next queue item), one message covers everything recorded since; the person's own act, such as a
+//     click on a card (R200, 2026-11-24: 「我点了卡为撒你没反应」), is told also inside a migration's quiet window;
 // (3) two wakes are at least a minute apart, the limit of NAW's other automatic messages (session-wake.cjs COOLDOWN);
 //     an attempt that failed counts too, so a send that keeps failing is tried once a minute at most;
 // (4) a butler running on DeepSeek is never called, nor one whose model NAW does not know;
@@ -41,6 +42,8 @@ const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-sett
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
+// Recorded by person-actions.cjs; a card or grant that ran out of time is not the person's act.
+const personAct = e => e.kind === 'request' && /^person-action:[a-z]+:(?!expire$)/u.test(e.payload?.reason ?? '');
 const identity = value => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'nativeId,sessionId' &&
   validId(value.sessionId) && validId(value.nativeId));
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
@@ -301,6 +304,18 @@ class StewardWake {
         position = through;
       }
       return true;
+    } catch { return false; }
+  }
+  // Whether the person acted after the position last named. Unreadable counts as not.
+  personActed() {
+    try {
+      let position = from(this.latest(), this.state.woken);
+      for (;;) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100);
+        if (events.some(personAct)) return true;
+        if (!more) return false;
+        position = through;
+      }
     } catch { return false; }
   }
   // One of the butler's calls, or a release of a rotation, went through: refusals may wake it again.
