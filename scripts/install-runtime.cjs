@@ -251,7 +251,8 @@ function views() {
     const final = baseline.state, restarting = baseline.restarting;
     const expectedActive = baseline.expectedActive, flushed = baseline.views;
     let afterView = null, lastError = null;
-    const deadline = Date.now() + 60000;
+    // Startup may first spend 30 s clearing an interrupted runtime copy and 120 s on a new one (app/dsh-tui.cjs).
+    const deadline = Date.now() + 60000 + 150000;
     do {
       try {
         const view = await readBackends();

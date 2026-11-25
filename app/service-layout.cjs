@@ -14,8 +14,11 @@ function readLayout(dataDir) {
   if (layout.format !== 1 || !Array.isArray(layout.entries) || !layout.entries.length || new Set(layout.entries).size !== layout.entries.length || !layout.entries.includes(layout.active) || layout.entries.some(key => !validKey(key)) || (layout.pending !== undefined && (!validKey(layout.pending) || layout.entries.includes(layout.pending)))) throw uiError("error.service.invalidLayout");
   if (layout.dshInheritance !== undefined) {
     const history = layout.dshInheritance, pairs = new Set();
+    // Where the copy stopped; absent from rows older versions wrote.
+    const validProgress = row => (row.stage === undefined || typeof row.stage === 'string' && /^[a-z-]{1,20}$/.test(row.stage)) &&
+      [row.item, row.elapsedMs].every(value => value === undefined || Number.isSafeInteger(value) && value >= 0);
     if (!history || typeof history.version !== 'string' || !history.version || !Array.isArray(history.failures) || history.failures.some(row => {
-      if (!row || !validKey(row.source) || !validKey(row.target) || row.source === row.target || !Number.isInteger(row.attempts) || row.attempts < 1 || row.attempts > DSH_INHERIT_ATTEMPTS || !['deadline', 'filesystem', 'unqualified', 'unavailable'].includes(row.reason)) return true;
+      if (!row || !validKey(row.source) || !validKey(row.target) || row.source === row.target || !Number.isInteger(row.attempts) || row.attempts < 1 || row.attempts > DSH_INHERIT_ATTEMPTS || !['deadline', 'filesystem', 'unqualified', 'unavailable'].includes(row.reason) || !validProgress(row)) return true;
       const key = JSON.stringify([row.source, row.target]); if (pairs.has(key)) return true; pairs.add(key); return false;
     })) throw uiError("error.service.invalidLayout");
   }
