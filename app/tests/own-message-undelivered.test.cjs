@@ -355,7 +355,7 @@ test('along a rotation chain: what each session sent in its turn is the butler\'
   const later = f.open(); f.observe(later, sessions); assert.equal(f.events(later).at(-1).payload.itemId, 'of-b-closed'); assert.equal(f.events(later).length, 6);
 });
 
-test('no role record to read: nothing the butler was told is saved is left out, and none is guessed to be another session\'s', async t => {
+test('no role record to read: what the butler lost since the intake is not left out, and none is guessed to be another session\'s', async t => {
   const broken = { 'it throws': () => { throw Error('unreadable'); }, 'it cannot say': () => undefined };
   for (const [name, wasButler] of Object.entries(broken)) {
     const f = await fixture(t), a = f.session(f.source, f.a), b = person('b'), c = person('c');
@@ -474,11 +474,21 @@ test('the role record says neither yes nor no of a time it cannot know', async t
   // Started: the butler was designated some time after the line before, when no line could be written.
   f.advance(1000); f.designate(null); const ended = f.now(); f.advance(1000); const t3 = f.now(); f.advance(1000);
   record.append({ kind: 'role', event: 'started', session: { id: 'c', nativeId: 'native-c' } });
-  assert.deepEqual([held(c, ended), held(c, t3), held(c, t3, ['c', 'b']), held(b, t3, ['c', 'b']), held(b, t3), held(c, t2)], [undefined, undefined, undefined, undefined, false, false]);
+  assert.deepEqual([held(c, ended), held(c, t3), held(c, t3, ['c', 'b']), held(b, t3, ['c', 'b']), held(b, t3), held(c, t2)], [undefined, undefined, undefined, undefined, undefined, false], 'nobody knows who until that line');
   // A line that cannot be written: what came before stands, later nobody knows.
   f.advance(1000); const t4 = f.now(); f.advance(1000); record.log.append = () => { throw Error('Synthetic'); };
   assert.throws(() => record.designated(b)); const t5 = f.now();
   assert.deepEqual([held(c, t4), held(b, t1), held(c, t5), held(b, t5, ['b'])], [true, false, undefined, undefined]);
+  // A successor the role did not follow, then chosen by the person: not before that.
+  const g = await fixture(t), x = person('x'), at = g.now(); g.advance(1000); g.designate(x);
+  assert.equal(g.main.record.heldRole('x', 'native-x', at, new Set(['x', g.a])), false);
+  assert.equal(g.main.record.heldRole('y', 'native-y', at, new Set(['x', 'y', g.a])), true, 'one between them');
+  // One the role followed to held it from its start, before the line that noticed it; who came before it is not known.
+  const follows = path.join(g.root, 'follows'); fs.mkdirSync(follows, { mode: 0o700 });
+  const followed = new StewardRecord(follows, { steward: () => x, selected: () => person('first'), now: () => g.now() });
+  followed.append({ kind: 'role', event: 'revoked', session: null }); g.advance(1000); const gap = g.now(); g.advance(1000); followed.sync(x);
+  assert.equal(followed.roles().at(-1).event, 'followed');
+  assert.deepEqual([['x', ['x', 'y']], ['y', ['x', 'y']], ['y', ['x']], ['y']].map(([id, chain]) => followed.heldRole(id, 'native-' + id, gap, chain && new Set(chain))), [true, undefined, false, false]);
   // Before the first line: not the butler if that line is a designation, not known if it was already one.
   const first = await fixture(t); assert.equal(first.main.record.heldRole('b', 'native-b', 1), false);
   const dir = path.join(first.root, 'started'); fs.mkdirSync(dir, { mode: 0o700 });

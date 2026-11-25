@@ -328,8 +328,8 @@ class ButlerIngress {
   // Own is what a session sent while it held the role, whoever it is to, by the role record
   // (`wasButler(id, nativeId, at, chain)`: true, false, or undefined when the record cannot say): a butler the person
   // replaced directly is on no rotation chain, and its backend can withdraw one while main is not running. When the
-  // record cannot say, what the current butler and those sessions sent is own; any other told message to the butler
-  // is recorded as one to the butler, also one whose arrival NAW could not confirm.
+  // record cannot say, what the current butler and those sessions sent that failed since this intake started is own;
+  // any other told message to the butler is recorded as one to the butler, also one whose arrival NAW could not confirm.
   observeWakeUndelivered(sessions = [], { steward, formerly, wasButler } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
