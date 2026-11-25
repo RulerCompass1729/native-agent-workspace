@@ -398,23 +398,52 @@ test('a line still being written at the end gives no size until it is whole', as
   assert.equal(counter.last.counts.get('s1'), 1);
 });
 
-test('a line longer than the cap gives no size while it is being skipped', async t => {
-  const r = roots(t);
-  fs.writeFileSync(r.claudeFile, `${claudeUsage({ read: 189500, write1h: 500, input: 0 })}\n`);
-  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0, readBytes: 4096, lineCap: 2048, passBytes: 4096 });
-  await counter.sample([claude()], 0);
-  assert.equal(counter.contexts.get('s1').tokens, 190000);
-  fs.appendFileSync(r.claudeFile, 'y'.repeat(3000));
-  await counter.sample([claude()], 1);
-  const state = counter.states.get('s1');
-  assert.equal(state.skipping, true);
-  assert.equal(state.offset, fs.statSync(r.claudeFile).size);
-  assert.equal(counter.contexts.has('s1'), false, 'every byte is read, its last line is not whole');
-  await counter.sample([claude()], 2);
-  assert.equal(counter.contexts.has('s1'), false);
-  fs.appendFileSync(r.claudeFile, '\n');
-  await counter.sample([claude()], 3);
-  assert.equal(counter.contexts.get('s1').tokens, 190000);
+test('after a line longer than the cap, unread, no size from before it is given until a request after it', async t => {
+  const large = extra => claudeUsage({ ...extra, message: { ...JSON.parse(claudeUsage(extra)).message, content: [{ type: 'text', text: 'y'.repeat(9000) }] } });
+  // What the unread line was: another request, an uncached one, a compaction, or no request at all.
+  const unread = {
+    request: large({ read: 19000, write1h: 1000 }), uncached: large({ input: 190000 }),
+    compaction: claudeCompaction({ content: 'y'.repeat(9000) }), text: claudeTurn('y'.repeat(9000)),
+  };
+  for (const [kind, line] of Object.entries(unread)) {
+    const r = roots(t);
+    fs.writeFileSync(r.claudeFile, `${claudeUsage({ read: 189500, write1h: 500, input: 0 })}\n`);
+    const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0, readBytes: 4096, lineCap: 2048, passBytes: 4096 });
+    let pass = 0;
+    const sample = async () => { await counter.sample([claude()], pass += 1); return counter.contexts.get('s1'); };
+    const state = () => counter.states.get('s1');
+    const end = async what => {
+      for (let passes = 0; ; passes += 1) {
+        const context = await sample();
+        if (state().offset === fs.statSync(r.claudeFile).size && !state().skipping) return context;
+        assert.equal(context, undefined, `${kind}: ${what}, still skipping`);
+        assert.ok(passes < 10);
+      }
+    };
+    assert.equal((await sample()).tokens, 190000, kind);
+    fs.appendFileSync(r.claudeFile, line);
+    while (state().offset < fs.statSync(r.claudeFile).size) assert.equal(await sample(), undefined, `${kind}: being skipped`);
+    assert.equal(state().skipping, true, kind);
+    assert.equal(await sample(), undefined, `${kind}: every byte is read, its newline is not there yet`);
+    fs.appendFileSync(r.claudeFile, '\n');
+    assert.equal(await end('its newline'), undefined, `${kind}: skipped whole`);
+    assert.equal(await sample(), undefined, `${kind}: nothing written since`);
+    fs.appendFileSync(r.claudeFile, `${claudeTurn('after')}\n`);
+    assert.equal(await end('a turn'), undefined, `${kind}: no request since`);
+    // A cache read alone has no lifetime to take over the unread line.
+    fs.appendFileSync(r.claudeFile, `${claudeUsage({ read: 21000 })}\n`);
+    assert.deepEqual(await end('a read'), { tokens: 21002, at: AT, ttlMs: null }, kind);
+    fs.appendFileSync(r.claudeFile, `${claudeUsage({ read: 22000, write1h: 10 })}\n`);
+    assert.deepEqual(await end('a write'), { tokens: 22012, at: AT, ttlMs: 60 * 60000 }, kind);
+    // Its end and what follows in one read.
+    const whole = roots(t);
+    fs.writeFileSync(whole.claudeFile, `${claudeUsage({ read: 189500, write1h: 500, input: 0 })}\n`);
+    const second = new counting.CompactionCounter({ claudeRoot: whole.claudeRoot, codexRoot: whole.codexRoot, sampleMs: 0, readBytes: 4096, lineCap: 2048, passBytes: 4096 });
+    await second.sample([claude()], 0);
+    fs.appendFileSync(whole.claudeFile, `${line}\n${claudeUsage({ read: 21000 })}\n`);
+    for (let passes = 1; passes < 10; passes += 1) await second.sample([claude()], passes);
+    assert.deepEqual(second.contexts.get('s1'), { tokens: 21002, at: AT, ttlMs: null }, `${kind}: a read in the read that ends it`);
+  }
 });
 
 test('a request that neither read nor wrote the cache has no lifetime: none from before it is kept or looked for', async t => {

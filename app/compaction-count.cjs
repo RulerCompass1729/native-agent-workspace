@@ -98,7 +98,7 @@ function contextLine(line, nativeId) {
 }
 
 // Reads on from state.offset; returns the bytes read. state: { dev, ino, offset, count, skipping, context, whole }.
-// whole: this read reached the end of the record, on a whole line.
+// whole: this read reached the end of the record. context is null from an unread line until a request after it.
 async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
   let handle;
   try {
@@ -115,7 +115,7 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
     }
     const length = Math.min(stat.size - state.offset, maxBytes);
     if (length <= 0) {
-      state.whole = !state.skipping;
+      state.whole = true;
       return 0;
     }
     const buffer = Buffer.allocUnsafe(length);
@@ -159,9 +159,11 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
     if (state.skipping || (start === 0 && data.length >= lineCap)) {
       state.skipping = true;
       start = data.length;
+      // It may be a request or a compaction: neither the size nor the lifetime from before it is known to hold.
+      state.context = null;
     }
     state.offset += start;
-    state.whole = !state.skipping && state.offset === stat.size;
+    state.whole = state.offset === stat.size;
     return read;
   } finally {
     await handle.close().catch(() => {});
