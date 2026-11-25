@@ -88,7 +88,7 @@ test('held, then the butler is archived and its successor goes on: one event, na
   assert.equal(f.row().wake.status, 'cancelled');
   f.observe(); f.observe();
   assert.deepEqual(f.events().map(e => [e.kind, e.sourceRef, e.payload]),
-    [['blocked', `wake-undelivered:${f.b}`, own(f, f.row(), 'cancelled:observation-boundary-known-reason')]]);
+    [['blocked', `wake-undelivered:${f.b}`, own(f, f.row(), 'cancelled:disconnecting')]]);
   // The new butler is also one the record names; main restarting records nothing again.
   f.main.record.sync(f.session(f.source, f.c)); f.observe(); f.advance(1000);
   const later = f.open(); f.observe(later); assert.equal(f.events(later).length, 1);
@@ -118,7 +118,7 @@ for (const held of [false, true]) test(`a gap in what NAW saw of the turn withdr
   for (let i = 0; i < 2; i++) f.source.runtimes.get(f.a).emit('nativeBlock', { kind: 'gap' });
   if (!held) await one.finish();
   assert.equal(f.row().wake.status, 'cancelled'); f.observe(); f.observe();
-  assert.deepEqual(f.events().map(e => e.payload), [own(f, f.row(), 'cancelled:observation-boundary-known-reason')]);
+  assert.deepEqual(f.events().map(e => e.payload), [own(f, f.row(), 'cancelled:observation-gap')]);
 });
 
 test('after a gap, asking again in the same turn: the call answers it did not go out, so no event but the first message\'s', async t => {
@@ -236,7 +236,7 @@ test('the person designates another session directly: what the one before was to
   f.advance(MIN); f.designate(f.session(f.source, f.c)); f.advance(1000);
   f.observe(); assert.deepEqual(f.events(), [], 'still waiting');
   f.advance(MIN); await f.stop(f.a); f.observe(); f.observe();
-  assert.deepEqual(f.events().map(e => e.payload), [own(f, f.row(), 'cancelled:observation-boundary-known-reason')]);
+  assert.deepEqual(f.events().map(e => e.payload), [own(f, f.row(), 'cancelled:disconnecting')]);
   // What it sends after it stopped being the butler is an ordinary session's.
   const g = await fixture(t);
   g.designate(g.session(g.source, g.c)); g.advance(1000);
@@ -339,6 +339,27 @@ test('rows of a backend from before the mark: withdrawn, held or lost are record
   assert.deepEqual(f.events(later).map(e => e.payload.itemId), ['w', 'h', 'q', 'b', 'l'], 'sent in the role, withdrawn before this intake: without the mark, not announced');
 });
 
+// The person's stop, a takeover and a gap were one code, and the butler could not tell which it may send again.
+const withdrawals = {
+  'observation-gap': f => f.source.runtimes.get(f.a).emit('nativeBlock', { kind: 'gap' }),
+  'human-control': f => f.source.claim(f.a, 'another-window', 'chat', 'shared'),
+  disconnecting: f => f.stop(f.a),
+};
+for (const [code, act] of Object.entries(withdrawals)) test(`why a held one was withdrawn is its own code: ${code}`, async t => {
+  const f = await fixture(t); f.busy();
+  const one = await f.begin('one', 'Secret held task.'); await one.finish(); f.advance(MIN);
+  await act(f); assert.equal(f.row().wake.status, 'cancelled'); assert.equal(f.row().uiMessage.key, 'notice.wake.observationBoundaryKnownReason');
+  f.observe(); assert.deepEqual(f.outcomes(), [`cancelled:${code}`]);
+});
+test('withdrawn with a code of its own, or with no cause: as before', async t => {
+  const f = await fixture(t), row = (id, uiMessage, extra) => ({ id, origin: 'agent-wake-intent', uiMessage,
+    wake: { id, senderId: f.a, nativeId: f.source.get(f.a).nativeId, recipientId: f.b, body: 'Secret.', time: f.now(), status: 'cancelled', told: true, ...extra } });
+  const cause = { version: 1, key: 'notice.run.observationGap', params: {} };
+  f.observe(f.main, [{ ...f.source.get(f.a), messages: [row('own', { version: 1, key: 'notice.wake.turnCancelled', params: {}, cause }, { cancellation: { code: 'turn-not-completed', at: f.now() } }),
+    row('plain', { version: 1, key: 'notice.wake.heldCancelled', params: {} }), row('none', undefined)] }]);
+  assert.deepEqual(f.outcomes(), ['cancelled:turn-not-completed', 'cancelled:held-cancelled', 'cancelled:unknown']);
+});
+
 test('the role record says who held the role and when, in its own words only', async t => {
   const f = await fixture(t), record = f.main.record, at = f.now(), nativeId = f.source.get(f.a).nativeId;
   assert.equal(record.heldRole(f.a, nativeId, at), true);
@@ -359,7 +380,7 @@ test('main: each backend state is judged with the role record, and the butler a 
   vm.runInNewContext(bind + '\nbindClient(context);', { context, butlerIngress: f.main.ingress, stewardRole: { current: () => f.session(f.source, f.c) }, stewardRecord: f.main.record,
     queueDispatcher: null, sessionLabels: { labels: new Map() }, roomState: new RoomState(f.mainDir), broadcastRoom: async () => {} });
   client.emit('state', f.source.snapshot());
-  assert.deepEqual(f.outcomes(), ['cancelled:observation-boundary-known-reason']);
+  assert.deepEqual(f.outcomes(), ['cancelled:disconnecting']);
   // The person's designation.
   const handler = main.slice(main.indexOf("  register('steward', async (c, id, duty = null) => {"), main.indexOf("  register('stewardEvents', async (c, position = null) => {"));
   for (const next of [null, 'next']) {

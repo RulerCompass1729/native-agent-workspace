@@ -33,7 +33,7 @@ function undeliveredRow(row, own = false) {
   const at = Number.isSafeInteger(intent.settledAt) ? intent.settledAt : intent.time;
   if (intent.status === 'not-sent') return { outcome: 'not-sent', code: keyCode(row.uiMessage?.cause?.key), at };
   if (intent.status === 'cancelled') {
-    const code = isCode(intent.cancellation?.code) ? intent.cancellation.code : keyCode(row.uiMessage?.key);
+    const code = isCode(intent.cancellation?.code) ? intent.cancellation.code : keyCode(row.uiMessage?.cause?.key || row.uiMessage?.key);
     return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? at };
   }
   // Never taken from the sender (session-wake.cjs): it may go again. Otherwise the recipient may have it.
