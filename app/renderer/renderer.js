@@ -5882,20 +5882,22 @@ function renderStewardWakeWarning(wakeBlock) {
     return;
   }
   const reason = uiText(`stewardWake.reason.${wakeBlock.reason}`);
+  // How long the butler was not woken, whichever reason holds it now.
+  const minutes = wakeBlock.waitingMinutes ?? wakeBlock.minutes;
   // The butler's own handoff: only the person's step ends it (steward-wake.cjs hold), here or in its sidebar menu.
   const butler = state?.sessions?.find(s => s.id === state.steward?.sessionId);
   const own = wakeBlock.step === 'update-backend' || wakeBlock.step === 'release';
   const item = !own ? null : wakeBlock.step === 'release' ? rotationReleaseAction(butler)[0] : backendUpdateAction(butler)[0];
   // Names no menu item: the step's button shows only when its menu has it (289 #4, the two can disagree).
-  const text = own ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes: wakeBlock.minutes })
-    : uiText('stewardWake.stalled', { minutes: wakeBlock.minutes, reason });
+  const text = own ? uiText(`stewardWake.ownHandoffButton.${wakeBlock.step}`, { minutes })
+    : uiText('stewardWake.stalled', { minutes, reason });
   const undelivered = own && Number.isSafeInteger(wakeBlock.undelivered) && wakeBlock.undelivered > 0;
   const full = undelivered ? uiText('stewardWake.withUndelivered', { text, count: `${wakeBlock.undelivered}${wakeBlock.undeliveredMore ? '+' : ''}` }) : text;
   const live = chip.querySelector('.wake-chip-text');
   // The person's step is read once below; its minute count would be read again every minute.
   if (item) live.removeAttribute('role'); else live.setAttribute('role', 'status');
   // Rewriting the same text in a live status can be read again; renders come often.
-  const chipText = uiText('stewardWake.chip', { minutes: wakeBlock.minutes });
+  const chipText = uiText('stewardWake.chip', { minutes });
   if (live.textContent !== chipText) live.textContent = chipText;
   chip.querySelector('summary').setAttribute('aria-label', full);
   // An ordinary reason: the chip's own advice. The person's step: what only they can do.

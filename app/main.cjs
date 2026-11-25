@@ -2549,6 +2549,11 @@ async function boot() {
     try { state = on === undefined ? stewardWake.view({ held: c.background === true }) : stewardWake.set(on); }
     catch (error) { throw uiError(error?.code === 'STEWARD_WAKE_NO_BUTLER' ? 'error.steward.wakeNoButler' : 'error.steward.wakeUnavailable'); }
     if (wasOn && !state.on) try { stewardRecord?.wakeOff(); } catch { /* The record shows that a line could not be written. */ }
+    // The butler's own read also lists the open migration quiet windows and what waits behind each; null: not known.
+    if (c.background && on === undefined) {
+      let open = null; try { open = quietWindows ? quietWindows.holding([roomState.value, ...roomState.spaces.rooms], roomState.queueWaits) : null; } catch { open = null; }
+      state = { ...state, quietWindows: open };
+    }
     return state;
   });
   // B6: the person's own actions on an integration handoff: retry one delivery or everything
