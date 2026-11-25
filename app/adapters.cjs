@@ -506,8 +506,9 @@ function claudeFailureCause(file, nativeId, messageId) {
           row.isApiErrorMessage !== true || row.message?.model !== '<synthetic>') return false;
         // Native 2.1.323 omits the HTTP status on a connection error; explicit
         // null is the other no-status encoding. No other value is admitted.
+        // stream_idle_timeout: native's own idle timer gave up on an open stream after part of the answer (2.1.331).
         return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden'
-          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && row.apiError === 'connection_failed' ? 'connectionFailed' : false;
+          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && ['connection_failed', 'stream_idle_timeout'].includes(row.apiError) ? 'connectionFailed' : false;
       } catch { /* torn line: no authority to retry */ }
     }
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
@@ -1119,8 +1120,8 @@ class Claude extends EventEmitter {
     turn.failureReads = (turn.failureReads || 0) + 1;
     turn.pendingFailure = cause === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
-    // An unknown error body grants nothing: only the saved typed 403 or the
-    // exact no-status connection_failed pair can admit this otherwise unnamed
+    // An unknown error body grants nothing: only the saved typed 403 or an
+    // exact no-status connection cause can admit this otherwise unnamed
     // failure. Other unknown rows retain their existing behavior.
     if (turn.errorRowUnclassified && cause !== 'requestForbidden' && cause !== 'connectionFailed') return;
     turn.endReported = true;
@@ -1356,6 +1357,10 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
+    // An agent that ends in the turn that started or resumed it is in no turn-end report, and its notification has
+    // no source (real 2.1.332, 11-25): its start is what makes it known.
+    if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
+      typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;

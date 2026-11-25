@@ -284,6 +284,9 @@ class BackgroundControl {
     archivedFacts.delete(rows);
     this.archivedBySession.set(record.actor.id, rows);
   }
+  recordsOf(sessionId) {
+    return [...this.data.records.filter(r => r.actor.id === sessionId), ...(this.archivedBySession.get(sessionId) || [])];
+  }
   // A settled record that changes later (a send confirmed on a later receipt) is added to its block again.
   reappend(record) {
     if (this.failed) throw Error('Background operation storage is unavailable');

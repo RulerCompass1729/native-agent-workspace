@@ -15,7 +15,7 @@ function parseLock(text) {
   try { value = JSON.parse(text); } catch { return null; }
   if (Number.isSafeInteger(value) && value > 1) return { pid: value };
   if (value?.format !== 1 || !Number.isSafeInteger(value.pid) || value.pid < 2 ||
-      !['service', 'startup'].includes(value.kind) || typeof value.directory !== 'string' || !path.isAbsolute(value.directory) ||
+      !['service', 'startup', 'dsh-copy'].includes(value.kind) || typeof value.directory !== 'string' || !path.isAbsolute(value.directory) ||
       !(value.started === null || typeof value.started === 'string' && value.started.trim()) || typeof value.token !== 'string' || !value.token) return null;
   return value;
 }

@@ -191,7 +191,6 @@ function sourceIssue(w, s, r, intent) {
   }
   return null;
 }
-function sourceValid(w, s, r, intent) { return !sourceIssue(w, s, r, intent); }
 function durable(w) { w.changed(); w.persist(); if (w.storageWarning) throw uiError("error.wake.recordSaveFailed"); }
 function notSent(error, hold) {
   return { status: 'not-sent', reason: error.message, reasonUiMessage: displayMessage(error.uiMessage) || null, ...hold };
@@ -401,13 +400,15 @@ async function stageOnce(w, s, r, native, args) {
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
   // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
   if (intent.quietWindow || waits) intent.saidHeld = true;
+  // The call answers that it is saved: if it does not go out after that, main tells the butler whose it is (butler-ingress.cjs).
+  if (intent.status === 'staged') intent.told = true;
   const lost = untold(s, native.nativeId);
   let missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; delete intent.told; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   // Told in this answer only with its mark on disk. Marked after the answer's own save, which can fail partway and
   // leave on disk what it was to save. If the mark is not saved, a later answer tells it.
   if (lost.length) {
@@ -500,14 +501,14 @@ function deliver(w, row) {
 // before anything was reserved or written (not-sent) can be held and offered again; an uncertain outcome never is.
 function transfer(w, row, readdress = false) {
   const intent = row.wake;
-  intent.status = 'sending'; durable(w);
+  intent.status = 'sending'; delete intent.takeRefused; durable(w);
   // A recipient that cannot be found again was never offered it: not sent.
   const located = readdress ? relocate(w, intent).then(() => null, error => notSent(error)) : Promise.resolve(null);
   return located.then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
     if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
-      intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+      intent.status = result.status; if (result.status !== 'submitted') intent.settledAt = Date.now(); row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
       // It took one: the others held here for it wait out its new minute instead of being refused for it first.
       if (result.status === 'submitted') {
         for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, Date.now() + COOLDOWN);
@@ -515,7 +516,10 @@ function transfer(w, row, readdress = false) {
       }
     }
     durable(w);
-  }).catch(error => { intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
+  }).catch(error => {
+    // Never taken (a take saves 'consumed' first), so it did not go out, and a take from now on is refused.
+    if (intent.status === 'sending') { intent.untaken = true; intent.takeRefused ||= { code: 'not-taken' }; }
+    intent.status = 'unconfirmed'; intent.settledAt = Date.now(); row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); })
     .finally(() => arm(w));
 }
 function heldRows(w) {
@@ -602,9 +606,20 @@ function cancelParticipant(w, id, reason, reasonUiMessage) {
     if (cause && why) row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason: rawReason, body: row.wake.body }, cause, causeParam: 'reason' }, 'notice.', row.text) || row.uiMessage;
   }
 }
+// Kept on the row: a code and changed field names only.
+function takeIssue(w, s, r, intent, spec) {
+  if (intent.status !== 'sending') return { code: 'not-being-sent' };
+  if (intent.recipientId !== spec.recipientId) return { code: 'recipient-mismatch' };
+  if (intent.targetKey !== spec.targetKey) return { code: 'backend-mismatch' };
+  if (!r) return { code: 'source-runtime-changed' };
+  return sourceIssue(w, s, r, intent);
+}
 function take(w, spec) {
   const s = w.sessions.get(spec?.senderId), r = s && w.runtimes.get(s.id), row = s?.messages.find(m => m.id === spec.id), intent = row?.wake;
-  if (!intent || intent.status !== 'sending' || intent.recipientId !== spec.recipientId || intent.targetKey !== spec.targetKey || !r || !sourceValid(w, s, r, intent)) throw uiError("error.wake.credentialInvalid");
+  const issue = intent && takeIssue(w, s, r, intent, spec);
+  if (issue) intent.takeRefused = intent.status === 'sending' ? issue : intent.takeRefused || issue;
+  if (!intent || issue) throw uiError("error.wake.credentialInvalid");
+  delete intent.takeRefused;
   intent.status = 'consumed'; durable(w); return { ...intent };
 }
 function budgetView(s) {

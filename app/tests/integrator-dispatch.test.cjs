@@ -393,7 +393,7 @@ test('the session that holds an open handoff is sent no queue item until the han
   assert.deepEqual(g.dispatcher.integration.holding(), []);
   // The planner is told only when there is an engine.
   const dispatch = fs.readFileSync(path.join(__dirname, '../queue-dispatch.cjs'), 'utf8');
-  assert.match(dispatch, /\n    const engaged = this\.integration \? this\.integration\.holding\(\) : undefined;\n    const actions = planDispatch\(\{\n/);
+  assert.match(dispatch, /\n    const engaged = this\.integration \? this\.integration\.holding\(\) : undefined;\n    const input = \{\n[^}]*\n      engaged,\n[^}]*\};\n    let actions = planDispatch\(input\);\n/);
   assert.equal(dispatch.match(/this\.integration\.holding\(\)/g).length, 1, 'Asked once in a pass, before anything is sent');
   assert.equal(dispatch.match(/input\.engaged/g).length, 4, 'Read by the planner and by the vacancy list, nowhere else');
 });

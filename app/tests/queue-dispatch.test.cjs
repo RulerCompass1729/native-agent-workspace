@@ -5,9 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const rules = require('../queue-dispatch.cjs');
+const { CompactionCounter } = require('../compaction-count.cjs');
 const { RoomState } = require('../room-state.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
+const { QuietWindows } = require('../quiet-windows.cjs');
 
 const HOUR = 60 * 60 * 1000;
 const NOW = 1_800_000_000_000;
@@ -1159,6 +1161,33 @@ test('an old member writes a handoff, a new member takes its queue, and the old 
   assert.match(work[1][2], /next task/);
 });
 
+test('a handoff asked for before a migration quiet window is taken inside it; none is asked for inside one', async t => {
+  const old = () => member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' });
+  const held = new Map([['a', 'synthetic-window']]);
+  const inside = dispatcherSetup(t, [old()]);
+  inside.room.queueAdd('next task', 'a');
+  inside.dispatcher.quietWindows = { sessionIds: () => held };
+  await inside.dispatcher.start();
+  await inside.dispatcher.schedule(); await inside.dispatcher.schedule();
+  assert.deepEqual(inside.client.sends('a'), [], 'neither the item nor a handoff request');
+  const { room, client, dispatcher } = dispatcherSetup(t, [old()]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /【NAW 换会话】/);
+  dispatcher.quietWindows = { sessionIds: () => held };
+  client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1]?.id;
+  assert.ok(newId, 'the successor is made'); assert.equal(room.value.queue[0].assignee, newId);
+  await dispatcher.schedule();
+  assert.match(client.sends(newId)[0][2], /交接：在 feature 分支 abc123/);
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.find(call => call[0] === 'stop'), ['stop', 'a']);
+  assert.equal(client.sends('a').length, 1);
+});
+
 test('an open decision goes with the session: the successor is told it whole, the row answers the successor, and what it is sent next is marked', async t => {
   // 11-23, the person: 「要不要改成把没答的决定带给继任会话，答复跟着换会话链走？要」.
   const asked = '需要你决定：要不要删旧分支？\n\nA：删。B：留。推荐 A，因为它已经合进 main。' + '补充'.repeat(150);
@@ -1701,7 +1730,7 @@ test('the old session is not stopped while a space collaboration is running', as
   assert.deepEqual(client.calls.filter(call => call[0] === 'stop'), [['stop', 'a']]);
 });
 
-test('while the old session waits for a collaboration, the new member already takes work, and the wait is bounded', async t => {
+test('while the old session waits for a collaboration, the new member already takes work, and the old one ends when it is over', async t => {
   const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
@@ -1720,7 +1749,11 @@ test('while the old session waits for a collaboration, the new member already ta
   dispatcher.dirty = true;
   await dispatcher.schedule();
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'never stopped while a collaboration runs');
-  assert.equal(dispatcher.rotations.a.phase, 'kept');
+  assert.equal(dispatcher.rotations.a.phase, 'handed');
+  client.state.rooms[0].run = null;
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.deepEqual(client.calls.filter(call => call[0] === 'stop'), [['stop', 'a']]);
 });
 
 test('a native row NAW recognised as machine input is not the person stepping in (11-12)', () => {
@@ -1759,8 +1792,8 @@ test('the person quoting NAW text is still the person; an ended old session need
   assert.equal(plan(rooms, [member('a', { messages: quoted })])[0].reason, 'person-intervened');
 });
 
-test('a rotation whose old session already ended finishes at once even while a collaboration runs', async t => {
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
+test('a rotation whose old session already ended finishes in two minutes even while a collaboration runs', async t => {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
   fakeMembership(room, client);
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -1769,9 +1802,9 @@ test('a rotation whose old session already ended finishes at once even while a c
   await dispatcher.schedule();
   client.state.sessions[0].state = 'ended';
   client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
-  dispatcher.dirty = true;
-  await dispatcher.schedule();
-  assert.equal(dispatcher.rotations.a, undefined, 'record finished without waiting');
+  // Two minutes of it: a move of its backend shows the same for a moment (R206).
+  for (const minutes of [0, 1, 1, 1]) { advance(minutes * MINUTE); dispatcher.dirty = true; await dispatcher.schedule(); }
+  assert.equal(dispatcher.rotations.a, undefined, 'record finished without waiting for the collaboration');
   assert.equal(client.calls.filter(call => call[0] === 'stop').length, 0, 'nothing left to stop');
 });
 
@@ -2593,15 +2626,15 @@ async function rotateTypedSession(t, snapshotFails, terminalClosed = false, type
   await dispatcher.schedule();
   await dispatcher.schedule();
   await dispatcher.schedule();
-  return { client, notices, dir };
+  return { client, notices, dir, dispatcher };
 }
 
 // 换续前发送不丢话 (2026-11-14): a send the person makes after NAW's last check reaches the old session before
-// the stop does. The stop is then refused by the service: the old session keeps the words and answers them,
-// the rotation is recorded as kept, and the designation (which follows only done lines) stays with it.
+// the stop does. The stop is then refused by the service: the old session keeps the words and answers them, the
+// rotation waits for it (R206 below), and the designation (which follows only done lines) stays with it until then.
 for (const capable of [true, false]) test(`a send that reaches the old session just before its stop keeps it (${capable ? 'conditional stop' : 'old service'})`, async t => {
   const notices = [];
-  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
+  const { room, client, dispatcher, dir, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
     { notify: kind => notices.push(kind) });
   fakeMembership(room, client);
   if (!capable) client.capabilities = [rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP];
@@ -2625,15 +2658,18 @@ for (const capable of [true, false]) test(`a send that reaches the old session j
   } else {
     assert.equal(client.calls.some(call => call[0] === 'maintenanceStop'), false, 'an old service is never asked to stop unconditionally');
   }
-  assert.deepEqual(notices, ['kept']);
   const log = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   const last = log.at(-1);
-  assert.equal(last.event, 'kept');
-  assert.equal(last.reason, capable ? 'changed-at-stop' : 'old-service', 'the log says why it was kept');
+  assert.equal(last.event, 'waiting');
+  assert.equal(last.reason, capable ? 'changed-at-stop' : 'old-service', 'the log says what it waits for');
   assert.equal(last.new.id, newId);
   const { follow } = require('../queue-secretary.cjs');
   assert.equal(follow(path.join(dir, 'rotation-log.jsonl'), { sessionId: 'a', nativeId: old.nativeId }).sessionId, 'a', 'the designation stays with the old session');
-  assert.equal(dispatcher.rotations.a.phase, 'kept');
+  assert.equal(dispatcher.rotations.a.phase, 'handed');
+  advance(31 * 60 * 1000); dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.deepEqual(notices, ['kept']);
+  assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
 });
 
 // A Claude stop the service refuses its own receipt for (seen on the real 2.1.319 window, 2026-11-14): the
@@ -2714,7 +2750,7 @@ test('finding 2: after the old session is kept, an item added without a member g
   const { room, client, dispatcher, newId } = await keptBesideSuccessor(t);
   const handoff = client.sends(newId)[0][2];
   assert.doesNotMatch(handoff, /旧会话已经结束/, 'the handoff, sent before the outcome, does not claim the old one ended');
-  assert.match(handoff, /要是人这时还在用它，就留给人用完自己关，这个空间里没指定成员的活 NAW 之后派给你/);
+  assert.match(handoff, /要是人这时还在用它，这个空间里没指定成员的活 NAW 先派给你，等人用完，NAW 把之后变了的补给你，再结束它/);
   const before = client.sends('a').length;
   room.queueAdd('C 的新一件（没指定成员）', null);
   await dispatcher.schedule();
@@ -2758,9 +2794,9 @@ for (const state of ['disconnected', 'recoverable', 'error', 'background', 'stop
   });
 }
 
-test('finding 2: the butler\'s handoff says the designation stays with a kept old session', () => {
+test('the butler\'s handoff says the designation stays with an old session in use until that is ended', () => {
   const text = rules.handoffText('大管家', '交接', '', '【大管家职责】');
-  assert.match(text, /要是人这时还在用旧会话，它就留给人用，大管家仍是它，直到人另行指定/);
+  assert.match(text, /要是人这时还在用旧会话，大管家先仍是它，等人用完，NAW 把之后变了的补给你，再结束它、由你接着当/);
   assert.doesNotMatch(text, /旧会话已经结束/);
 });
 
@@ -2802,14 +2838,16 @@ test('an unsent native prompt refuses the handoff request: no failure, no notice
 });
 
 test('typing into the old terminal after its screen was saved keeps the old session', async t => {
-  const { client, notices } = await rotateTypedSession(t, false, false, true);
+  const { client, notices, dispatcher } = await rotateTypedSession(t, false, false, true);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
   assert.deepEqual(notices, ['kept']);
 });
 
 test('a session the person starts using just before the stop keeps its spaces and process', async t => {
   const notices = [];
-  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push(kind),
   });
   const joins = fakeMembership(room, client);
@@ -2821,6 +2859,9 @@ test('a session the person starts using just before the stop keeps its spaces an
   await dispatcher.schedule();
   // The person sends the old session a message in chat view while the successor takes over.
   client.busyOnRefresh = true;
+  await dispatcher.schedule();
+  advance(31 * 60 * 1000);
+  dispatcher.dirty = true;
   await dispatcher.schedule();
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
   assert.deepEqual(notices, ['kept']);
@@ -4444,8 +4485,12 @@ for (const outcome of ['delivered', 'refused', 'uncertain']) test(`an item marke
 // Queue 794d3cd7 (the person, 2026-11-13): a conversation compacted again and again continues in a new
 // session through the same handoff, without waiting out a successor's day of rest, and the butler between turns.
 function fakeCompactions(counts) {
-  const seen = [];
-  return { seen, counts, async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); } };
+  const seen = [], again = [];
+  return {
+    seen, again, counts,
+    async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); },
+    async recheck(session) { again.push(session.id); },
+  };
 }
 
 test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its next item, or after thirty quiet minutes', () => {
@@ -4505,7 +4550,7 @@ test('cache-aware rotation: a large warm Claude member is rotated before its nex
   // A successor that read a lot in its first turn does its item first, or it would be replaced again and again.
   assert.deepEqual(plan(rooms, [member('a', { createdAt: NOW - 59 * 60000 })], context()), dispatch);
   assert.deepEqual(plan(rooms, [member('a', { ...old, provider: 'codex' })], context()), dispatch, 'Codex is not measured');
-  // With nothing queued there is no item to save, and a new session would only go cold in its turn.
+  // With nothing queued: not while its last request is this recent, however long NAW saw nothing (R221, below).
   const idle = [{ id: 'shared', name: 'Team', queue: [] }];
   for (const minutes of [2, 10, 30, 50]) {
     assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], context()), []);
@@ -4773,9 +4818,142 @@ test('794d3cd7: a compacted member is asked for its handoff in words that say wh
   const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'compact'), 'the log keeps the reason');
   assert.deepEqual(fake.seen[0], ['a'], 'a session in no space that is not the butler is not read');
+  assert.deepEqual(fake.again, [], 'a count is not read again');
   assert.equal(client.sends('z').length, 0);
   assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
   assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
+});
+
+// R221 (the person, 2026-11-24): a large session that nobody is using is handed over while its cache is still warm, so
+// that whoever writes to it next does not pay for a cold one, and the CLI's own compaction at 54 minutes is not run for it.
+const idleRooms = [{ id: 'shared', name: 'Team', queue: [] }];
+const idleSize = (minutes, extra = {}, id = 'a') => ({ contexts: new Map([[id, { tokens: 180000, at: NOW - minutes * 60000, ttlMs: HOUR, ...extra }]]) });
+const idleMember = (minutes, extra = {}, id = 'a') => member(id, { createdAt: NOW - 2 * HOUR, lastActivityAt: NOW - minutes * 60000, ...extra });
+const idleRotate = (id = 'a') => [{ kind: 'rotate', sessionId: id, reason: 'context', contextTokens: 180000 }];
+
+test('R221: a large Claude member with no work is rotated once idle for 45 minutes and while still warm, a small, cold, young or Codex one is not', () => {
+  assert.equal(rules.QUIET_CONTEXT_MS, 45 * 60000);
+  const at = (minutes, size = {}, extra = {}) => plan(idleRooms, [idleMember(minutes, extra)], idleSize(minutes, size));
+  assert.deepEqual(at(45), idleRotate());
+  assert.deepEqual(at(53.9), idleRotate());
+  assert.deepEqual(at(44.9), []);
+  assert.deepEqual(at(54), [], 'the CLI compacts it itself from here, and the handoff could miss the cache');
+  assert.deepEqual(at(3 * 60), [], 'cold');
+  assert.deepEqual(at(50, { tokens: 179999 }), []);
+  assert.deepEqual(at(50, {}, { provider: 'codex' }), []);
+  assert.deepEqual(at(50, {}, { createdAt: NOW - 59 * 60000 }), []);
+  assert.deepEqual(at(50, { ttlMs: null }), [], 'lifetime unknown');
+  for (const minutes of [1, 4, 45, 50]) assert.deepEqual(at(minutes, { ttlMs: 5 * 60000 }), [], 'a five-minute cache is cold long before');
+  // Idle by both: what NAW saw of it and its own last request.
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], idleSize(44.9)), [], 'a request NAW saw nothing of');
+  assert.deepEqual(plan(idleRooms, [idleMember(44.9)], idleSize(50)), [], 'something other than a request');
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), quietContextMs: 51 * 60000 }), []);
+  assert.deepEqual(plan(idleRooms, [idleMember(20)], { ...idleSize(20), quietContextMs: 20 * 60000 }), idleRotate());
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), humanAt: new Map([['a', NOW - 60000]]) }), [], 'the person just used it');
+  // Before an item it needs no idle time, as before.
+  const queued = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  assert.deepEqual(plan(queued, [idleMember(2)], idleSize(2)), idleRotate());
+  // A successor's day of rest does not hold it, and one rotated at a time is still the rule.
+  assert.deepEqual(plan(idleRooms, [idleMember(50)], { ...idleSize(50), rotations: { a: { phase: 'kept', keptAt: NOW - HOUR, successorOf: 'before' } } }), idleRotate());
+  const gates = new Map();
+  assert.deepEqual(plan(idleRooms, [idleMember(50), member('z', { state: 'working' })], { ...idleSize(50), rotationGates: gates,
+    rotations: { z: { phase: 'requested', requestedAt: NOW } } }), []);
+  assert.equal(gates.has('a'), false, 'its few minutes are over before a stall is');
+});
+
+test('R221: until then the size is no reason at all: nothing is held for it, nothing is told, another reason keeps its own quiet', () => {
+  const told = () => ({ quietPending: new Map(), rotationGates: new Map() });
+  for (const butler of [undefined, 'a']) for (const minutes of [0, 10, 31, 44.9]) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [idleMember(minutes)], { ...idleSize(minutes), ...pass, butler }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0], `${minutes} minutes`);
+  }
+  // Nor for one of the two clocks alone.
+  for (const [seen, request] of [[44.9, 50], [31, 50], [50, 44.9]]) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [idleMember(seen)], { ...idleSize(request), ...pass, butler: 'a' }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0]);
+  }
+  // Nothing known of its activity: not a stall of this reason either.
+  const pass = told();
+  plan(idleRooms, [idleMember(50, { lastActivityAt: undefined, createdAt: undefined })], { ...idleSize(50), ...pass });
+  assert.equal(pass.rotationGates.size, 0);
+  // Over its memory it goes at ten minutes, and waits for those as memory.
+  const heavy = { memory: new Map([['a', 4 * 1024 ** 3]]), memoryLimit: 1024 ** 3 };
+  assert.deepEqual(plan(idleRooms, [idleMember(12)], { ...idleSize(12), ...heavy }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(idleRooms, [idleMember(12)], { ...idleSize(50), ...heavy }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  const short = told();
+  assert.deepEqual(plan(idleRooms, [idleMember(5)], { ...idleSize(5), ...heavy, ...short }), []);
+  assert.deepEqual([...short.quietPending], [['a', 'memory']]);
+  // Compacted three times it goes at thirty, and a long conversation keeps its own words.
+  const compactions = new Map([['a', 3]]);
+  assert.deepEqual(plan(idleRooms, [idleMember(31)], { ...idleSize(31), compactions }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idleRooms, [idleMember(50, { messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+});
+
+test('R221: nor within two minutes of its migration window closing; the other reasons are as they were', () => {
+  const told = () => ({ quietPending: new Map(), rotationGates: new Map() });
+  const closed = (extra = {}) => idleMember(50, { quietWindowClosed: true, ...extra });
+  for (const butler of [undefined, 'a']) {
+    const pass = told();
+    assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), ...pass, butler }), []);
+    assert.deepEqual([pass.quietPending.size, pass.rotationGates.size], [0, 0]);
+  }
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), memory: new Map([['a', 4 * 1024 ** 3]]), memoryLimit: 1024 ** 3 }), [{ kind: 'rotate', sessionId: 'a', reason: 'memory' }]);
+  assert.deepEqual(plan(idleRooms, [closed()], { ...idleSize(50), compactions: new Map([['a', 3]]) }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  assert.deepEqual(plan(idleRooms, [closed({ messages: heavyMessages() })], idleSize(50)), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+  const queued = [{ id: 'shared', name: 'Team', queue: [{ id: 'item', text: 'task', assignee: 'a', status: 'queued' }] }];
+  assert.deepEqual(plan(queued, [closed()], idleSize(50)), idleRotate(), 'before an item as before');
+});
+
+test('R221: the butler outside every space is rotated the same, and only as the butler', () => {
+  const butler = (minutes, extra) => idleMember(minutes, { roomIds: [], roomId: null, ...extra }, 'b');
+  const outside = { outside: ['b'], butler: 'b' };
+  assert.deepEqual(plan(idleRooms, [butler(45)], { ...idleSize(45, {}, 'b'), ...outside }), idleRotate('b'));
+  for (const minutes of [2, 10, 44.9, 54]) assert.deepEqual(plan(idleRooms, [butler(minutes)], { ...idleSize(minutes, {}, 'b'), ...outside }), []);
+  assert.deepEqual(plan(idleRooms, [butler(50)], idleSize(50, {}, 'b')), [], 'a session in no space that is not the butler');
+});
+
+test('R221: every gate a quiet rotation has holds this one too', () => {
+  const size = idleSize(50);
+  const due = (extra = {}, pass = {}) => plan(idleRooms, [idleMember(50, extra)], { ...size, ...pass });
+  assert.deepEqual(due(), idleRotate(), 'nothing in the way');
+  const asked = { id: 'q', role: 'assistant', text: 'A or B?' };
+  for (const [name, extra] of Object.entries({
+    draft: { liveDraft: 'half typed' },
+    'stored message': { pendingQueue: { tag: 'kept' } },
+    'message on its way in': { pendingTag: 'kept' },
+    question: { claudeQuestion: { id: 'question' } },
+    approval: { approval: { id: 'approval' } },
+    'native prompt': { nativeInputRequired: true },
+    dialog: { nativeTerminalDialog: true },
+    turn: { state: 'working' },
+    'background command': { background: 1 },
+    timer: { scheduled: 1 },
+    'background not known': { backgroundStale: true },
+    'team member at work': { fleet: [{ event: 'SubagentStart', id: 'child', stale: false, time: NOW }] },
+    'quiet window': { quietWindow: { deadline: NOW + 60000 } },
+    paused: { wakeDisabled: true },
+    archived: { archived: true },
+  })) {
+    const gates = new Map();
+    assert.deepEqual(due({ messages: [asked], ...extra }, { rotationGates: gates }), [], name);
+    assert.equal(gates.size, 0, `${name}: not a stall`);
+  }
+  for (const [name, pass] of Object.entries({
+    'automatic messages off': { wakePolicy: { enabled: false } },
+    'used by the person': { deferredRotations: new Set(['a']) },
+    'handed off': { handedOff: new Set(['a']) },
+    'model not known': { waitingModel: new Set(['a']) },
+    'trust fault': { blockedRotations: new Set(['a']) },
+    'integration handoff': { engaged: ['a'] },
+    'failed before': { rotations: { a: { phase: 'failed', failedAt: NOW - HOUR } } },
+  })) assert.deepEqual(due({}, pass), [], name);
+  // Decisions too long to hand over whole stay with it; others go along.
+  const long = n => sentItem({ id: `d${n}`, status: 'waiting', text: 'x'.repeat(rules.ITEM_TEXT_LIMIT), reply: '需要你决定：选哪个？' });
+  const waiting = queue => plan([{ id: 'shared', name: 'Team', queue }], [idleMember(50)], size);
+  assert.deepEqual(waiting([long(1), long(2)]), []);
+  assert.deepEqual(waiting([long(1)]), idleRotate());
 });
 
 test('cache-aware rotation: the size read from the record reaches the request, the space notice and the log in its own words', async t => {
@@ -4815,6 +4993,295 @@ test('cache-aware rotation: sizes a failed read left behind are not used', async
   await dispatcher.schedule();
   await dispatcher.schedule();
   assert.match(client.sends('a').at(-1)[2], /second task/);
+});
+
+// The 30-second sample and the real record together: the size a context rotation is started on is read again first.
+function recordedMember(t, id, native) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-recheck-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, `${native}.jsonl`);
+  const line = entry => fs.appendFileSync(file, `${JSON.stringify({ isSidechain: false, sessionId: native, ...entry })}\n`);
+  return {
+    file,
+    session: member(id, { nativeId: native, nativeTranscript: file, createdAt: NOW - 2 * HOUR }),
+    counter: new CompactionCounter({ claudeRoot: root, codexRoot: root }),
+    request(tokens, at, usage = { cache_creation_input_tokens: 500, cache_creation: { ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 } }) {
+      const cached = usage.cache_creation_input_tokens ? tokens - usage.cache_creation_input_tokens : 0;
+      line({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { role: 'assistant', model: 'claude-test-model',
+        usage: { input_tokens: tokens - cached - usage.cache_creation_input_tokens, cache_read_input_tokens: cached, ...usage } } });
+    },
+    compaction: () => line({ type: 'system', subtype: 'compact_boundary' }),
+  };
+}
+const [NATIVE_A, NATIVE_B, NATIVE_C] = ['a', 'b', 'c'].map(id => `0f6c2a3e-5b7d-4c1e-9a8b-00000000000${id}`);
+const UNCACHED = { cache_creation_input_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } };
+
+const rotated = (client, id = 'a') => client.sends(id).filter(call => /【NAW 换会话】/.test(call[2])).map(call => call[2]);
+
+for (const after of [22000, 30000]) test(`a compaction after the sample: picked ${after} ms after it, the member takes its item and is not rotated by the size from before`, async t => {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(20000, NOW - 60000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter, settleMs: 8000 });
+  room.queueAdd('first task', 'a');
+  await dispatcher.start();
+  advance(8000);
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /first task/);
+  advance(40000);
+  record.request(190000, dispatcher.now() - 1000);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(dispatcher.contexts.get('a').tokens, 190000, 'sampled while it works');
+  advance(after - 9000);
+  record.compaction();
+  record.request(20000, dispatcher.now() - 1000);
+  client.reply('a', 'first task finished');
+  await dispatcher.schedule();
+  advance(9000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  assert.deepEqual(rotated(client), []);
+  assert.match(client.sends('a').at(-1)[2], /next task/, 'in the same pass');
+  assert.equal(dispatcher.contexts.get('a').tokens, 20000);
+});
+
+// A member sampled at 190K, warm; `then` is what happens to its record before its next item, 22 seconds later. One pass.
+async function pickedAfterSample(t, then) {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(190000, NOW - 60000);
+  await record.counter.sample([record.session], NOW);
+  assert.equal(record.counter.contexts.get('a').tokens, 190000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter });
+  then(record);
+  advance(22000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  if (!rotated(client).length) assert.match(client.sends('a').at(-1)[2], /next task/);
+  else assert.equal(room.value.queue[0].status, 'queued');
+  return rotated(client);
+}
+
+test('a large warm member is rotated by the size it has now', async t => {
+  assert.match((await pickedAfterSample(t, () => {}))[0], /上下文已到约 190K/);
+  assert.match((await pickedAfterSample(t, record => record.request(206000, NOW + 10000)))[0], /上下文已到约 206K/);
+});
+
+test('a request that missed the cache after the sample: not rotated by the lifetime from before', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => record.request(190000, NOW + 10000, UNCACHED)), []);
+});
+
+test('a record that is not read to its end when the rotation would start: the member takes its item', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => fs.appendFileSync(record.file, '{"half')), []);
+  assert.deepEqual(await pickedAfterSample(t, record => { record.counter.readSession = async () => { throw Error('EIO'); }; }), []);
+});
+
+test('a third compaction found when the rotation would start rotates the member for that', async t => {
+  assert.match((await pickedAfterSample(t, record => {
+    for (let n = 0; n < 3; n++) record.compaction();
+    record.request(20000, NOW + 10000);
+  }))[0], /上下文已压缩 3 次/);
+});
+
+test('only a member the pass would rotate for its size is read again; when it drops out, the next one has the turn', async t => {
+  const a = recordedMember(t, 'a', NATIVE_A), b = recordedMember(t, 'b', NATIVE_B), c = recordedMember(t, 'c', NATIVE_C);
+  for (const one of [a, b, c]) one.request(190000, NOW - 60000);
+  const { counter } = a, read = [], recheck = counter.recheck.bind(counter);
+  counter.recheck = (session, now) => { read.push(session.id); return recheck(session, now); };
+  const { room, client, dispatcher } = dispatcherSetup(t, [a.session, b.session, c.session], { compactions: counter });
+  await counter.sample([a.session, b.session, c.session], NOW);
+  a.compaction();
+  a.request(20000, NOW - 1000);
+  for (const id of ['a', 'b', 'c']) room.queueAdd(`task ${id}`, id);
+  await dispatcher.tick();
+  assert.deepEqual(read, ['a', 'b']);
+  assert.match(client.sends('a')[0][2], /task a/);
+  assert.equal(rotated(client, 'b').length, 1);
+  assert.match(client.sends('c')[0][2], /task c/, 'one rotation at a time, as before');
+  const waits = [...room.queueWaits.values()].flat().map(wait => [wait.sessionId, wait.reason]);
+  assert.deepEqual(waits, [['b', 'rotating']], 'not those of the plans before');
+});
+
+// R221 through the dispatcher and the real record: one pass a minute, an open window, nothing queued.
+function idleSetup(t, minutes, { extra = {}, ...options } = {}) {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(190000, NOW - minutes * 60000);
+  Object.assign(record.session, { cwd: '/tmp', lastActivityAt: NOW - minutes * 60000 }, extra);
+  const f = dispatcherSetup(t, [record.session], { compactions: record.counter, window: true, sampleProcesses: async () => { throw Error('no sample'); }, ...options });
+  f.joins = fakeMembership(f.room, f.client);
+  f.record = record; f.old = record.session;
+  f.pass = async (forward = 0) => { f.advance(forward * 60000); f.dispatcher.dirty = true; await f.dispatcher.tick(); };
+  f.log = () => fs.existsSync(path.join(f.dir, 'rotation-log.jsonl'))
+    ? fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+  f.requests = () => f.log().filter(entry => entry.event === 'requested').map(entry => entry.reason);
+  // The rest of the rotation: the handoff, a successor in the same space, the old session ended.
+  f.finish = async () => {
+    f.client.reply('a', '交接：在 feature 分支 abc123，下一步跑测试。');
+    await f.pass();
+    f.next = f.client.state.sessions.at(-1);
+    await f.pass();
+    f.next.messages.push({ id: 'first-reply', role: 'assistant', text: '已核对交接。' });
+    f.next.state = 'idle';
+    await f.pass();
+    await f.pass();
+  };
+  return f;
+}
+
+test('R221: a member left alone is asked at 45 minutes, and its successor goes on in its place', async t => {
+  const f = idleSetup(t, 44);
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  await f.pass(1);
+  assert.match(rotated(f.client)[0], /^【NAW 换会话】这个会话的上下文已到约 190K。/);
+  assert.deepEqual(f.requests(), ['context']);
+  await f.finish();
+  assert.deepEqual([f.old.state, f.next.roomIds, f.next.state], ['ended', ['shared'], 'idle']);
+  assert.deepEqual(f.log().map(entry => entry.event), ['requested', 'done', 'archived']);
+  assert.equal(f.client.sends('a').length, 1, 'asked once');
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.deepEqual(f.requests(), ['context'], 'the successor is small: nothing more');
+});
+
+test('R221: a compaction just before: found when the rotation would start, so there is none, then or later', async t => {
+  const f = idleSetup(t, 53);
+  await f.record.counter.sample([f.old], NOW);
+  assert.equal(f.record.counter.contexts.get('a').tokens, 190000);
+  f.record.compaction();
+  for (let n = 0; n < 3; n++) await f.pass(n && 1);
+  assert.deepEqual(rotated(f.client), []);
+  const still = idleSetup(t, 53);
+  await still.record.counter.sample([still.old], NOW);
+  await still.pass();
+  assert.equal(rotated(still.client).length, 1, 'without one it is asked');
+});
+
+test('R221: the CLI compacts the session while the request is on its way in: nothing lost, one rotation', async t => {
+  const f = idleSetup(t, 53);
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (method === 'dispatch' && args[0] === 'a') f.record.compaction();
+    return call(method, ...args);
+  };
+  await f.pass();
+  assert.equal(rotated(f.client).length, 1);
+  f.record.request(40000, NOW + 60000);
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  await f.finish();
+  assert.deepEqual([f.old.state, f.next.roomIds], ['ended', ['shared']]);
+  assert.match(f.client.sends(f.next.id)[0][2], /在 feature 分支 abc123/, 'the handoff written after it');
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.deepEqual(f.requests(), ['context']);
+  assert.equal(f.client.sends('a').length, 1);
+});
+
+for (const [name, extra, clear] of [
+  ['a draft', { liveDraft: 'half typed' }, { liveDraft: '' }],
+  ['a stored message', { pendingQueue: { tag: 'kept' } }, { pendingQueue: null }],
+  ['a question', { claudeQuestion: { id: 'question' } }, { claudeQuestion: null }],
+]) test(`R221: ${name} keeps the session; without it the same session is asked`, async t => {
+  const f = idleSetup(t, 47, { extra });
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  assert.deepEqual(f.log(), [], 'and nothing is told of it');
+  Object.assign(f.old, clear);
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+for (const [name, change] of [
+  ['a draft', { liveDraft: 'half typed' }],
+  ['a stored message', { pendingQueue: { tag: 'kept' } }],
+  ['a question', { claudeQuestion: { id: 'question' } }],
+]) test(`R221: ${name} that comes in between the plan and the request keeps the session`, async t => {
+  const f = idleSetup(t, 47);
+  const recheck = f.record.counter.recheck.bind(f.record.counter);
+  f.record.counter.recheck = async (...args) => { const result = await recheck(...args); Object.assign(f.old, change); return result; };
+  await f.pass();
+  assert.deepEqual(f.record.counter.contexts.get('a')?.tokens, 190000);
+  assert.deepEqual(rotated(f.client), []);
+  Object.assign(f.old, Object.fromEntries(Object.keys(change).map(key => [key, null])));
+  f.record.counter.recheck = recheck;
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+// What is held for a session because of its window is looked at once a minute (session-wake.cjs QUIET_CHECK_MS): a window
+// that closes early leaves it held for up to a minute that no gate shows, and a rotation in it ends it as not sent.
+const WINDOW_KEY = 'backends/aaaaaaaaaaaaaaaaaaaa';
+function idleWindow(f, { opened = 30, left = 10, ids = ['a'], wait = { code: 'busy', ids: ['z'] } } = {}) {
+  const at = f.dispatcher.now();
+  fs.writeFileSync(path.join(f.dir, 'quiet-windows.json'), JSON.stringify({ format: 1, history: [], windows: [{ id: NATIVE_A, scope: `backend:${WINDOW_KEY}`, reason: 'migration',
+    openedBy: 'naw', openedAt: at - opened * 60000, deadline: at + left * 60000, waited: 'busy', sessions: ids }] }), { mode: 0o600 });
+  f.windows = () => f.dispatcher.quietWindows = new QuietWindows(f.dir, { now: f.dispatcher.now, moveWait: () => wait });
+  const open = f.windows();
+  f.judge = (extra = {}) => open.pass({ options: [{ backendKey: WINDOW_KEY, sessions: ids.map(id => ({ id })) }], settings: { migrate: true }, sessions: [],
+    humanAt: new Map(), failed: new Set(), ...extra }).closed.map(window => window.code);
+}
+const windowEnds = [
+  ['still-busy', {}, f => f.judge()],
+  ['person', { opened: 5 }, f => f.judge({ humanAt: new Map([['z', NOW]]) })],
+  ['not-waiting', { opened: 5, wait: { code: 'draft', ids: ['z'] } }, f => f.judge()],
+  ['migrate-off', { opened: 5 }, f => f.judge({ settings: { migrate: false } })],
+  ['gone', { opened: 5 }, f => f.judge({ options: [] })],
+  ['moved', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'moved').code]],
+  ['move-failed', { opened: 5 }, f => [f.dispatcher.quietWindows.moved(WINDOW_KEY, 'move-failed').code]],
+  ['timeout', { opened: 5, left: 1, wait: { code: 'quiet-10m', ids: [] } }, f => { f.advance(60000); return f.judge(); }],
+  ['timeout, not recorded yet', { opened: 5, left: 1 }, f => f.advance(60000)],
+];
+for (const [code, window, close] of windowEnds) test(`R221: a migration window closed (${code}): the session is asked two minutes later, not before`, async t => {
+  const closed = () => {
+    const f = idleSetup(t, 46 - (window.left === 1 ? 1 : 0));
+    idleWindow(f, window);
+    const codes = close(f);
+    if (codes) assert.deepEqual(codes, [code]);
+    return f;
+  };
+  const f = closed();
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), [], `at ${f.dispatcher.now() - NOW} ms`);
+  }
+  assert.deepEqual(f.log(), [], 'nothing is told of it');
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
+  for (const [ms, asked] of [[119999, 0], [120000, 1]]) {
+    const edge = closed();
+    await edge.pass(ms / 60000);
+    assert.equal(rotated(edge.client).length, asked, `${ms} ms after it`);
+  }
+});
+
+test('R221: the two minutes hold after NAW starts again; another backend\'s window holds nothing; inside its own nothing is asked', async t => {
+  const again = idleSetup(t, 46);
+  idleWindow(again);
+  assert.deepEqual(again.judge(), ['still-busy']);
+  again.windows();
+  await again.pass(0.1);
+  assert.deepEqual(rotated(again.client), []);
+  await again.pass(2);
+  assert.equal(rotated(again.client).length, 1);
+  const other = idleSetup(t, 46);
+  idleWindow(other, { ids: ['z'] });
+  assert.deepEqual(other.judge(), ['still-busy']);
+  await other.pass(0.1);
+  assert.equal(rotated(other.client).length, 1);
+  const open = idleSetup(t, 46);
+  idleWindow(open, { opened: 5 });
+  for (const forward of [0.1, 1, 1]) await open.pass(forward);
+  assert.deepEqual(rotated(open.client), []);
+});
+
+test('R221: a rotation of the size that the person interrupts waits for its own 45 minutes', t => {
+  const { dispatcher } = dispatcherSetup(t, []);
+  for (const butler of ['a', 'other']) assert.equal(dispatcher.personQuiet('a', 'context', butler), 45 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'content', 'a'), 30 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'memory', 'a'), 10 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'compact', 'a'), 2 * 60000);
+  assert.equal(dispatcher.personQuiet('a', 'compact', 'other'), 30 * 60000);
+  dispatcher.deferredAt.set('a', { at: NOW, due: 'context' });
+  const held = minutes => dispatcher.personDeferred([member('a')], null, NOW + minutes * 60000).has('a');
+  assert.deepEqual([held(31), held(44.9), held(45)], [true, true, false]);
 });
 
 test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
@@ -5454,7 +5921,7 @@ test(`R183: a first turn that ends ${status} after 3 minutes rolls back at once`
   assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
 });
 test('R183: the wait for a collaboration is counted from the confirmed first turn', async t => {
-  const f = await firstHandoff(t);
+  const f = await firstHandoff(t); f.dispatcher.view();
   f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
   await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle';
   await advanceTo(f, 29); assert.equal(f.record.handoffConfirmed, true); assert.equal(f.record.phase, 'handed');
@@ -5463,19 +5930,20 @@ test('R183: the wait for a collaboration is counted from the confirmed first tur
   f.client.state.rooms[0].run = null; await advanceTo(f, 32);
   assert.equal(f.old.state, 'ended');
 });
-test('R183: that wait stays bounded', async t => {
-  const f = await firstHandoff(t);
+test('R183: that wait is told to the person after half an hour, and does not end (R206)', async t => {
+  const f = await firstHandoff(t), told = []; f.dispatcher.notify = kind => told.push(kind);
   f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
   await advanceTo(f, 28); f.boundary('complete'); f.fresh.state = 'idle'; await advanceTo(f, 29);
-  await advanceTo(f, 59); assert.equal(f.record.phase, 'handed');
-  await advanceTo(f, 59.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept'); assert.equal(f.old.state, 'idle');
+  await advanceTo(f, 59); assert.deepEqual(told, []);
+  await advanceTo(f, 59.1); assert.deepEqual(told, ['kept']); assert.equal(f.dispatcher.rotations.a.phase, 'handed'); assert.equal(f.old.state, 'idle');
 });
-test('R183: a rotation confirmed by an older version keeps its wait from the handoff', async t => {
+test('R183: a rotation an older version confirmed and left waiting is finished too (R206)', async t => {
   const f = await firstHandoff(t, { state: 'idle' }); f.boundary('complete');
-  f.record.handoffConfirmed = true; f.dispatcher.save();
+  f.record.handoffConfirmed = true; f.dispatcher.save(); f.dispatcher.view();
   f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
-  await advanceTo(f, 29); assert.equal(f.record.phase, 'handed');
-  await advanceTo(f, 30.1); assert.equal(f.dispatcher.rotations.a.phase, 'kept');
+  await advanceTo(f, 29); await advanceTo(f, 60); assert.equal(f.record.phase, 'handed'); assert.equal(f.old.state, 'idle');
+  f.client.state.rooms[0].run = null; await advanceTo(f, 61);
+  assert.equal(f.old.state, 'ended'); assert.equal(f.dispatcher.rotations.a, undefined);
 });
 
 test('one space notice failing repeatedly does not block another space or duplicate its notice', async t => {
@@ -5551,4 +6019,842 @@ for (const change of ['native context', 'person input', 'draft']) test(`r3 ${cha
   t.after(() => reopened.close()); reopened.client = f.client; await reopened.advanceRotations(f.client.snapshot(), NOW);
   assert.equal(reopened.rotations.a.failureCleanup.stop.state, 'retained'); assert.deepEqual(f.fresh.roomIds, ['shared']);
   assert.equal(f.client.calls.some(c => c[0] === 'stopFailedSuccessor'), false);
+});
+
+// R206 (2026-11-24: 「这是个 bug:一旦错过就不再继续,这个肯定不行.」): a rotation kept from ending its old session waits
+// for it and is then finished. The session under test is a, at the pass that has its handoff confirmed.
+const ROWS = f => fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').filter(line => line.startsWith('{"time"')).map(line => JSON.parse(line));
+const eventsOf = (f, id = 'a') => ROWS(f).filter(e => e.old.id === id && ['kept', 'done', 'failed'].includes(e.event)).map(e => e.event);
+const gatesOf = (f, id = 'a') => ROWS(f).filter(e => e.old.id === id && e.event === 'waiting').map(e => e.reason);
+const NO_SAMPLES = { sampleProcesses: async () => { throw Error('no sample'); } };
+const stewardFrom = role => () => { const at = role()?.current(); return at ? { ...at, duty: '【NAW 职责说明】\nD' } : null; };
+async function handedOver(t, { butler = true, extra = {}, others = [] } = {}) {
+  let f = null;
+  const notices = [], due = { createdAt: NOW - 30 * HOUR, messages: heavyMessages(extra.provider), cwd: '/tmp', lastActivityAt: NOW - 40 * MINUTE };
+  const old = member('a', { ...due, ...(butler ? { roomIds: [], roomId: null } : {}), ...extra });
+  f = dispatcherSetup(t, [old, ...others], { clients: () => f?.window, notify: kind => notices.push(kind), steward: stewardFrom(() => f?.role), ...NO_SAMPLES });
+  f.window = f.client; f.notices = notices; f.clock = NOW; f.old = old;
+  f.role = new StewardRole(f.dir);
+  if (butler) f.role.set({ sessionId: 'a', nativeId: 'native-a' });
+  f.joins = fakeMembership(f.room, f.client);
+  const advance = f.advance; f.advance = ms => { f.clock += ms; advance(ms); };
+  f.pass = async (minutes = 0) => { f.advance(minutes * MINUTE); f.dispatcher.dirty = true; await f.dispatcher.schedule(); };
+  f.session = id => f.client.state.sessions.find(s => s.id === id);
+  f.stopped = id => f.client.calls.some(call => call[0] === 'stop' && call[1] === id);
+  f.asks = () => f.client.sends('a').filter(call => call[4].startsWith('rotation-supplement:'));
+  f.tells = id => f.client.sends(id ?? f.newId).filter(call => call[4].startsWith('rotation-handoff:a:'));
+  // What the backend does with the person's message: the row, the control revision, and the turn it starts.
+  f.person = (text = 'one more thing', state = 'idle') => {
+    const n = old.messages.length;
+    old.controlRevision += 1; old.state = state; f.dispatcher.noteHuman('a');
+    old.messages.push({ id: `person-${n}`, role: 'user', text, origin: 'gui', status: 'submitted', time: f.clock });
+    if (state === 'idle') old.messages.push({ id: `answer-${n}`, role: 'assistant', text: 'done', time: f.clock });
+  };
+  // NAW restarted: the same files, a new dispatcher with nothing in memory.
+  f.restart = async () => {
+    f.dispatcher.close();
+    f.dispatcher = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, connect: async () => f.client, clients: () => f.window, now: () => f.clock,
+      settleMs: 0, tickMs: HOUR, notify: kind => notices.push(kind), steward: stewardFrom(() => f.role), ...NO_SAMPLES });
+    f.role = new StewardRole(f.dir);
+    t.after(() => f.dispatcher.close());
+    await f.dispatcher.start();
+  };
+  await f.dispatcher.start();
+  await f.pass();
+  f.client.reply('a', '交接：在看三个交付。');
+  await f.pass();
+  f.newId = f.client.state.sessions.at(-1).id;
+  await f.pass();
+  assert.equal(f.dispatcher.rotations.a.phase, 'handed');
+  f.session(f.newId).messages.push({ id: 'first-reply', role: 'assistant', text: '已核对交接。' });
+  f.session(f.newId).state = 'idle';
+  return f;
+}
+// R221: the butler outside every space. After each pass there is exactly one designated session, and it is alive.
+function idleButler(t, minutes) {
+  let f = null;
+  f = idleSetup(t, minutes, { extra: { roomIds: [], roomId: null }, steward: stewardFrom(() => f?.role) });
+  f.role = new StewardRole(f.dir); f.role.set({ sessionId: 'a', nativeId: NATIVE_A });
+  const pass = f.pass; f.seats = [];
+  f.pass = async forward => {
+    await pass(forward);
+    const seat = f.role.current();
+    assert.equal(f.client.state.sessions.filter(s => s.id === seat?.sessionId && s.nativeId === seat.nativeId && s.state !== 'ended').length, 1);
+    f.seats.push(seat.sessionId);
+  };
+  return f;
+}
+test('R221: the butler left alone is asked at 45 minutes; the designation moves once, to its successor', async t => {
+  const f = idleButler(t, 44);
+  await f.pass();
+  assert.deepEqual(rotated(f.client), []);
+  await f.pass(1);
+  assert.match(rotated(f.client)[0], /上下文已到约 190K/);
+  await f.finish();
+  assert.deepEqual(f.requests(), ['context']);
+  assert.deepEqual([f.old.state, f.next.state, f.next.roomIds], ['ended', 'idle', []]);
+  assert.deepEqual([...new Set(f.seats)], ['a', f.next.id]);
+  assert.equal(f.role.current().sessionId, f.next.id);
+  for (let n = 0; n < 3; n++) await f.pass(1);
+  assert.equal(f.client.state.sessions.length, 2, 'one successor');
+});
+test('R221: the butler is asked two minutes after its migration window closed, not before', async t => {
+  const f = idleButler(t, 46);
+  idleWindow(f);
+  assert.deepEqual(f.judge(), ['still-busy']);
+  for (const forward of [0.1, 1]) {
+    await f.pass(forward);
+    assert.deepEqual(rotated(f.client), []);
+  }
+  await f.pass(1);
+  assert.equal(rotated(f.client).length, 1);
+  assert.deepEqual(f.requests(), ['context']);
+});
+for (const [name, fail] of [
+  ['cannot be created', f => {
+    const call = f.client.call.bind(f.client);
+    f.client.call = async (method, ...args) => { if (method === 'create') throw Error('synthetic create failure'); return call(method, ...args); };
+  }],
+  ['fails in its first turn', f => {
+    const call = f.client.call.bind(f.client);
+    f.client.call = async (method, ...args) => {
+      const tag = await call(method, ...args), target = f.client.state.sessions.find(s => s.id === args[0]);
+      if (method === 'dispatch' && args[3]?.startsWith('rotation-handoff:')) { target.messages.at(-1).status = 'failed'; target.state = 'error'; }
+      return tag;
+    };
+  }],
+]) test(`R221: the butler whose successor ${name} stays the butler and is not asked again`, async t => {
+  const f = idleButler(t, 46);
+  fail(f);
+  await f.pass();
+  assert.equal(rotated(f.client).length, 1);
+  f.client.reply('a', '交接：在看三个交付。');
+  for (let n = 0; n < 4; n++) await f.pass(1);
+  assert.ok(f.log().some(entry => entry.event === 'failed'), 'the rotation failed');
+  assert.deepEqual([...new Set(f.seats)], ['a']);
+  assert.deepEqual([f.old.state, f.old.archived], ['idle', undefined]);
+  assert.equal(rotated(f.client).length, 1);
+});
+
+// The old session's one addition, told to the same successor and finished there.
+async function supplemented(f, text = '交接之后：人改了主意。') {
+  assert.equal(f.asks().length, 1, 'the old session is asked');
+  f.client.reply('a', text);
+  await f.pass();
+  assert.equal(f.tells().length, 1);
+  assert.match(f.tells()[0][2], new RegExp(text));
+  f.client.reply(f.newId, '并进来了。');
+  await f.pass();
+}
+const finished = (f, id = 'a') => {
+  assert.equal(f.session(id).state, 'ended'); assert.equal(f.dispatcher.rotations[id], undefined);
+  assert.deepEqual(eventsOf(f, id), ['done']); assert.equal(f.session(f.newId).state === 'ended', false);
+};
+
+test('R206: the person typing in the old session is waited for, and it is ended once they are done', async t => {
+  const f = await handedOver(t);
+  f.dispatcher.noteHuman('a'); f.old.liveDraft = '还没发'; f.old.draftRevision += 1;
+  await f.pass();
+  assert.deepEqual([f.dispatcher.rotations[f.newId]?.phase, f.dispatcher.rotations[f.newId]?.successorOf], ['kept', 'a'], 'the successor rests as after any rotation');
+  for (const minutes of [31, 25 * 60]) { await f.pass(minutes); assert.equal(f.stopped('a'), false, 'their draft is never cut off'); }
+  assert.deepEqual(eventsOf(f), [], 'not over: nothing is recorded as kept');
+  assert.deepEqual(gatesOf(f).slice(0, 1), ['person-input']); assert.ok(gatesOf(f).includes('person-typing'), 'the log names the gate, not the words');
+  assert.deepEqual(f.role.current().sessionId, 'a', 'the butler until then');
+  assert.deepEqual(f.dispatcher.rotationChains().map(chain => chain.sessions.map(x => [x.id, x.outcome])), [[['a', null], [f.newId, 'kept']]], 'the two are shown together meanwhile');
+  const lines = gatesOf(f).length;
+  for (const draft of ['', '又写', '', '还写']) { f.old.liveDraft = draft; f.dispatcher.noteHuman('a'); await f.pass(1); }
+  assert.ok(gatesOf(f).length <= lines + 1); assert.deepEqual(gatesOf(f).length, new Set(gatesOf(f)).size, 'a gate it comes back to is not another line');
+  f.old.liveDraft = ''; f.dispatcher.noteHuman('a');
+  await f.pass(29); assert.equal(f.stopped('a'), false, 'the quiet time is not shorter');
+  await f.pass(2);
+  finished(f); assert.deepEqual(f.role.current(), { sessionId: f.newId, nativeId: `native-${f.newId}` });
+  assert.equal(f.asks().length, 0, 'nothing was said: nothing to add');
+  assert.equal(f.client.calls.filter(call => call[0] === 'create').length, 1, 'the same successor');
+  assert.deepEqual(f.notices.filter(kind => kind === 'kept'), ['kept'], 'the person is told once');
+});
+
+test('R206: what the person said after the handoff reaches the successor before the old session is ended', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass();
+  assert.deepEqual(gatesOf(f), ['person-message']);
+  await f.pass(29); assert.equal(f.asks().length, 0);
+  await f.pass(2); assert.equal(f.stopped('a'), false);
+  assert.match(f.asks()[0]?.[2] || '', /只补一段：交接之后变了什么/);
+  await supplemented(f); finished(f);
+  assert.deepEqual(f.role.current().sessionId, f.newId); assert.equal(f.asks().length, 1); assert.equal(f.tells().length, 1);
+  assert.equal(f.client.calls.filter(call => call[0] === 'create').length, 1);
+});
+
+test('R206: an old session NAW woke ran another turn: that is added too, with no quiet to wait for', async t => {
+  const f = await handedOver(t);
+  f.old.messages.push({ id: 'wake', role: 'user', text: '【NAW 派活】看一下', origin: 'naw-dispatch', time: f.clock }); f.old.state = 'working';
+  await f.pass(); assert.deepEqual(gatesOf(f), ['turn-running']);
+  f.old.messages.push({ id: 'wake-reply', role: 'assistant', text: '看过了', time: f.clock }); f.old.state = 'idle';
+  await f.pass(1); await supplemented(f); finished(f);
+});
+
+test('R206: what the person says in a space counts as use by its own time: it does not take control of the session', async t => {
+  const f = await handedOver(t); f.dispatcher.noteHuman('a'); await f.pass(); await f.pass(20);
+  f.old.messages.push({ id: 'space-words', role: 'user', text: '顺便看一下', origin: 'gui', status: 'submitted', time: f.clock }, { id: 'space-answer', role: 'assistant', text: 'ok', time: f.clock });
+  await f.pass(20); assert.equal(f.asks().length, 0, 'their quiet starts again');
+  await f.pass(11); await supplemented(f); finished(f);
+});
+
+test('R206: a successor with a queue item, in use by the person or in a turn is told once it is free', async t => {
+  const f = await handedOver(t, { butler: false });
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。');
+  const task = f.room.queueAdd('在做的一件', f.newId);
+  f.room.queueMarkSent('shared', task, f.newId, f.newId, f.clock, false, `native-${f.newId}`);
+  await f.pass(); assert.equal(f.tells().length, 0, 'its item first'); assert.ok(gatesOf(f).includes('successor-busy'));
+  f.room.queueSettle('shared', task, 'done', undefined, f.newId);
+  f.dispatcher.noteHuman(f.newId); await f.pass(1); assert.equal(f.tells().length, 0);
+  f.session(f.newId).state = 'working'; await f.pass(10); assert.equal(f.tells().length, 0);
+  f.session(f.newId).state = 'idle'; await f.pass(1); await f.pass(1); assert.equal(f.tells().length, 1); f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+test('R206: a collaboration is waited for however long it runs', async t => {
+  const f = await handedOver(t, { butler: false });
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] };
+  await f.pass(); await f.pass(31); await f.pass(25 * 60);
+  assert.deepEqual(eventsOf(f), []); assert.deepEqual(gatesOf(f), ['collaborating']); assert.deepEqual(f.notices, ['kept'], 'told once, after half an hour');
+  f.client.state.rooms[0].run = null; await f.pass(1);
+  finished(f);
+});
+
+test('R206: a terminal whose screen could not be saved is tried again', async t => {
+  const f = await handedOver(t, { extra: { terminalInputPending: true } });
+  const reads = () => f.client.calls.filter(call => call[0] === 'terminalSnapshot').length;
+  f.client.snapshotFails = true; await f.pass(); await f.pass(2); const before = reads(); await f.pass(0.2); await f.pass(0.2); assert.equal(reads(), before, 'not on every pass');
+  await f.pass(25 * 60);
+  assert.deepEqual(eventsOf(f), []); assert.deepEqual(gatesOf(f), ['terminal-unsaved']); assert.deepEqual(f.notices, ['keptUnsaved']);
+  f.client.snapshotFails = false; await f.pass(2);
+  finished(f); assert.equal(fs.readdirSync(path.join(f.dir, 'rotation-terminals')).length, 1);
+});
+
+test('R206: keys left in the terminal hold it; Claude says when its prompt is empty, and NAW asks no more than that', async t => {
+  const f = await handedOver(t);
+  f.old.terminalInputPending = true; f.old.controlRevision += 1;
+  let draft = true; const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => {
+    if (draft && method === 'dispatch' && args[0] === 'a') throw Object.assign(Error('draft'), { uiMessage: { key: 'error.submission.nativeDraft' } });
+    return call(method, ...args);
+  };
+  await f.pass(); assert.deepEqual(gatesOf(f), ['control-changed']);
+  for (const minutes of [1, 31, 31, 24 * 60]) await f.pass(minutes);
+  assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []); assert.ok(gatesOf(f).includes('terminal-input')); assert.equal(f.asks().length, 0);
+  draft = false; await f.pass(31);
+  await supplemented(f, '没有变化。'); finished(f);
+});
+
+test('R206: a Codex terminal cannot say so: it is held until the person sends', async t => {
+  const f = await handedOver(t); f.old.provider = 'codex';
+  f.old.terminalInputPending = true; f.old.controlRevision += 1;
+  await f.pass(); await f.pass(1); await f.pass(31); await f.pass(25 * 60);
+  assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 0); assert.ok(gatesOf(f).includes('terminal-input')); assert.deepEqual(eventsOf(f), []);
+  f.person('发出去了'); await f.pass(1); await f.pass(31);
+  await supplemented(f); finished(f);
+});
+
+test('R206: someone always at it is never cut off', async t => {
+  const f = await handedOver(t), stalls = []; f.dispatcher.rotationStalled = stall => stalls.push([stall.memberId, stall.reason, stall.gate]);
+  for (let i = 0; i < 60; i += 1) { f.person(`第 ${i} 句`); await f.pass(); await f.pass(29); }
+  assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 0); assert.deepEqual(eventsOf(f), []); assert.equal(f.role.current().sessionId, 'a');
+  assert.ok(ROWS(f).length < 12, 'a wait is not a line per pass');
+  assert.deepEqual(stalls, [['a', 'content', 'person-quiet']], 'a long wait is one line in the butler\'s record');
+});
+
+test('R206: more from the person while the addition is written is the next interruption, asked for once too', async t => {
+  const f = await handedOver(t);
+  f.person('一'); await f.pass(); await f.pass(31); assert.equal(f.asks().length, 1);
+  f.client.reply('a', '补：一。'); f.person('二'); await f.pass();
+  assert.equal(f.tells().length, 1); assert.doesNotMatch(f.tells()[0][2], /二/);
+  f.client.reply(f.newId, '收到。'); await f.pass(); assert.equal(f.stopped('a'), false, '「二」 is not told yet'); assert.equal(f.asks().length, 1);
+  await f.pass(31); assert.equal(f.asks().length, 2);
+  f.client.reply('a', '补：二。'); await f.pass(); assert.equal(f.tells().length, 2); f.client.reply(f.newId, '收到。'); await f.pass();
+  finished(f);
+});
+
+test('R206: an addition that came to nothing is not asked for again at once', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass(); await f.pass(31); assert.equal(f.asks().length, 1);
+  f.old.state = 'idle'; // The turn failed: no words.
+  for (const minutes of [1, 1, 10, 15]) { await f.pass(minutes); assert.equal(f.asks().length, 1); }
+  assert.ok(gatesOf(f).includes('supplement-missing')); assert.equal(f.stopped('a'), false);
+  await f.pass(5); assert.equal(f.asks().length, 2); f.old.state = 'idle'; await f.pass(1);
+  await f.pass(45); assert.equal(f.asks().length, 2, 'twice as long the second time');
+  await f.pass(20); assert.equal(f.asks().length, 3); f.client.reply('a', '补上了。'); await f.pass();
+  f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+test('R206: an old session the person ended themselves is finished, and the successor is told it left something unsaid', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass(); f.old.state = 'ended'; await f.pass(1); assert.equal(f.tells().length, 0); await f.pass(2);
+  assert.equal(f.asks().length, 0); assert.match(f.tells()[0]?.[2] || '', /没有补写就结束了/);
+  f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+for (const state of ['working', 'ended']) test(`R206: a successor turn on the addition that ${state === 'working' ? 'runs long is not told twice' : 'fails is tried again later'}`, async t => {
+  const f = await handedOver(t), call = f.client.call.bind(f.client), hold = state === 'working' ? null : 'failed';
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'dispatch' && args[3].startsWith('rotation-handoff:a:')) {
+      const rows = f.session(f.newId).messages;
+      if (hold) { rows.at(-1).status = hold; f.session(f.newId).state = 'idle'; } else f.late = rows.pop();
+    }
+    return result;
+  };
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells().length, 1);
+  if (hold) {
+    await f.pass(1); await f.pass(20); assert.equal(f.tells().length, 1); assert.ok(gatesOf(f).includes('successor-turn-failed')); assert.deepEqual(heldBack(f), []);
+    f.session(f.newId).state = 'working'; await f.pass(11); assert.deepEqual(heldBack(f), [f.newId], 'from then on before its next item');
+    f.session(f.newId).state = 'idle'; await f.pass(4); await f.pass(1); assert.equal(f.tells().length, 2); assert.equal(f.asks().length, 1, 'the old session is not asked again for it');
+  } else {
+    await f.pass(45); assert.equal(f.tells().length, 1); assert.equal(f.stopped('a'), false);
+    f.session(f.newId).messages.push(f.late); f.session(f.newId).state = 'idle'; await f.pass(1); finished(f);
+  }
+});
+
+// Every step is on disk before it has an effect: a restart asks nothing, tells nothing and creates nothing twice.
+for (const at of ['waiting', 'asked', 'asking', 'ready', 'sending', 'sent']) test(`R206: NAW restarted while ${at}`, async t => {
+  const f = await handedOver(t), call = f.client.call.bind(f.client);
+  f.person(); await f.pass(); if (at === 'waiting') await f.restart();
+  if (at === 'asking' || at === 'sending') f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'dispatch' && args[3].startsWith(at === 'asking' ? 'rotation-supplement:' : 'rotation-handoff:a:')) {
+      f.client.call = call;
+      f.onDisk = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'), 'utf8')).rotations.a.supplement?.state;
+      throw Error('synthetic lost answer');
+    }
+    return result;
+  };
+  await f.pass(31); if (['asked', 'asking'].includes(at)) { assert.equal(f.dispatcher.rotations.a?.supplement?.state, at); await f.restart(); }
+  assert.equal(f.asks().length, 1); f.client.reply('a', '交接之后：改了。');
+  if (at === 'ready') f.session(f.newId).state = 'working';
+  await f.pass(1);
+  if (['ready', 'sending', 'sent'].includes(at)) { assert.equal(f.dispatcher.rotations.a?.supplement?.state, at); await f.restart(); }
+  if (['asking', 'sending'].includes(at)) assert.equal(f.onDisk, at, 'written before it is sent');
+  if (at === 'ready') { f.session(f.newId).state = 'idle'; await f.pass(1); }
+  await f.pass(1); assert.equal(f.tells().length, 1); f.client.reply(f.newId, '收到。');
+  // A restart does not know when the person last used it: their quiet is counted from then.
+  for (let i = 0; i < 3 && f.dispatcher.rotations.a; i += 1) await f.pass(31);
+  finished(f);
+  assert.equal(f.asks().length, 1); assert.equal(f.tells().length, 1); assert.equal(f.client.calls.filter(c => c[0] === 'create').length, 1);
+  assert.equal(f.client.sends('a').filter(c => c[4] === 'rotation:a').length, 1); assert.equal(f.role.current().sessionId, f.newId);
+});
+
+test('R206: the person\'s quiet is counted across a restart too', async t => {
+  const f = await handedOver(t);
+  f.dispatcher.noteHuman('a'); await f.pass(); await f.restart();
+  await f.pass(10); await f.pass(10); assert.equal(f.stopped('a'), false); await f.pass(11); finished(f);
+});
+
+for (const [what, change] of [['a key in its terminal', old => { old.controlRevision += 1; }], ['another row', old => { old.messages.push({ id: 'late', role: 'assistant', text: 'late' }); }]])
+test(`R206: ${what} between the judgement and the step keeps the old session and is not skipped`, async t => {
+  const f = await handedOver(t), refresh = f.client.refresh.bind(f.client); let once = null;
+  f.client.refresh = async () => { if (once) { once(f.old); once = null; } return refresh(); };
+  f.dispatcher.noteHuman('a'); await f.pass(); f.advance(31 * MINUTE); once = change;
+  await f.pass(); assert.equal(f.stopped('a'), false, 'not ended');
+  if (what === 'another row') { await f.pass(2); await supplemented(f); return finished(f); }
+  f.person(); await f.pass(1); once = change;
+  await f.pass(31); assert.equal(f.asks().length, 0, 'nor asked over the person');
+});
+
+// What a move of a backend shows of its sessions, and what one that failed leaves on record.
+async function movable(t, options) {
+  const f = await handedOver(t, options), route = f.client.route.bind(f.client);
+  f.client.control = { maintenance: new Set() };
+  f.client.route = id => ({ ...route(id), key: 'backend' });
+  f.move = async (id, work) => {
+    const session = f.session(id), state = session.state;
+    f.client.control.maintenance.add('backend'); session.state = 'ended'; await work();
+    f.client.control.maintenance.clear(); await f.pass(0.5); // a snapshot of that moment, seen after it
+    session.state = state;
+  };
+  return f;
+}
+test('R206: an old session stopped for a move of its backend is not taken as ended', async t => {
+  const f = await movable(t);
+  f.person('移动前说的'); await f.pass();
+  await f.move('a', async () => { for (const minutes of [1, 3, 3]) await f.pass(minutes); });
+  await f.pass(1); assert.deepEqual(eventsOf(f), []); assert.equal(f.tells().length, 0, 'nor said to have left it unsaid'); assert.equal(f.role.current().sessionId, 'a');
+  assert.ok(gatesOf(f).includes('backend-move'));
+  await f.pass(31); assert.equal(f.asks().length, 1); await supplemented(f); finished(f);
+});
+
+test('R206: the same at the pass that has the handoff confirmed', async t => {
+  const f = await movable(t);
+  await f.move('a', async () => { for (const minutes of [0, 3]) await f.pass(minutes); });
+  assert.deepEqual(eventsOf(f), []); await f.pass(1); finished(f); assert.equal(f.stopped('a'), true, 'ended by its own stop');
+});
+
+test('R206: a successor stopped for a move of its backend is not given up', async t => {
+  const f = await movable(t, { butler: false });
+  f.person(); await f.pass();
+  await f.move(f.newId, async () => { for (const minutes of [1, 3, 3]) await f.pass(minutes); });
+  await f.pass(31); assert.deepEqual(eventsOf(f), []); await supplemented(f); finished(f);
+  assert.equal(f.client.calls.filter(call => call[0] === 'create').length, 1, 'no second successor');
+});
+
+test('R206: an old session a failed move left stopped is the person\'s to continue, until they put it away', async t => {
+  const f = await handedOver(t), record = path.join(f.dir, 'backend-switch.json');
+  f.person(); await f.pass(); f.old.state = 'ended';
+  fs.writeFileSync(record, JSON.stringify({ format: 2, backends: { backend: { phase: 'stopped', failedAt: NOW, sessions: [{ id: 'a', nativeId: 'native-a', name: 'a' }] } } }));
+  await f.pass(31); await f.pass(31); assert.deepEqual(eventsOf(f), []); assert.deepEqual(gatesOf(f).at(-1), 'backend-move'); assert.equal(f.tells().length, 0);
+  f.room.update({ archivedSessions: ['a'] }); await f.pass(1); await f.pass(3); assert.match(f.tells()[0]?.[2] || '', /没有补写就结束了/);
+  f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+const heldBack = f => ['a', f.newId].filter(id => !rules.queueVacancies({ rooms: [{ id: 'shared', name: 'Team', queue: [] }], sessions: [member(id)],
+  wakePolicy: AWAKE, now: f.clock, rotations: f.dispatcher.rotations })[0].candidateIds.length);
+// While the successor has the addition and cannot say it took it, the two are held back for ten minutes and no longer.
+for (const state of ['error', 'recoverable', 'approval', 'working']) test(`R206: an addition held up by a successor in ${state} does not hold the two back, and is not told twice`, async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass();
+  assert.equal(f.tells().length, 1); assert.equal(f.dispatcher.rotations.a.supplement.state, 'sent');
+  const held = () => heldBack(f), next = f.session(f.newId);
+  if (state === 'error') next.messages.at(-1).status = 'failed'; else f.boundary = next.messages.pop();
+  next.state = state;
+  await f.pass(1); assert.deepEqual(held(), ['a', f.newId]);
+  await f.pass(8); assert.deepEqual(held(), ['a', f.newId]); await f.pass(2); assert.deepEqual(held(), [], 'neither is held');
+  await f.pass(45); assert.deepEqual(held(), []); assert.equal(f.tells().length, 1); assert.equal(f.stopped('a'), false);
+  if (state === 'error') return;
+  next.state = 'idle'; next.messages.push(f.boundary); await f.pass(1); await f.pass(1);
+  assert.equal(f.tells().length, 1); finished(f);
+});
+
+test('R206: the butler is woken again when its addition is held up at a successor whose turn failed', async t => {
+  const f = await handedOver(t); let event = false, woken = 0;
+  f.dispatcher.stewardWake = { active: () => true, endHold() {}, hold() {}, due: () => event, patrolDue: () => null, clearBlocked() {}, skip() {}, controlSucceeded() {},
+    wake: async (session, model, send) => { woken += session.id === 'a'; await send('【NAW】有新结果', `steward-wake:${woken}`); } };
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass(); event = true;
+  f.session(f.newId).messages.at(-1).status = 'failed'; f.session(f.newId).state = 'error';
+  await f.pass(5); assert.equal(woken, 0); await f.pass(6); await f.pass(1); assert.equal(woken, 1); event = false; f.client.reply('a', '看过了。');
+  // Once it can work again, the addition and then what that wake brought are told, each once.
+  f.session(f.newId).state = 'idle'; await f.pass(1); await f.pass(31); assert.equal(f.tells().length, 2); f.client.reply(f.newId, '收到。');
+  await f.pass(1); await f.pass(1); assert.equal(f.asks().length, 2); f.client.reply('a', '又补。'); await f.pass(); f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+test('R206: an addition whose sends leave nothing behind holds the two back once, not at every try', async t => {
+  const f = await handedOver(t, { butler: false }), call = f.client.call.bind(f.client); let tries = 0;
+  f.client.call = async (method, ...args) => {
+    if (method === 'dispatch' && args[3].startsWith('rotation-handoff:a:')) { tries += 1; throw Error('send-timeout'); }
+    return call(method, ...args);
+  };
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(tries, 1);
+  assert.deepEqual(heldBack(f), ['a', f.newId]);
+  for (let i = 0; i < 8; i += 1) { await f.pass(1); if (i > 2) assert.deepEqual(heldBack(f), [], 'neither is held while it is tried again'); }
+  assert.ok(tries > 2 && tries < 6, `${tries}`); f.client.call = call; await f.pass(3);
+  assert.equal(f.tells().length, 1); assert.equal(f.asks().length, 1); assert.deepEqual(heldBack(f), ['a', f.newId], 'it is there now');
+  f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+test('R206: a successor that is gone while the old session is out of view gives nothing up until it is back', async t => {
+  const f = await handedOver(t, { butler: false });
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.dispatcher.rotations.a.supplement.state, 'sent');
+  const task = f.room.queueAdd('给继任的', f.newId); f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'a');
+  f.room.update({ archivedSessions: [f.newId] }); await f.pass(1); await f.pass(5);
+  assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'old-missing');
+  f.client.state.sessions.push(f.old); await f.pass(1);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'a');
+});
+
+test('R206: what the old session added is told while a failed move has it stopped, and holds no one after', async t => {
+  const f = await handedOver(t, { butler: false });
+  f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); f.session(f.newId).state = 'working'; await f.pass();
+  assert.equal(f.dispatcher.rotations.a.supplement.state, 'ready'); f.old.state = 'ended';
+  fs.writeFileSync(path.join(f.dir, 'backend-switch.json'), JSON.stringify({ format: 2, backends: { b: { phase: 'stopped', sessions: [{ id: 'a', nativeId: 'native-a', name: 'a' }] } } }));
+  await f.pass(1); await f.pass(11); f.session(f.newId).state = 'idle'; await f.pass(1); await f.pass(1); assert.equal(f.tells().length, 1);
+  f.client.reply(f.newId, '收到。'); const task = f.room.queueAdd('下一件', f.newId); await f.pass(1); await f.pass(1);
+  assert.equal(f.room.value.queue.find(i => i.id === task).status, 'sent'); assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'backend-move');
+  fs.unlinkSync(path.join(f.dir, 'backend-switch.json')); f.old.state = 'idle'; await f.pass(1); await f.pass(1); finished(f); assert.equal(f.asks().length, 1);
+});
+
+test('R206: more open decisions than fit in one message hold no one back', async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(31);
+  for (let i = 0; i < 12; i += 1) {
+    const task = f.room.queueAdd(`${i}`.padEnd(1500, '长'), 'a'); f.room.queueMarkSent('shared', task, 'a', 'a', f.clock, false, 'native-a');
+    f.room.queueSettle('shared', task, 'waiting', undefined, 'a', '', `需要你决定：${i}`.padEnd(1500, '问'));
+  }
+  f.client.reply('a', '补。'); await f.pass(); await f.pass(1);
+  assert.equal(f.tells().length, 0); assert.ok(gatesOf(f).includes('decisions-stay'), gatesOf(f).join()); assert.deepEqual(heldBack(f), []);
+  for (const item of f.room.value.queue) if (item.status === 'waiting') f.room.queueResolve(item.id);
+  await f.pass(1); await f.pass(1); assert.equal(f.tells().length, 1); f.client.reply(f.newId, '收到。'); await f.pass(); finished(f);
+});
+
+test('R206: a successor that always has a next item is told between two of them', async t => {
+  const f = await handedOver(t, { butler: false });
+  f.person(); await f.pass(); const first = f.room.queueAdd('第一件', f.newId), second = f.room.queueAdd('第二件', f.newId);
+  await f.pass(3); assert.equal(f.room.value.queue.find(i => i.id === first).status, 'sent');
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); await f.pass(11); await f.pass(11); assert.equal(f.tells().length, 0);
+  assert.deepEqual(heldBack(f), [f.newId], 'the old one is not held for it');
+  f.client.reply(f.newId, '第一件做完了。'); await f.pass(1); await f.pass(1); assert.equal(f.tells().length, 1); assert.equal(f.room.value.queue.find(i => i.id === second).status, 'queued');
+  f.client.reply(f.newId, '收到。'); await f.pass(); finished(f); await f.pass(1); assert.equal(f.room.value.queue.find(i => i.id === second).status, 'sent');
+});
+
+test('R206: an old session no longer in view is finished after half an hour out of it, as it was at once before', async t => {
+  const f = await handedOver(t);
+  f.dispatcher.noteHuman('a'); await f.pass(); f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== 'a');
+  await f.pass(1); await f.pass(29); assert.deepEqual(eventsOf(f), []); assert.ok(gatesOf(f).includes('old-missing'));
+  await f.pass(2); assert.deepEqual(eventsOf(f), ['done']); assert.equal(f.role.current().sessionId, f.newId);
+});
+
+test('R206: an old session the person archived while it runs is asked and ended too', async t => {
+  const f = await handedOver(t), stalls = []; f.dispatcher.rotationStalled = stall => stalls.push(stall.memberId);
+  f.person(); await f.pass(); f.room.update({ archivedSessions: ['a'] });
+  await f.pass(31); await f.pass(1); await supplemented(f); finished(f);
+  const g = await handedOver(t); g.dispatcher.rotationStalled = stall => stalls.push(stall.memberId);
+  g.old.state = 'working'; await g.pass(); g.room.update({ archivedSessions: ['a'] }); await g.pass(1); await g.pass(120); await g.pass(120);
+  assert.deepEqual(stalls, ['a'], 'a long wait is in the butler\'s record all the same');
+});
+
+for (const [what, change] of [['the person used it', f => f.dispatcher.noteHuman('a')], ['a dialog opened in it', f => { f.old.nativeTerminalDialog = true; }]])
+test(`R206: an archived old session is not asked when ${what} between the judgement and the step`, async t => {
+  const f = await handedOver(t), refresh = f.client.refresh.bind(f.client); let once = null;
+  f.client.refresh = async () => { if (once) { once(f); once = null; } return refresh(); };
+  f.person(); await f.pass(); f.room.update({ archivedSessions: ['a'] }); await f.pass(1); f.advance(31 * MINUTE); once = change;
+  await f.pass(); assert.equal(once, null); assert.equal(f.asks().length, 0); f.old.nativeTerminalDialog = false; await f.pass(1);
+  await f.pass(31); await supplemented(f); finished(f);
+});
+
+test('R206: a designation that cannot be read is waited for, and the person is told', async t => {
+  const f = await handedOver(t), steward = f.dispatcher.steward;
+  f.dispatcher.steward = () => { throw Error('unreadable'); };
+  await f.pass(); await f.pass(1); await f.pass(31); assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []);
+  assert.deepEqual(gatesOf(f).at(-1), 'designation-unreadable'); assert.ok(f.notices.includes('kept'));
+  f.dispatcher.steward = steward; await f.pass(1); finished(f);
+});
+
+test('R206: an old session whose stop did not go through is back in its spaces when its successor is gone', async t => {
+  const f = await handedOver(t, { butler: false }), call = f.client.call.bind(f.client); let refuse = true;
+  f.client.call = async (method, ...args) => {
+    if (refuse && method === 'maintenanceStop') { f.dispatcher.noteHuman('a'); throw Object.assign(Error('changed'), { uiMessage: { key: 'error.backendSwitchSessionChanged' } }); }
+    return call(method, ...args);
+  };
+  await f.pass(); assert.deepEqual(gatesOf(f), ['changed-at-stop']); assert.deepEqual(f.old.roomIds, []);
+  const task = f.room.queueAdd('给继任的', f.newId); refuse = false; f.dispatcher.noteHuman('a');
+  f.room.update({ archivedSessions: [f.newId] }); await f.pass(1);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.deepEqual(f.old.roomIds, ['shared']); assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'a');
+});
+
+test('R206: what an unreadable waiting record loses is asked for again, and ends nothing', async t => {
+  const f = await handedOver(t), file = path.join(f.dir, 'queue-dispatch.json');
+  f.person(); await f.pass(); await f.pass(31); assert.equal(f.asks().length, 1); f.client.reply('a', '补。');
+  f.dispatcher.close(); const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.assign(saved.rotations.a, { usedAt: 'x', gates: [1], left: 'x', missed: { tries: 0 } }); delete saved.rotations.a.supplement.item;
+  fs.writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
+  await f.restart(); const { usedAt, gates, left, missed } = f.dispatcher.rotations.a;
+  assert.deepEqual([Number.isFinite(usedAt), gates?.includes(1) ?? false, left, missed], [true, false, undefined, undefined]);
+  await f.pass(31); assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 2);
+});
+
+test('R206: the whole change of a butler, interrupted and across a restart, has exactly one butler throughout and needs no one', async t => {
+  const f = await handedOver(t), seen = [];
+  const only = () => { seen.push(f.role.current().sessionId); return seen.at(-1); };
+  assert.equal(only(), 'a'); f.person(); await f.pass(); assert.equal(only(), 'a');
+  await f.restart(); assert.equal(only(), 'a'); await f.pass(31); assert.equal(only(), 'a');
+  f.client.reply('a', '补。'); await f.pass(); assert.equal(only(), 'a'); f.client.reply(f.newId, '收到。');
+  const call = f.client.call.bind(f.client);
+  f.client.call = async (method, ...args) => { const result = await call(method, ...args); only(); return result; };
+  for (let i = 0; i < 3 && f.dispatcher.rotations.a; i += 1) await f.pass(31);
+  assert.equal(only(), f.newId); assert.deepEqual([...new Set(seen)], ['a', f.newId]);
+  assert.deepEqual(f.role.current(), { sessionId: f.newId, nativeId: `native-${f.newId}` }); assert.equal(f.session('a').state, 'ended');
+  assert.deepEqual(f.role.selected, { sessionId: 'a', nativeId: 'native-a' }, 'the person\'s own choice is not written by NAW');
+});
+
+test('R206: a rotation waiting for its old session takes no slot, holds no one, and another due session is changed meanwhile', async t => {
+  const other = member('o', { createdAt: NOW - 29 * HOUR, messages: heavyMessages(), cwd: '/tmp', lastActivityAt: NOW - 40 * MINUTE });
+  const f = await handedOver(t, { others: [other] });
+  f.person(); await f.pass(); await f.pass(1);
+  assert.equal(f.client.sends('o').filter(call => call[4] === 'rotation:o').length, 1, 'the second one due is asked for its handoff');
+  const waiting = f.dispatcher.rotations.a;
+  assert.deepEqual(plan([{ id: 'shared', name: 'Team', queue: [item('1', { assignee: 'm' })] }], [member('m')], { rotations: { x: { ...waiting, newId: 'm' }, m: { phase: 'kept', keptAt: NOW } } }).map(x => x.kind), ['dispatch']);
+  assert.deepEqual(rules.queueVacancies({ rooms: [{ id: 'shared', name: 'Team', queue: [] }], sessions: [member('x'), member('m')], wakePolicy: AWAKE, now: NOW,
+    rotations: { x: { ...waiting, newId: 'm' } } })[0].candidateIds, ['m', 'x']);
+});
+
+test('R206: the butler is still woken while its change waits for the person, and not while its addition is on its way', async t => {
+  const f = await handedOver(t), skips = []; let event = false, woken = 0;
+  f.dispatcher.stewardWake = { active: () => true, endHold() {}, hold: reason => skips.push(reason), due: () => event, patrolDue: () => null, clearBlocked() {}, skip: reason => skips.push(reason), controlSucceeded() {},
+    wake: async (session, model, send) => { woken += 1; await send('【NAW】有新结果', `steward-wake:${woken}`); } };
+  f.person(); await f.pass(); await f.pass(3); event = true; await f.pass(1);
+  assert.equal(woken, 1, skips.join()); event = false; f.client.reply('a', '看过了。');
+  await f.pass(31); assert.equal(f.asks().length, 1); event = true; f.client.reply('a', '补。'); await f.pass();
+  assert.equal(woken, 1); assert.equal(f.tells().length, 1); f.client.reply(f.newId, '收到。'); event = false; await f.pass(); finished(f);
+});
+
+test('R206: two sessions due at once are both finished, each interrupted in its own way', async t => {
+  const other = member('o', { createdAt: NOW - 29 * HOUR, messages: heavyMessages(), cwd: '/tmp', lastActivityAt: NOW - 40 * MINUTE });
+  const f = await handedOver(t, { others: [other] });
+  f.person(); await f.pass(); await f.pass();
+  f.client.reply('o', '交接：o。'); await f.pass(); const oNew = f.client.state.sessions.at(-1).id; await f.pass();
+  f.client.state.rooms[0].run = { status: 'running', ids: ['x', 'y'] }; f.session(oNew).state = 'idle'; await f.pass(); await f.pass(31);
+  assert.deepEqual([f.stopped('a'), f.stopped('o')], [false, false]); assert.deepEqual([eventsOf(f), eventsOf(f, 'o')], [[], []]);
+  f.client.state.rooms[0].run = null; await f.pass(1); assert.equal(f.session('o').state, 'ended');
+  await supplemented(f); finished(f);
+  assert.deepEqual(ROWS(f).filter(e => e.event === 'done').map(e => [e.old.id, e.new.id]).sort(), [['a', f.newId], ['o', oNew]].sort());
+});
+
+for (const state of ['ended', 'archived']) test(`R206: a successor ${state} while its old session was in use gives the work back, and the old one is changed again`, async t => {
+  const f = await handedOver(t, { butler: false });
+  f.person(); await f.pass();
+  const task = f.room.queueAdd('给继任的', f.newId);
+  f.session(f.newId).serviceCapabilities = [];
+  if (state === 'ended') f.session(f.newId).state = 'ended'; else f.room.update({ archivedSessions: [f.newId] });
+  await f.pass(1); if (state === 'ended') await f.pass(2);
+  assert.equal(f.dispatcher.rotations.a, undefined); assert.deepEqual(eventsOf(f), ['failed']); assert.equal(ROWS(f).findLast(e => e.event === 'failed').reason, 'successor-gone');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'a'); assert.equal(f.stopped('a'), false);
+  const { follow } = require('../queue-secretary.cjs');
+  assert.equal(follow(path.join(f.dir, 'rotation-log.jsonl'), { sessionId: 'a', nativeId: 'native-a' }).sessionId, 'a', 'no edge to the one that is gone');
+});
+
+test('R206: a successor that is away for now is waited for', async t => {
+  const f = await handedOver(t);
+  f.dispatcher.noteHuman('a'); await f.pass(); f.session(f.newId).state = 'recoverable'; await f.pass(31); await f.pass(25 * 60);
+  assert.equal(f.stopped('a'), false); assert.ok(gatesOf(f).includes('successor-unavailable'));
+  f.session(f.newId).state = 'idle'; await f.pass(1); finished(f);
+});
+
+test('R206: a successor changed for another meanwhile: the old session is finished to the one that holds the work now', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass(); await f.pass(1);
+  const next = member('n2', { roomIds: [], roomId: null }); f.client.state.sessions.push(next);
+  f.dispatcher.appendLog('done', { oldId: f.newId, oldNativeId: `native-${f.newId}`, name: 'x', newId: 'n2', newNativeId: 'native-n2', newName: 'y', roomIds: [] });
+  f.session(f.newId).state = 'ended';
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); assert.equal(f.tells().length, 0);
+  f.client.reply('n2', '收到。'); await f.pass();
+  assert.equal(f.session('a').state, 'ended'); assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' });
+});
+
+// Its own finished rotation replaced the confirmed successor with n2.
+const ONWARD = f => ({ oldId: f.newId, oldNativeId: `native-${f.newId}`, name: 'x', newId: 'n2', newNativeId: 'native-n2', newName: 'y', roomIds: [] });
+function replaced(f, edges = [['done', {}]], ids = ['n2']) {
+  for (const id of ids) f.client.state.sessions.push(member(id, f.role.selected ? { roomIds: [], roomId: null } : {}));
+  for (const [event, change] of edges) f.dispatcher.appendLog(event, { ...ONWARD(f), ...change });
+  f.session(f.newId).state = 'ended';
+}
+const butlers = f => f.client.state.sessions.filter(s => s.state !== 'ended' && s.id === f.role.current().sessionId && s.nativeId === f.role.current().nativeId).length;
+
+for (const at of ['waiting', 'asked', 'sent', 'ended']) for (const again of [false, true])
+test(`R206: a successor replaced by its own rotation while the old one is ${at}${again ? ', across a restart' : ''}: what it added goes to the session that has the work now, once`, async t => {
+  const f = await handedOver(t), on = async () => { if (again) await f.restart(); replaced(f); if (again) await f.restart(); };
+  const call = f.client.call.bind(f.client); let boundary = null;
+  f.client.call = async (method, ...args) => {
+    const result = await call(method, ...args);
+    if (method === 'dispatch' && args[0] === 'n2') boundary = f.session('n2').messages.pop();
+    return result;
+  };
+  f.person(); await f.pass(); await f.pass(1);
+  if (at === 'ended') f.old.state = 'ended';
+  if (at === 'waiting' || at === 'ended') await on();
+  await f.pass(31); await f.pass(1); await f.pass(1);
+  if (at !== 'ended') {
+    assert.equal(f.asks().length, 1); assert.ok(f.asks()[0][2].includes(`已经交给「${at === 'waiting' ? f.dispatcher.name(f.session('n2')) : f.session(f.newId).name}」`), 'it names the one that is told');
+    if (at === 'asked') await on();
+    f.client.reply('a', '补。'); await f.pass();
+  }
+  if (at === 'sent') { assert.equal(f.tells().length, 1); f.session(f.newId).messages.pop(); await on(); await f.pass(31); }
+  for (let i = 0; i < 4 && !f.tells('n2').length; i += 1) await f.pass(31);
+  assert.equal(f.tells('n2').length, 1); assert.equal(f.tells().length, at === 'sent' ? 1 : 0, 'nothing more to the one that is gone');
+  assert.match(f.tells('n2')[0][2], at === 'ended' ? /没有补写就结束了/ : /补。/);
+  await f.pass(1); await f.pass(1); assert.equal(f.stopped('a'), false, 'not ended before it is confirmed there'); assert.deepEqual(eventsOf(f), []);
+  f.session('n2').messages.push(boundary); f.client.reply('n2', '收到。'); for (let i = 0; i < 3 && f.dispatcher.rotations.a; i += 1) await f.pass(1);
+  assert.equal(f.session('a').state, 'ended'); assert.deepEqual(eventsOf(f), ['done']); assert.equal(f.asks().length, at === 'ended' ? 0 : 1);
+  assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' }); assert.equal(butlers(f), 1); assert.equal(f.client.calls.filter(c => c[0] === 'create').length, 1);
+});
+
+// Who has the work now is read by the rule the designation follows: where that stops at one that is gone, nothing is
+// sent, ended or given back, and the old session stays what it is.
+for (const [what, edges, ids] of [
+  ['kept, and then finished', f => [['kept', { newId: 'n1', newNativeId: 'native-n1' }], ['done', {}]], ['n1', 'n2']],
+  ['finished to two', f => [['done', {}], ['done', { newId: 'n3', newNativeId: 'native-n3' }]], ['n2', 'n3']],
+  ['finished to one that replaced another too', f => [['done', {}], ['done', { oldId: 'z', oldNativeId: 'native-z' }]], ['n2']],
+  ['finished to one whose native session is not known', f => [['done', { newNativeId: null }]], ['n2']],
+  ['finished, with a line that cannot be read', f => [['done', {}]], ['n2']],
+]) for (const butler of [true, false])
+test(`R206: a successor ${what}: nothing is chosen for the ${butler ? 'butler' : 'member'}, and it waits and says so`, async t => {
+  const f = await handedOver(t, { butler });
+  f.person(); await f.pass(); await f.pass(1);
+  const task = butler ? null : f.room.queueAdd('给继任的', f.newId);
+  replaced(f, edges(f), ids);
+  if (what.includes('cannot be read')) fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), '{"event":"done"\n');
+  const told = () => [f.newId, ...ids].flatMap(id => f.tells(id)).length;
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); await f.pass(1);
+  if (!what.includes('cannot be read')) await f.restart();
+  for (const minutes of [1, 31, 25 * 60]) await f.pass(minutes);
+  assert.equal(told(), 0); assert.equal(f.asks().length, 0); assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []);
+  assert.equal(gatesOf(f).at(-1), butler && what.includes('cannot be read') ? 'designation-unreadable' : 'identity-ambiguous'); assert.equal(f.dispatcher.rotations.a.phase, 'handed'); assert.ok(f.dispatcher.rotations.a.told, 'the person is told once');
+  if (task) assert.equal(f.room.value.queue.find(i => i.id === task).assignee, f.newId);
+  if (butler && !what.includes('cannot be read')) { assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1); }
+});
+
+for (const [what, change] of [['another one now', s => { s.nativeId = 'native-other'; }], ['not known', s => { s.nativeId = null; }]])
+for (const onward of [false, true]) test(`R206: ${onward ? 'the one that replaced the successor' : 'a successor'} whose native session is ${what} is not told`, async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  if (onward) replaced(f);
+  const id = onward ? 'n2' : f.newId, native = f.session(id).nativeId; change(f.session(id));
+  await f.pass(31); if (f.asks().length) f.client.reply('a', '补。'); await f.pass(); await f.pass(1); await f.pass(1);
+  assert.equal(f.tells(id).length, 0); assert.equal(f.stopped('a'), false); assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1);
+  if (what === 'another one now') { assert.deepEqual(eventsOf(f), ['failed']); return; }
+  assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'successor-unavailable'); assert.equal(f.asks().length, 0);
+  f.session(id).nativeId = native; await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells(id).length, 1);
+});
+
+test('R206: a successor that was another native session before its own rotation had the handoff no more: its replacement is not told', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  replaced(f, [['done', { oldNativeId: 'native-other' }]]);
+  for (const minutes of [1, 1, 1]) await f.pass(minutes);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.equal(f.tells('n2').length, 0); assert.equal(f.stopped('a'), false); assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1);
+});
+
+test('R206: a successor whose own rotation was kept still has the handoff, as the designation says', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1);
+  replaced(f, [['kept', { newId: 'n1', newNativeId: 'native-n1' }]], ['n1']); f.session(f.newId).state = 'idle';
+  await f.pass(31); await supplemented(f); assert.equal(f.tells('n1').length, 0); finished(f); assert.equal(f.role.current().sessionId, f.newId);
+});
+
+test('R206: what the old session still had in its space\'s queue goes to the one that replaced its successor', async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); f.client.reply('n2', '收到。');
+  const task = f.room.queueAdd('给旧会话的', 'a'); await f.pass(); assert.equal(f.session('a').state, 'ended');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'n2');
+});
+
+test('R206: a successor whose native session was never recorded is not told', async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); f.dispatcher.rotations.a.newNativeId = null;
+  await f.pass(31); if (f.asks().length) f.client.reply('a', '补。'); await f.pass(); await f.pass(1);
+  assert.equal(f.tells().length, 0); assert.equal(f.asks().length, 0); assert.equal(f.stopped('a'), false); assert.equal(gatesOf(f).at(-1), 'identity-ambiguous');
+});
+
+// The looks finishRotation takes before it stops the old session: the first before it leaves its spaces, the last after.
+function atLook(f, which, change) {
+  const touched = f.dispatcher.touchedSince.bind(f.dispatcher), refresh = f.client.refresh.bind(f.client); let looks = 0, armed = false;
+  f.looks = () => looks;
+  f.dispatcher.touchedSince = async (...args) => { looks += 1; armed = looks === which; return touched(...args); };
+  f.client.refresh = async () => { const value = await refresh(); if (armed) { armed = false; change(); } return value; };
+}
+const BECOMES = {
+  'another native session': s => { s.nativeId = 'native-other'; },
+  'a session with no native identity': s => { s.nativeId = null; },
+  'an ended session': s => { s.state = 'ended'; },
+  'a session out of view': (s, f) => { f.client.state.sessions = f.client.state.sessions.filter(x => x !== s); },
+};
+for (const [what, change] of Object.entries(BECOMES)) for (const when of ['its handoff', 'what was added']) for (const butler of [true, false]) for (const which of [1, 2])
+test(`R206: a successor that becomes ${what} in look ${which}, once ${when} is confirmed, leaves the old ${butler ? 'butler' : 'member'} running`, async t => {
+  const f = await handedOver(t, { butler }), home = butler ? [] : ['shared'];
+  if (when === 'what was added') {
+    f.person(); await f.pass(); await f.pass(1); await f.pass(31); f.client.reply('a', '补。'); await f.pass();
+    assert.equal(f.tells().length, 1); f.client.reply(f.newId, '并进来了。');
+  }
+  const successor = f.session(f.newId), was = { nativeId: successor.nativeId, state: successor.state };
+  atLook(f, which, () => change(successor, f));
+  await f.pass();
+  assert.equal(f.looks(), which); assert.equal(f.stopped('a'), false, 'the old session is not stopped'); assert.notEqual(f.session('a').state, 'ended');
+  assert.deepEqual(eventsOf(f), []); assert.equal(gatesOf(f).at(-1), 'successor-unavailable'); assert.deepEqual(f.old.roomIds, which === 1 ? home : []);
+  if (butler) { assert.equal(f.role.current().sessionId, 'a'); assert.equal(butlers(f), 1); }
+  if (what !== 'another native session') {
+    Object.assign(successor, was); if (!f.session(f.newId)) f.client.state.sessions.push(successor);
+    await f.pass(2); finished(f); assert.equal(f.tells().length, when === 'what was added' ? 1 : 0, 'and told nothing more');
+    return;
+  }
+  await f.pass(1);
+  assert.deepEqual(eventsOf(f), ['failed']); assert.equal(f.stopped('a'), false); assert.deepEqual(f.old.roomIds, home, 'back in its spaces');
+  assert.equal(f.client.sends('native-other').length, 0); if (butler) assert.equal(f.role.current().sessionId, 'a');
+});
+
+for (const [what, change] of [
+  ['becomes another native session', f => { f.session('n2').nativeId = 'native-other'; }],
+  ['is put away', f => { f.room.update({ archivedSessions: ['n2'] }); }],
+  ['is itself replaced by one that is not certain', f => { for (const id of ['n3', 'n4']) f.dispatcher.appendLog('done', { ...ONWARD(f), oldId: 'n2', oldNativeId: 'native-n2', newId: id, newNativeId: `native-${id}` }); }],
+])
+test(`R206: the one that replaced the successor ${what} in the last look: the old session is not stopped`, async t => {
+  const f = await handedOver(t, { butler: false }); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1); f.client.reply('n2', '收到。');
+  atLook(f, 2, () => change(f)); await f.pass();
+  assert.equal(f.looks(), 2); assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), []);
+  assert.equal(gatesOf(f).at(-1), what.includes('not certain') ? 'identity-ambiguous' : 'successor-unavailable');
+  await f.pass(2); assert.equal(f.stopped('a'), false);
+  assert.deepEqual(eventsOf(f), what.includes('not certain') ? [] : ['failed']);
+});
+
+test('R206: a successor that stays itself through both looks has the old session ended, as before', async t => {
+  for (const butler of [true, false]) {
+    const f = await handedOver(t, { butler }); atLook(f, 2, () => {}); await f.pass(); assert.equal(f.looks(), 2); assert.equal(f.stopped('a'), true); finished(f);
+  }
+});
+
+test('R206: who replaced the successor is read from the whole log, not from its last thousand lines', async t => {
+  const f = await handedOver(t); f.person(); await f.pass(); await f.pass(1); replaced(f);
+  for (let i = 0; i < 1001; i += 1) f.dispatcher.appendLog('requested', { oldId: `o${i}`, oldNativeId: `native-o${i}`, name: 'x', roomIds: [] });
+  await f.pass(31); await f.pass(1); assert.deepEqual(eventsOf(f), []); f.client.reply('a', '补。'); await f.pass(); assert.equal(f.tells('n2').length, 1);
+  f.client.reply('n2', '收到。'); await f.pass(); assert.equal(f.session('a').state, 'ended'); assert.deepEqual(f.role.current(), { sessionId: 'n2', nativeId: 'native-n2' });
+});
+
+test('R206: an identity that does not match is never upgraded', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass(); f.old.nativeId = 'native-other'; await f.pass(31);
+  assert.equal(f.stopped('a'), false); assert.deepEqual(eventsOf(f), ['kept']); assert.equal(ROWS(f).at(-1).reason, 'identity-changed');
+  assert.equal(f.role.current().sessionId, 'a'); assert.equal(f.dispatcher.rotations.a.phase, 'kept');
+});
+
+test('R206: two successors are never chosen between: the change waits and says so', async t => {
+  const f = await handedOver(t);
+  fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), JSON.stringify({ time: NOW - HOUR, event: 'kept', spaces: [], old: { id: 'a', nativeId: 'native-a', name: 'x' }, new: { id: 'earlier', nativeId: 'native-earlier', name: 'x' } }) + '\n');
+  await f.pass(); await f.pass(25 * 60);
+  assert.equal(f.stopped('a'), false, 'it would leave no butler'); assert.deepEqual(gatesOf(f), ['identity-ambiguous']); assert.equal(f.role.current().sessionId, 'a');
+  assert.deepEqual(ROWS(f).filter(e => e.event === 'done'), []);
+});
+
+test('R206: a designation the person moved is theirs: no old kept or done line moves it, and their old session is left to them', async t => {
+  const f = await handedOver(t);
+  f.person(); await f.pass(); f.role.set({ sessionId: 'mine', nativeId: 'native-mine' });
+  await f.pass(31); await f.pass(25 * 60);
+  assert.equal(f.stopped('a'), false); assert.equal(f.old.archived, undefined); assert.equal(f.asks().length, 0);
+  assert.deepEqual(eventsOf(f), ['kept']); assert.equal(ROWS(f).findLast(e => e.event === 'kept').reason, 'designation-changed');
+  f.dispatcher.appendLog('done', { oldId: 'a', oldNativeId: 'native-a', name: 'x', newId: f.newId, newNativeId: `native-${f.newId}`, newName: 'y', roomIds: [] });
+  assert.deepEqual(new StewardRole(f.dir).current(), { sessionId: 'mine', nativeId: 'native-mine' });
+  // Once they chose the successor themselves, the old session is ended and the choice stays.
+  const g = await handedOver(t);
+  g.person(); await g.pass(); g.role.set({ sessionId: g.newId, nativeId: `native-${g.newId}` }); await g.pass(31);
+  await supplemented(g); finished(g); assert.equal(g.role.current().sessionId, g.newId);
+});
+
+// What an earlier version left: the old session kept, its successor resting, the old one used since, one name for both.
+test('R206: a kept record of an earlier version is read as it is, its old session is left alone, and the person\'s designation goes on from theirs', async t => {
+  const same = '大管家续32', rows = [{ id: 'h', role: 'user', text: '后来的话', time: NOW - HOUR }, { id: 'h2', role: 'assistant', text: '好', time: NOW - HOUR }];
+  const due = { createdAt: NOW - 30 * HOUR, cwd: '/tmp', lastActivityAt: NOW - 40 * MINUTE, roomIds: [], roomId: null };
+  const old = member('k', { ...due, name: same, messages: [...heavyMessages(), ...rows] }), next = member('k2', { ...due, name: same }), mine = member('a', { ...due, name: same, messages: heavyMessages() });
+  let f = null, clock = NOW;
+  const s = dispatcherSetup(t, [old, next, mine], { clients: () => f?.client, steward: stewardFrom(() => f?.role) });
+  f = { ...s, role: new StewardRole(s.dir) }; f.role.set({ sessionId: 'a', nativeId: 'native-a' }); fakeMembership(f.room, f.client);
+  const line = { time: NOW - 3 * HOUR, event: 'kept', spaces: [], old: { id: 'k', nativeId: 'native-k', name: same }, new: { id: 'k2', nativeId: 'native-k2', name: same } };
+  fs.writeFileSync(path.join(f.dir, 'rotation-log.jsonl'), JSON.stringify(line) + '\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(f.dir, 'queue-dispatch.json'), JSON.stringify({ version: 1, rotations: {
+    k: { phase: 'kept', keptAt: NOW - 3 * HOUR, oldNativeId: 'native-k', name: same, roomIds: [] },
+    k2: { phase: 'kept', keptAt: NOW - 3 * HOUR, oldNativeId: 'native-k2', name: same, roomIds: [], successorOf: 'k' } } }), { mode: 0o600 });
+  const dispatcher = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, connect: async () => f.client, clients: () => f.client, now: () => clock, settleMs: 0, tickMs: HOUR, steward: stewardFrom(() => f.role) });
+  t.after(() => dispatcher.close());
+  const pass = async minutes => { clock += minutes * MINUTE; dispatcher.dirty = true; await dispatcher.schedule(); };
+  await dispatcher.start(); await pass(0);
+  assert.deepEqual(Object.keys(dispatcher.rotations).sort(), ['a', 'k', 'k2']);
+  f.client.reply('a', '交接：x。'); await pass(0); const created = f.client.state.sessions.at(-1); await pass(0);
+  assert.notEqual(created.name, same); assert.equal(f.client.state.sessions.filter(x => x.name === created.name).length, 1);
+  created.state = 'idle'; dispatcher.noteHuman('a'); await pass(0); assert.equal(mine.state, 'idle'); await pass(31);
+  assert.equal(mine.state, 'ended'); assert.deepEqual(f.role.current(), { sessionId: created.id, nativeId: created.nativeId });
+  assert.deepEqual(f.role.selected, { sessionId: 'a', nativeId: 'native-a' });
+  assert.equal(old.state, 'idle'); assert.equal(old.archived, undefined); assert.equal(f.client.sends('k').length, 0); assert.equal(f.client.sends('k2').length, 0);
+});
+
+test('R206: the successor is not given a name a session or an earlier successor has', async t => {
+  const f = await handedOver(t, { others: [member('o', { name: rules.nextName('Agent a'), roomIds: [], roomId: null })] });
+  assert.equal(f.session(f.newId).name, rules.nextName(rules.nextName('Agent a')));
+  await f.pass(); finished(f); assert.equal(ROWS(f).find(e => e.event === 'done').new.id, f.newId, 'the line points at the one the change made');
+});
+
+test('R206: the change is not done while its line is not in the log the designation is read from', async t => {
+  const f = await handedOver(t);
+  const append = fs.appendFileSync; let refuse = true;
+  fs.appendFileSync = (file, ...rest) => { if (refuse && String(file).endsWith('rotation-log.jsonl')) throw Error('disk full'); return append(file, ...rest); };
+  t.after(() => { fs.appendFileSync = append; });
+  await f.pass(); assert.equal(f.role.current().sessionId, 'a'); assert.equal(f.dispatcher.rotations.a?.phase, 'handed', 'kept on record, to be written');
+  refuse = false; await f.pass(2); await f.pass(2);
+  assert.equal(f.dispatcher.rotations.a, undefined); assert.equal(f.role.current().sessionId, f.newId);
 });

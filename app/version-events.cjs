@@ -181,19 +181,21 @@ class VersionEvents {
     this.emit(failed && !moved && !gone ? 'backend-move-failed' : 'backend-moved', `【NAW 版本】后台迁移（${this.version}）：\n${lines.join('\n')}\n${rest}`,
       `moved:${moved},gone:${gone},failed:${failed},behind:${this.watch.size}`);
   }
-  // A migration's quiet window (quiet-windows.cjs) reached its deadline before the move: dispatch and automatic
-  // messages there resume, and NAW opens none for that backend for two hours.
-  // `held`: what the move still waits for at the deadline ({ sessions, wait } as observe takes them), to name who.
-  quietWindowTimedOut(window, held = null) {
+  // A migration's quiet window (quiet-windows.cjs) ended before the move, at its deadline or earlier (`code`): dispatch
+  // and automatic messages there resume, and NAW opens none for that backend until two hours after that deadline.
+  // `held`: what the move still waits for then ({ sessions, wait } as observe takes them), to name who.
+  quietWindowEnded(window, held = null) {
     const key = typeof window?.scope === 'string' ? window.scope.replace(/^backend:/u, '') : '';
     const waited = token(window?.waited) ? window.waited : 'unknown';
-    const at = Number.isSafeInteger(window?.deadline) ? iso(window.deadline) : iso(this.now());
+    const early = { person: '有人在用里面的会话', 'still-busy': '开了 30 分钟还有会话在干活或等人回答' }[window?.code];
+    const at = iso(early ? window.closedAt : Number.isSafeInteger(window?.deadline) ? window.deadline : this.now());
+    const how = early ? `提前关了（${at}，${early}）` : `到了截止时间（${at}）`;
     let still = '';
     if (held && Array.isArray(held.sessions) && held.wait && typeof held.wait === 'object') {
       const b = { sessions: held.sessions, count: held.sessions.length, wait: held.wait };
       still = `，卡在：${(WAITS[held.wait.code] || WAITS['not-movable'])(b)}。`;
     }
-    this.emit('quiet-window-timeout', `【NAW 版本】后台 ${short(key)} 迁移前的安静窗口到了截止时间（${at}），还没迁成${still || '：'}已恢复派活和自动消息；2 小时内不再为它开窗。`,
+    this.emit(`quiet-window-${early ? window.code : 'timeout'}`, `【NAW 版本】后台 ${short(key)} 迁移前的安静窗口${how}，还没迁成${still || '：'}已恢复派活和自动消息；${early ? `直到原定截止时间（${iso(window.deadline)}）后 2 小时，` : '2 小时内'}不再为它开窗。`,
       `backend:${short(key)},waited:${waited}`);
   }
   emit(reason, text, outcome) {

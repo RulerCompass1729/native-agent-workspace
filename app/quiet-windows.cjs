@@ -6,8 +6,10 @@
 // the butler's wake for the person's own act (wakeSteward); a
 // backend on this code holds the automatic messages its sessions send there (session-wake.cjs). Nothing running is
 // interrupted and the quiet rule itself is unchanged. The window closes when the move is made or failed, when the
-// setting is turned off, when the backend stops waiting only for quiet, or at its deadline; after a timeout NAW
-// opens none for that backend for two hours. Only NAW opens one, only for a migration.
+// setting is turned off, when the backend stops waiting only for quiet, when the person works with one of its
+// sessions, when one is still at work after GRACE_MS, or at its deadline; after any of the last four NAW opens none
+// for that backend for two hours, counted from the deadline when it closed early. Only NAW opens one, only for a
+// migration.
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -18,8 +20,12 @@ const GRACE_MS = 30 * 60 * 1000, REOPEN_MS = 2 * 60 * 60 * 1000;
 const LONGEST_MS = 2 * 60 * 60 * 1000;
 // What moveWait says when the backend waits only for its sessions: at work, or not yet quiet long enough.
 const OPENING = Object.freeze(['quiet-10m', 'quiet-30m', 'busy']);
+// Closes before the deadline that free its sessions only: what opens next is timed as if it had run to its deadline.
+const EARLY = Object.freeze(['person', 'still-busy']);
 // Closes after which NAW does not open another window for that backend for REOPEN_MS.
-const COOLING = Object.freeze(['timeout', 'not-waiting']);
+const COOLING = Object.freeze(['timeout', 'not-waiting', ...EARLY]);
+const isCooling = (history, scope, now) => history.some(h => h.scope === scope && COOLING.includes(h.code) &&
+  now < (EARLY.includes(h.code) ? h.deadline : h.closedAt) + REOPEN_MS);
 const KEY = /^(\.|backends\/[a-f0-9]{20})$/u;
 const ID = /^[a-f0-9-]{36}$/u;
 
@@ -108,7 +114,7 @@ class QuietWindows {
     });
   }
   cooling(scope, now = this.now()) {
-    return this.history.some(h => h.scope === scope && COOLING.includes(h.code) && now - h.closedAt < REOPEN_MS);
+    return isCooling(this.history, scope, now);
   }
   // Written first: memory follows the file, so a reader never sees a window NAW does not keep, or misses one it does.
   commit(windows, history) {
@@ -131,6 +137,7 @@ class QuietWindows {
     if (typeof moveWait !== 'function') throw TypeError('QuietWindows needs moveWait to pass');
     const now = this.now(), migrate = Boolean(settings && settings.migrate), list = Array.isArray(options) ? options : [];
     const windows = [], closed = [], opened = [];
+    const waitOf = option => moveWait(option, settings, sessions, humanAt, now, failed, quietMs, unprovenQuietMs);
     const ids = option => (option.sessions || []).map(s => s.id).filter(id => typeof id === 'string' && id.length > 0 && id.length <= 100).slice(0, MAX_SESSIONS);
     for (const window of this.windows) {
       const option = list.find(o => `backend:${o.backendKey}` === window.scope);
@@ -138,20 +145,30 @@ class QuietWindows {
       if (!migrate) code = 'migrate-off';
       else if (!option) code = 'gone';
       else {
-        const wait = moveWait(option, settings, sessions, humanAt, now, failed, quietMs, unprovenQuietMs);
+        const wait = waitOf(option);
         // Movable now: the move runs in this same pass and closes it.
         if (wait && now >= window.deadline) code = 'timeout';
         else if (wait && !OPENING.includes(wait.code)) code = 'not-waiting';
+        // It holds neither the person's own turns nor one that outlasted the grace for running turns (11-24: five of
+        // eleven windows ran to their deadline for nothing, 281 minutes).
+        else if (wait?.code === 'busy' && wait.ids.some(id => humanAt.get(id) > window.openedAt)) code = 'person';
+        else if (wait?.code === 'busy' && now >= window.openedAt + GRACE_MS) code = 'still-busy';
         else { windows.push({ ...window, sessions: ids(option) }); continue; }
       }
       closed.push({ ...window, closedAt: now, code });
     }
     const history = [...this.history, ...closed];
-    if (migrate && !windows.length) {
+    // A window closed early keeps its place until its deadline while its backend still waits, so no window opens sooner
+    // than if it had run on: windows at other times would meet other turns, and held again what it freed.
+    const placed = history.some(h => EARLY.includes(h.code) && now < h.deadline && list.some(o => {
+      const wait = `backend:${o.backendKey}` === h.scope ? waitOf(o) : undefined;
+      return wait === null || OPENING.includes(wait?.code);
+    }));
+    if (migrate && !windows.length && !placed) {
       for (const option of list) {
         const scope = `backend:${option.backendKey}`;
-        if (!KEY.test(String(option.backendKey)) || failed.has(option.backendKey) || history.some(h => h.scope === scope && COOLING.includes(h.code) && now - h.closedAt < REOPEN_MS)) continue;
-        const wait = moveWait(option, settings, sessions, humanAt, now, failed, quietMs, unprovenQuietMs);
+        if (!KEY.test(String(option.backendKey)) || failed.has(option.backendKey) || isCooling(history, scope, now)) continue;
+        const wait = waitOf(option);
         if (!wait || !OPENING.includes(wait.code)) continue;
         // At work, a session may need the longer rule once it stops: the window allows for it.
         const term = wait.code === 'quiet-10m' ? quietMs : Math.max(quietMs, unprovenQuietMs);

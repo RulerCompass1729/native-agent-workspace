@@ -212,7 +212,7 @@ class Workspace extends EventEmitter {
       }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
-        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
+        if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.wake.settledAt = Date.now(); message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
         // Held, so never sent: reopening does not offer it again.
         if (message.wake?.status === 'held') { message.wake.status = 'cancelled'; message.wake.settledAt = Date.now(); message.text = `NAW 后台重开过；存着的自动消息没有补送。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldRestored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
       }
@@ -967,12 +967,15 @@ class Workspace extends EventEmitter {
     // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
     // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
     // ended; a new native process starts with none.
-    const rememberTasks = ids => {
-      const known = runtime.backgroundTaskIds ||= new Set();
+    const rememberTasks = (ids, kept = 'backgroundTaskIds') => {
+      const known = runtime[kept] ||= new Set();
       for (const id of ids) { known.delete(id); known.add(id); }
       while (known.size > 200) known.delete(known.values().next().value);
     };
     on('backgroundStarted', id => rememberTasks([id]));
+    // Apart: an agent that sends no notification keeps its ID here, and must not push out a task still running.
+    on('agentStarted', id => rememberTasks([id], 'agentTaskIds'));
+    const taskKept = id => [runtime.backgroundTaskIds, runtime.agentTaskIds].some(known => known?.has(id));
     on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
       rememberTasks(Array.isArray(info.ids) ? info.ids : []);
@@ -1020,7 +1023,7 @@ class Workspace extends EventEmitter {
       // Not the person: no wake.human, pause or controlRevision. Its submission still sends the mod's
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
-      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
+      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && taskKept(id));
       return {blocks,onlyBlocks,taskIds,reported,machine:sourced||reported,inputSource:sourced?item.source:reported?'task-notification':null};
     };
     on('nativeInputOrigin', (text, item, reply) => {
@@ -1035,7 +1038,7 @@ class Workspace extends EventEmitter {
       // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task
       // (real 2.1.322: an event carries task-id, summary and event; an end, like a finished Bash, a status). What a watched
       // command printed into an event or a summary is not the block's own status.
-      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) runtime.backgroundTaskIds.delete(taskIds[i]); });
+      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) for (const known of [runtime.backgroundTaskIds, runtime.agentTaskIds]) known?.delete(taskIds[i]); });
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);

@@ -497,3 +497,60 @@ test('a record read whole and one read a piece at a time give the same size and 
   }
   assert.ok(uncached > 5, `${uncached} of the records end without a lifetime`);
 });
+
+test('one session read again within the sample interval: its size, lifetime and count are renewed, no other session is read and the interval stands', async t => {
+  const r = roots(t);
+  const other = path.join(path.dirname(r.claudeFile), `${OTHER}.jsonl`);
+  fs.writeFileSync(r.claudeFile, `${claudeUsage({ read: 189000, write1h: 1000, input: 0 })}\n`);
+  fs.writeFileSync(other, `${claudeUsage({ read: 189000, write1h: 1000, input: 0, sessionId: OTHER })}\n`);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot });
+  const sessions = [claude(), claude({ id: 's3', nativeId: OTHER })];
+  const counts = await counter.sample(sessions, AT);
+  fs.appendFileSync(r.claudeFile, `${claudeCompaction()}\n${claudeUsage({ input: 20000, write5m: 500, at: '2026-11-24T10:00:10.000Z' })}\n`);
+  fs.appendFileSync(other, `${claudeCompaction({ sessionId: OTHER })}\n`);
+  await counter.sample(sessions, AT + 22000);
+  assert.equal(counter.contexts.get('s1').tokens, 190000, 'the sample stands for its interval');
+  await counter.recheck(sessions[0], AT + 22000);
+  assert.deepEqual(counter.contexts.get('s1'), { tokens: 20500, at: AT + 10000, ttlMs: 5 * 60000 });
+  assert.equal(counter.contexts.get('s3').tokens, 190000);
+  assert.deepEqual([...await counter.sample(sessions, AT + 29999)].sort(), [['s1', 1], ['s3', 0]]);
+  assert.equal(counts.get('s1'), 1, 'also in the counts the pass already has');
+  await counter.recheck(sessions[0], AT + 29999);
+  assert.equal(counter.contexts.get('s1').tokens, 20500, 'nothing new: the same');
+  assert.deepEqual([...await counter.sample(sessions, AT + 30000)].sort(), [['s1', 1], ['s3', 1]]);
+  assert.equal(counter.contexts.has('s3'), false);
+});
+
+test('one session read again gives no size unless its record is read to the end, and the next sample reads on from there', async t => {
+  const cases = {
+    'a line still being written': file => fs.appendFileSync(file, claudeCompaction().slice(0, 40)),
+    'more than one read takes': file => fs.appendFileSync(file, `${claudeTurn('x'.repeat(300))}\n`.repeat(8)),
+    'a line longer than the cap': file => fs.appendFileSync(file, `${claudeTurn('x'.repeat(1200))}`),
+    'the record gone': file => fs.rmSync(file),
+    'the record unreadable': file => fs.chmodSync(file, 0),
+  };
+  for (const [name, change] of Object.entries(cases)) {
+    const r = roots(t);
+    fs.writeFileSync(r.claudeFile, `${claudeUsage({ read: 189000, write1h: 1000, input: 0 })}\n`);
+    const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, readBytes: 1024, lineCap: 768, passBytes: 1024 });
+    await counter.sample([claude()], AT);
+    assert.equal(counter.contexts.get('s1').tokens, 190000, name);
+    change(r.claudeFile);
+    await counter.recheck(claude(), AT + 1000);
+    assert.equal(counter.contexts.has('s1'), false, name);
+    if (name === 'the record gone' || name === 'the record unreadable') fs.rmSync(r.claudeFile, { force: true });
+    fs.appendFileSync(r.claudeFile, `\n${claudeUsage({ read: 30000, write1h: 100, input: 0 })}\n`);
+    for (let pass = 1; pass <= 8; pass++) await counter.sample([claude()], AT + pass * 30000);
+    assert.equal(counter.contexts.get('s1').tokens, 30100, name);
+  }
+});
+
+test('a failed read leaves no size behind', async t => {
+  const r = roots(t);
+  fs.writeFileSync(r.claudeFile, `${claudeUsage({ read: 189000, write1h: 1000, input: 0 })}\n`);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot });
+  await counter.sample([claude()], AT);
+  counter.fileOf = async () => { throw Error('EIO'); };
+  await assert.rejects(counter.recheck(claude(), AT + 1000), /EIO/);
+  assert.equal(counter.contexts.has('s1'), false);
+});

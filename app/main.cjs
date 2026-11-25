@@ -52,7 +52,7 @@ const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
 const { roomId: validRoomId, roomIds, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
-const { PersonActions } = require('./person-actions.cjs');
+const { PersonActions, asker } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
@@ -835,9 +835,10 @@ function stewardDutyText() {
 }
 // A session NAW opened to replace another and has not finished moving in (steward step 2, batch 2): its join is still
 // to come, and refusing that join would make the rotation stop it. Nor one a failed rotation is still to stop (never
-// handed work); a kept one, or one the failed rotation had already handed work to, is the person's to choose.
+// handed work); a kept one, one that has the work while its old session is in use (waitingOld), or one the failed
+// rotation had already handed work to, is the person's to choose.
 function midRotation(id) {
-  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !(record.phase === 'failed' && record.handoffConfirmed));
+  return Object.values(queueDispatcher?.rotations || {}).some(record => record?.newId === id && record.phase !== 'kept' && !queueRules.waitingOld(record) && !(record.phase === 'failed' && record.handoffConfirmed));
 }
 // The designated butler calling through NAW now (steward step 2, batch 4): the very session and native session the
 // designation names, the designation readable, the session usable and in no space. Anything else is not the butler,
@@ -949,7 +950,7 @@ function recordsChanged(force = false) {
   for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
 }
 function stewardWakeChanged() {
-  const status = stewardWake?.view().blocked || null;
+  const status = stewardWake?.view({ early: true }).blocked || null;
   for (const context of windows.values()) sendToPage(context, 'workspace:steward-wake', status);
   recordsChanged(true);
 }
@@ -1023,7 +1024,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0]);
+    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method, args[1]);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -1042,7 +1043,8 @@ function bindClient(context) {
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
-    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [] }); }
+    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [],
+      wasButler: (id, nativeId, at, chain) => stewardRecord?.heldRole(id, nativeId, at, chain) }); }
     catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }
@@ -1095,7 +1097,7 @@ function displayState(snapshot, context, read = null, toPage = false) {
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
-    ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
+    ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [] }),
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
@@ -1174,6 +1176,7 @@ async function startQueueDispatcher() {
       countCompactions: true,
       // Not yet built: it throws, and the dispatcher tries again on its next pass.
       rotationStalled: stall => butlerIngress.rotationStalled(stall),
+      errorStalled: stall => butlerIngress.errorStalled(stall),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can
@@ -1722,13 +1725,13 @@ function migrateUnprovenQuietMs() {
   }
   return queueRules.MIGRATE_UNPROVEN_QUIET_MS;
 }
-// One pass over the quiet windows by the move's own inputs; a timeout is told as the version events are.
+// One pass over the quiet windows by the move's own inputs; one that ended without its move is told as the version events are.
 function passQuietWindows(input) {
   if (!quietWindows) return;
   let result;
   try { result = quietWindows.pass(input); } catch { return; }
   for (const window of result.closed) {
-    if (window.code !== 'timeout') continue;
+    if (!['timeout', 'person', 'still-busy'].includes(window.code)) continue;
     // Who still holds the move, by the same rule, so the line names them.
     let held = null;
     try {
@@ -1736,7 +1739,7 @@ function passQuietWindows(input) {
       const wait = option && queueRules.moveWait(option, input.settings, input.sessions, input.humanAt, Date.now(), input.failed, input.quietMs, input.unprovenQuietMs);
       if (wait) held = { sessions: option.sessions || [], wait };
     } catch { held = null; }
-    try { versionEvents?.quietWindowTimedOut(window, held); } catch { /* Kept in its record. */ }
+    try { versionEvents?.quietWindowEnded(window, held); } catch { /* Kept in its record. */ }
   }
 }
 function quietWindowMoved(key, code) {
@@ -1904,7 +1907,7 @@ async function boot() {
   // person's designation, which a rotation keeps.
   try {
     stewardWake ||= new StewardWake(dataDir, { ledger: () => butlerIngress?.ledger || null, selected: () => stewardRole.selected,
-      changed: stewardWakeChanged,
+      changed: stewardWakeChanged, asker: event => asker(backgroundControl?.recordsOf(event.payload.memberId) || [], event),
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
@@ -2510,7 +2513,10 @@ async function boot() {
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
     if (id !== null && handoff !== null && !validDuty(handoff)) throw uiError('error.steward.handoffInvalid');
     let record = null, standingLost = false, reached = null;
-    if (id === null) stewardRole.set(null);
+    // Who held the role until now is written just before the person's choice replaces it: a rotation's successor that made
+    // no call since would otherwise be missing, and with it what it sent (StewardRecord.heldRole).
+    const recordHolder = () => { try { stewardRecord?.sync(stewardOf()); } catch { /* As below. */ } };
+    if (id === null) { recordHolder(); stewardRole.set(null); }
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {
       // The backend's own list does not say which sessions the person archived; the desktop's record does.
@@ -2525,6 +2531,7 @@ async function boot() {
       // The same butler again keeps it: the designation may have named it only through the rotation log.
       let again = false;
       try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
+      recordHolder();
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
       const keep = typeof standing === 'boolean' ? standing : again || null;
       let unsaved = false; if (carry && keep !== null) try { carry(keep); } catch { unsaved = true; }

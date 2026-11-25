@@ -122,6 +122,7 @@ test('the butler is woken for the event and the secretary is sent its notice, bo
   for (let i = 0; i < 5; i++) { clock.now += 3000; await dispatcher.schedule(); }
   const to = id => client.dispatches().filter(call => call[1] === id);
   assert.equal(to('butler').length, 1); assert.match(to('butler')[0][2], /^【NAW 事件】有新事件。用 workspace_control 调 stewardEvents/u);
+  assert.match(to('butler')[0][2], /原因含 version-installed。$/u);
   assert.equal(to('secretary').length, 1); assert.match(to('secretary')[0][4], /^version-notice:/u);
   assert.match(to('secretary')[0][2], /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 0\.1\.0-alpha\.286）/u);
   assert.equal(f.versionNotices?.waiting(), false);

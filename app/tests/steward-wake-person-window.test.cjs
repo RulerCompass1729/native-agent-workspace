@@ -50,6 +50,8 @@ function fixture(t, { butler = {}, others = [], windows = [quietWindow(['butler'
     f.rows.push({ id, actor: { id: 'butler', nativeId: 'native-butler' }, command: { method: 'createSession' }, confirmation: { options: { cancelId: 0 } }, humanDecision, humanDecisionAt: clock.now, state: 'complete' });
     actions.observe({}, f.rows);
   };
+  // Another act of the person's, not on one of the butler's cards (those: steward-wake-card-click.test.cjs).
+  f.act = (id = 'item-1') => actions.call('spaceAction', ['space-1', 'queueResolve', [id, 'SYNTHETIC PRIVATE ANSWER']], true);
   f.event = (n = 1) => ledger.ingest({ eventId: `butler-source:${n}`, sourceRef: `queue-outcome:space-1:${n}`, kind: 'failure', payload: { spaceId: 'space-1', itemId: `item-${n}`, reason: 'Synthetic failure' } });
   // Passes as the dispatcher's own timer makes them, every 3 seconds, for `ms`.
   f.run = async (ms, { hurry = false } = {}) => {
@@ -97,11 +99,11 @@ test('a click is told together with the ordinary events before it; those after i
   f.click('card-2'); await f.run(MIN); assert.equal(f.sent.length, 2, 'the next click is told too');
 });
 
-test('two clicks within a minute are told at most a minute apart', async t => {
+test('two answers on queue items within a minute are told at most a minute apart', async t => {
   const f = fixture(t);
-  f.click(); await f.run(6000); assert.equal(f.sent.length, 1);
+  f.act(); await f.run(6000, { hurry: true }); assert.equal(f.sent.length, 1);
   Object.assign(f.butler, { state: 'idle', lastActivityAt: f.clock.now - 10000 });
-  f.click('card-2'); await f.run(2 * MIN, { hurry: true });
+  f.act('item-2'); await f.run(2 * MIN, { hurry: true });
   assert.equal(f.sent.length, 2); assert.ok(f.sent[1].at - f.sent[0].at >= MIN);
 });
 
@@ -121,7 +123,7 @@ test('a card or grant running out of time is not the person\'s act', async t => 
   assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'quiet-window');
 });
 
-test('a click does not pass any other gate', async t => {
+test('an act that is no answer on the butler\'s card passes no other gate', async t => {
   const child = { event: 'SubagentStart', id: 'child', stale: false, time: START };
   for (const [name, set, reason] of [
     ['automatic messages off', f => { f.client.state.wakePolicy = { enabled: false }; }, 'automatic-messages-off'],
@@ -140,19 +142,19 @@ test('a click does not pass any other gate', async t => {
     ['a backend being replaced', f => { f.client.operationGuard = () => () => { throw Object.assign(Error('SYNTHETIC maintenance'), { notSent: true }); }; }, 'send-not-sent'],
   ]) {
     const f = fixture(t);
-    f.click(); set(f);
+    f.act(); set(f);
     await f.run(MIN, { hurry: true });
     assert.deepEqual(f.sent, [], name); assert.equal(f.held()?.reason, reason, name);
   }
   const off = fixture(t);
-  off.wake.set(false); off.click(); await off.run(5 * MIN);
+  off.wake.set(false); off.act(); await off.run(5 * MIN);
   assert.deepEqual(off.sent, [], 'event wake off');
 });
 
-test('the two minutes after the person used the butler still hold a click, then it goes out inside the window', async t => {
+test('the two minutes after the person used the butler still hold such an act, then it goes out inside the window', async t => {
   const f = fixture(t);
   f.dispatcher.noteHuman('butler'); const used = f.clock.now;
-  f.click(); await f.dispatcher.schedule();
+  f.act(); await f.dispatcher.schedule();
   assert.equal(f.held()?.reason, 'person-recent', 'said at once');
   await f.run(5 * MIN);
   assert.equal(f.sent.length, 1);
@@ -186,11 +188,11 @@ test('a patrol, a queue item and another session\'s window are as before', async
   assert.equal(elsewhere.sent.length, 1, 'a window elsewhere never held the butler');
 });
 
-test('a wake that did not arrive keeps the click owed, tried again a minute later', async t => {
+test('a wake that did not arrive keeps such an act owed, tried again a minute later', async t => {
   const f = fixture(t), dispatch = f.client.call;
   let fail = true;
   f.client.call = async (method, ...args) => { if (method === 'dispatch' && fail) throw Object.assign(Error('SYNTHETIC not sent'), { notSent: true }); return dispatch(method, ...args); };
-  f.click(); await f.run(30000, { hurry: true });
+  f.act(); await f.run(30000, { hurry: true });
   assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'cooldown'); assert.equal(f.wake.due(), true);
   fail = false; await f.run(MIN, { hurry: true });
   assert.equal(f.sent.length, 1);
@@ -243,9 +245,9 @@ test('the butler gone by the read right before the send is said as missing', asy
   assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'missing');
 });
 
-test('outside a window a click waits for the same idle clock as any event', async t => {
+test('outside a window such an act waits for the same idle clock as any event', async t => {
   const f = fixture(t, { windows: [] });
-  f.click(); const at = f.clock.now;
+  f.act(); const at = f.clock.now;
   await f.dispatcher.schedule();
   assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'not-settled');
   await f.run(MIN);
@@ -263,4 +265,26 @@ test('the wake inside a window makes the move wait for its quiet again, without 
   assert.equal(ready(f.clock.now), false);
   assert.equal(ready(f.sent[0].at + rules.MIGRATE_QUIET_MS), true);
   assert.equal(f.quiet.windowOf('butler', f.clock.now).deadline, before);
+});
+
+test('an event that waits for the window to end asks the backends for nothing meanwhile', async t => {
+  const f = fixture(t), refresh = f.client.refresh; let reads = 0;
+  f.client.refresh = async () => { reads += 1; return refresh(); };
+  f.event(); await f.run(20 * MIN, { hurry: true });
+  assert.deepEqual(f.sent, []); assert.equal(f.held()?.reason, 'quiet-window'); assert.equal(reads, 0);
+  f.clock.now = START + HOUR; await f.run(MIN);
+  assert.equal(f.sent.length, 1);
+});
+
+test('a click right after the butler\'s turn ended in the window waits its eight seconds, whether a pass saw that turn or not', async t => {
+  for (const seen of [true, false]) {
+    const f = fixture(t);
+    await f.run(MIN, { hurry: true });
+    if (seen) { f.butler.state = 'working'; await f.run(MIN, { hurry: true }); f.butler.state = 'idle'; }
+    f.butler.lastActivityAt = f.clock.now; f.click(); const at = f.clock.now;
+    await f.run(6000, { hurry: true });
+    assert.deepEqual(f.sent, [], `seen ${seen}`); assert.equal(f.held()?.reason, 'not-settled');
+    await f.run(30000, { hurry: true });
+    assert.equal(f.sent.length, 1); assert.ok(f.sent[0].at - at >= 8000 && f.sent[0].at - at <= 12000, `${f.sent[0].at - at} ms`);
+  }
 });
