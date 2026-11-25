@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const rules = require('../queue-dispatch.cjs');
+const { CompactionCounter } = require('../compaction-count.cjs');
 const { RoomState } = require('../room-state.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
@@ -4400,8 +4401,12 @@ for (const outcome of ['delivered', 'refused', 'uncertain']) test(`an item marke
 // Queue 794d3cd7 (the person, 2026-11-13): a conversation compacted again and again continues in a new
 // session through the same handoff, without waiting out a successor's day of rest, and the butler between turns.
 function fakeCompactions(counts) {
-  const seen = [];
-  return { seen, counts, async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); } };
+  const seen = [], again = [];
+  return {
+    seen, again, counts,
+    async sample(sessions) { seen.push(sessions.map(session => session.id)); return new Map(Object.entries(counts)); },
+    async recheck(session) { again.push(session.id); },
+  };
 }
 
 test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its next item, or after thirty quiet minutes', () => {
@@ -4729,6 +4734,7 @@ test('794d3cd7: a compacted member is asked for its handoff in words that say wh
   const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'compact'), 'the log keeps the reason');
   assert.deepEqual(fake.seen[0], ['a'], 'a session in no space that is not the butler is not read');
+  assert.deepEqual(fake.again, [], 'a count is not read again');
   assert.equal(client.sends('z').length, 0);
   assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
   assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
@@ -4771,6 +4777,112 @@ test('cache-aware rotation: sizes a failed read left behind are not used', async
   await dispatcher.schedule();
   await dispatcher.schedule();
   assert.match(client.sends('a').at(-1)[2], /second task/);
+});
+
+// The 30-second sample and the real record together: the size a context rotation is started on is read again first.
+function recordedMember(t, id, native) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-recheck-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, `${native}.jsonl`);
+  const line = entry => fs.appendFileSync(file, `${JSON.stringify({ isSidechain: false, sessionId: native, ...entry })}\n`);
+  return {
+    file,
+    session: member(id, { nativeId: native, nativeTranscript: file, createdAt: NOW - 2 * HOUR }),
+    counter: new CompactionCounter({ claudeRoot: root, codexRoot: root }),
+    request(tokens, at, usage = { cache_creation_input_tokens: 500, cache_creation: { ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 } }) {
+      const cached = usage.cache_creation_input_tokens ? tokens - usage.cache_creation_input_tokens : 0;
+      line({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { role: 'assistant', model: 'claude-test-model',
+        usage: { input_tokens: tokens - cached - usage.cache_creation_input_tokens, cache_read_input_tokens: cached, ...usage } } });
+    },
+    compaction: () => line({ type: 'system', subtype: 'compact_boundary' }),
+  };
+}
+const [NATIVE_A, NATIVE_B, NATIVE_C] = ['a', 'b', 'c'].map(id => `0f6c2a3e-5b7d-4c1e-9a8b-00000000000${id}`);
+const UNCACHED = { cache_creation_input_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 } };
+
+const rotated = (client, id = 'a') => client.sends(id).filter(call => /【NAW 换会话】/.test(call[2])).map(call => call[2]);
+
+for (const after of [22000, 30000]) test(`a compaction after the sample: picked ${after} ms after it, the member takes its item and is not rotated by the size from before`, async t => {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(20000, NOW - 60000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter, settleMs: 8000 });
+  room.queueAdd('first task', 'a');
+  await dispatcher.start();
+  advance(8000);
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /first task/);
+  advance(40000);
+  record.request(190000, dispatcher.now() - 1000);
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  assert.equal(dispatcher.contexts.get('a').tokens, 190000, 'sampled while it works');
+  advance(after - 9000);
+  record.compaction();
+  record.request(20000, dispatcher.now() - 1000);
+  client.reply('a', 'first task finished');
+  await dispatcher.schedule();
+  advance(9000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  assert.deepEqual(rotated(client), []);
+  assert.match(client.sends('a').at(-1)[2], /next task/, 'in the same pass');
+  assert.equal(dispatcher.contexts.get('a').tokens, 20000);
+});
+
+// A member sampled at 190K, warm; `then` is what happens to its record before its next item, 22 seconds later. One pass.
+async function pickedAfterSample(t, then) {
+  const record = recordedMember(t, 'a', NATIVE_A);
+  record.request(190000, NOW - 60000);
+  await record.counter.sample([record.session], NOW);
+  assert.equal(record.counter.contexts.get('a').tokens, 190000);
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [record.session], { compactions: record.counter });
+  then(record);
+  advance(22000);
+  room.queueAdd('next task', 'a');
+  await dispatcher.tick();
+  if (!rotated(client).length) assert.match(client.sends('a').at(-1)[2], /next task/);
+  else assert.equal(room.value.queue[0].status, 'queued');
+  return rotated(client);
+}
+
+test('a large warm member is rotated by the size it has now', async t => {
+  assert.match((await pickedAfterSample(t, () => {}))[0], /上下文已到约 190K/);
+  assert.match((await pickedAfterSample(t, record => record.request(206000, NOW + 10000)))[0], /上下文已到约 206K/);
+});
+
+test('a request that missed the cache after the sample: not rotated by the lifetime from before', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => record.request(190000, NOW + 10000, UNCACHED)), []);
+});
+
+test('a record that is not read to its end when the rotation would start: the member takes its item', async t => {
+  assert.deepEqual(await pickedAfterSample(t, record => fs.appendFileSync(record.file, '{"half')), []);
+  assert.deepEqual(await pickedAfterSample(t, record => { record.counter.readSession = async () => { throw Error('EIO'); }; }), []);
+});
+
+test('a third compaction found when the rotation would start rotates the member for that', async t => {
+  assert.match((await pickedAfterSample(t, record => {
+    for (let n = 0; n < 3; n++) record.compaction();
+    record.request(20000, NOW + 10000);
+  }))[0], /上下文已压缩 3 次/);
+});
+
+test('only a member the pass would rotate for its size is read again; when it drops out, the next one has the turn', async t => {
+  const a = recordedMember(t, 'a', NATIVE_A), b = recordedMember(t, 'b', NATIVE_B), c = recordedMember(t, 'c', NATIVE_C);
+  for (const one of [a, b, c]) one.request(190000, NOW - 60000);
+  const { counter } = a, read = [], recheck = counter.recheck.bind(counter);
+  counter.recheck = (session, now) => { read.push(session.id); return recheck(session, now); };
+  const { room, client, dispatcher } = dispatcherSetup(t, [a.session, b.session, c.session], { compactions: counter });
+  await counter.sample([a.session, b.session, c.session], NOW);
+  a.compaction();
+  a.request(20000, NOW - 1000);
+  for (const id of ['a', 'b', 'c']) room.queueAdd(`task ${id}`, id);
+  await dispatcher.tick();
+  assert.deepEqual(read, ['a', 'b']);
+  assert.match(client.sends('a')[0][2], /task a/);
+  assert.equal(rotated(client, 'b').length, 1);
+  assert.match(client.sends('c')[0][2], /task c/, 'one rotation at a time, as before');
+  const waits = [...room.queueWaits.values()].flat().map(wait => [wait.sessionId, wait.reason]);
+  assert.deepEqual(waits, [['b', 'rotating']], 'not those of the plans before');
 });
 
 test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
