@@ -863,6 +863,16 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.addressedSendAvailable, false);
   assert.equal(term1.writes.length, 1);
 
+  // 296-r2 #2: Partial redraw that erases the composer rules while leaving the old MCP listing above MUST NOT certify warmup either.
+  await paint(term1, [
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
+  ], 0);
+  assert.equal(rt1.mcpWarmPhase, 'opening', 'partial redraw without composer box above MCP Servers never certifies warmup');
+  assert.equal(rt1.addressedSendAvailable, false);
+  assert.equal(term1.writes.length, 1);
+
   // Real active /mcp overlay BELOW the composer rule with ✓ naw_workspace + workspace_message + esc Exit closes /mcp via Esc.
   await paint(term1, [
     rule,
@@ -882,20 +892,24 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, true);
   assert.equal(rt1.addressedSendAvailable, true);
 
-  // 296-r1 #1: Human submits a turn while warmup is pending -> PreInvocation sets liveTurn BEFORE syncing screen so /mcp is NEVER written into the human turn!
+  // 296-r1/r2 #1: Human types and submits a visible draft while warmup is pending -> warmup aborts immediately,
+  // so an empty-composer repaint arriving BEFORE PreInvocation never writes /mcp behind the human submission!
   const id4 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
   const rt4 = ws.runtimes.get(id4), term4 = terms[1];
   term4.emit('started', 71720);
   await paint(term4, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts']);
-  ws.input(id4, 'human prompt\r', 'owner-1');
+  ws.input(id4, 'human prompt', 'owner-1');
+  assert.equal(rt4.mcpWarmPhase, 'aborted', 'non-trust human input aborts pending warmup');
+  await paint(term4, ['Antigravity CLI 1.5.16', rule, '> human prompt', rule, '']);
+  ws.input(id4, '\r', 'owner-1');
   const writesBeforeHumanPreInv = term4.writes.length;
-  // Screen has model footer and empty composer when PreInvocation arrives after settle window (humanInputQuietMs: 0).
+  // Empty-composer repaint arrives BEFORE PreInvocation after settle window (humanInputQuietMs: 0).
   await paint(term4, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
-  assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'unseen human prompt does not trigger /mcp');
+  assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'empty repaint after human submit never triggers /mcp');
   rt4.hook({ hookEventName: 'PreInvocation', conversationId: randomUUID(), invocationNum: 1, initialNumSteps: 0 });
   assert.ok(rt4.turnId);
   assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'PreInvocation never writes /mcp into a human-started turn');
-  assert.equal(rt4.mcpWarmPhase, 'pending');
+  assert.equal(rt4.mcpWarmPhase, 'aborted');
 
   // Timeout path: sends Esc once, marks failed, keeps addressedSendAvailable=false while allowing chat after overlay closes.
   const id2 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });

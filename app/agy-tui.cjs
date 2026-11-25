@@ -71,12 +71,18 @@ function screenShowsModelFooter(screen) {
 function screenShowsNawMcpReady(screen) {
   const view = screenLines(screen);
   if (!view) return false;
-  let start = 0;
+  let bottomRule = -1;
   for (let i = view.lines.length - 1; i >= 0; i--) {
-    if (RULE_LINE.test(view.lines[i].trim())) { start = i + 1; break; }
+    if (RULE_LINE.test(view.lines[i].trim())) { bottomRule = i; break; }
   }
+  if (bottomRule < 2) return false;
+  let topRule = -1;
+  for (let i = bottomRule - 1; i >= 0; i--) {
+    if (RULE_LINE.test(view.lines[i].trim())) { topRule = i; break; }
+  }
+  if (topRule < 0 || bottomRule - topRule <= 1) return false;
   let inMcp = false, sawReady = false, sawExit = false;
-  for (let i = start; i < view.lines.length; i++) {
+  for (let i = bottomRule + 1; i < view.lines.length; i++) {
     const line = view.lines[i];
     if (line.includes('MCP Servers')) inMcp = true;
     if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) sawReady = true;
@@ -359,12 +365,14 @@ class AgyTui extends EventEmitter {
   }
   noteHumanTerminalInput(data = '') {
     this.lastHumanInputAt = this.now();
-    if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing') {
+    const screen = this.terminal?.screen;
+    const state = screen ? editorState(screen) : 'unknown';
+    const isTrustKey = this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' &&
+      ((!this.trustConfirmSent && (TRUST_NAV_KEYS.test(data) || TRUST_CONFIRM_KEYS.test(data))) || /^[\r\n]+$/.test(data));
+    if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing' || (this.mcpWarmPhase === 'pending' && !isTrustKey)) {
       this.clearMcpWarmTimers();
       this.mcpWarmPhase = 'aborted';
     }
-    const screen = this.terminal?.screen;
-    const state = screen ? editorState(screen) : 'unknown';
     // Raw-PTY fail-closed boundary (accepted 2026-11-24): only an already-visible draft stays in 'editing';
     // typing on 'empty' or 'unknown' enters 'unseen' until a draft or turn is observed (sub-chunk coalesced
     // type+erase stays conservatively blocked rather than risking submission of an un-echoed draft).
@@ -372,11 +380,8 @@ class AgyTui extends EventEmitter {
       this.humanInputState = 'none';
     } else if (this.humanInputState !== 'unseen' && screen && state === 'draft') {
       this.humanInputState = 'editing';
-    } else if (this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' && !this.trustConfirmSent &&
-      (TRUST_NAV_KEYS.test(data) || TRUST_CONFIRM_KEYS.test(data))) {
-      if (TRUST_CONFIRM_KEYS.test(data)) this.trustConfirmSent = true;
-      this.humanInputState = 'editing';
-    } else if (this.humanInputState !== 'unseen' && screen && state === 'blocked' && typeof data === 'string' && /^[\r\n]+$/.test(data)) {
+    } else if (isTrustKey) {
+      if (!this.trustConfirmSent && TRUST_CONFIRM_KEYS.test(data)) this.trustConfirmSent = true;
       this.humanInputState = 'editing';
     } else {
       this.humanInputState = 'unseen';
