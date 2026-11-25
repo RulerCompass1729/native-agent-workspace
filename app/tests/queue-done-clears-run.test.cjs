@@ -117,13 +117,17 @@ test('a decision the person answers from its card, and an item marked handled wh
   assert.deepEqual([f.status(asked), f.status(out), f.client.told()], ['done', 'done', []]);
 });
 test('a member no longer listed, or without its native session, is told of nowhere, and its item is still done', async t => {
-  const f = setup(t);
-  await f.dispatcher.start(); await f.pass();
-  for (const change of [s => { s.sessions = []; }, s => { s.sessions[0].nativeId = null; }]) {
-    const id = f.butlers('First.'), snapshot = f.client.snapshot(); change(snapshot);
-    f.room.queueMarkSent('shared', id, 'a', 'Agent a', NOW);
+  for (const change of [sessions => sessions.shift(), sessions => { sessions[0].nativeId = null; }, null]) {
+    const f = setup(t, [QUEUE_DONE], () => ({ sessionId: 'butler', nativeId: 'native-butler' })), other = [];
+    f.client.state.sessions.push({ ...structuredClone(f.client.state.sessions[0]), id: 'butler', name: 'Butler', nativeId: 'native-butler', roomIds: [], roomId: null });
+    f.client.butlerEntry = { state: { capabilities: [QUEUE_DONE] }, client: { async call(...args) { other.push(args[0]); return true; } } };
+    const id = f.butlers('First.');
+    await f.dispatcher.start(); await f.pass();
+    assert.equal(f.status(id), 'sent');
+    const snapshot = f.client.snapshot();
+    change?.(snapshot.sessions);
     f.dispatcher.settle({ kind: 'settle', roomId: 'shared', itemId: id, status: 'done', sessionId: 'a' }, snapshot);
-    assert.deepEqual([f.status(id), f.client.told()], ['done', []]);
+    assert.deepEqual([f.status(id), f.client.told().length, other.length], change ? ['done', 0, 0] : ['done', 1, 1]);
   }
 });
 for (const [name, break_] of [
