@@ -1,4 +1,4 @@
-// A sent item whose member stopped in 'error' with nothing continuing it: the butler is told once, nothing else happens
+// A sent item whose member stopped in 'error' with nothing continuing it: the butler is told once a stop, nothing else happens
 // (2026-11-25: a member stayed so for forty minutes; its item is settled only at 'idle', and no event named it).
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { EventEmitter } = require('node:events');
@@ -93,21 +93,34 @@ test('in quiet, with a pass every thirty seconds, it is told within three and a 
 });
 test('only an item already sent counts', async t => {
   const f = setup(t);
+  await run(f, MINUTE);
+  assert.equal(f.d.errorStalls.size, 1);
   f.roomState.queueResolve(f.item, 'shared');
   f.roomState.queueAdd('Synthetic waiting task', 'm1', 'shared');
   await run(f, 10 * MINUTE);
   assert.deepEqual(stalls(f), []);
+  assert.equal(f.d.errorStalls.size, 0);
 });
+// One going out has its pending input until native takes it.
 for (const status of ['scheduled', 'sending'])
 test(`an automatic continuation ${status}: nothing is told; once it is gone, three more minutes`, async t => {
-  const f = setup(t, { capacityRecovery: retry(status) });
+  const f = setup(t, { capacityRecovery: retry(status), pendingTag: status === 'sending' ? 'capacity-tag' : null });
   await run(f, 15 * MINUTE);
   assert.deepEqual(stalls(f), []);
-  f.member.capacityRecovery = null;
+  Object.assign(f.member, { capacityRecovery: null, pendingTag: null });
   const since = f.clock.now - STEP;
   await run(f, 3 * MINUTE - STEP);
   assert.deepEqual(stalls(f), []);
   await run(f, STEP);
+  assert.deepEqual(stalls(f), [line(f, since)]);
+  untouched(f);
+});
+test('a continuation whose record stays at sending after its turn failed is told', async t => {
+  const f = setup(t, { capacityRecovery: retry('sending'), pendingTag: 'capacity-tag' });
+  await run(f, MINUTE);
+  f.member.pendingTag = null;
+  const since = f.clock.now - STEP;
+  await run(f, 3 * MINUTE);
   assert.deepEqual(stalls(f), [line(f, since)]);
   untouched(f);
 });
@@ -130,6 +143,203 @@ test('the person pressed Esc: the member is idle, nothing is told', async t => {
   f.member.nativeInputRequired = true;
   await run(f, 10 * MINUTE);
   assert.deepEqual(stalls(f), []);
+});
+const STOPS = [['interrupt'], ['input', '\x1b'], ['input', '\x03'], ['input', 'words\x03']];
+for (const [method, data] of STOPS)
+test(`the person stops the scheduled continuation (${method}${data ? ' ' + JSON.stringify(data) : ''}): nothing is told, until the member runs again`, async t => {
+  const f = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(f, MINUTE);
+  f.d.noteHuman('m1', method, data);
+  f.d.noteHuman('m1', method, data);
+  f.member.capacityRecovery = null;
+  await run(f, 60 * MINUTE);
+  assert.deepEqual(stalls(f), []);
+  untouched(f);
+  f.member.state = 'working';
+  await run(f, MINUTE);
+  f.member.state = 'error';
+  const since = f.clock.now;
+  await run(f, 3 * MINUTE + STEP);
+  assert.deepEqual(stalls(f), [line(f, since)]);
+});
+// Opened, taken over, scrolled in its terminal, or other words typed: the person may not know it stopped.
+for (const [method, data] of [['claim', 'window'], ['terminal', true], ['select', undefined], ['input', '\x1b[<64;10;10M'], ['input', '\x1b[A'], ['input', 'words'], ['draft', '\x1b'], [undefined, undefined]])
+test(`no stop of the scheduled continuation (${method} ${JSON.stringify(data)}): told`, async t => {
+  const f = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(f, MINUTE);
+  f.d.noteHuman('m1', method, data);
+  f.member.capacityRecovery = null;
+  await run(f, 3 * MINUTE);
+  assert.deepEqual(stalls(f), [line(f, NOW + MINUTE - STEP)]);
+});
+test('Esc while nothing is scheduled, ten minutes before the stop or in it: told', async t => {
+  const before = setup(t, { state: 'working' });
+  await run(before, MINUTE);
+  before.d.noteHuman('m1', 'input', '\x1b');
+  await run(before, 10 * MINUTE);
+  before.member.state = 'error';
+  const since = before.clock.now;
+  await run(before, 3 * MINUTE + STEP);
+  assert.deepEqual(stalls(before), [line(before, since)]);
+  const during = setup(t);
+  await run(during, MINUTE);
+  for (const [method, data] of STOPS) during.d.noteHuman('m1', method, data);
+  await run(during, 3 * MINUTE);
+  assert.deepEqual(stalls(during), [line(during)]);
+});
+test('Esc once the continuation is gone, or once the member is at work: told', async t => {
+  const gone = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(gone, MINUTE);
+  gone.member.capacityRecovery = null;
+  await run(gone, MINUTE);
+  gone.d.noteHuman('m1', 'input', '\x1b');
+  await run(gone, 2 * MINUTE + STEP);
+  assert.deepEqual(stalls(gone), [line(gone, NOW + MINUTE - STEP)]);
+  const working = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(working, MINUTE);
+  Object.assign(working.member, { state: 'working', capacityRecovery: null });
+  await run(working, MINUTE);
+  working.d.noteHuman('m1', 'input', '\x1b');
+  working.member.state = 'error';
+  const since = working.clock.now;
+  await run(working, 3 * MINUTE + STEP);
+  assert.deepEqual(stalls(working), [line(working, since)]);
+});
+test('a pass between the stop and its effect still sees the continuation scheduled: nothing is told', async t => {
+  const f = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(f, MINUTE);
+  f.d.noteHuman('m1', 'interrupt');
+  await run(f, STEP);
+  f.member.capacityRecovery = null;
+  await run(f, 60 * MINUTE);
+  assert.deepEqual(stalls(f), []);
+});
+test('Esc ten minutes before, on the continuation of an earlier stop: told', async t => {
+  const f = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(f, MINUTE);
+  f.d.noteHuman('m1', 'input', '\x1b');
+  Object.assign(f.member, { state: 'working', capacityRecovery: null });
+  await run(f, 10 * MINUTE);
+  f.member.state = 'error';
+  const since = f.clock.now;
+  await run(f, 3 * MINUTE + STEP);
+  assert.deepEqual(stalls(f), [line(f, since)]);
+});
+test('a stop in another session is not one here', async t => {
+  const f = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(f, MINUTE);
+  f.d.noteHuman('m2', 'interrupt');
+  f.member.capacityRecovery = null;
+  await run(f, 3 * MINUTE);
+  assert.deepEqual(stalls(f), [line(f, NOW + MINUTE - STEP)]);
+});
+test('a stop that did not stop it: what goes out, or is scheduled for a later turn, is told when it stays', async t => {
+  const sent = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(sent, MINUTE);
+  sent.d.noteHuman('m1', 'interrupt');
+  await run(sent, MINUTE);
+  Object.assign(sent.member, { capacityRecovery: retry('sending'), pendingTag: 'capacity-tag' });
+  await run(sent, MINUTE);
+  sent.member.pendingTag = null;
+  const since = sent.clock.now - STEP;
+  await run(sent, 3 * MINUTE);
+  assert.deepEqual(stalls(sent), [line(sent, since)]);
+  const later = setup(t, { capacityRecovery: retry('scheduled') });
+  await run(later, MINUTE);
+  later.d.noteHuman('m1', 'interrupt');
+  later.member.capacityRecovery = retry('scheduled', { turnId: '22222222-2222-4222-8222-222222222222' });
+  await run(later, MINUTE);
+  later.member.capacityRecovery = null;
+  const again = later.clock.now - STEP;
+  await run(later, 3 * MINUTE);
+  assert.deepEqual(stalls(later), [line(later, again)]);
+});
+test('what counts as a stop in the terminal is what the workspace takes for one, and the daily app passes it on', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../workspace.cjs'), 'utf8');
+  const found = /const interrupt = (data === .+);/.exec(source);
+  const workspace = Function('data', 'return ' + found[1]);
+  for (const data of ['', '\x1b', '\x03', 'a\x03b', '\x1b\x1b', '\x1b[A', '\x1bOA', '\x1b[<64;10;10M', 'words', '\r', '\x04']) {
+    assert.equal(rules.terminalInterrupt(data), workspace(data), JSON.stringify(data));
+  }
+  for (const data of [undefined, null, 3, {}, ['\x1b']]) assert.equal(rules.terminalInterrupt(data), false);
+  for (const data of ['\x1b', '\x03']) assert.equal(rules.terminalReplyOnly(data), false);
+  const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  assert.match(main, /humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method, args\[1\]\);/);
+});
+test('the clock set back: the three minutes start again from there', async t => {
+  const f = setup(t);
+  await run(f, 2 * MINUTE);
+  f.clock.now -= 24 * 60 * MINUTE;
+  const since = f.clock.now;
+  await run(f, 3 * MINUTE);
+  assert.deepEqual(stalls(f), []);
+  await run(f, STEP);
+  assert.deepEqual(stalls(f), [line(f, since)]);
+});
+test('each stop has its own line: seen at work, then three minutes in error again; one for each also after a restart', async t => {
+  for (const state of ['working', 'approval', 'background', 'idle']) {
+    const f = setup(t);
+    await run(f, 4 * MINUTE);
+    const lines = [line(f)];
+    for (let stop = 0; stop < 2; stop++) {
+      f.member.state = state;
+      await run(f, state === 'idle' ? STEP : MINUTE);
+      f.member.state = 'error';
+      const since = f.clock.now;
+      await run(f, 3 * MINUTE);
+      assert.deepEqual(stalls(f), lines, state);
+      lines.push(line(f, since));
+      await run(f, 20 * MINUTE);
+      assert.deepEqual(stalls(f), lines, state);
+    }
+    restart(t, f);
+    await run(f, 20 * MINUTE);
+    assert.deepEqual(stalls(f), lines, state);
+    untouched(f);
+  }
+});
+test('a stop too short to be told does not count: the first line of the item stays one after a restart', async t => {
+  const f = setup(t);
+  await run(f, MINUTE);
+  f.member.state = 'working';
+  await run(f, MINUTE);
+  f.member.state = 'error';
+  const since = f.clock.now;
+  await run(f, 4 * MINUTE);
+  restart(t, f);
+  await run(f, 10 * MINUTE);
+  assert.deepEqual(stalls(f), [line(f, since)]);
+});
+test('a connection lost and found, or a backend starting, is not another stop', async t => {
+  const f = setup(t);
+  await run(f, 4 * MINUTE);
+  for (const state of ['disconnected', 'recoverable', 'starting', 'ended']) {
+    f.member.state = state;
+    await run(f, MINUTE);
+    f.member.state = 'error';
+    await run(f, 10 * MINUTE);
+  }
+  assert.deepEqual(stalls(f), [line(f)]);
+  assert.equal(f.told, 1);
+  const first = setup(t);
+  await run(first, 2 * MINUTE);
+  first.member.state = 'disconnected';
+  await run(first, MINUTE);
+  first.member.state = 'error';
+  const since = first.clock.now;
+  await run(first, 3 * MINUTE + STEP);
+  assert.deepEqual(stalls(first), [line(first, since)], 'and the time starts after it');
+});
+test('a second stop also has its record tried again', async t => {
+  const f = setup(t);
+  await run(f, 4 * MINUTE);
+  f.member.state = 'working';
+  await run(f, MINUTE);
+  f.member.state = 'error';
+  const since = f.clock.now;
+  f.throws = 2;
+  await run(f, 4 * MINUTE);
+  assert.deepEqual(stalls(f), [line(f), line(f, since)]);
 });
 test('a draft in the session: nothing is told while it stays; blanks are no draft', async t => {
   const f = setup(t, { liveDraft: 'synthetic words' });

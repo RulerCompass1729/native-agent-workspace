@@ -390,12 +390,13 @@ class ButlerIngress {
     this.rotationStalls.add(eventId);
     return true;
   }
-  // A sent item's member in 'error' with nothing continuing it (queue-dispatch.cjs noteErrorStalls): one line per
-  // delivery, kept across restarts by its id, and none when that turn's spent retries already have theirs.
-  errorStalled({ memberId, nativeId, itemId, tag, since, exhaustedTurnId = null }) {
+  // A sent item's member in 'error' with nothing continuing it (queue-dispatch.cjs noteErrorStalls): one line a stop,
+  // kept across restarts by its id, and none when that turn's spent retries already have theirs. `again`: the pass saw
+  // it at work since a stop already told, so this one is named by its own start.
+  errorStalled({ memberId, nativeId, itemId, tag, since, again = false, exhaustedTurnId = null }) {
     if (!Number.isSafeInteger(since)) return false;
     if (exhaustedTurnId && this.recoveryFailures.has(hash([memberId, nativeId, exhaustedTurnId]))) return false;
-    const eventId = `error-stalled:${hash([memberId, nativeId, itemId, tag])}`;
+    const eventId = `error-stalled:${hash([memberId, nativeId, itemId, tag, ...(again ? [since] : [])])}`;
     if (this.errorStalls.has(eventId)) return false;
     this.record({ eventId, sourceRef: `error-stalled:${memberId}`, kind: 'blocked',
       payload: { memberId, itemId, reason: 'error-stalled', title: new Date(since).toISOString() } });

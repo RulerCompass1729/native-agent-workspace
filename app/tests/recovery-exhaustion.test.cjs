@@ -55,20 +55,73 @@ for(const boundary of ['draft','takeover','member-change'])test('review stale co
  const f=await exhausted(t,'claude','connection');if(boundary==='draft')f.w.setDraft(f.s.id,'Synthetic unsent words','window');if(boundary==='takeover')f.w.claim(f.s.id,'other-window');if(boundary==='member-change')f.w.join(f.s.id,false);
  const member=f.w.snapshot().sessions.find(s=>s.id===f.s.id);assert.equal(member.capacityRecovery,null);for(const listener of f.listeners)listener({sessions:[member]});assert.equal(f.ingress.ledger.eventsAfter(null).events.filter(e=>e.kind==='failure').length,0);assert.equal(f.sent.length,3);
 });
-// The same queue item through the real adapter, workspace snapshot and dispatcher: what NAW continues is not told while
-// it is scheduled; what it does not continue is told after three minutes in 'error'.
-for(const [label,row,reason] of [['an idle stream',{apiErrorStatus:undefined,apiError:'stream_idle_timeout',error:'server_error'},'connection'],['a server error',{apiErrorStatus:500,apiError:undefined,error:'server_error'},null],['a usage limit',{apiErrorStatus:429,apiError:undefined,error:'rate_limit'},null],['a sign-in failure',{apiErrorStatus:401,apiError:undefined,error:'authentication_failed'},null]])
-test('a sent item whose member stopped on '+label+(reason?' is continued, and not told meanwhile':' is told to the butler, and not continued'),async t=>{
- const f=capacityWorkspace(t,undefined,row),{room,ingress,id}=wire(f),clock={now:Date.now()};
+// The same queue item through the real adapter, workspace and dispatcher, with the person's own calls noted as the daily
+// app notes them (main.cjs authorizeOperation).
+const human=part(main,'const HUMAN_SESSION_METHODS','// A key the person typed in'),note=/humanSessionWork\(method, args\)\) (queueDispatcher\?\.noteHuman\(.+\);)/.exec(main)[1];
+function rig(t,f){
+ const {room,ingress,id}=wire(f),clock={now:Date.now()};
  const capabilities=[rules.CAPABILITY],client=Object.assign(new EventEmitter(),{close(){},refresh:async()=>{},route:()=>({client,state:{capabilities}}),
   snapshot:()=>({...f.w.snapshot(),capabilities,wakePolicy:{enabled:true},operatorPolicy:{domains:[]}}),call:async m=>{if(m==='initial')return client.snapshot();throw Error(m);}});
  const d=new rules.QueueDispatcher({roomState:room,dataDir:f.dir,connect:async()=>client,clients:()=>client,steward:()=>null,now:()=>clock.now,settleMs:8000,tickMs:3600000,
-  transcriptRoot:require('node:path').join(f.dir,'none'),sampleProcesses:async()=>'',samplePressure:async()=>'',compactions:{async sample(){return new Map();}},errorStalled:s=>ingress.errorStalled(s)});
+  transcriptRoot:path.join(f.dir,'none'),sampleProcesses:async()=>'',samplePressure:async()=>'',compactions:{async sample(){return new Map();}},errorStalled:s=>ingress.errorStalled(s)});
  t.after(()=>d.close());
  const told=()=>ingress.ledger.eventsAfter(null).events.filter(e=>e.payload.reason==='error-stalled');
+ const pass=async ms=>{for(let n=0;n<ms;n+=10000){d.dirty=true;await d.schedule();clock.now+=10000;}};
+ const authorize=new Function('queueRules','queueDispatcher',human+'return (method,args)=>{if(humanSessionWork(method,args))'+note+'};')(rules,d);
+ const person=async(method,...args)=>{authorize(method,[f.s.id,...args]);await (method==='draft'?f.w.setDraft(f.s.id,...args):f.w[method](f.s.id,...args));};
+ return {room,id,clock,told,pass,person};
+}
+const STREAM={apiErrorStatus:undefined,apiError:'stream_idle_timeout',error:'server_error'};
+// What NAW continues is not told while it is scheduled; what it does not continue is told after three minutes in 'error'.
+for(const [label,row,reason] of [['an idle stream',STREAM,'connection'],['a server error',{apiErrorStatus:500,apiError:undefined,error:'server_error'},null],['a usage limit',{apiErrorStatus:429,apiError:undefined,error:'rate_limit'},null],['a sign-in failure',{apiErrorStatus:401,apiError:undefined,error:'authentication_failed'},null]])
+test('a sent item whose member stopped on '+label+(reason?' is continued, and not told meanwhile':' is told to the butler, and not continued'),async t=>{
+ const f=capacityWorkspace(t,undefined,row),g=rig(t,f);
  f.fail({errorRowUnclassified:true});f.stop();assert.equal(f.s.state,'error');
  assert.equal(f.w.capacityStatus(f.s.id)?.reason??null,reason);
- for(let n=0;n<=19;n++){d.dirty=true;await d.schedule();clock.now+=10000;}
- assert.deepEqual(told().map(e=>[e.kind,e.payload.memberId,e.payload.itemId]),reason?[]:[['blocked',f.s.id,id]]);
- assert.equal(room.queueFind('shared',id).status,'sent');assert.deepEqual(f.sent,[]);
+ await g.pass(200000);
+ assert.deepEqual(g.told().map(e=>[e.kind,e.payload.memberId,e.payload.itemId]),reason?[]:[['blocked',f.s.id,g.id]]);
+ assert.equal(g.room.queueFind('shared',g.id).status,'sent');assert.deepEqual(f.sent,[]);
+});
+// Once continued, a turn that fails without a named end leaves its record at 'sending' (the limit of three counts on it).
+for(const [label,row,incomplete] of [['a sign-in failure',{apiErrorStatus:401,apiError:undefined,error:'authentication_failed'},false],['a usage limit',{apiErrorStatus:429,apiError:undefined,error:'rate_limit'},false],['an idle stream in a turn of more than 64 blocks',STREAM,true]])
+test('a continued turn that stopped on '+label+' is told to the butler',async t=>{
+ const f=capacityWorkspace(t,undefined,STREAM),g=rig(t,f);
+ f.fail({errorRowUnclassified:true});f.stop();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(f.sent,['继续']);f.s.pendingTag=null;
+ const promptId=f.r.lastPromptId=randomUUID(),turnId=randomUUID(),errorMessageId=randomUUID();
+ fs.writeFileSync(f.file,JSON.stringify({...f.row,...row,uuid:errorMessageId})+'\n');
+ f.block({id:'control:turn-start',kind:'control',status:'running',promptId,turnId});f.r.emit('state','working');
+ if(incomplete)(f.r.displayProofs||=new Map()).set(turnId,{blocks:new Map(),incomplete:true});
+ f.block({id:'turn:'+turnId,kind:'turn',status:'failed',turnId,failedRequest:true,errorMessageId,errorRowUnclassified:true});f.stop({prompt_id:promptId});
+ assert.equal(f.s.state,'error');assert.equal(f.w.capacityStatus(f.s.id)?.status,'sending');
+ await g.pass(200000);
+ assert.deepEqual(g.told().map(e=>[e.kind,e.payload.memberId,e.payload.itemId]),[['blocked',f.s.id,g.id]]);
+ assert.deepEqual(f.sent,['继续']);
+});
+// The person's own stop of the continuation is not told; looking, scrolling, typing or taking over is no stop. Looking
+// and scrolling leave it scheduled, so what ends it there is something else; a takeover ends it when it is due.
+for(const [label,calls,count] of [['the stop button',[['interrupt','window']],0],['Esc in the terminal',[['input','\x1b','window']],0],['Ctrl-C in the terminal',[['input','\x03','window']],0],
+ ['something else after opening it',[['claim','window'],['claim','window','terminal']],1],['something else after scrolling its terminal',[['input','\x1b[<64;10;10M','window']],1],['other words in the terminal',[['input','words','window']],1],['another window taking over',[['claim','other-window']],1],['a draft, cleared',[['draft','words','window'],['draft','','window']],1]])
+test('a scheduled continuation ended by '+label+': '+(count?'told':'not told'),async t=>{
+ const f=capacityWorkspace(t,undefined,STREAM),g=rig(t,f);f.r.terminal.input=()=>{};
+ f.fail({errorRowUnclassified:true});f.stop();await g.pass(60000);assert.equal(f.w.capacityStatus(f.s.id).status,'scheduled');
+ for(const call of calls)await g.person(...call);
+ if(label.startsWith('something else'))f.w.cancelCapacity(f.s.id);
+ if(label.startsWith('another window')){f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await new Promise(resolve=>setImmediate(resolve));}
+ assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.s.state,'error');
+ await g.pass(3600000);
+ assert.equal(g.told().length,count);assert.deepEqual(f.sent,[]);
+});
+test('Esc ten minutes before the stop is no stop of its continuation: told',async t=>{
+ const f=capacityWorkspace(t,undefined,STREAM),g=rig(t,f);f.r.terminal.input=()=>{};
+ await g.pass(10000);await g.person('input','\x1b','window');await g.pass(600000);
+ f.fail({errorRowUnclassified:true});f.stop();assert.equal(f.s.state,'error');await g.pass(60000);f.w.cancelCapacity(f.s.id);
+ await g.pass(3600000);
+ assert.equal(g.told().length,1);
+});
+test('a second stop of the same item has its own line',async t=>{
+ const f=capacityWorkspace(t,undefined,{apiErrorStatus:500,apiError:undefined,error:'server_error'}),g=rig(t,f);
+ f.fail({errorRowUnclassified:true});f.stop();await g.pass(600000);assert.equal(g.told().length,1);
+ f.r.emit('state','working');await g.pass(60000);f.r.emit('state','error');await g.pass(170000);assert.equal(g.told().length,1);
+ await g.pass(600000);assert.equal(g.told().length,2);assert.deepEqual(f.sent,[]);
 });

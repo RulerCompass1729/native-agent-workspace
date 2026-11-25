@@ -434,7 +434,7 @@ test('the desktop asks for a click held at once, the phone does not, and a typed
   assert.equal(JSON.stringify(asked), '[{"early":true}]');
   assert.match(main, /stewardWakeStatus: stewardWake\?\.view\(\{ early: true \}\)\.blocked \|\| null/u);
   assert.match(main, /healthSummary\(stewardWake\?\.view\(\), /u); assert.match(main, /if \(stewardWake\?\.view\(\)\.blocked\) alerts\.push\(\{ code: 'steward-wake-stalled' \}\)/u);
-  assert.match(main, /else if \(humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method\);/u);
+  assert.match(main, /else if \(humanSessionWork\(method, args\)\) queueDispatcher\?\.noteHuman\(args\[0\], method, args\[1\]\);/u);
 });
 
 test('the chip names the click and not a minute count; the person\'s own step keeps its text', () => {
