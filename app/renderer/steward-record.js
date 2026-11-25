@@ -84,7 +84,7 @@
       // Opened: the whole sentence, and NAW's own words for a step that failed or was refused by a rule, as the agent was told them.
       body.append(say(make('p'), key, marked(entry, params)));
       if (entry.kind === 'patrol') body.append(say(make('p'), 'stewardRecord.step.patrolDetail', { sessions: entry.sessions, items: entry.items, minutes: entry.minutes }));
-      if (entry.kind === 'wakeBlocked') body.append(say(make('p'), 'stewardWake.stalled', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
+      if (entry.kind === 'wakeBlocked') body.append(say(make('p'), entry.minutes ? 'stewardWake.stalled' : 'stewardWake.notWoken', () => ({ minutes: entry.minutes, reason: format(`stewardWake.reason.${entry.reason}`) })));
       if (entry.error) { const why = make('p', 'steward-record-error'); why.textContent = entry.error; body.append(why); }
     }
     const attention = entry => ['confirmation-required', 'not-executed', 'unconfirmed', 'not-sent'].includes(entry.state) || !['role', 'message', 'wakeSwitch'].includes(entry.kind) && !entry.state;

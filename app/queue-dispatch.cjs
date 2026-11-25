@@ -524,6 +524,12 @@ function sessionReady(session, wakePolicy) {
 
 // The session as if its backend were in no quiet window.
 const pastWindow = session => session && { ...session, quietWindow: undefined };
+// For the person's answer on its own card: nor a command or timer of its own in the background, reported or not.
+const pastClick = session => session && { ...pastWindow(session), backgroundStale: false, background: 0, scheduled: 0 };
+// Its turn, a question of its own on screen, or the moment after: the rest of not-idle and busy does not end by itself.
+const ownTurn = (session, reason) => reason === 'not-settled' ||
+  reason === 'not-idle' && ['working', 'approval'].includes(session?.state) ||
+  reason === 'busy' && Boolean(session && (session.approval || session.claudeQuestion || session.nativeInputRequired));
 
 // While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
 // each of its own turns). busy stays not-idle: an approval or question flagged on the session belongs to the turn (a
@@ -2500,6 +2506,8 @@ class QueueDispatcher {
     this.vacancySince = new Map();
     this.vacancyIdentity = new Map();
     this.humanAt = new Map();
+    // The last key the person typed in a session's terminal here.
+    this.typedAt = new Map();
     this.rotationWaitReasons = new Map();
     this.pending = null;
     this.again = false;
@@ -2805,6 +2813,19 @@ class QueueDispatcher {
     }
   }
 
+  // `steward` and the native sessions it continued from through done rotations, nearest first. A session whose native
+  // session changed in place did not continue what that one had raised.
+  holders(steward) {
+    const line = [], listed = at => line.some(h => h.sessionId === at.sessionId && h.nativeId === at.nativeId);
+    for (let at = steward; validId(at?.sessionId) && validId(at.nativeId) && !listed(at);) {
+      const { sessionId, nativeId } = at;
+      line.push({ sessionId, nativeId });
+      const old = this.log.findLast(e => e.event === 'done' && e.new?.id === sessionId && e.new.nativeId === nativeId)?.old;
+      at = old && { sessionId: old.id, nativeId: old.nativeId };
+    }
+    return line;
+  }
+
   rotationChains() {
     if (!this.chainsCache) {
       try {
@@ -2952,9 +2973,10 @@ class QueueDispatcher {
   }
 
   // The person's own input, takeover or view of a session (main.cjs IPC).
-  noteHuman(sessionId) {
+  noteHuman(sessionId, method) {
     if (typeof sessionId === 'string' && sessionId) {
       this.humanAt.set(sessionId, this.now());
+      if (method === 'input') this.typedAt.set(sessionId, this.now());
       this.vacancySince.delete(sessionId); this.vacancyIdentity.delete(sessionId);
       this.dirty = true;
     }
@@ -3107,6 +3129,17 @@ class QueueDispatcher {
     });
   }
 
+  // The person answered a card of the butler's, or of one it continued from, since its last wake.
+  cardClicked() {
+    try { return this.stewardWake.personActed(this.holders(this.steward())); } catch { return false; }
+  }
+
+  // Such an answer may change no session, and time alone ends these holds: a pass then. Other holds end with a state
+  // event, or are looked at by the next full pass.
+  clickSoon() {
+    return Boolean(this.stewardWake) && [undefined, 'not-settled', 'person-recent'].includes(this.clickHeld) && this.stewardWake.due() && this.cardClicked();
+  }
+
   // Someone just became idle or stopped typing: their time arrives without a new state event.
   settlingSoon(now) {
     for (const since of this.idleSince.values()) {
@@ -3250,7 +3283,7 @@ class QueueDispatcher {
     const rotating = this.activeRotations().length > 0;
     const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
-      this.answerSoon(now);
+      this.answerSoon(now) || this.clickSoon();
     if (!due) {
       return;
     }
@@ -3349,29 +3382,38 @@ class QueueDispatcher {
   // `quietPending`: what the plan found short only of its quiet. A wake then would restart the butler's 2 quiet minutes
   // before its compaction rotation, so it waits for the rotation, which the successor's wake follows.
   async wakeSteward(current, holding, quietPending) {
+    const event = this.stewardWake.due(), click = event && this.cardClicked();
+    this.clickHeld = click ? 'held' : undefined; this.stewardWake.clicked = click;
     try {
       // The butler's own handoff holds every wake, the patrol's included, until the person's step.
       const own = this.ownHandoffStep(current.snapshot.sessions);
       if (own) return this.stewardWake.hold('rotation-control-unresolved', own);
       this.stewardWake.endHold();
-      const event = this.stewardWake.due(), work = event ? null : this.openWork(current);
+      const work = event ? null : this.openWork(current);
       const minutes = work ? this.stewardWake.patrolDue(work.idleMs, work) : null;
       if (!event && minutes === null) { this.stewardWake.clearBlocked(); return; }
       const steward = this.stewardOutside(current.snapshot.sessions);
-      const skip = reason => this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined);
+      const listed = steward && current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
+      const skip = (reason, session = listed) => {
+        if (click) this.clickHeld = reason;
+        this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined, ownTurn(session, reason));
+      };
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
-      const listed = current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
-      // The person's own act is told past a quiet window (R200), and past nothing else. The turn it starts makes the move
-      // wait for its quiet again; the window's deadline stays. No idle clock runs in a window: its last activity counts.
-      const past = Boolean(event && listed.quietWindow && this.stewardWake.personActed()), butler = past ? pastWindow(listed) : listed;
-      const idle = past ? sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs)
-        : settled(steward.sessionId, this.idleSince, current.now, this.settleMs);
+      // The person's own act is told past a quiet window (R200), and their answer on its own card (R209) also past its
+      // background work, the two minutes after they used it and the quiet a rotation waits for. The turn it starts makes
+      // a move or rotation wait for its quiet again; a window's deadline stays. Where no idle clock runs, its last
+      // activity counts.
+      const as = click ? pastClick : event && listed.quietWindow && this.stewardWake.personActed() ? pastWindow : null, butler = as ? as(listed) : listed;
+      const idle = this.idleSince.has(steward.sessionId) ? settled(steward.sessionId, this.idleSince, current.now, this.settleMs)
+        : Boolean(as) && sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs);
       if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
-      if (quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
-      const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why, past);
-      if (!fresh) return skip(why.reason || 'state-unavailable');
+      if (!click && quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
+      const why = {}, fresh = await this.freshReady(steward.sessionId, click ? 0 : this.humanQuietMs, why, as);
+      if (!fresh) return skip(why.reason || 'state-unavailable', why.session);
+      // Keys typed in its terminal may be an input on its way that no draft shows.
+      if (click && humanRecent(steward.sessionId, this.typedAt, fresh.now, Math.min(this.humanQuietMs, ANSWER_QUIET_MS))) return skip('person-recent');
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
@@ -3644,8 +3686,8 @@ class QueueDispatcher {
   }
 
   // Read fresh state once, right before sending; skip if the member moved on (`why.reason` says how, when given).
-  // `past`: a quiet window does not hold this send (wakeSteward).
-  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, past = false) {
+  // `as`: the session as this send may see it, what does not hold it left out (wakeSteward).
+  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, as = null) {
     const held = () => {
       if (this.isolation.unknown) return 'trust-unknown';
       if (Object.hasOwn(this.isolation.holds, sessionId)) return 'trust-hold';
@@ -3657,8 +3699,8 @@ class QueueDispatcher {
     const current = this.view();
     why.reason = held();
     if (why.reason) return null;
-    const session = current.snapshot.sessions.find(s => s.id === sessionId);
-    const ready = sessionReady(past ? pastWindow(session) : session, current.snapshot.wakePolicy);
+    const session = why.session = current.snapshot.sessions.find(s => s.id === sessionId);
+    const ready = sessionReady(as ? as(session) : session, current.snapshot.wakePolicy);
     if (!ready.ready) {
       why.reason = ready.reason;
       return null;
