@@ -4,7 +4,7 @@ An automatic message refused because its recipient is in a turn it cannot join w
 
 The person decided that ordinary text typed into the sender, and another agent's message to it, no longer withdraw a held message. This also covers messages held for the butler's 60-second limit and for a migration's quiet window. Esc, interrupt, takeover, the off switch, pause-all, the person acting on the recipient, a changed identity and a backend restart still withdraw it, with their existing assertions unchanged. The existing assertions that ordinary input withdraws a held message were reversed with the decision, and one test now shows that words such as "Do not send that one." no longer withdraw it.
 
-Not approved and not here: a reconnected terminal and background input into the sender still withdraw a held message. Text sent to the sender from the phone also still withdraws it, and so does writing to the sender through a space. Scrolling and focusing the sender's terminal share the path of typed text, so they no longer withdraw a held message.
+Not approved and not here: a reconnected terminal and background input into the sender still withdraw a held message. A message sent to an idle sender from the phone also still withdraws it (the phone's queue and steer into a running turn do not), and so does writing to the sender through a space. Scrolling and focusing the sender's terminal share the path of typed text, so they no longer withdraw a held message.
 
 ## Checks
 
@@ -14,8 +14,8 @@ The new tests failed on the unchanged code first: 47 of 195 in the three wake su
 
 A non-author review covered the permission boundary field by field and found no path into a running turn, no double send and no loosened limit. It returned two blocking findings. A message answered as held could end before its turn did without the sender or the butler being told. An unknown outcome was told as not delivered, which invites a second copy. Both have tests that failed before the fix.
 
-It also found that the person writing to the sender through a space during an offer no longer withdrew the message, and that a notice could be lost with a failed save. Both are fixed with tests that failed first. A mutation run over these fixes left no survivor.
+It also found that the person writing to the sender through a space during an offer no longer withdrew the message, and that a notice could be lost with a failed save. Both are fixed with tests that failed first. A mutation run over these fixes left no survivor. The same reviewer accepted the delta with zero blockers.
 
 ## Known gaps
 
-The one-minute look misses a shorter idle moment, and a later message may enter a running turn ahead of a held one. A recipient that took an automatic message within the last 60 seconds refuses for that limit first, so a message to it is not held even when it is also at work. A Codex recipient that starts a turn while its goal is being read ends the message as not sent. A held message counts as in flight at the install gate, so it can delay an install; messages held one after another can delay it longer than two hours. The gate is unchanged.
+The one-minute look misses a shorter idle moment, and a later message may enter a running turn ahead of a held one. A recipient that took an automatic message within the last 60 seconds refuses for that limit first, so a message to it is not held even when it is also at work. A Codex recipient that starts a turn while its goal is being read ends the message as not sent. A held message counts as in flight at the install gate, so it can delay an install; messages held one after another can delay it longer than two hours. The gate is unchanged. A held message behind an older one for the same recipient can be recorded as expired after its two hours; it is never sent late.
