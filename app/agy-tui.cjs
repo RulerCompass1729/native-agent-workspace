@@ -68,27 +68,43 @@ function screenShowsModelFooter(screen) {
   return false;
 }
 
-function screenShowsNawMcpReady(screen) {
+function screenMcpOverlay(screen) {
   const view = screenLines(screen);
-  if (!view) return false;
+  if (!view) return null;
   let bottomRule = -1;
   for (let i = view.lines.length - 1; i >= 0; i--) {
     if (RULE_LINE.test(view.lines[i].trim())) { bottomRule = i; break; }
   }
-  if (bottomRule < 2) return false;
+  if (bottomRule < 2) return null;
   let topRule = -1;
   for (let i = bottomRule - 1; i >= 0; i--) {
     if (RULE_LINE.test(view.lines[i].trim())) { topRule = i; break; }
   }
-  if (topRule < 0 || bottomRule - topRule <= 1) return false;
-  let inMcp = false, sawReady = false, sawExit = false;
+  if (topRule < 0 || bottomRule - topRule <= 1) return null;
+  let headingIdx = -1, readyIdx = -1, exitIdx = -1;
   for (let i = bottomRule + 1; i < view.lines.length; i++) {
     const line = view.lines[i];
-    if (line.includes('MCP Servers')) inMcp = true;
-    if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) sawReady = true;
-    if (inMcp && line.includes('esc Exit')) sawExit = true;
+    if (headingIdx < 0 && line.includes('MCP Servers')) headingIdx = i;
+    if (headingIdx >= 0 && readyIdx < 0 && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) readyIdx = i;
+    if (headingIdx >= 0 && line.includes('esc Exit')) exitIdx = i;
   }
-  return sawReady && sawExit;
+  if (headingIdx < 0 || exitIdx < 0) return null;
+  return {
+    headingIdx,
+    headingLine: view.lines[headingIdx],
+    readyIdx,
+    readyLine: readyIdx >= 0 ? view.lines[readyIdx] : null,
+    exitIdx,
+    exitLine: view.lines[exitIdx],
+  };
+}
+
+function isFreshMcpOverlay(screen, preLines, requireReady = false) {
+  const overlay = screenMcpOverlay(screen);
+  if (!overlay || !Array.isArray(preLines)) return false;
+  if (preLines[overlay.headingIdx] === overlay.headingLine || preLines[overlay.exitIdx] === overlay.exitLine) return false;
+  if (!requireReady) return true;
+  return overlay.readyIdx >= 0 && preLines[overlay.readyIdx] !== overlay.readyLine;
 }
 
 function editorState(screen) {
@@ -284,7 +300,7 @@ class AgyTui extends EventEmitter {
     this.humanInputTimer = null;
     this.mcpWarmPhase = 'idle'; // 'idle' | 'pending' | 'opening' | 'closing' | 'ready' | 'failed' | 'aborted'
     this.mcpServerListed = false;
-    this.mcpWarmObservedOutput = '';
+    this.mcpWarmPreLines = null;
     this.mcpWarmTimer = null;
     this.mcpAuthTimer = null;
     this.mcpCalls = new Map();
@@ -309,7 +325,7 @@ class AgyTui extends EventEmitter {
     if (this.mcpWarmPhase !== 'pending' || this.stopped || !this.terminal?.alive || !this.terminal.screen) return;
     if (editorState(this.terminal.screen) !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
     this.clearMcpWarmTimers();
-    this.mcpWarmObservedOutput = '';
+    this.mcpWarmPreLines = screenLines(this.terminal.screen)?.lines || [];
     this.mcpWarmPhase = 'opening';
     this.syncCapabilities();
     // agy TUI skips plugin MCP loading before keyring auth finishes; opening /mcp once after auth
@@ -324,7 +340,9 @@ class AgyTui extends EventEmitter {
     this.mcpWarmTimer = setTimeout(() => {
       this.mcpWarmTimer = null;
       if (this.mcpWarmPhase !== 'opening' && this.mcpWarmPhase !== 'closing') return;
-      const shouldEsc = this.mcpWarmPhase === 'opening' && this.terminal?.alive;
+      const screen = this.terminal?.screen;
+      const shouldEsc = this.mcpWarmPhase === 'opening' && this.terminal?.alive && screen &&
+        editorState(screen) !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreLines, false);
       this.mcpWarmPhase = 'failed';
       if (shouldEsc) {
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
@@ -363,12 +381,8 @@ class AgyTui extends EventEmitter {
         this.mcpAuthTimer.unref?.();
       }
     } else if (this.mcpWarmPhase === 'opening') {
-      // Require authenticated tools/list callback, fresh post-/mcp output painting naw_workspace/workspace_message,
-      // and an active /mcp overlay on screen so stale pre-warmup listings can never trigger Escape.
-      if (this.mcpServerListed && state !== 'empty' &&
-        this.mcpWarmObservedOutput.includes('naw_workspace') &&
-        this.mcpWarmObservedOutput.includes('workspace_message') &&
-        screenShowsNawMcpReady(screen)) {
+      // Require authenticated tools/list callback plus newly painted viewport cells (diffed against pre-warmup screen).
+      if (this.mcpServerListed && state !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreLines, true)) {
         this.mcpWarmPhase = 'closing';
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
       }
@@ -512,14 +526,11 @@ class AgyTui extends EventEmitter {
     this.trustConfirmSent = false;
     this.clearMcpWarmTimers();
     this.mcpServerListed = false;
-    this.mcpWarmObservedOutput = '';
+    this.mcpWarmPreLines = null;
     this.mcpWarmPhase = this.needsMcpWarmup() ? 'pending' : 'idle';
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {
       if (this.terminal !== terminal) return;
-      if (this.mcpWarmPhase === 'opening' && typeof event?.data === 'string' && event.data.length > 0) {
-        this.mcpWarmObservedOutput = (this.mcpWarmObservedOutput + stripAnsi(event.data)).slice(-8192);
-      }
       if (terminal.screen) this.syncScreenState(terminal.screen);
       else if (typeof event?.data === 'string') this.observeTerminalText(stripAnsi(event.data));
       this.emit('terminal', event);

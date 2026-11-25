@@ -883,8 +883,9 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, true);
   assert.equal(rt1.addressedSendAvailable, true);
 
-  // 296-r4: Stale pre-warmup listing + rules already on screen, partial redraw erases bottom composer (no fresh naw_workspace output),
-  // then authenticated noteMcpListed() arrives -> MUST NOT send Escape until fresh post-/mcp output paints the overlay!
+  // 296-r4/r5: Stale pre-warmup listing + rules already on screen, partial redraw erases bottom composer,
+  // split OSC title sequence emits naw_workspace/workspace_message without changing viewport cells, and noteMcpListed() arrives
+  // -> MUST NOT send Escape (even on timeout!) until newly painted viewport cells show a fresh /mcp overlay!
   const id5 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
   const rt5 = ws.runtimes.get(id5), term5 = terms[1];
   term5.emit('started', 71721);
@@ -903,27 +904,21 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   ], 7);
   assert.equal(rt5.mcpWarmPhase, 'opening');
   const writesAfterOpen5 = term5.writes.length;
-  // Partial redraw erases rows 7..10 (current composer) without painting any fresh MCP listing.
+  // Partial redraw erases rows 7..10 (current composer), then split OSC title carries both names without touching viewport cells.
   const eraseBottom = '\x1b[7;1H\x1b[J';
   await new Promise(resolve => term5.screen.write(eraseBottom, resolve));
   term5.emit('data', { data: eraseBottom });
+  for (const part of ['\x1b]0;naw_workspace ', 'workspace_message\x07']) {
+    await new Promise(resolve => term5.screen.write(part, resolve));
+    term5.emit('data', { data: part });
+  }
   rt5.noteMcpListed();
-  assert.equal(rt5.mcpWarmPhase, 'opening', 'noteMcpListed during stale partial redraw never sends Escape without fresh post-/mcp output');
+  assert.equal(rt5.mcpWarmPhase, 'opening', 'stale cells + split OSC title never sends Escape');
   assert.equal(term5.writes.length, writesAfterOpen5);
-  // Once real post-/mcp overlay output arrives, Escape is sent and warmup finishes cleanly.
-  await paint(term5, [
-    rule,
-    '> ',
-    rule,
-    'MCP Servers',
-    '>  ✓ naw_workspace  Tools: workspace_message',
-    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
-  ], 4);
-  assert.equal(rt5.mcpWarmPhase, 'closing');
-  assert.equal(term5.writes.at(-1), '\x1b');
-  await paint(term5, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
-  assert.equal(rt5.mcpWarmPhase, 'ready');
-  assert.equal(rt5.addressedSendAvailable, true);
+  // 296-r5 #2: Even when the warmup timer expires on that stale screen, ZERO Escape is sent!
+  await new Promise(r => setTimeout(r, 90));
+  assert.equal(rt5.mcpWarmPhase, 'failed');
+  assert.equal(term5.writes.length, writesAfterOpen5, 'timeout on stale frame never sends Escape');
 
   // 296-r1/r2 #1: Human types and submits a visible draft while warmup is pending -> warmup aborts immediately,
   // so an empty-composer repaint arriving BEFORE PreInvocation never writes /mcp behind the human submission!
@@ -944,12 +939,13 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'PreInvocation never writes /mcp into a human-started turn');
   assert.equal(rt4.mcpWarmPhase, 'aborted');
 
-  // Timeout path: sends Esc once, marks failed, keeps addressedSendAvailable=false while allowing chat after overlay closes.
+  // Timeout path WITH a fresh errored /mcp overlay open: sends Esc once to dismiss the fresh overlay, marks failed, keeps addressedSendAvailable=false.
   const id2 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
   const rt2 = ws.runtimes.get(id2), term2 = terms[3];
   term2.emit('started', 71718);
   await paint(term2, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt2.mcpWarmPhase, 'opening');
+  await paint(term2, [rule, '> ', rule, 'MCP Servers', '  ✗ naw_workspace  Error', 'Keyboard: esc Exit'], 4);
   await new Promise(r => setTimeout(r, 90));
   assert.equal(rt2.mcpWarmPhase, 'failed');
   assert.equal(term2.writes.at(-1), '\x1b');
