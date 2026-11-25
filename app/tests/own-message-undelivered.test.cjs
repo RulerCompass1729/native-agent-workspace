@@ -525,17 +525,19 @@ test('main: each backend state is judged with the role record, and the butler a 
   const end = main.indexOf("  register('stewardStanding',", start);
   assert.ok(start >= 0 && end > start);
   const handler = main.slice(start, end);
-  for (const next of [null, 'next']) {
-    const steps = [], handlers = new Map();
+  // `rotated`: the holder a rotation makes while the designation waits its turn; it is the one recorded.
+  for (const [next, waits] of [[null, false], ['next', false], ['next', true]]) {
+    const steps = [], handlers = new Map(); let holder = 'before';
+    const rotate = () => { if (waits) holder = 'rotated'; };
     vm.runInNewContext(handler, { applicationHandlers: new Map(), register: (name, run) => handlers.set(name, run), uiError: key => Error(key), validDuty: () => true, midRotation: () => false, roomIds: () => [],
       roomState: { serial: run => run(), apply: value => value }, broadcastRoom: async () => {}, stewardDutyText: () => 'duty', submit: async () => {}, stewardWake: null, stewardStanding: null,
-      stewardOf: () => ({ sessionId: 'rotated', nativeId: 'native-rotated' }),
+      stewardOf: () => ({ sessionId: holder, nativeId: 'native-' + holder }),
       stewardRecord: { sync: value => steps.push(['sync', value.sessionId]), designated: value => steps.push(['designated', value?.sessionId ?? null]) },
       stewardRole: { selected: null, set(value) { steps.push(['set', value?.sessionId ?? null]); this.selected = value; } } });
-    const person = { background: false, client: { call: async () => ({ sessions: [{ id: 'next', nativeId: 'native-next', state: 'idle', provider: 'codex' }] }), snapshot: () => ({ sessions: [] }) } };
+    const person = { background: false, client: { call: async () => { rotate(); return { sessions: [{ id: 'next', nativeId: 'native-next', state: 'idle', provider: 'codex' }] }; }, snapshot: () => ({ sessions: [] }) } };
     const result = await handlers.get('steward')(person, next);
     if (next === null) assert.equal(result, null);
     else assert.equal(result.duty.state, 'sent');
-    assert.deepEqual(steps, [['sync', 'rotated'], ['set', next], ['designated', next]]);
+    assert.deepEqual(steps, [['sync', waits ? 'rotated' : 'before'], ['set', next], ['designated', next]]);
   }
 });

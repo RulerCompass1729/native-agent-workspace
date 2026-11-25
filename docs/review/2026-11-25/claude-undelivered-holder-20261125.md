@@ -6,26 +6,31 @@ The role held as the message was sent now decides first, by session id, native i
 
 - Its sender held the role: the message is the butler's own, also when it ended unconfirmed and also when its recipient is the butler now.
 - Its sender is the butler now but did not hold the role then: not its own, and not a message to the butler either.
-- A session on the rotation chain counts as before.
-- The role record cannot say (it could not be read or written, or does not reach back that far): a sender on the present chain still counts as own, anyone else's message to the butler is reported as that, and nothing is attributed to another session.
+- A session on the rotation chain still counts, with two differences: what it sent before its chain was designated is not its own, also after a rotation, and a message told as saved that failed while NAW was closed is now recorded for one without a line of its own.
+- The role record cannot say (it could not be read or written, or does not reach back that far): a sender on the present chain still counts as own, anyone else's message to the butler is reported as that (an unconfirmed one only if its sender was told it was saved), and nothing is attributed to another session.
 - One message makes one event.
 
 One expectation of the earlier change is different on purpose: a message taken without confirmation, whose recipient is designated afterwards, is now the sender's own.
 
-The move to alpha.300 conflicted only in the designation handler of `app/main.cjs`: that release's handoff check and this branch's sync before a designation both stay. The sync runs before `designated`, so a chain the record has not seen yet is written before the new line.
+The move to alpha.300 conflicted only in the designation handler of `app/main.cjs`: that release's handoff check and this branch's sync before a designation both stay. The sync runs just before the role is set, so a rotation's newest session that the record has not seen yet gets its line before the new one, also when that rotation finished while the designation waited its turn.
 
 ## Checks
 
-On the previous head 6 of the 33 tests in `own-message-undelivered` fail and 27 pass; the two synthetic cases from the integration review are red there and on alpha.299, and green here. 93 related test files on the merged code: 2744 passed, none failed or skipped. 45 mutations of the new conditions: 44 killed, one equivalent (the same event id is recorded once). Trial merges: no conflict with the five other lanes checked, and with the card-click lane only the frozen-day review file. The full suite, Electron and an install were not run. No model was called by the tests and the daily app was not touched.
+On the previous head 6 of the 33 tests in `own-message-undelivered` fail and 27 pass; the two synthetic cases from the integration review are red there and on alpha.299, and green here. 93 related test files on the final code: 2744 passed, none failed or skipped. 45 mutations of the new conditions, run before the merge: 44 killed, one equivalent (the same event id is recorded once); the place of the sync, changed after it, fails a test in either branch when removed or moved back. Trial merges: no conflict with the five other lanes checked, and with the card-click lane only the frozen-day review file. The full suite, Electron and an install were not run. No model was called by the tests and the daily app was not touched.
 
 ## Independent review
 
-A non-author read-only session reviewed the fix and the increment: PASS twice, nothing blocking; its two should-fix notes and three others were taken. The merge with alpha.300 was sent to the same reviewer as an increment.
+A non-author read-only session reviewed the fix and the increment: PASS twice, nothing blocking; its two should-fix notes and three others were taken. The merge with alpha.300 went to the same reviewer as an increment: PASS, nothing blocking. Its notes led to the later sync above and to this text, which went to it as a last increment.
 
 ## Known limits
 
 - A session between two lines of a former chain that never had a line of its own is not recorded.
 - While the record cannot be read, the butler's rows that failed before this intake started wait until it can be, and so does a former butler's message to a third session.
+- A message sent before the record's first line, which says the butler had already begun, is not recorded at all if it failed before this intake started: the record never says who held the role then.
 - If the role moved along the chain unseen by the record, the chain cannot be read as the person designates its newest session, and the sync is skipped, that session's earlier messages are not its own.
 - After a failed record write and a restart, what a replaced session sent up to the first line written after it can still count as own.
 - A message refused as it was called, to the session that is now the butler, is still reported as one to the butler.
+
+## Correction
+
+`docs/review/2026-11-24/claude-lost-held-dispatch-20261124.md` lists as a limit that a direct designation makes turning waking on start from the newest event. A designation made while waking was on now keeps where it stood.
