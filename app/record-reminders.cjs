@@ -43,8 +43,9 @@ function acknowledged(dataDir) {
 // blocks are past 30 days; how many 0.5 GiB the whole has passed; how many blocks cannot be read) is above the level
 // the person last acknowledged. `unavailable` maps a record the app could not load at start to why ('history' or 'other').
 // `standing`: the last switches of the permission to organize (steward-standing.cjs), one line each in the butler's
-// record. The butler's are shown until acknowledged; the person's own are listed, not counted.
-function status(dataDir, now, { unavailable = {}, standing = [] } = {}) {
+// record. The butler's are shown until acknowledged; the person's own are listed, not counted. With `known` false the
+// rows are the last ones read, and "知道了" stays: they may be there again.
+function status(dataDir, now, { unavailable = {}, standing = { rows: [], known: true } } = {}) {
   const seen = acknowledged(dataDir), records = []; let cleared = false;
   for (const name of RECORDS) {
     const manifest = manifestOf(dataDir, name), items = [], bytes = history.totalBytes({ blocks: manifest ? manifest.blocks : [] }) + keptBytes(dataDir, name);
@@ -59,12 +60,12 @@ function status(dataDir, now, { unavailable = {}, standing = [] } = {}) {
       }
       if (Object.hasOwn(unavailable, name)) items.push({ kind: 'unavailable', level: 1, cause: unavailable[name] === 'history' ? 'history' : 'other' });
     }
-    if (name === 'steward') items.push(...standing.map(({ revision, on, by, at }) => ({ kind: 'standing', level: revision, on, by, at })));
+    if (name === 'steward') items.push(...standing.rows.map(({ revision, on, by, at }) => ({ kind: 'standing', level: revision, on, by, at })));
     const blocks = manifest ? manifest.blocks : [];
     const days = blocks.flatMap(block => Object.keys(block.days)).sort();
     for (const item of items) item.shown = item.by !== 'person' && item.level > (seen[`${name}:${item.kind}`] ?? 0);
     // "知道了" lasts while its condition does: once it is no longer due, the next time is a new one.
-    for (const kind of KINDS) if (Object.hasOwn(seen, `${name}:${kind}`) && !items.some(item => item.kind === kind)) { delete seen[`${name}:${kind}`]; cleared = true; }
+    for (const kind of KINDS) if ((kind !== 'standing' || standing.known) && Object.hasOwn(seen, `${name}:${kind}`) && !items.some(item => item.kind === kind)) { delete seen[`${name}:${kind}`]; cleared = true; }
     records.push({ record: name, blocks: blocks.length, bytes, oldestDay: days[0] || null, items });
   }
   if (cleared) try { history.writePrivateJson(history.existingDirectory(dataDir, history.HISTORY_DIR), ACKNOWLEDGED, { version: 1, acknowledged: seen }); } catch { /* Kept as it was; asked again next time. */ }

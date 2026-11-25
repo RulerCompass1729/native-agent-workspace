@@ -144,9 +144,9 @@ class StewardRecord {
     // Open only while this call runs: a timer or connection made during it keeps the store, never the step.
     let result; const call = { id: sender.id, nativeId: sender.nativeId, open: true };
     try { result = await this.calls.run(call, run); }
-    catch (error) { this.finish(id, { state: 'unconfirmed', reason: null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false, operationId: null }); throw error; }
+    catch (error) { this.finish(id, { state: 'unconfirmed', reason: call.did ?? null, error: String(error?.message ?? '').slice(0, ERROR_MAX) || null, duplicate: false, operationId: null }); throw error; }
     finally { call.open = false; }
-    this.finish(id, outcomeOf(result));
+    this.finish(id, { ...outcomeOf(result), ...(call.did ? { reason: call.did } : {}) });
     return result;
   }
   // Whether the call now running is one this record wrote as a step of `actor` (main.cjs lets only such a call read
@@ -155,6 +155,9 @@ class StewardRecord {
     const call = this.calls.getStore();
     return Boolean(call?.open === true && actor && call.id === actor.id && call.nativeId === actor.nativeId);
   }
+  // What the running step of `actor` did, kept as its outcome's reason: 'switched' or 'already' (stewardStanding), so
+  // that its row does not say a switch was made when none was.
+  did(actor, what) { if (this.recording(actor)) this.calls.getStore().did = what; }
   // An outcome that cannot be written leaves its step without one; the view says so, and the record stops taking new
   // steps (the next call is refused).
   finish(step, outcome) { try { this.append({ kind: 'outcome', step, ...outcome }); } catch { /* Seen as no outcome. */ } }
@@ -272,7 +275,9 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
       // The butler's own call on NAW's switch for waking it: turned on, turned off, or only looked at how it stands.
       out.wake = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
     } else if (entry.method === 'stewardStanding' && Array.isArray(args)) {
-      out.standing = args.length === 0 ? 'check' : args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
+      // Only a step that says it switched reads as a switch: asked and refused, or already so, is said as that.
+      const turn = args.length === 1 && typeof args[0] === 'boolean' ? (args[0] ? 'on' : 'off') : null;
+      out.standing = args.length === 0 ? 'check' : turn && ({ __proto__: null, switched: turn, already: turn + 'Already' }[entry.reason] ?? turn + 'Asked');
     } else if (entry.method === 'stewardPatrol' && Array.isArray(args)) {
       // The butler's own call on the patrol interval: set, turned off, or looked at.
       out.patrol = args.length === 0 ? 'check' : args.length === 1 && [null, 15, 30, 60].includes(args[0]) ? args[0] : undefined;

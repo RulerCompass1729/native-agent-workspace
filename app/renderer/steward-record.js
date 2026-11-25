@@ -5,11 +5,13 @@
   'use strict';
   const STATES = ['running', 'complete', 'received', 'awaiting-native', 'confirmation-required', 'cancelled', 'not-executed', 'unconfirmed'];
   const MESSAGES = ['staged', 'sending', 'consumed', 'submitted', 'unconfirmed', 'not-sent', 'cancelled'];
-  const REASONS = ['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'model-change-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'standing-authorization-unavailable'];
+  const REASONS = ['another-operation-running', 'unknown-command', 'confirmation-limit', 'originating-session-unavailable', 'conversation-access-denied', 'conversation-target-unavailable', 'model-change-unavailable', 'space-file-membership-required', 'explicit-paths-required', 'standing-authorization-unavailable',
+    'standing-caller', 'standing-invalid', 'standing-unrecorded', 'standing-person-off', 'standing-unchanged'];
   const ROLES = ['designated', 'revoked', 'followed', 'started'];
   // The butler's call on NAW's switch for waking it (steward-record.cjs view `wake`): turned on, off, or looked at.
   const WAKE_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.wakeOn', off: 'stewardRecord.step.wakeOff', check: 'stewardRecord.step.wakeCheck' });
-  const STANDING_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.standingOn', off: 'stewardRecord.step.standingOff', check: 'stewardRecord.step.standingCheck' });
+  const STANDING_CALLS = Object.freeze({ __proto__: null, on: 'stewardRecord.step.standingOn', off: 'stewardRecord.step.standingOff',
+    onAsked: 'stewardRecord.step.standingOnAsked', offAsked: 'stewardRecord.step.standingOffAsked', onAlready: 'stewardRecord.step.standingOnAlready', offAlready: 'stewardRecord.step.standingOffAlready', check: 'stewardRecord.step.standingCheck' });
   // The intervals NAW's patrol of an idle butler may use (steward-wake.cjs PATROL_CHOICES); null is off.
   const PATROL = Object.freeze([null, 15, 30, 60]);
   function bind({ dialog, document, api, text, display, usageLines = null, language = () => 'zh' }) {
@@ -96,7 +98,8 @@
     async function standingSwitch() {
       const box = make('section', 'steward-record-wake'), label = make('label'), input = document.createElement('input');
       input.type = 'checkbox'; input.dataset.action = 'steward-standing'; label.append(input, make('span', '', 'standing.switch'));
-      const note = make('p', 'records-note', 'standing.scope'), status = make('p', 'records-note'); status.setAttribute('role', 'status');
+      const note = make('p', 'records-note'), lock = make('span', '', 'standing.lock'), status = make('p', 'records-note'); status.setAttribute('role', 'status');
+      note.append(make('span', '', 'standing.scope'), lock);
       const show = value => {
         input.checked = value.on === true;
         let key = 'standing.off';
@@ -105,6 +108,8 @@
         // On for the previous butler: why it reads off (R118).
         else if (value.reason === 'other-designation') key = 'standing.offOther';
         else if (value.by === 'butler') key = 'standing.offButler';
+        // Off, but not by the person: the butler can turn it on again.
+        lock.hidden = ['standing.offOther', 'standing.offButler'].includes(key);
         say(status, key, { time: value.by === 'butler' ? when(value.at, Date.now()) : '' });
       };
       try { show(await api.stewardStanding()); } catch { input.disabled = true; say(status, 'standing.unavailable'); }

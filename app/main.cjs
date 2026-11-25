@@ -197,7 +197,7 @@ function confirmationSnapshot(client, snapshot = client.snapshot()) {
     client.entries?.some(e => e.closed || e.closing || e.client?.socket?.destroyed)) };
 }
 function appRecordsStatus(snapshot = null, suppliedTemp = null) {
-  let standing = []; try { standing = stewardStanding?.switches() ?? []; } catch { /* The other reminders are shown. */ }
+  let standing = { rows: [], known: false }; try { standing = stewardStanding?.switches() ?? standing; } catch { /* The other reminders are shown. */ }
   const records = recordReminders.status(dataDir, Date.now(), { standing, unavailable: {
     ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
     ...(stewardRecord?.failed ? { steward: stewardRecord.loadError ? 'history' : 'other' } : {}),
@@ -2580,23 +2580,31 @@ async function boot() {
   // The person's permission to organize (steward-standing.cjs): the person in their window, or the designated butler
   // through NAW (stewardCaller; R234, the person, 2026-11-25: 「这个应该大管家自己可以点」), only as a step of its record.
   // No argument only says how it stands. The person's off is not the butler's to undo.
-  register('stewardStanding', async (c, on) => {
-    if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw uiError('error.steward.standingOnly');
-    if (on !== undefined && typeof on !== 'boolean') throw uiError('error.steward.standingInvalid');
+  register('stewardStanding', async (c, ...args) => {
+    const [on] = args, refuse = (key, reason) => c.background ? new background.HandlerRefused(uiError(key), reason) : uiError(key);
+    if (c.background ? !(await stewardCaller(c)) : !isCurrentHumanContext(c)) throw refuse('error.steward.standingOnly', 'standing-caller');
+    if (args.length > 1 || on !== undefined && typeof on !== 'boolean') throw refuse('error.steward.standingInvalid', 'standing-invalid');
     if (on === undefined) return stewardStanding.view();
+    const told = async () => { try { recordsChanged(true); await broadcastRoom(); } catch { /* Already switched; seen at the next change. */ } };
+    // Whether it was switched is not known: the windows look again, and nobody is told that nothing changed.
+    const unknown = async error => { if (error?.code !== 'STEWARD_STANDING_UNKNOWN') return; await told(); throw uiError('error.steward.standingUnknown'); };
     let value;
     if (!c.background) {
-      value = stewardStanding.set(c, on);
+      try { value = stewardStanding.set(c, on); } catch (error) { await unknown(error); throw error; }
       // A line that cannot be written does not keep the person's switch from working.
       try { stewardRecord?.standingSwitch(on); } catch { /* The record shows that a line could not be written. */ }
     } else {
       const actor = backgroundOperation.current();
-      if (!stewardRecord?.recording(actor)) throw uiError('error.steward.recordUnavailable');
+      if (!stewardRecord?.recording(actor)) throw refuse('error.steward.recordUnavailable', 'standing-unrecorded');
       try { value = stewardStanding.setByButler(actor, on); }
-      catch (error) { throw uiError(error?.code === 'STEWARD_STANDING_PERSON_OFF' ? 'error.steward.standingPersonOff' : 'error.steward.standingUnavailable'); }
+      catch (error) {
+        await unknown(error);
+        throw error?.code === 'STEWARD_STANDING_PERSON_OFF' ? refuse('error.steward.standingPersonOff', 'standing-person-off') : refuse('error.steward.standingUnavailable', 'standing-unchanged');
+      }
+      stewardRecord.did(actor, value.changed ? 'switched' : 'already');
+      if (!value.changed) return value;
     }
-    recordsChanged(true);
-    await broadcastRoom();
+    await told();
     return value;
   });
   // Patrol while idle (steward-wake.cjs patrol): the same two callers as the wake switch

@@ -117,10 +117,23 @@ class StewardStanding {
     } catch { return null; }
   }
   // The last switches, oldest first, for the bell. Kept with the state they made: a switch cannot be without its line.
-  switches() { try { return switchRows(this.read()); } catch { return []; } }
+  // A file that cannot be read is not one without switches: the rows last read, and known false.
+  switches() {
+    try { return { rows: this.rows = switchRows(this.read()), known: true }; }
+    catch { return { rows: this.rows ?? [], known: false }; }
+  }
+  // An error after the file was replaced (its directory could not be synced) is not a failed switch: what the file says
+  // now decides. Neither known: STEWARD_STANDING_UNKNOWN.
+  save(value) {
+    try { this.write(value); }
+    catch (error) {
+      let revision; try { revision = this.read().revision; } catch { throw Object.assign(Error('Standing permission could not be read back'), { code: 'STEWARD_STANDING_UNKNOWN', cause: error }); }
+      if (revision !== value.revision) throw error;
+    }
+  }
   change(s, on, by) {
     const at = this.now(), revision = s.revision + 1;
-    this.write({ ...s, on, designation: this.role.selected, revision, source: { by, at, revision }, switches: [...switchRows(s), { revision, on, by, at }].slice(-SWITCHES) });
+    this.save({ ...s, on, designation: this.role.selected, revision, source: { by, at, revision }, switches: [...switchRows(s), { revision, on, by, at }].slice(-SWITCHES) });
   }
   set(context, on) {
     if (!this.person(context) || typeof on !== 'boolean') throw Error('Only the current person window can change standing permission');
@@ -135,8 +148,9 @@ class StewardStanding {
     if (typeof on !== 'boolean' || !same(this.role.current(), { sessionId: actor?.id, nativeId: actor?.nativeId })) throw Error('Only the current butler can change standing permission here');
     const s = this.read();
     if (on && personOff(s)) throw Object.assign(Error('The person turned standing permission off'), { code: 'STEWARD_STANDING_PERSON_OFF' });
-    if (s.on !== on || on && !same(s.designation, this.role.selected)) this.change(s, on, 'butler');
-    return this.view();
+    const changed = s.on !== on || on && !same(s.designation, this.role.selected);
+    if (changed) this.change(s, on, 'butler');
+    return { ...this.view(), changed };
   }
   // The person designates another butler (main.cjs steward): asked before the designation moves, null unless they have
   // it on for the butler being replaced, or were asked and took it back (`standing` false: the butler may have turned it
@@ -149,7 +163,7 @@ class StewardStanding {
       if (!keep) { if (personOff(s)) return; this.change(s, false, 'person'); return true; }
       if (!s.on || same(s.designation, this.role.selected)) return;
       const by = switched(s), revision = s.revision + 1;
-      this.write({ ...s, designation: this.role.selected, revision, ...(by ? { source: { ...by, revision } } : {}) });
+      this.save({ ...s, designation: this.role.selected, revision, ...(by ? { source: { ...by, revision } } : {}) });
     };
   }
   authorized(actor, command, state, roomId) {

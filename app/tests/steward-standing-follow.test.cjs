@@ -187,8 +187,8 @@ test('the person\'s switch takes no background or member call; another session\'
   assert.ok(start > 0 && end > start);
   let registered, calls = 0, told = 0;
   vm.runInContext(source.slice(start, end), vm.createContext({ register: (_name, fn) => { registered = fn; },
-    isCurrentHumanContext: c => !c.background, stewardCaller: async () => null, stewardRecord: null, recordsChanged() {}, uiError, broadcastRoom: async () => { told++; }, stewardStanding: { view: () => ({}), set: () => { calls++; } } }));
-  await assert.rejects(registered({ background: true }, true), error => error?.uiMessage?.key === 'error.steward.standingOnly');
+    isCurrentHumanContext: c => !c.background, stewardCaller: async () => null, stewardRecord: null, recordsChanged() {}, uiError, background: require('../background-control.cjs'), broadcastRoom: async () => { told++; }, stewardStanding: { view: () => ({}), set: () => { calls++; } } }));
+  await assert.rejects(registered({ background: true }, true), error => error?.reason === 'standing-caller' && error.message === uiError('error.steward.standingOnly').message);
   assert.equal(calls, 0);
   // Reading it (the designation dialog does, each time it opens) tells no window; setting it tells every one.
   await registered({}); assert.deepEqual([calls, told], [0, 0]);
@@ -227,5 +227,7 @@ test('the record dialog shows the reason beside the switch, in either language',
     const status = all(box).find(node => node.tag === 'p' && node.textContent === locale.format(language, key));
     assert.ok(status, `${language} ${key}`);
     assert.equal(all(box).find(node => node.tag === 'input').checked, value.on);
+    // Off because the butler changed is not the person's off: that only the person turns it on again is not said there.
+    assert.equal(all(box).find(node => node.textContent === locale.format(language, 'standing.lock')).hidden, key === 'standing.offOther');
   }
 });

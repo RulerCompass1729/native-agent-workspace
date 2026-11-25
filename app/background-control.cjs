@@ -39,6 +39,8 @@ const admissionReasons = new Set(['confirmation-limit', 'originating-session-una
 // Fixed branch names only: backend errors can contain another session's text or paths.
 const validOriginCheck = value => typeof value === 'string' && /^(?:(?:admission|confirmation)-(?:roster|missing|native-id|archived|context-pending)|confirmation-(?:refresh|native-call|closed|fingerprint))$/.test(value);
 const preconditionReasons = new Set(['invalid-file-path-count', 'file-preview-changed', 'conversation-access-denied', 'space-file-membership-required', 'conversation-target-unavailable', 'model-change-unavailable']);
+// Codes of a handler that refused before any effect; such a call is not executed, never unconfirmed.
+const handlerRefusals = new Set(['standing-caller', 'standing-invalid', 'standing-unrecorded', 'standing-person-off', 'standing-unchanged']);
 const summarizedReasons = new Set([...admissionReasons, 'another-operation-running', 'explicit-paths-required', ...preconditionReasons]);
 const positiveCount = n => Number.isSafeInteger(n) && n > 0;
 const nextCount = n => { if (!Number.isSafeInteger(n) || n < 0 || n >= Number.MAX_SAFE_INTEGER) throw Error('Refusal counter is exhausted'); return n + 1; };
@@ -103,7 +105,7 @@ const parameters = {
   spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|queueClaim|releaseRotation|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'notes: [text, expectedRevision]; refused while the person has this space attach its notes to queued work; queueAdd: [text, assignee or null]; only the person-designated secretary or the butler may add; queueCancel: the person or the butler, and a session for an item it added itself that is still queued (not yet sent); queueResolve: only the person or the butler; queueClaim: [itemId from initial rooms[].queue], a session already doing an item queued for it and not yet sent, so NAW does not send it again; NAW settles it by your reply when this turn ends; not while an item sent to you has not settled; releaseRotation: [sessionId, expectedNativeId, epoch, tag, reason], only the person or designated butler may discard an unresolved handoff without sending native input; other arguments in the corresponding command order'],
   queueSecretary: ['sessionId or null to revoke; person-only, agents cannot designate themselves'],
   stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
-  stewardStanding: ['on: true or false to turn the person\'s permission to organize work on this Mac on or off; omit it to see how it stands. The designated butler or the person only. Once the person turned it off, only the person turns it on again. Each switch is a step of the butler\'s record and a line in the person\'s bell'],
+  stewardStanding: ['on: true or false to turn the person\'s permission to organize work on this Mac on or off; omit it to see how it stands. The designated butler or the person only. Once the person turned it off, only the person turns it on again. Each switch is a step of the butler\'s record and a line in the person\'s bell; changed in the answer says whether this call switched it'],
   stewardWake: ['on: true or false to turn waking on events on or off; omit it to see how it stands. The designated butler or the person only; off by default. While on, NAW sends the butler, once it is idle and at most once a minute, one 【NAW 事件】 message naming a position: read stewardEvents from that position. A migration quiet window holds it, except for the person\'s own act (such as a click on a card). Omitted, it also says what holds a wake now (blocked: the reason with its own since and minutes; waitingSince and waitingMinutes, the whole wait when longer; deadline while it is a quiet window), and to the butler the backends in a migration quiet window (quietWindows: backend, openedAt, deadline, sessions, and queued, how many queued items wait behind it as of the last dispatch pass; null when not known). Times are in epoch milliseconds'],
   stewardPatrol: ['minutes: null (off), 15, 30 or 60; omit it to see how it stands. The designated butler or the person only; off by default, and only while stewardWake is on (turning that off turns this off). While set, once the butler has been idle that long and sessions are still running or awaiting approval, or items are queued or sent, NAW sends it one 【NAW 巡查】 with counts only; with nothing changed since the last one the interval doubles, up to 4 hours'],
   spaceFiles: ['roomId', 'fileId?; omit to import the explicit paths'], gitWorktreePreview: ['selected repository path', 'nonce', 'relative path'],
@@ -152,6 +154,12 @@ class ConfirmationRequired extends Error {
 class PreconditionRefused extends Error {
   constructor(error, reason) {
     if (!preconditionReasons.has(reason)) throw Error('Invalid operation precondition reason');
+    super(error.message); this.reason = reason;
+  }
+}
+class HandlerRefused extends Error {
+  constructor(error, reason) {
+    if (!handlerRefusals.has(reason)) throw Error('Invalid handler refusal reason');
     super(error.message); this.reason = reason;
   }
 }
@@ -926,6 +934,7 @@ class BackgroundControl {
           state = refusal.state; error = typeof e?.message === 'string' ? e.message.slice(0, 2048) : '本次操作未执行。';
         }
         else if (preconditionError && e === preconditionError) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
+        else if (e instanceof HandlerRefused && !approved) { refusal = refusalDetails(e.reason); state = refusal.state; error = e.message.slice(0, 2048); }
         else if (e instanceof ConfirmationRequired && e.confirmation?.kind === 'message') {
           // Refresh first; the quota decision and pending-row commit below have
           // no await between them. Concurrent actors cannot both take slot128.
@@ -1376,4 +1385,4 @@ function dialog(context, kind, options, nativeDialog) {
   }
   throw new ConfirmationRequired({ kind, options });
 }
-module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, validate, tool, dialog, agentReply, CONFIRMATION_TTL_MS, confirmationExpiresAt };
+module.exports = { BackgroundControl, ConfirmationRequired, PreconditionRefused, HandlerRefused, validate, tool, dialog, agentReply, CONFIRMATION_TTL_MS, confirmationExpiresAt };

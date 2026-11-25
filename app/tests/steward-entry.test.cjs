@@ -382,7 +382,7 @@ test('every sentence exists in both languages, and the words say what the design
     // The events the butler reads; their refusals are checked in steward-events.test.cjs.
     'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable',
     // Its switch of the permission to organize (R234); checked in steward-standing-butler.test.cjs.
-    'error.steward.standingOnly', 'error.steward.standingInvalid', 'error.steward.standingPersonOff', 'error.steward.standingUnavailable',
+    'error.steward.standingOnly', 'error.steward.standingInvalid', 'error.steward.standingPersonOff', 'error.steward.standingUnavailable', 'error.steward.standingUnknown',
     // Waking the butler on events; its refusals are checked in steward-wake.test.cjs.
     'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable',
     // Patrol while idle (R120); checked in steward-wake.test.cjs.
@@ -514,7 +514,8 @@ test('an agent cannot carry it, and a permission that cannot be saved is said wh
   const late = fixture(t), l = standing(late); await late.call('outside'); l.turn(true); const write = l.value.write;
   l.value.write = function (next) { write.call(this, next); throw Error('synthetic'); };
   assert.equal(Object.hasOwn(await late.call('other', null, true), 'standingLost'), false); assert.equal(l.on(), true);
-  assert.equal((await late.call('outside', null, false)).standingLost, true);
+  // Taken back by such a save: it is off, by the person, and that is in the record; nothing is said to be lost.
+  assert.equal(Object.hasOwn(await late.call('outside', null, false), 'standingLost'), false); assert.deepEqual([l.read().on, l.read().source.by], [false, 'person']);
   // Turned off elsewhere while the dialog was open: nothing is carried, and that is said; not asked, nothing is said.
   const g = fixture(t), off = standing(g); await g.call('outside'); off.turn(true); off.turn(false);
   assert.equal((await g.call('other', null, true)).standingLost, true); assert.equal(off.on(), false);
