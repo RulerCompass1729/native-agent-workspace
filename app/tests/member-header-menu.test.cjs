@@ -42,7 +42,7 @@ function fixture(member = 0) {
     members: () => context.state.members, orderedMembers: () => context.state.members, $: id => elements.get(id),
     activeSessionId: () => 'naw-alpha', current: () => records[0], terminals: new Map(), sessionComposers: new Map(), owner: 'fixture-owner',
     toast: text => notices.push(text), toastMessage: (key, params) => notices.push(require('../ui-locale.js').format('zh', key, params)), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null,
-    captureReadingViews() {}, restoreOverviewReading() {}, moveRoomMember: (...args) => changed.push(args),
+    captureReadingViews() {}, sessionRotationAction: () => [], restoreOverviewReading() {}, moveRoomMember: (...args) => changed.push(args),
     api: { copy: id => copies.push(id) }, ui: { menu: config => { const entry = { config, closed: false }; const close = () => { if (entry.closed) return; entry.closed = true; config.onClose(); }; entry.close = close; menus.push(entry); return close; } },
     header, name, heading, next, record: records[member], button,
   });
