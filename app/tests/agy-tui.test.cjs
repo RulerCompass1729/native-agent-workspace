@@ -845,12 +845,33 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, false);
 
   // Unrelated healthy server + failed naw_workspace must NOT satisfy warmup.
-  await paint(term1, ['MCP Servers', '  ✓ other_server  Tools: foo', '  ✗ naw_workspace  Error'], 1);
+  await paint(term1, [rule, '> ', rule, 'MCP Servers', '  ✓ other_server  Tools: foo', '  ✗ naw_workspace  Error', 'esc Exit'], 1);
   assert.equal(rt1.mcpWarmPhase, 'opening');
   assert.equal(term1.writes.length, 1);
 
-  // Connected naw_workspace with workspace_message closes /mcp via Esc.
-  await paint(term1, ['MCP Servers', '>  ✓ naw_workspace  Tools: workspace_message', 'esc Exit'], 1);
+  // 296-r1 #2: An old MCP listing scrolled ABOVE the active empty composer must NOT certify warmup or trigger Escape.
+  await paint(term1, [
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts    auto · Gemini 4 Neon · high',
+  ], 4);
+  assert.equal(rt1.mcpWarmPhase, 'opening', 'scrolled-up prior MCP listing above empty composer never certifies warmup');
+  assert.equal(rt1.addressedSendAvailable, false);
+  assert.equal(term1.writes.length, 1);
+
+  // Real active /mcp overlay BELOW the composer rule with ✓ naw_workspace + workspace_message + esc Exit closes /mcp via Esc.
+  await paint(term1, [
+    rule,
+    '> ',
+    rule,
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: ↑/↓ Navigate  enter Actions  esc Exit',
+  ], 4);
   assert.equal(rt1.mcpWarmPhase, 'closing');
   assert.equal(term1.writes.at(-1), '\x1b');
   assert.equal(rt1.chatAvailable, false);
@@ -861,9 +882,24 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, true);
   assert.equal(rt1.addressedSendAvailable, true);
 
+  // 296-r1 #1: Human submits a turn while warmup is pending -> PreInvocation sets liveTurn BEFORE syncing screen so /mcp is NEVER written into the human turn!
+  const id4 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
+  const rt4 = ws.runtimes.get(id4), term4 = terms[1];
+  term4.emit('started', 71720);
+  await paint(term4, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts']);
+  ws.input(id4, 'human prompt\r', 'owner-1');
+  const writesBeforeHumanPreInv = term4.writes.length;
+  // Screen has model footer and empty composer when PreInvocation arrives after settle window (humanInputQuietMs: 0).
+  await paint(term4, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
+  assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'unseen human prompt does not trigger /mcp');
+  rt4.hook({ hookEventName: 'PreInvocation', conversationId: randomUUID(), invocationNum: 1, initialNumSteps: 0 });
+  assert.ok(rt4.turnId);
+  assert.equal(term4.writes.length, writesBeforeHumanPreInv, 'PreInvocation never writes /mcp into a human-started turn');
+  assert.equal(rt4.mcpWarmPhase, 'pending');
+
   // Timeout path: sends Esc once, marks failed, keeps addressedSendAvailable=false while allowing chat after overlay closes.
   const id2 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
-  const rt2 = ws.runtimes.get(id2), term2 = terms[1];
+  const rt2 = ws.runtimes.get(id2), term2 = terms[2];
   term2.emit('started', 71718);
   await paint(term2, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt2.mcpWarmPhase, 'opening');
@@ -877,7 +913,7 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
 
   // Human input during opening aborts warmup cleanly without sending Esc over user keystrokes.
   const id3 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
-  const rt3 = ws.runtimes.get(id3), term3 = terms[2];
+  const rt3 = ws.runtimes.get(id3), term3 = terms[3];
   term3.emit('started', 71719);
   await paint(term3, ['Antigravity CLI 1.5.16', rule, '> ', rule, '? for shortcuts    auto · Gemini 4 Neon · high']);
   assert.equal(rt3.mcpWarmPhase, 'opening');

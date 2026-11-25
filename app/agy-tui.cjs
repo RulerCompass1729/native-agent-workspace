@@ -71,12 +71,18 @@ function screenShowsModelFooter(screen) {
 function screenShowsNawMcpReady(screen) {
   const view = screenLines(screen);
   if (!view) return false;
-  let inMcp = false;
-  for (const line of view.lines) {
-    if (line.includes('MCP Servers')) inMcp = true;
-    if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) return true;
+  let start = 0;
+  for (let i = view.lines.length - 1; i >= 0; i--) {
+    if (RULE_LINE.test(view.lines[i].trim())) { start = i + 1; break; }
   }
-  return false;
+  let inMcp = false, sawReady = false, sawExit = false;
+  for (let i = start; i < view.lines.length; i++) {
+    const line = view.lines[i];
+    if (line.includes('MCP Servers')) inMcp = true;
+    if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) sawReady = true;
+    if (inMcp && line.includes('esc Exit')) sawExit = true;
+  }
+  return sawReady && sawExit;
 }
 
 function editorState(screen) {
@@ -333,7 +339,7 @@ class AgyTui extends EventEmitter {
         this.mcpAuthTimer.unref?.();
       }
     } else if (this.mcpWarmPhase === 'opening') {
-      if (screenShowsNawMcpReady(screen)) {
+      if (state !== 'empty' && screenShowsNawMcpReady(screen)) {
         this.mcpWarmPhase = 'closing';
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
       }
@@ -635,17 +641,15 @@ class AgyTui extends EventEmitter {
         break;
       case 'PreInvocation': {
         if (this.humanInputState === 'unseen') this.humanInputState = 'editing';
-        if (this.terminal?.screen) {
-          this.syncScreenState(this.terminal.screen);
-        } else {
-          this.trustPromptActive = false;
-          this.promptReady = true;
-          this.syncCapabilities();
+        if (this.mcpWarmPhase === 'opening' || this.mcpWarmPhase === 'closing') {
+          this.clearMcpWarmTimers();
+          this.mcpWarmPhase = 'aborted';
         }
         if (this.liveTurn) {
           if (!this.liveTurn.transcriptPath && typeof event.transcriptPath === 'string') {
             this.liveTurn.transcriptPath = resolveSessionTranscript(event.transcriptPath, this.liveTurn.nativeId, this.brainRoot);
           }
+          if (this.terminal?.screen) this.syncScreenState(this.terminal.screen);
           this.emit('state', 'working');
           break;
         }
@@ -664,6 +668,13 @@ class AgyTui extends EventEmitter {
           minStep: Number.isInteger(event.initialNumSteps) ? event.initialNumSteps : 0,
           transcriptPath: resolveSessionTranscript(event.transcriptPath, nativeId, this.brainRoot),
         };
+        if (this.terminal?.screen) {
+          this.syncScreenState(this.terminal.screen);
+        } else {
+          this.trustPromptActive = false;
+          this.promptReady = true;
+          this.syncCapabilities();
+        }
         if (pending) this.emit('submitted', pending.tag);
         if (nativeId) this.emit('nativeTurnStart', { nativeId, turnId });
         if (pending && nativeId) this.emit('replyBound', { tag: pending.tag, nativeId, turnId });
