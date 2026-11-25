@@ -1535,7 +1535,7 @@ function register(name, handler) {
       }
       // Never silently fall back to an old backend that cannot retain actor
       // attribution or preserve the person's draft for these input paths.
-      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
+      const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'stewardPatrol', 'stewardRotate', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
       // handler below still authenticates the secretary and person-only actions.
@@ -2773,6 +2773,15 @@ async function boot() {
     await broadcastRoom();
   });
   applicationHandlers.delete('sessionRotation');
+  // 甲 (R207; the person, 2026-11-25: 「「权限可以」 同意」): the designated butler asks for its own rotation now. Itself
+  // only, never another session, and it cannot take one back. The call is a step in its record, as its others are.
+  register('stewardRotate', async (c, ...args) => {
+    const steward = await stewardCaller(c);
+    if (!steward || args.length > 1 || args.length === 1 && args[0] !== steward.id) throw uiError('error.rotation.butlerOnly');
+    if (!queueDispatcher) throw uiError('error.rotation.unavailable');
+    const row = await queueDispatcher.requestRotation(steward.id, 'steward');
+    return row ? { state: row.state, ...(row.gate ? { gate: row.gate } : {}) } : null;
+  });
   register('modelChoices', (c, id) => modelChanges().choices(id));
   register('changeModel', async (c, id, value, nativeId) => {
     if (!c.background) return modelChanges().request(id, value, nativeId);

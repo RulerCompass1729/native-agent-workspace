@@ -4763,6 +4763,9 @@ class QueueDispatcher {
       if (record && (trustRecoveryPending(record) || failedHandoffPending(record))) throw uiError('error.rotation.unavailable');
       this.requests[sessionId] = { at: now, by, nativeId: session.nativeId || null };
       this.requestTried.delete(sessionId);
+    } else if (by === 'person' && this.requests[sessionId].by === 'steward') {
+      // Theirs from now on, whoever is the butler.
+      this.requests[sessionId].by = 'person';
     } else {
       return this.rotationRow(sessionId, session, now);
     }
@@ -4842,6 +4845,9 @@ class QueueDispatcher {
         reason = 'archived';
       } else if (handedOff.has(id)) {
         reason = 'handed-off';
+      } else if (request.by === 'steward' && session && this.stewardSession([session]) === null) {
+        // Asked by the butler for itself, and it is not the butler any more.
+        reason = 'designation-changed';
       } else if ((!session || OUT_STATES.includes(session.state)) && this.outGate(id, session, now) === '') {
         reason = 'session-ended';
       }

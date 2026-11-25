@@ -6,4 +6,6 @@ Backend. `requestRotation` and `withdrawRotation` in `app/queue-dispatch.cjs`, r
 
 `rotationRows` says where each rotation stands, for the person's windows only (`sessionRotations` in the state). It is computed in the pass that runs anyway, and reads no extra snapshot.
 
+The butler's own call (a commit by itself; the person's word for this one). `stewardRotate` in `app/main.cjs`: the designated butler, outside every space, asks for its own rotation, by the check its other calls pass (`stewardCaller`). Any other caller and any other target are refused, and it has no undo. Each call is a step of its record; the rotation log says `by: steward`. Its request is dropped when it is no longer the butler before it began.
+
 Undo: drop this lane's commits. An older NAW ignores `requests` and the three new events.

@@ -7371,3 +7371,60 @@ test('R207: a session in no space beside another butler, held at its end by a dr
   await f.pass(1); await f.pass(1);
   assert.deepEqual([f.session('a').state, f.lines('kept').length, f.role.current().sessionId], ['ended', 0, 's']);
 });
+
+test('R207 甲: the butler asks for itself: the same rotation, the successor is the butler, and each step is written as its own', async t => {
+  const f = await askedSetup(t, { butler: true });
+  f.old.state = 'working';
+  await f.now('a', 'steward');
+  assert.deepEqual(f.row(), { state: 'requested', gate: 'not-idle', undo: true }, 'its own turn is not cut');
+  assert.deepEqual(rotated(f.client), []);
+  f.old.state = 'idle';
+  await f.pass();
+  assert.match(rotated(f.client)[0], /^【NAW 换会话】大管家要求现在就换自己。NAW 会开一个新会话接着做/);
+  await f.through();
+  assert.equal(f.session('a').state, 'ended');
+  assert.deepEqual(f.role.current(), { sessionId: f.newId, nativeId: `native-${f.newId}` });
+  assert.deepEqual([f.lines('asked').map(e => e.by), f.lines('requested').length, f.lines('done').length], [['steward'], 1, 1]);
+});
+
+test('R207 甲: no longer the butler before it began: its request is dropped and that is written; the person\'s stays', async t => {
+  const f = await askedSetup(t, { butler: true, others: [member('s', { roomIds: [], roomId: null })] });
+  f.old.state = 'working';
+  await f.now('a', 'steward');
+  f.role.set({ sessionId: 's', nativeId: 'native-s' });
+  f.old.state = 'idle';
+  await f.pass(); await f.pass(1);
+  assert.deepEqual([rotated(f.client), f.dispatcher.requests, f.row()], [[], {}, undefined]);
+  assert.deepEqual(f.lines('dropped').map(e => [e.reason, e.by]), [['designation-changed', 'steward']]);
+  const g = await askedSetup(t, { butler: true, others: [member('s', { roomIds: [], roomId: null })] });
+  g.old.state = 'working';
+  await g.now('a', 'steward'); await g.now('a');
+  assert.deepEqual(g.lines('asked').map(e => e.by), ['steward', 'person']);
+  g.role.set(null);
+  g.old.state = 'idle';
+  await g.pass();
+  assert.equal(rotated(g.client).length, 1, 'the person asked too');
+});
+
+test('R207 甲: the person takes back what the butler asked for; nobody\'s request makes a second one', async t => {
+  const f = await askedSetup(t, { butler: true });
+  f.old.state = 'working';
+  await f.now('a', 'steward'); await f.now('a', 'steward');
+  assert.equal(f.lines('asked').length, 1);
+  await f.undo();
+  f.old.state = 'idle';
+  await f.pass(); await f.pass(1);
+  assert.deepEqual([rotated(f.client), f.lines('withdrawn').map(e => e.by)], [[], ['person']]);
+});
+
+test('R207: asked for by hand, the successor has bypass only if the session still has it when its handoff is written', async t => {
+  for (const [mode, starts] of [['bypassPermissions', [true, 'bypassPermissions']], ['plan', [false, 'plan']]]) {
+    const f = await askedSetup(t, { extra: { skipPermissions: true, nativePermissionMode: 'bypassPermissions' } });
+    await f.now();
+    f.old.nativePermissionMode = mode;
+    f.client.reply('a', '交接：……');
+    await f.pass();
+    const options = f.client.calls.find(call => call[0] === 'create')[1];
+    assert.deepEqual([options.skipPermissions === true, options.settings.permissionMode], starts);
+  }
+});

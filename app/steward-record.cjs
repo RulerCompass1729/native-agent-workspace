@@ -272,6 +272,9 @@ function view(record, snapshot, { current = null, stateOf = () => null, readOf =
       // The butler's own call on the patrol interval: set, turned off, or looked at.
       out.patrol = args.length === 0 ? 'check' : args.length === 1 && [null, 15, 30, 60].includes(args[0]) ? args[0] : undefined;
       if (out.patrol === undefined) delete out.patrol;
+    } else if (entry.method === 'stewardRotate' && Array.isArray(args) && (args.length === 0 || args.length === 1 && args[0] === entry.session?.id)) {
+      // The butler's own call for its rotation now.
+      out.rotate = true;
     } else if (Array.isArray(args) && entry.method !== 'stewardEvents') Object.assign(out, { target: nameOf(args[0]), ...archived(args[0]) });
     // A read of another session's conversation (a snapshot NAW ran as `initial`, or one of its images): whom it read,
     // from what NAW actually ran rather than what was asked, and how far.
