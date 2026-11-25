@@ -1,0 +1,15 @@
+## Opening a new session as the butler from the butler's own dialog (lane/claude-steward-new-20261125)
+
+The person (2026-11-21) asked how to switch the butler to Codex and found no place to change it. This is the first half of the answer: the butler can be changed to a new session, and its model chosen, in its own dialog. A Codex butler is not in it; that needs a decision about Codex's control tools. Serves the vision's single entry: who answers there can be changed there.
+
+Change: the chooser behind the butler's menu has one more row, "open a new session as the butler". It opens an ordinary Claude session outside every space, in the butler's folder, with a model and an effort to choose; skipping permission checks is never ticked for the person. It is designated only once it can take a message, with an editable handoff in front of the duty statement, sent once and not stored. Codex is shown with the reason it cannot be chosen yet. Until the designation returns the old butler stays; afterwards it is an ordinary session, and the event wake is off as with every designation. No permission check changed.
+
+Also: an error stays in view beside the buttons; a text that cannot be sent is said before a session exists; the list scrolls by itself with the new row always in sight; each opening starts at the heading with the chosen row shown.
+
+Tests: 39 in the two files. Red on the base `ac8d5a19` at the first round (32 of 37, most of one file only from a changed signature). Mutations of the new conditions and of the scroll lines: none left (three killed only by hanging). Related on `a276f72f`: 3591/3591 and 1579/1579; the later commit changes three sentences, 228/228 in the text and dialog files. Hidden window with synthetic sessions: nobody designated, with a butler, 28 sessions at three window heights, a row deep in the list, a start that fails, a slow one closed and one waited for, English; no crash report. The existing steward GUI script passes, with two stale checks in it corrected.
+
+Review: one read-only session, two rounds. First: BLOCK (the sentence about Codex was untrue; eight notes). Second, on the delta: PASS-WITH-NOTES, nothing blocking; two sentences then replaced by the reviewer's own texts.
+
+Left: existing Codex sessions can still be chosen (as before). The new session's folder can become the next session dialog's default. The agent-control permission is not carried, as with an existing session. The handoff text gives no location. A missing, archived or recoverable record reads as "could not start". A made session that was not ready is an ordinary row after the dialog is reopened. Focus does not return to the button after an error (as before). A row under a three-line path can be slightly covered by the pinned row. The statement's own error does not mention control characters. Not run: a real Claude start (trust or sign-in screen, the 60 s limit), a real Codex control call, a screen reader, mobile and remote views.
+
+Undo: drop this lane's code commits; no file format changed.
