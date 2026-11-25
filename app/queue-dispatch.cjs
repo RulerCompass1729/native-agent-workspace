@@ -4023,6 +4023,12 @@ class QueueDispatcher {
     return { ...current, session };
   }
 
+  // Asked again at the send: the change may have been asked for after the pass was planned.
+  modelChanging(id) {
+    const ids = this.modelChanges();
+    return Array.isArray(ids) && ids.includes(id);
+  }
+
   // The member's backend can take a NAW input and its connection is not being replaced.
   preflight(session) {
     const entry = this.client.route(session.id);
@@ -4087,6 +4093,10 @@ class QueueDispatcher {
     const current = await this.freshReady(action.sessionId, this.humanQuietMs, why);
     if (!current) {
       waits?.set(action.itemId, [{ sessionId: action.sessionId, reason: why.reason }]);
+      return;
+    }
+    if (this.modelChanging(action.sessionId)) {
+      waits?.set(action.itemId, [{ sessionId: action.sessionId, reason: 'model-change' }]);
       return;
     }
     const room = current.snapshot.rooms.find(r => r.id === action.roomId);
@@ -4292,6 +4302,7 @@ class QueueDispatcher {
       this.rotationWait(expected, whyReady.reason || 'not-idle');
       return;
     }
+    if (this.modelChanging(action.sessionId)) return;
     const session = current.session;
     const reason = action.reason || 'content';
     const whyNotice = rotationWhyNotice(reason, recordCount(session), bytes || 0, action.compactions, action.contextTokens);
