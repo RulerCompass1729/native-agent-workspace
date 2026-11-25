@@ -36,6 +36,8 @@ function undeliveredRow(row, own = false) {
     const code = isCode(intent.cancellation?.code) ? intent.cancellation.code : keyCode(row.uiMessage?.key);
     return { outcome: 'cancelled', code, at: intent.cancellation?.at ?? at };
   }
+  // Never taken from the sender (session-wake.cjs): it may go again. Otherwise the recipient may have it.
+  if (own && intent.status === 'unconfirmed' && intent.untaken === true) return { outcome: 'not-sent', code: isCode(intent.takeRefused?.code) ? intent.takeRefused.code : 'not-taken', at };
   if (intent.status === 'unconfirmed' && row.uiMessage?.key === 'error.wake.deliveryUnconfirmed') return { outcome: 'unconfirmed', code: 'delivery-failed', at };
   if (own && intent.status === 'unconfirmed') return { outcome: 'unconfirmed', code: keyCode(row.uiMessage?.key), at };
   return null;
@@ -338,7 +340,10 @@ class ButlerIngress {
         const failed = undeliveredRow(row, true);
         if (!failed || row.wake.senderId !== s.id) continue;
         const { recipientId } = row.wake;
-        if (!own && butler.has(recipientId)) { if (undeliveredRow(row)) this.undeliveredWake(s.id, row.id, failed); continue; }
+        if (!own && butler.has(recipientId)) {
+          const toButler = undeliveredRow(row); if (toButler) this.undeliveredWake(s.id, row.id, toButler);
+          continue;
+        }
         if (!toldSaved(row)) continue;
         const inRole = held(s.id, row.wake);
         if (own || inRole) this.undeliveredWake(s.id, row.id, failed, { recipientId, since: inRole && row.wake.told === true ? 0 : this.humanSince });

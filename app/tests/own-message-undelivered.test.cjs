@@ -34,8 +34,11 @@ async function fixture(t, { receiveFails = false } = {}) {
     return { close() {}, async call(method, spec) {
       if (method === 'initial') return { ...w.snapshot(), capabilities: ['agentWakeV1', 'agentWakePreflightV1'] };
       if (method === 'wakeCheck') return wake.check(w, spec);
-      if (method === 'wakeTake') return wake.take(w, spec);
-      if (method === 'wakeReceive') { if (options.receiveFails) throw Error('Synthetic connection lost'); return wake.receive(w, spec); }
+      if (method === 'wakeTake') { options.beforeTake?.(spec); return wake.take(w, spec); }
+      if (method === 'wakeReceive') {
+        if (options.receiveFails) throw Error('Synthetic connection lost');
+        const result = await wake.receive(w, spec); if (options.lostAfter) throw Error('Synthetic connection lost'); return result;
+      }
       throw Error('Unexpected method ' + method);
     } };
   };
@@ -141,10 +144,89 @@ test('told saved, then refused at its one attempt, lost on the way, or not confi
   const silent = await f.begin('silent', 'Secret three.'); f.advance(1000); await silent.finish();
   assert.deepEqual(f.rows().map(m => m.wake.status), ['not-sent', 'unconfirmed', 'unconfirmed']);
   f.observe();
-  assert.deepEqual(f.outcomes(), ['not-sent:recipient-disabled', 'unconfirmed:delivery-failed', 'unconfirmed:unconfirmed']);
+  assert.deepEqual(f.outcomes(), ['not-sent:recipient-disabled', 'not-sent:not-taken', 'unconfirmed:unconfirmed']);
   assert.deepEqual(f.events().at(-1).payload, own(f, f.row(), 'unconfirmed:unconfirmed'), 'when it ended, not when it was registered');
   const g = await fixture(t), sent = await g.begin('sent', 'Secret four.'); await sent.finish();
   assert.equal(g.row().wake.status, 'submitted'); g.observe(); assert.deepEqual(g.events(), []);
+});
+
+// Sample six (22:43): a message whose turn ended normally was refused as it was being taken. What the person and the
+// sender see is unchanged; the butler is told apart the one that never left from the one that may have arrived.
+for (const [name, set, code, refused] of [
+  ['a gap', f => f.source.runtimes.get(f.a).emit('nativeBlock', { kind: 'gap' }), 'source-identity-changed', { code: 'source-identity-changed', fields: ['peerRevision'] }],
+  ['a permission question', f => f.source.runtimes.get(f.a).emit('state', 'approval'), 'source-identity-changed', { code: 'source-identity-changed', fields: ['peerRevision'] }],
+  ['the recipient could not be reached', f => { f.options.receiveFails = true; }, 'not-taken', { code: 'not-taken' }],
+]) test(`as it is being taken, ${name}: not sent, and never taken later`, async t => {
+  const f = await fixture(t), one = await f.begin('one', 'Secret task.'); assert.equal(one.result.status, 'staged');
+  const before = JSON.stringify(f.source.get(f.a).messages.at(-1).wake.sourceProof);
+  f.options.beforeTake = () => { f.options.beforeTake = null; set(f); };
+  if (code === 'not-taken') set(f);
+  f.advance(1000); await one.finish();
+  const row = f.row();
+  assert.deepEqual([row.wake.status, row.uiMessage.key, row.wake.untaken, row.wake.takeRefused], ['unconfirmed', 'error.wake.deliveryUnconfirmed', true, refused]);
+  assert.equal(JSON.stringify(row.wake.sourceProof), before);
+  f.observe(); f.observe();
+  assert.deepEqual(f.events().map(e => e.payload), [own(f, row, `not-sent:${code}`)]);
+  // Asked for again, it stays refused, and why it did not go out stays.
+  assert.throws(() => wake.take(f.source, { id: row.id, senderId: f.a, recipientId: f.b, targetKey: KEY }), e => e.uiMessage?.key === 'error.wake.credentialInvalid');
+  assert.deepEqual(row.wake.takeRefused, refused); assert.equal(f.writes.length, 0);
+  f.source.persist(); const again = f.open(), reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  f.observe(again, reopened.snapshot().sessions); assert.equal(f.events(again).length, 1);
+});
+
+test('lost after it was taken, or input as it is being taken: may have arrived, or delivered', async t => {
+  const f = await fixture(t), one = await f.begin('one', 'Secret task.');
+  f.options.lostAfter = true; f.advance(1000); await one.finish();
+  assert.deepEqual([f.row().wake.status, f.row().wake.untaken, f.row().wake.takeRefused], ['unconfirmed', undefined, undefined]);
+  assert.equal(f.writes.length, 1); f.observe();
+  assert.deepEqual(f.events().map(e => e.payload), [own(f, f.row(), 'unconfirmed:delivery-failed')]);
+  const g = await fixture(t), two = await g.begin('two', 'Secret two.');
+  g.options.beforeTake = () => g.source.runtimes.get(g.a).emit('nativeControlBoundary', 'control:input');
+  await two.finish(); g.observe();
+  assert.deepEqual([g.row().wake.status, g.row().wake.untaken, g.writes.length, g.events().length], ['submitted', undefined, 1, 0]);
+});
+
+test('why a take is refused, in codes: not being sent, another recipient, another backend, or a runtime that is gone', async t => {
+  const f = await fixture(t), one = await f.begin('one', 'Secret task.');
+  const row = f.row(), spec = { id: row.id, senderId: f.a, recipientId: f.b, targetKey: KEY }, seen = [];
+  const refuse = other => { assert.throws(() => wake.take(f.source, { ...spec, ...other }), e => e.uiMessage?.key === 'error.wake.credentialInvalid'); seen.push(row.wake.takeRefused); };
+  refuse({}); delete row.wake.takeRefused;
+  f.options.beforeTake = () => {
+    f.options.beforeTake = null; refuse({ recipientId: f.c }); refuse({ targetKey: '.' });
+    const r = f.source.runtimes.get(f.a); f.source.runtimes.delete(f.a); refuse({}); f.source.runtimes.set(f.a, r);
+  };
+  await one.finish();
+  assert.deepEqual(seen, ['not-being-sent', 'recipient-mismatch', 'backend-mismatch', 'source-runtime-changed'].map(code => ({ code })));
+  assert.deepEqual([row.wake.status, row.wake.takeRefused], ['submitted', undefined], 'the right one still takes it');
+  assert.throws(() => wake.take(f.source, { ...spec, id: 'none' }), e => e.uiMessage?.key === 'error.wake.credentialInvalid');
+  f.observe(); assert.deepEqual(f.events(), []);
+});
+
+test('refused as it is being taken, to the butler or from an ordinary session: told as before', async t => {
+  const f = await fixture(t); f.designate(f.session(f.target, f.b)); f.advance(1000);
+  for (const to of [f.b]) {
+    const one = await f.begin('one', 'Secret task.', { from: f.c, to });
+    f.options.beforeTake = () => f.source.runtimes.get(f.c).emit('nativeBlock', { kind: 'gap' });
+    await one.finish(); f.observe();
+    assert.equal(f.row(f.c).wake.untaken, true);
+    assert.deepEqual(f.events().map(e => e.payload), [{ memberId: f.c, reason: 'wake-undelivered', outcome: 'unconfirmed:delivery-failed', title: new Date(f.now()).toISOString() }]);
+  }
+});
+
+test('a row that names no usable reason, or is still being sent: not taken, or no event', async t => {
+  const f = await fixture(t);
+  const row = (id, status, extra) => ({ id, origin: 'agent-wake-intent', uiMessage: { version: 1, key: 'error.wake.deliveryUnconfirmed', params: {} },
+    wake: { id, senderId: f.a, nativeId: f.source.get(f.a).nativeId, recipientId: f.b, body: 'Secret.', time: f.now(), status, untaken: true, ...extra } });
+  f.observe(f.main, [{ ...f.source.get(f.a), messages: [row('none', 'unconfirmed'), row('bad', 'unconfirmed', { takeRefused: { code: 'Secret words' } }), row('open', 'sending')] }]);
+  assert.deepEqual(f.events().map(e => [e.payload.itemId, e.payload.outcome]), [['none', 'not-sent:not-taken'], ['bad', 'not-sent:not-taken']]);
+});
+
+test('held, offered and refused as it is taken: the reason of that attempt', async t => {
+  const f = await fixture(t); f.busy(); const one = await f.begin('one', 'Secret task.'); await one.finish();
+  assert.equal(f.row().wake.status, 'held'); f.row().wake.takeRefused = { code: 'earlier' };
+  f.idle(); f.options.receiveFails = true; f.advance(2 * MIN); await f.retry();
+  assert.deepEqual([f.row().wake.status, f.row().wake.takeRefused], ['unconfirmed', { code: 'not-taken' }]);
+  f.observe(); assert.deepEqual(f.outcomes(), ['not-sent:not-taken']);
 });
 
 test('the person designates another session directly: what the one before was told is saved is the new butler\'s too', async t => {
