@@ -510,7 +510,9 @@ test('a session left in another mode than bypass is not put back into bypass; an
   const left = (...modes) => s => { fs.appendFileSync(nativeTranscript, modes.map(permissionMode => JSON.stringify({ type: 'permission-mode', permissionMode, sessionId: s?.other || 'native-a' }) + '\n').join('')); };
   const resumed = async (nativePermissionMode, onStop) => {
     fs.writeFileSync(nativeTranscript, JSON.stringify({ type: 'user', sessionId: 'native-a' }) + '\n' + JSON.stringify({ type: 'permission-mode', permissionMode: nativePermissionMode, sessionId: 'native-a' }) + '\n');
-    const f = workspace({ nativeTranscript, nativePermissionMode }, { onStop: s => { onStop?.(s); } }); await f.w.changeModel('a', OPUS, f.expected, true); return f.calls.find(Array.isArray)[5];
+    const f = workspace({ nativeTranscript, nativePermissionMode }, { onStop: s => { onStop?.(s); } }); let mode;
+    delete f.w.resume; f.w.bind = () => {}; f.w.host = { create: s => { mode = s.nativePermissionMode; return {}; } };
+    await f.w.changeModel('a', OPUS, f.expected, true); assert.deepEqual([f.s.state, f.s.requestedSettings.model], ['starting', OPUS.model]); return mode;
   };
   for (const mode of ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']) assert.equal(await resumed('bypassPermissions', left(mode)), mode);
   assert.equal(await resumed('bypassPermissions', left('plan', 'auto')), 'auto', 'The last one counts'); assert.equal(await resumed('bypassPermissions', left('auto', 'bypassPermissions')), 'bypassPermissions');
