@@ -3823,7 +3823,8 @@ function stewardCandidates() {
     return { record, space, reason, current: record === butler };
   });
 }
-let stewardChoice = '';
+// Whether the person has the permission to organize on for the butler they have; null until it is read.
+let stewardChoice = '', stewardStandingOn = false;
 function renderStewardChooser() {
   const list = $('steward-list'), candidates = stewardCandidates();
   if (!candidates.some(item => item.record.id === stewardChoice && !item.reason)) stewardChoice = '';
@@ -3844,8 +3845,12 @@ function renderStewardChooser() {
   // Nobody to choose, nothing to send.
   $('steward-duty').hidden = $('steward-duty-label').hidden = !$('steward-none').hidden;
   // Confirming the session that already is the butler sends it the duty statement again, and says so.
-  $('steward-confirm').disabled = disconnected || !stewardChoice;
-  ui.display.text($('steward-confirm'), stewardChoice && stewardChoice === state.steward?.sessionId ? 'steward.choose.resend' : 'steward.choose.confirm');
+  const again = Boolean(stewardChoice) && stewardChoice === state.steward?.sessionId;
+  // The same butler keeps the permission; another one, or its session in another native conversation, is given it here, or not.
+  const kept = again && candidates.find(item => item.record.id === stewardChoice)?.record.nativeId === state.steward.nativeId;
+  $('steward-standing').hidden = !stewardStandingOn || !stewardChoice || kept;
+  $('steward-confirm').disabled = disconnected || !stewardChoice || stewardStandingOn === null;
+  ui.display.text($('steward-confirm'), again ? 'steward.choose.resend' : 'steward.choose.confirm');
 }
 // From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen.
 function openStewardChooser(chosen = null) {
@@ -3854,28 +3859,37 @@ function openStewardChooser(chosen = null) {
   stewardChoice = chosen || stewardRecord()?.id || ''; $('steward-error').hidden = true;
   // The text the person last chose, or the default of their language; their edits stay while the dialog is open.
   $('steward-duty').value = state.stewardDuty ?? uiText('steward.duty.default');
-  renderStewardChooser(); openTransientDialog('steward-dialog');
+  const asks = typeof api.stewardStanding === 'function';
+  stewardStandingOn = asks ? null : false; $('steward-standing-keep').checked = true;
+  renderStewardChooser(); const ticket = openTransientDialog('steward-dialog');
+  if (asks) api.stewardStanding().then(value => value.on === true, () => false).then(on => {
+    if (currentDialogTicket(ticket)) { stewardStandingOn = on; renderStewardChooser(); }
+  });
   // From its first line, wherever the box was scrolled the last time the dialog was open.
   $('steward-duty').scrollTop = 0;
   ([...$('steward-list').querySelectorAll('input')].find(input => input.checked && !input.disabled) || $('steward-cancel')).focus({ preventScroll: true });
 }
 async function confirmSteward() {
   const id = stewardChoice, ticket = dialogTickets.get($('steward-dialog'));
-  if (!id || disconnected) return;
+  if (!id || disconnected || stewardStandingOn === null) return;
   $('steward-confirm').disabled = true;
+  const standing = $('steward-standing').hidden ? null : $('steward-standing-keep').checked;
   // The default text unchanged is kept as "the default", so it follows the person's language.
   const text = $('steward-duty').value, duty = text === uiText('steward.duty.default') ? null : text;
   try {
-    const result = await api.steward(id, duty);
+    const result = await api.steward(id, duty, standing);
     updateState(await api.initial());
+    const lost = result?.standingLost ? standing === false ? 'standing.notOff' : 'standing.notKept' : '';
+    if (standing === false || lost) stewardStandingOn = false;
     // Designated, but the duty statement did not go in: the dialog stays open and says why.
     // Dismissed meanwhile: said once in the toast instead.
     if (result?.duty?.state === 'not-sent') {
-      const reason = result.duty.error || {}, params = () => ({ reason: ui.errorText(reason) });
-      if (!currentDialogTicket(ticket)) { toastMessage('steward.duty.notSent', params); return; }
-      ui.display.computed($('steward-error'), 'text', () => uiText('steward.duty.notSent', params()));
+      const reason = result.duty.error || {}, said = () => uiText('steward.duty.notSent', { reason: ui.errorText(reason) }) + (lost ? ' ' + uiText(lost) : '');
+      if (!currentDialogTicket(ticket)) { toast(''); ui.display.computed($('toast-text'), 'text', said); return; }
+      ui.display.computed($('steward-error'), 'text', said);
       $('steward-error').hidden = false; renderStewardChooser(); return;
     }
+    if (lost) toastMessage(lost);
     // The person chose it from a list: show what they chose. Not if they have dismissed the chooser and moved on.
     if (currentDialogTicket(ticket)) { $('steward-dialog').close(); await select(id); }
   } catch (error) {

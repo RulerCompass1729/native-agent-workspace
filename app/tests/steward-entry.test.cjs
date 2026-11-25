@@ -6,6 +6,9 @@ const { EventEmitter } = require('node:events');
 const { uiError } = require('../ui-errors.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
 const { StewardRole, DUTY_MAX, validDuty } = require('../steward-role.cjs');
+const { StewardStanding } = require('../steward-standing.cjs');
+const { StewardWake, GAP_MS } = require('../steward-wake.cjs');
+const { ButlerLedger } = require('../butler-ledger.cjs');
 const { IntegratorRole } = require('../integrator-role.cjs');
 const { QueueSecretary } = require('../queue-secretary.cjs');
 const { RoomState } = require('../room-state.cjs');
@@ -31,7 +34,9 @@ function fixture(t, { landingOwner = null } = {}) {
   const context = vm.createContext({ applicationHandlers: handlers, backgroundOperation, uiError, roomIds, stewardRole: role, stewardOf: require('../steward-record.cjs').cachedSteward(role), roomState, landingOwner, validRoomId: id => typeof id === 'string' && id.length > 0,
     queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
     // Waking the butler on events (steward-wake.cjs): only whether the designation turns it off, and when.
-    stewardWake: { set: on => { wakeOff.push([on, role.selected]); } },
+    stewardWake: { reached: () => null, set: on => { wakeOff.push([on, role.selected]); }, redesignated: () => { wakeOff.push([false, role.selected]); } },
+    // The person's permission to organize, real over the same directory: which designation it is for.
+    stewardStanding: new StewardStanding(directory, { role, person: c => c === person }),
     // What designating sends: the person's own input, as the composer gives it, in the person's language.
     validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
     submit: async (c, method, ...args) => {
@@ -48,7 +53,7 @@ function fixture(t, { landingOwner = null } = {}) {
     } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
-  vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
+  vm.runInContext(cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
   vm.runInContext(cut("  register('join', async (c, id, join) => {", "  register('roomRename',"), context);
   // The space action's own join branch, as written, in a handler of its own.
   vm.runInContext("register('spaceJoin', async (c, roomId, action, args = []) => {\n" + cut("    if (action === 'join') {\n      keepStewardOutside(", "    if (['stageImages', 'removeImage'].includes(action)) {") + '});', context);
@@ -144,7 +149,7 @@ test('designating or revoking the butler, the same session again included, turns
   await assert.rejects(f.call('member'), key('error.steward.inSpace'));
   assert.equal(f.wakeOff.length, 3);
   // A switch that cannot be saved does not undo the designation.
-  f.context.stewardWake = { set() { throw Error('The steward wake state cannot be saved'); } };
+  f.context.stewardWake = { reached: () => null, redesignated() { throw Error('The steward wake state cannot be saved'); } };
   await f.call('other');
   assert.deepEqual(f.role.selected, { sessionId: 'other', nativeId: 'native-other' });
 });
@@ -315,7 +320,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
   assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
-  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n    \}\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n[^\n]*\n[^\n]*standingLost = [^\n]*\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs', 'session-wake.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }
@@ -329,8 +334,8 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // The record module shares nothing writable with the other two roles.
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
-  // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
-  const handler = cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {");
+  // Designating writes the record (and, when the person was asked, the permission's), and tells the windows; no more.
+  const handler = cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
@@ -373,4 +378,169 @@ test('every sentence exists in both languages, and the words say what the design
   assert.equal(locale.format('zh', 'menu.stewardSet'), '设为大管家（我主要和它说话）'); assert.equal(locale.format('zh', 'error.steward.joinSpace'), '大管家不能加入协作空间。先撤销大管家，再把这个会话加入空间。');
   assert.equal(locale.format('zh', 'steward.choose.inSpace', { space: '网站改版' }), '在协作空间「网站改版」里，先移出才能当大管家');
   assert.equal(locale.format('zh', 'steward.rowStatus', { name: 'A', status: '会话就绪' }), 'A · 会话就绪');
+});
+
+// R220 (the person, 2026-11-24): 「要跟着新大管家走啊,否则大管家干啥」. The permission to organize was on for a butler whose
+// replacement was kept (no done edge), the person designated the next one by hand, and it stayed with the old one.
+const OUTSIDE = { sessionId: 'outside', nativeId: 'native-outside' }, OTHER = { sessionId: 'other', nativeId: 'native-other' };
+function standing(f) {
+  const value = f.context.stewardStanding, read = () => JSON.parse(fs.readFileSync(path.join(f.directory, 'steward-standing.json'), 'utf8'));
+  return { value, read, on: () => value.view().on, turn: on => value.set(f.person, on) };
+}
+
+test('designating another butler by hand: the permission goes to it when the person leaves it on, and to nobody when they were not asked', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); assert.equal(s.on(), true);
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('kept', OUTSIDE, OTHER) + '\n', { mode: 0o600 });
+  const result = await f.call('other', null, true);
+  assert.equal(Object.hasOwn(result, 'standingLost'), false);
+  assert.deepEqual(s.read().designation, OTHER); assert.deepEqual(s.value.view(), { on: true, limit: 30, unavailable: false });
+  // The person's way back: the previous one does not have it.
+  assert.equal(s.value.take({ id: 'outside', nativeId: 'native-outside' }, { method: 'archiveRoom', arguments: ['shared'], operation_id: 'old' }, { sessions: f.sessions, rooms: [] }, 'shared'), null);
+  // A caller that does not ask leaves it where it was, as before.
+  const g = fixture(t), kept = standing(g);
+  await g.call('outside'); kept.turn(true); await g.call('other');
+  assert.deepEqual([kept.read().designation, kept.read().on, kept.on(), kept.value.view().reason], [OUTSIDE, true, false, 'other-designation']);
+  for (const odd of ['true', 1, {}]) { await g.call('outside'); await g.call('other', null, odd); assert.deepEqual(kept.read().designation, OUTSIDE, String(odd)); }
+});
+
+test('the person takes it back while designating: it is off, for the previous butler too', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); const before = s.read().revision;
+  await f.call('other', null, false);
+  assert.deepEqual([s.read().on, s.on(), s.value.view().reason, s.read().revision], [false, false, undefined, before + 1]);
+  await f.call('outside'); assert.equal(s.on(), false, 'designated again, it is not on by itself');
+});
+
+test('not on for the butler being replaced: leaving the line on turns nothing on', async t => {
+  // Never turned on; on only for an earlier designation; turned off; nobody designated; unreadable.
+  const never = fixture(t); await never.call('outside'); await never.call('other', null, true);
+  assert.equal(fs.existsSync(path.join(never.directory, 'steward-standing.json')), false);
+  const earlier = fixture(t), e = standing(earlier); await earlier.call('outside'); e.turn(true); await earlier.call('other'); await earlier.call('busy-codex', null, true);
+  assert.deepEqual([e.read().designation, e.on()], [OUTSIDE, false]);
+  const off = fixture(t), o = standing(off); await off.call('outside'); o.turn(true); o.turn(false); await off.call('other', null, true); assert.equal(o.on(), false);
+  const revoked = fixture(t), r = standing(revoked); await revoked.call('outside'); r.turn(true); await revoked.call(null); await revoked.call('other', null, true); assert.equal(r.on(), false);
+  const broken = fixture(t), b = standing(broken); await broken.call('outside'); b.turn(true); fs.writeFileSync(path.join(broken.directory, 'steward-standing.json'), '{', { mode: 0o600 });
+  await broken.call('other', null, true); assert.equal(b.value.view().unavailable, true); assert.equal(fs.readFileSync(path.join(broken.directory, 'steward-standing.json'), 'utf8'), '{');
+});
+
+test('the same butler again keeps it, also when the rotation log had made it the butler; a refused designation moves nothing', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); const same = s.read().revision;
+  await f.call('outside'); assert.deepEqual([s.on(), s.read().revision], [true, same], 'nothing written');
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('done', OUTSIDE, OTHER) + '\n', { mode: 0o600 });
+  assert.equal(s.on(), true, 'the successor has it');
+  const write = s.value.write; s.value.write = () => { throw Error('synthetic'); };
+  assert.deepEqual([(await f.call('other')).standingLost, s.on()], [true, false], 'not asked, had it, and it could not be kept: said');
+  s.value.write = write; f.role.set(OUTSIDE); assert.equal(s.on(), true);
+  await f.call('other'); assert.deepEqual([s.read().designation, s.on()], [OTHER, true], 'the duty statement sent again does not take it away');
+  for (const id of ['member', 'ended', 'missing']) await assert.rejects(f.call(id, null, true));
+  assert.deepEqual([s.read().designation, s.on()], [OTHER, true]);
+  // Only the session the log named, native session included, is the same one.
+  for (const odd of [{ nativeId: 'native-elsewhere' }, { sessionId: 'elsewhere' }]) {
+    const g = fixture(t), other = standing(g); await g.call('outside'); other.turn(true);
+    fs.writeFileSync(path.join(g.directory, 'rotation-log.jsonl'), edge('done', OUTSIDE, { ...OTHER, ...odd }) + '\n', { mode: 0o600 });
+    await g.call('other'); assert.deepEqual([other.read().designation, other.on()], [OUTSIDE, false], JSON.stringify(odd));
+  }
+});
+
+test('an agent cannot carry it, and a permission that cannot be saved is said while the designation stands', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true);
+  await assert.rejects(f.agent('other')('steward', ['other', null, true]));
+  assert.deepEqual([f.role.selected, s.read().designation], [OUTSIDE, OUTSIDE]);
+  // The window the call came from is no longer the person's: the designation is as it was before this change, nothing is carried.
+  f.context.stewardStanding.person = () => false;
+  await f.call('other', null, true); assert.deepEqual([f.role.selected, s.read().designation], [OTHER, OUTSIDE]);
+  f.context.stewardStanding.person = c => c === f.person;
+  await f.call('outside'); assert.equal(s.on(), true);
+  f.context.stewardStanding.write = () => { throw Error('synthetic'); };
+  const lost = await f.call('other', null, true);
+  assert.deepEqual([lost.standingLost, lost.duty.state, f.role.selected, s.on()], [true, 'queued', OTHER, false]);
+  await f.call('outside');
+  f.context.refuseSubmit = Object.assign(Error('x'), { uiMessage: { key: 'error.steward.dutyBusy' } });
+  const both = await f.call('other', null, true); assert.deepEqual([both.standingLost, both.duty.state], [true, 'not-sent']);
+  await f.call('outside'); const left = await f.call('other', null, false); assert.deepEqual([left.standingLost, s.on(), s.read().on], [true, false, true], 'taken back but not saved: said, since the previous one would have it again');
+  // A save that failed after it took place: the permission is on, so nothing is said to be lost.
+  const late = fixture(t), l = standing(late); await late.call('outside'); l.turn(true); const write = l.value.write;
+  l.value.write = function (next) { write.call(this, next); throw Error('synthetic'); };
+  assert.equal(Object.hasOwn(await late.call('other', null, true), 'standingLost'), false); assert.equal(l.on(), true);
+  assert.equal((await late.call('outside', null, false)).standingLost, true);
+  // Turned off elsewhere while the dialog was open: nothing is carried, and that is said; not asked, nothing is said.
+  const g = fixture(t), off = standing(g); await g.call('outside'); off.turn(true); off.turn(false);
+  assert.equal((await g.call('other', null, true)).standingLost, true); assert.equal(off.on(), false);
+  for (const value of [false, null]) { await g.call('outside'); assert.equal(Object.hasOwn(await g.call('other', null, value), 'standingLost'), false); }
+});
+
+// R206 (the person): 「一旦错过就不再继续,这个肯定不行」. Designating by hand turns the event wake off; an event recorded before
+// it is turned on again was never announced to anyone. The real wake, behind the real handler.
+function waking(t) {
+  const f = fixture(t), sends = [], w = { f, clock: { now: 1_800_000_000_000 }, sends };
+  w.ledger = new ButlerLedger(f.directory, { now: () => w.clock.now });
+  w.open = () => { f.context.stewardWake = w.wake = new StewardWake(f.directory, { ledger: () => w.ledger, selected: () => f.role.selected, record() {}, now: () => w.clock.now }); };
+  w.event = n => w.ledger.ingest({ eventId: `butler-source:${n}`, sourceRef: `queue-outcome:space-1:${n}`, kind: 'failure', payload: { spaceId: 'space-1', itemId: `item-${n}`, reason: `Synthetic failure reason ${n}` } });
+  w.send = async text => { sends.push(text); return `tag-${sends.length}`; };
+  // Wakes until nothing is due, and gives the events each one names.
+  w.woken = async () => { const named = []; while (w.wake.due() && named.length < 5) { w.clock.now += GAP_MS; const r = await w.wake.wake({ id: f.role.selected.sessionId, nativeId: f.role.selected.nativeId }, 'claude-opus-5-5', w.send); named.push(w.ledger.eventsAfter(r.position).events.map(e => e.payload.itemId)); } return named; };
+  // A record that has begun: one that never had a line has no position to keep.
+  w.open(); w.event(0); return w;
+}
+
+test('an event recorded around a designation made by hand wakes the new butler once it is turned on, in one wake, also over a restart', async t => {
+  const w = waking(t), { f } = w;
+  await f.call('outside'); w.wake.set(true); w.event(1); assert.deepEqual(await w.woken(), [['item-1']]);
+  w.event(2); w.wake.skip('not-idle'); assert.equal(w.wake.blocked.reason, 'not-idle'); await f.call('other'); assert.equal(w.wake.blocked, null);
+  // The designation still turns it off, and nothing is sent by itself; what held a wake of the previous one is not the new one's.
+  assert.deepEqual([w.wake.view().on, w.wake.due()], [false, false]); w.event(3); assert.deepEqual(await w.woken(), []);
+  w.open(); assert.equal(w.wake.view().on, false, 'a restart does not turn it on'); w.event(4);
+  w.wake.set(true); assert.deepEqual(await w.woken(), [['item-2', 'item-3', 'item-4']]);
+  w.event(5); assert.deepEqual(await w.woken(), [['item-5']], 'and no position is left over');
+  // Nothing recorded in between: nothing to say.
+  await f.call('outside'); w.wake.set(true); assert.deepEqual(await w.woken(), []);
+});
+
+test('designated twice in a row, the earliest position is kept; the same butler again keeps it too', async t => {
+  const w = waking(t), { f } = w;
+  await f.call('outside'); w.wake.set(true); w.event(1); await f.call('other'); w.event(2); await f.call('busy-codex'); w.event(3);
+  w.wake.set(true); assert.deepEqual(await w.woken(), [['item-1', 'item-2', 'item-3']]);
+  w.event(4); await f.call('busy-codex'); w.event(5); w.wake.set(true); assert.deepEqual(await w.woken(), [['item-4', 'item-5']]);
+});
+
+test('from what is recorded now, as before: off for the previous butler, turned off and on, revoked, a replaced event record, an unsaved state', async t => {
+  const start = async () => { const w = waking(t); await w.f.call('outside'); w.wake.set(true); w.event(1); return w; };
+  const check = async (w, label) => { w.event(8); w.wake.set(true); assert.deepEqual(await w.woken(), [], label); w.event(9); assert.deepEqual((await w.woken()).flat().slice(-1), ['item-9'], label + ': the next one'); };
+  const off = waking(t); await off.f.call('outside'); off.event(1); await off.f.call('other'); await check(off, 'never on');
+  const turned = await start(); turned.wake.set(false); await turned.f.call('other'); await check(turned, 'off before the designation');
+  const after = await start(); await after.f.call('other'); after.wake.set(true); after.wake.set(false); await check(after, 'on and off after it');
+  const refused = await start(); await refused.f.call('other'); refused.wake.set(false); await check(refused, 'turned off after it');
+  const revoked = await start(); await revoked.f.call(null); await revoked.f.call('other'); await check(revoked, 'revoked');
+  const later = await start(); await later.f.call('other'); await later.f.call(null); await later.f.call('other'); await check(later, 'revoked after it');
+  const replaced = await start(); await replaced.f.call('other'); fs.rmSync(replaced.ledger.file, { force: true }); replaced.clock.now++; replaced.ledger = new ButlerLedger(replaced.f.directory, { now: () => replaced.clock.now }); replaced.event(7); await check(replaced, 'another record');
+  const older = await start(); older.event(2); const copy = fs.readFileSync(older.ledger.file); older.event(3); older.event(4); await older.woken(); await older.f.call('other');
+  fs.writeFileSync(older.ledger.file, copy, { mode: 0o600 }); older.ledger = new ButlerLedger(older.f.directory, { now: () => older.clock.now }); await check(older, 'an older copy of the same record');
+  const unsaved = await start(); const write = unsaved.wake.write; unsaved.wake.write = function () { this.failed = true; throw Error('synthetic'); };
+  await unsaved.f.call('other'); assert.deepEqual([unsaved.f.role.selected, unsaved.wake.view().on, unsaved.wake.view().failed], [OTHER, false, true]);
+  unsaved.wake.write = write; await unsaved.f.call('busy-codex'); await check(unsaved, 'not saved');
+  // Turned on, but not saved: what was kept is still there the next time.
+  const again = await start(); await again.f.call('other'); again.event(2); const save = again.wake.write; again.wake.write = function () { this.failed = true; throw Error('synthetic'); };
+  assert.throws(() => again.wake.set(true)); assert.equal(again.wake.reached()?.endsWith(':1'), true); again.wake.write = save; again.wake.set(true); assert.deepEqual(await again.woken(), [['item-1', 'item-2']]);
+  // Already off with nothing kept, there is nothing to save; one that could not be read is saved again.
+  const idle = waking(t); idle.wake.write = () => { throw Error('synthetic'); }; assert.equal(idle.wake.set(false).on, false);
+  fs.writeFileSync(path.join(idle.f.directory, 'steward-wake.json'), '{', { mode: 0o600 }); idle.open(); assert.equal(idle.wake.view().failed, true);
+  assert.equal(idle.wake.set(false).failed, false); idle.open(); assert.equal(idle.wake.view().failed, false);
+  // On for a designation that is not the one replaced (nobody turned it off): not the previous butler's.
+  const stale = await start(); stale.f.role.set(OTHER); await stale.f.call('busy-codex'); await check(stale, 'on for an earlier one');
+});
+
+test('a designation or the person turning it off while a wake is being sent: what that left stays', async t => {
+  const during = async act => {
+    const w = waking(t); await w.f.call('outside'); w.wake.set(true); w.event(1); w.clock.now += GAP_MS;
+    await w.wake.wake({ id: 'outside', nativeId: 'native-outside' }, 'claude-opus-5-5', async () => { await act(w); return 'tag'; });
+    w.event(2); return w;
+  };
+  const moved = await during(w => w.f.call('other')); moved.wake.set(true); assert.deepEqual(await moved.woken(), [['item-1', 'item-2']], 'the new butler hears what was being sent to the previous one');
+  const off = await during(w => w.wake.set(false)); off.wake.set(true); assert.deepEqual(await off.woken(), [], 'turned off: from now');
+  const restarted = await during(w => { w.wake.set(false); w.event(5); w.wake.set(true); }); assert.deepEqual(await restarted.woken(), [['item-2']], 'off and on: from then, not from the wake being sent');
+  const on = await during(async w => { await w.f.call('other'); w.wake.set(true); }); assert.deepEqual(await on.woken(), [['item-1', 'item-2']]);
+  const kept = await during(() => {}); assert.deepEqual(await kept.woken(), [['item-2']]);
 });

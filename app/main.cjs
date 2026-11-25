@@ -2464,10 +2464,12 @@ async function boot() {
   // that session is listed and where the window lands at start, and which calls main.cjs takes as the butler's
   // (stewardCaller). Designating also sends the duty statement (`duty`: the person's own text, or null for the
   // default of their language) into the session as the person's message (the activation checklist, item 6).
-  register('steward', async (c, id, duty = null) => {
+  // `standing`: whether the person left the permission to organize (steward-standing.cjs) on for the new butler, asked
+  // only while it is on for the one they have; null when they were not asked.
+  register('steward', async (c, id, duty = null, standing = null) => {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
-    let record = null;
+    let record = null, standingLost = false, reached = null;
     if (id === null) stewardRole.set(null);
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {
@@ -2478,13 +2480,23 @@ async function boot() {
       let spaces;
       try { spaces = roomIds(record); } catch { throw uiError('error.steward.invalid'); }
       if (spaces.length) throw uiError('error.steward.inSpace');
+      const carry = stewardStanding?.carry(c);
+      reached = stewardWake?.reached() ?? null;
+      // The same butler again keeps it: the designation may have named it only through the rotation log.
+      let again = false;
+      try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
+      const keep = typeof standing === 'boolean' ? standing : again || null;
+      let unsaved = false; if (carry && keep !== null) try { carry(keep); } catch { unsaved = true; }
+      // Said by what holds now: a save that failed may have taken place, and a line left on may have been turned off elsewhere.
+      standingLost = keep ? Boolean(carry || standing) && !stewardStanding?.view().on : unsaved;
     });
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
-    // revoking, the same session again included, turns it off, until the person or that butler turns it on.
-    try { stewardWake?.set(false); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
+    // revoking, the same session again included, turns it off, until the person or that butler turns it on. A
+    // designation made while it was on keeps where it stood for then; a revocation keeps nothing.
+    try { stewardWake?.redesignated(reached); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
     await broadcastRoom();
     if (id === null) return null;
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
@@ -2508,17 +2520,18 @@ async function boot() {
         look();
       });
       else await sending;
-      return { duty: { state: method === 'queue' ? 'queued' : 'sent' } };
+      return { duty: { state: method === 'queue' ? 'queued' : 'sent' }, ...(standingLost ? { standingLost } : {}) };
     } catch (error) {
       // Shown as a thrown error would be (the IPC reply's own step): the person's language, the same fallback.
       const message = String(error?.message ?? ''), uiMessage = message ? uiLocale.displayMessage(error?.uiMessage) : uiError('error.main.operationIncomplete').uiMessage;
-      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } } };
+      return { duty: { state: 'not-sent', error: { message: message || uiError('error.main.operationIncomplete').message, ...(uiMessage ? { uiMessage } : {}) } }, ...(standingLost ? { standingLost } : {}) };
     }
   });
   register('stewardStanding', async (c, on) => {
     if (!isCurrentHumanContext(c)) throw uiError('error.steward.personOnly');
     const value = on === undefined ? stewardStanding.view() : stewardStanding.set(c, on);
-    await broadcastRoom(); return value;
+    if (on !== undefined) await broadcastRoom();
+    return value;
   });
   applicationHandlers.delete('stewardStanding');
   // Patrol while idle (steward-wake.cjs patrol): the same two callers as the wake switch

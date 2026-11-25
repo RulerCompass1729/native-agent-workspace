@@ -13,7 +13,9 @@
 //     cannot be written is not sent.
 // The switch is the person's and the designated butler's alone (main.cjs stewardWake), off by default. It holds for the
 // designation it was turned on for: designating or revoking the butler, the same session again included, turns it off
-// (main.cjs steward), and it is not on for a session other than the one designated. Nothing here calls a model: a wake is one NAW
+// (main.cjs steward), and it is not on for a session other than the one designated. A designation made while it is on
+// keeps how far it had got, and the next time it is turned on goes on from there, unless it was turned off or the butler
+// revoked in between (redesignated). Nothing here calls a model: a wake is one NAW
 // message into the butler's own conversation, under the person's automatic-message switch, like a queue item.
 // Patrol while idle (R120, PM brief 2026-11-23): with the switch on and an interval set, a butler idle that long while
 // work is unfinished gets one 【NAW 巡查】 with counts only, through the same checks and record as a wake. With nothing
@@ -202,24 +204,38 @@ class StewardWake {
     if (!ledger) throw fault('The event record is unavailable', 'STEWARD_WAKE_UNAVAILABLE');
     return ledger.latest();
   }
-  // Turned on, it starts from what is recorded now: older events are not news. Turned on again while on, it keeps its
-  // position, so nothing waiting is skipped. The time of the last wake is kept either way: turning it off and on does
-  // not shorten the minute between wakes. Turned off, it also clears a switch kept for an earlier designation, so that
-  // designating that session again does not turn it back on.
+  // Turned on, it starts from what is recorded now: older events are not news. Two exceptions, so that nothing waiting
+  // is skipped: turned on again while on, it keeps its position; after a designation made while it was on, it starts
+  // from the position kept then (redesignated; an older version could also leave one when turned off during a wake).
+  // The time of the last wake is kept either way: turning it off and on does not shorten the minute between wakes.
+  // Turned off, it also clears a switch or a position kept for an earlier designation, so that designating that session
+  // again does not turn it back on.
   set(on) {
     if (typeof on !== 'boolean') throw fault('Invalid steward wake switch', 'STEWARD_WAKE_INVALID');
-    if (!this.failed && (on ? this.active() : !this.state.on)) return this.view();
-    let next;
-    if (on) {
-      let designated = null; try { designated = this.selected(); } catch { throw fault('The designation cannot be read', 'STEWARD_WAKE_UNAVAILABLE'); }
-      if (!identity(designated)) throw fault('No butler is designated', 'STEWARD_WAKE_NO_BUTLER');
-      next = { version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId }, woken: this.latest(), at: this.failed ? null : this.state.at, patrol: null };
-    } else next = { version: 1, on: false, designation: null, woken: null, at: this.failed ? null : this.state.at, patrol: null };
-    this.write(next);
+    if (!on) return this.off(null);
+    if (this.active()) return this.view();
+    let designated = null; try { designated = this.selected(); } catch { throw fault('The designation cannot be read', 'STEWARD_WAKE_UNAVAILABLE'); }
+    if (!identity(designated)) throw fault('No butler is designated', 'STEWARD_WAKE_NO_BUTLER');
+    // A position kept past the end of this record (an older copy was put back) names nothing in it.
+    const latest = this.latest(), kept = this.state.on ? null : from(latest, this.state.woken);
+    this.write({ version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId },
+      woken: kept && newer(latest, kept) ? kept : latest, at: this.failed ? null : this.state.at, patrol: null });
     this.patrolLast = null; this.patrolWanted = false;
-    if (!on) this.clearBlocked();
     return this.view();
   }
+  off(woken) {
+    if (!this.failed && !this.state.on && this.state.woken === woken) return this.view();
+    this.write({ version: 1, on: false, designation: null, woken, at: this.failed ? null : this.state.at, patrol: null });
+    this.patrolLast = null; this.patrolWanted = false; this.clearBlocked();
+    return this.view();
+  }
+  // The position the person's designation leaves for the next butler, read before it moves: where the wake stands while
+  // it is on, or what an earlier designation kept and nobody has turned on since. Otherwise null: from what is recorded
+  // when it is turned on.
+  reached() { return this.state.on && !this.active() ? null : this.state.woken; }
+  // The person designates a butler or revokes it (main.cjs steward; revoked, `position` is null): off until turned on.
+  // Once it is, one wake covers everything recorded since `position` (R206: an event missed at a handover).
+  redesignated(position) { return this.off(position); }
   // The patrol interval in minutes, or null for off. Only while the switch is on; off needs nothing.
   setPatrol(minutes) {
     if (!PATROL_CHOICES.includes(minutes)) throw fault('Invalid patrol interval', 'STEWARD_PATROL_INVALID');
@@ -304,7 +320,7 @@ class StewardWake {
     if (!this.rested(now)) { this.skip('cooldown'); return null; }
     if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
     if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
-    const latest = this.latest(), position = from(latest, this.state.woken), id = randomUUID();
+    const latest = this.latest(), held = this.state, position = from(latest, held.woken), id = randomUUID();
     const refusals = this.refusalsOnly(latest);
     if (refusals && this.refusalWakes >= REFUSAL_WAKES) { this.skip('control-refused-limit'); return null; }
     try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
@@ -318,7 +334,9 @@ class StewardWake {
       // wake names it again rather than skipping what it would have announced.
       outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
     }
-    const next = { ...this.state, at: now, woken: outcome.state === 'sent' ? latest : this.state.woken };
+    // Turned off or designated anew while it was being sent: what was kept then stays.
+    const still = this.state.woken === held.woken && same(this.state.designation, held.designation);
+    const next = { ...this.state, at: now, woken: outcome.state === 'sent' && still ? latest : this.state.woken };
     try { this.write(next); } catch { /* Failed: no further wake until it is set again. */ }
     try {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
