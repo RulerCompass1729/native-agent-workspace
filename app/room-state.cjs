@@ -182,6 +182,10 @@ class RoomState {
     this.mergePreviews = new Map();
     this.queueWaits = new Map();
     this.mergeJobs = new Map();
+    this.readRoom();
+    this.readSpaces();
+  }
+  readRoom() {
     try {
       const stat = fs.lstatSync(this.file);
       if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('Unsafe file');
@@ -189,6 +193,8 @@ class RoomState {
       // A damaged display preference must never block native input or sharing.
       this.value = { ...this.value, ...validateRoom(data) };
     } catch (error) { if (error.code !== 'ENOENT') setWarning(this, 'warning', 'error.warning.roomRead'); }
+  }
+  readSpaces() {
     try {
       const stat = fs.lstatSync(this.spacesFile);
       if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('Unsafe file');
@@ -196,6 +202,11 @@ class RoomState {
       if (data.version !== 1 || !Array.isArray(data.rooms) || data.rooms.some(r => !r || !roomId(r.id) || r.id === DEFAULT_ROOM_ID) || new Set(data.rooms.map(r => r.id)).size !== data.rooms.length) throw Error('Invalid spaces');
       this.spaces = { version: 1, rooms: data.rooms.map(r => ({ ...validateRoom(r), id: r.id })) };
     } catch (error) { if (error.code !== 'ENOENT') setWarning(this, 'spacesWarning', 'error.warning.otherRoomDataRead'); }
+  }
+  // In the same copy, since others hold it (a retried start).
+  readAgain() {
+    if (this.warning) { this.warning = ''; delete this.warningUiMessage; this.readRoom(); }
+    if (this.spacesWarning) { this.spacesWarning = ''; delete this.spacesWarningUiMessage; this.readSpaces(); }
   }
   metadata(id = DEFAULT_ROOM_ID) {
     if (!roomId(id)) throw uiError("error.main.invalidSpace");
