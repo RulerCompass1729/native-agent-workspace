@@ -4398,6 +4398,60 @@ test('794d3cd7: a member compacted COMPACT_LIMIT times is rotated before its nex
   assert.deepEqual(plan(idle, [heavy]), []);
 });
 
+// The person, 2026-11-24 (cache-aware handoff): a Claude member that is large and still warm continues in a new session
+// before its next item, instead of being compacted in the middle of it. A cold one would pay for its whole conversation
+// again just to write the handoff (97 of them in two weeks: median 227K input-equivalents cold, 21K warm).
+test('cache-aware rotation: a large warm Claude member is rotated before its next item, a cold, small, young or idle one is not', () => {
+  assert.deepEqual(rules.CONTEXT_LIMITS, { claude: 180000 });
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('1')] }];
+  const dispatch = [{ kind: 'dispatch', roomId: 'shared', itemId: '1', sessionId: 'a' }];
+  const rotate = [{ kind: 'rotate', sessionId: 'a', reason: 'context', contextTokens: 180000 }];
+  const old = { createdAt: NOW - 2 * HOUR };
+  const context = (extra = {}) => ({ contexts: new Map([['a', { tokens: 180000, at: NOW - 60000, ttlMs: HOUR, ...extra }]]) });
+  assert.deepEqual(plan(rooms, [member('a', old)], context()), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ tokens: 179999 })), dispatch, 'not large yet');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 53 * 60000 })), rotate, 'still warm');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 55 * 60000 })), dispatch, 'about to go cold: the handoff itself could miss the cache');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 3 * HOUR })), dispatch, 'cold');
+  // A provider that shortens the lifetime (over the plan: five minutes) shortens the window with it.
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 10 * 60000, ttlMs: 5 * 60000 })), dispatch);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW - 4 * 60000, ttlMs: 5 * 60000 })), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ ttlMs: null })), dispatch, 'lifetime unknown');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ at: NOW + 60000 })), dispatch, 'a time ahead of this clock');
+  assert.deepEqual(plan(rooms, [member('a', old)], context({ tokens: '180000' })), dispatch, 'not a size');
+  assert.deepEqual(plan(rooms, [member('a', old)]), dispatch, 'no size known');
+  // A successor that read a lot in its first turn does its item first, or it would be replaced again and again.
+  assert.deepEqual(plan(rooms, [member('a', { createdAt: NOW - 59 * 60000 })], context()), dispatch);
+  assert.deepEqual(plan(rooms, [member('a', { ...old, provider: 'codex' })], context()), dispatch, 'Codex is not measured');
+  // With nothing queued there is no item to save, and a new session would only go cold in its turn.
+  const idle = [{ id: 'shared', name: 'Team', queue: [] }];
+  for (const minutes of [2, 10, 30, 50]) {
+    assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], context()), []);
+    assert.deepEqual(plan(idle, [member('a', { ...old, lastActivityAt: NOW - minutes * 60000 })], { ...context(), butler: 'a' }), []);
+  }
+  // Another reason keeps its own words, and a successor's day of rest does not hold this one.
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), compactions: new Map([['a', 3]]) }), [{ kind: 'rotate', sessionId: 'a', reason: 'compact', compactions: 3 }]);
+  const successor = { phase: 'kept', keptAt: NOW - HOUR, successorOf: 'before' };
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), rotations: { a: successor } }), rotate);
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), rotations: { a: { phase: 'kept', keptAt: NOW - HOUR } } }), dispatch, 'an old kept session');
+  assert.deepEqual(plan(rooms, [member('a', old)], { ...context(), deferredRotations: new Set(['a']) }), dispatch, 'the person is using it');
+  // One rotation at a time: the member works on meanwhile, and nothing is reported as stalled for this reason.
+  const gates = new Map();
+  const running = { z: { phase: 'requested', requestedAt: NOW } };
+  assert.deepEqual(plan(rooms, [member('a', old), member('z', { state: 'working' })], { ...context(), rotations: running, rotationGates: gates }), dispatch);
+  assert.equal(gates.has('a'), false);
+  // Two due at once: one is rotated, the other does its item now; a turn that holds the one slot for its whole half
+  // hour holds no item of anyone else's (the PM, 11-24).
+  const two = [{ id: 'shared', name: 'Team', queue: [item('1', { assignee: 'a' }), item('2', { assignee: 'b' })] }];
+  const both = { contexts: new Map(['a', 'b'].map(id => [id, { tokens: 200000, at: NOW - 60000, ttlMs: HOUR }])) };
+  assert.deepEqual(plan(two, [member('a', old), member('b', old)], both).map(action => [action.kind, action.sessionId]), [['rotate', 'a'], ['dispatch', 'b']]);
+  for (const requestedAt of [NOW, NOW - 29 * 60000]) {
+    const busy = { z: { phase: 'handed', requestedAt, handedAt: requestedAt, newId: 'y' } };
+    assert.deepEqual(plan(two, [member('a', old), member('b', old), member('y', { state: 'working' })], { ...both, rotations: busy })
+      .map(action => [action.kind, action.sessionId]), [['dispatch', 'a'], ['dispatch', 'b']]);
+  }
+});
+
 // 11-23: nobody was rotated for 14 hours. The four kinds added on 11-19 were not named beside person-intervened
 // and no-reply, so each counted as a decision its member had asked.
 const WAITING_KINDS = [
@@ -4640,6 +4694,45 @@ test('794d3cd7: a compacted member is asked for its handoff in words that say wh
   assert.equal(client.sends('z').length, 0);
   assert.match(rules.handoffRequestText('X'), /^【NAW 换会话】X。为了释放内存，NAW 会开一个新会话接着做/);
   assert.match(rules.handoffRequestText('X', 'content'), /^【NAW 换会话】X。为了释放内存，/);
+});
+
+test('cache-aware rotation: the size read from the record reaches the request, the space notice and the log in its own words', async t => {
+  const fake = Object.assign(fakeCompactions({ a: 1 }), { contexts: new Map() });
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('a', { cwd: '/tmp', createdAt: NOW - 2 * HOUR })], { compactions: fake });
+  fake.contexts.set('a', { tokens: 183400, at: dispatcher.now() - 60000, ttlMs: HOUR });
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /^【NAW 换会话】这个会话的上下文已到约 183K。为了不再一次次压缩上下文，NAW 会开一个新会话接着做/);
+  assert.equal(room.value.queue[0].status, 'queued', 'the queued item waits for the successor');
+  const requested = room.value.events.find(event => event.uiMessage?.key === 'notice.rotation.requested');
+  assert.match(requested.text, /NAW 换会话（这个会话的上下文已到约 183K）/);
+  const logged = fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(logged.some(entry => entry.event === 'requested' && entry.reason === 'context'), 'the log keeps the reason');
+});
+
+test('cache-aware rotation: sizes a failed read left behind are not used', async t => {
+  let fail = false;
+  const fake = Object.assign(fakeCompactions({ a: 1 }), { contexts: new Map() });
+  const counted = fake.sample.bind(fake);
+  fake.sample = async (...args) => { if (fail) throw Error('unreadable'); return counted(...args); };
+  const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { cwd: '/tmp', createdAt: NOW - 2 * HOUR })], { compactions: fake });
+  const size = { tokens: 1000, at: dispatcher.now() - 60000, ttlMs: HOUR };
+  fake.contexts.set('a', size);
+  room.queueAdd('first task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  assert.match(client.sends('a')[0][2], /first task/);
+  assert.equal(dispatcher.contexts.get('a'), size, 'read once');
+  client.reply('a', 'first task finished');
+  await dispatcher.schedule();
+  Object.assign(size, { tokens: 200000, at: dispatcher.now() - 60000 });
+  fail = true;
+  room.queueAdd('second task', 'a');
+  dispatcher.dirty = true;
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+  assert.match(client.sends('a').at(-1)[2], /second task/);
 });
 
 test('794d3cd7: a successor compacted three times is replaced again within its day; its own count starts at its own start', async t => {
