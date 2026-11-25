@@ -5210,6 +5210,58 @@ test('R183: a delivered first turn whose successor never comes back into view ro
   assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed'); assert.equal(stopsOf(f), 0);
   assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
 });
+// Undelivered at 119 s; native's receipt lands at 121 s; the next pass is at 125 s.
+async function lateReceipt(t, patch, turnId = 'first-turn') {
+  const f = await firstHandoff(t);
+  const receipt = { status: 'submitted', nativeId: 'native-b', turnId };
+  Object.assign(f.input, { status: 'awaiting-native', nativeId: undefined, turnId: undefined });
+  await advanceTo(f, 119 / 60); assert.equal(f.record.phase, 'handed'); assert.notEqual(f.record.handoffDelivered, true);
+  Object.assign(f.input, receipt); Object.assign(f.fresh, patch);
+  return f;
+}
+for (const [label, patch] of [['working', {}], ['with background work, which a rollback may not stop', { background: 1 }], ['waiting on an approval', { state: 'approval', approval: { id: 'synthetic' } }]])
+test(`R183: a receipt after the 2 minutes counts as delivered, its successor ${label}: one session has the work`, async t => {
+  const f = await lateReceipt(t, patch), { state } = f.fresh;
+  for (const minutes of [125 / 60, 10, 29]) {
+    await advanceTo(f, minutes);
+    assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b', `${minutes} minutes`);
+    assert.equal(f.record.phase, 'handed'); assert.equal(f.record.handoffDelivered, true);
+    assert.equal(stopsOf(f), 0); assert.equal(f.fresh.state, state);
+  }
+  f.boundary('complete'); Object.assign(f.fresh, { state: 'idle', background: 0, approval: null }); await advanceTo(f, 29.5);
+  assert.equal(f.record.handoffConfirmed, true);
+  assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'b');
+});
+test('R183: a late receipt counts before native has named its turn', async t => {
+  const f = await lateReceipt(t, {}, null);
+  await advanceTo(f, 125 / 60); assert.equal(f.record.phase, 'handed'); assert.equal(f.record.handoffDelivered, true); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+});
+test('R183: a late receipt adds no time: its limit too is counted from the handoff', async t => {
+  const f = await lateReceipt(t);
+  await advanceTo(f, 125 / 60); await advanceTo(f, 30); assert.equal(f.record.phase, 'handed');
+  await advanceTo(f, 30.1); assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+test('R183: a first turn that completed before the late receipt was seen confirms', async t => {
+  const f = await lateReceipt(t, { state: 'idle' });
+  f.boundary('complete'); await advanceTo(f, 125 / 60);
+  assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
+});
+test('R183: delivered while no pass ran (app closed, Mac asleep): the reopened app keeps it', async t => {
+  const f = await firstHandoff(t);
+  const reopened = new rules.QueueDispatcher({ roomState: f.room, dataDir: f.dir, now: () => NOW, tickMs: HOUR, connect: async () => f.client });
+  t.after(() => reopened.close()); reopened.client = f.client;
+  await reopened.advanceRotations(f.client.snapshot(), NOW + 10 * MINUTE);
+  assert.equal(reopened.rotations.a.phase, 'handed'); assert.equal(reopened.rotations.a.handoffDelivered, true); assert.equal(stopsOf(f), 0);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'b');
+});
+for (const state of ['ended', 'recoverable', 'background'])
+test(`R183: a late receipt whose successor is already ${state} rolls back at that pass`, async t => {
+  const f = await lateReceipt(t, { state });
+  await advanceTo(f, 125 / 60); assert.equal(f.record.phase, 'failed'); assert.equal(f.record.reason, 'handoff-unconfirmed');
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
 for (const wait of ['approval', 'nativeInputRequired'])
 test(`R183: a first turn waiting on the person (${wait}) is bounded by the same limit and is not stopped`, async t => {
   const f = await firstHandoff(t, wait === 'approval' ? { state: 'approval', approval: { id: 'synthetic' } } : { nativeInputRequired: true });

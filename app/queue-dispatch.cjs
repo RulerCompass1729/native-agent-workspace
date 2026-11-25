@@ -116,6 +116,7 @@ const NEW_SESSION_READY_MS = 10 * 60 * 1000;
 // one backend a minute). Nothing was changed, or the change is found again: the caller asks again later.
 const BACKEND_UPDATING_KEYS = new Set(['error.client.connectionUpdatingNoInput', 'error.client.connectionChangedNoReplay',
   'error.client.spacePauseUnconfirmed']);
+// A pass that finds the handoff message still undelivered, or its successor's process gone, after this long gives it up.
 const HANDOFF_ACCEPT_MS = 2 * 60 * 1000;
 // Once delivered, its first turn has this long, approvals included. 125 recorded first turns: median 0.6 minutes, longest 13.3.
 const HANDOFF_TURN_MS = 30 * 60 * 1000;
@@ -4608,6 +4609,8 @@ class QueueDispatcher {
         const outcome = firstHandoff.outcome(fresh, record.handoffTag);
         if (outcome === 'failed') throw Error('successor-turn-failed');
         if (outcome !== 'complete') {
+          // A late receipt counts, as a late completion does: undoing what native has taken stops it midway or, when it
+          // may not be stopped, leaves two sessions on the same work.
           if (record.handoffDelivered !== true && handoffDelivered(fresh, record.handoffTag)) {
             record.handoffDelivered = true;
             // An error here would stop the successor without the guards of a failed handoff; the next write has it.
