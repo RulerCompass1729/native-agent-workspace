@@ -4,9 +4,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const vm = require('node:vm');
 const rules = require('../queue-dispatch.cjs');
 const { CompactionCounter } = require('../compaction-count.cjs');
 const { RoomState } = require('../room-state.cjs');
+const { SessionLabels } = require('../session-labels.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
 const { QuietWindows } = require('../quiet-windows.cjs');
@@ -4129,6 +4131,34 @@ async function rotateOnce(t, extra = {}) {
   await setup.dispatcher.schedule(); // the old one leaves, stops and is archived
   return { ...setup, newId: setup.client.state.sessions[1].id };
 }
+// The names Main hands the dispatcher, by its own lines: a rename replaces the Map they are kept in, and a retried start
+// the object that has it.
+async function mainNames(sandbox) {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
+  const from = main.indexOf('async function startQueueDispatcher()'), end = main.indexOf('async function broadcastRoom()', from);
+  let handed = null;
+  Object.assign(sandbox, { queueDispatcher: null, dataDir: '', process: { env: {} }, backgroundTest: false, roomState: {}, personClient() {}, broadcastRoom() {}, notifyRotation() {},
+    creationDefaults: {}, observePersonActions() {}, stewardWake: null, answerNotices: null, versionNotices: null, quietWindows: null,
+    QueueDispatcher: class { constructor(options) { handed = options.labels; } async start() {} } });
+  vm.createContext(sandbox);
+  await vm.runInContext(main.slice(from, end) + '\nstartQueueDispatcher()', sandbox);
+  assert.ok(handed);
+  return handed;
+}
+test('a session the person renamed since the start has a successor named after the new name', async t => {
+  for (const retried of [false, true]) {
+    const { dir } = roomSetup(t), sandbox = { sessionLabels: new SessionLabels(dir) };
+    sandbox.sessionLabels.set('a', 'Before');
+    const labels = await mainNames(sandbox);
+    if (retried) sandbox.sessionLabels = new SessionLabels(dir);
+    sandbox.sessionLabels.set('a', 'After');
+    const { client, dispatcher, dir: log } = await rotateOnce(t, { labels });
+    assert.equal(client.calls.find(call => call[0] === 'create')[1].name, 'After · 续');
+    const names = rotationLog(log).flatMap(entry => [entry.old?.name, entry.new?.name]);
+    assert.deepEqual([...new Set(names.filter(Boolean))].sort(), ['After', 'After · 续']);
+    await dispatcher.close();
+  }
+});
 const rotationLog = dir => fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
 const eventKeys = room => room.value.events.map(event => event.uiMessage?.key);
 
