@@ -332,7 +332,7 @@ class AgyTui extends EventEmitter {
     // Only auto-open /mcp on a clean pre-warmup viewport (no pre-existing MCP listing that could ambiguate overlay detection).
     if (preCounts.heading > 0 || preCounts.ready > 0 || preCounts.exit > 0) {
       this.mcpWarmPhase = 'failed';
-      this.syncCapabilities();
+      this.syncScreenState(this.terminal.screen);
       return;
     }
     this.mcpWarmPreCounts = preCounts;
@@ -344,7 +344,7 @@ class AgyTui extends EventEmitter {
       this.terminal.input('/mcp\r');
     } catch {
       this.mcpWarmPhase = 'failed';
-      this.syncCapabilities();
+      this.syncScreenState(this.terminal.screen);
       return;
     }
     this.mcpWarmTimer = setTimeout(() => {

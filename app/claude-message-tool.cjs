@@ -43,13 +43,18 @@ function stageAgy(args) {
 }
 function notifyAgyListed() {
   const sock = process.env.NAW_MESSAGE_SOCKET, token = process.env.NAW_MESSAGE_TOKEN;
-  if (!sock || !token) return;
-  try {
-    const socket = net.connect(sock);
-    socket.setTimeout(1500, () => socket.destroy());
-    socket.once('error', () => socket.destroy());
-    socket.once('connect', () => { socket.end(JSON.stringify({ token, agyMcpListed: true }) + '\n'); });
-  } catch {}
+  if (!sock || !token) return Promise.resolve();
+  return new Promise(resolve => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    try {
+      const socket = net.connect(sock);
+      socket.setTimeout(300, () => { socket.destroy(); finish(); });
+      socket.once('error', () => { socket.destroy(); finish(); });
+      socket.once('close', finish);
+      socket.once('connect', () => { socket.end(JSON.stringify({ token, agyMcpListed: true }) + '\n'); });
+    } catch { finish(); }
+  });
 }
 async function main() {
   const { JsonRpcLineTransport } = await import('@deepseek-ai/dsh-sdk-protocol');
@@ -59,7 +64,7 @@ async function main() {
     if (method === 'initialize') return { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'workspace', version: '1' } };
     if (method === 'ping') return {};
     if (method === 'tools/list') {
-      if (isAgy) notifyAgyListed();
+      if (isAgy) await notifyAgyListed();
       return { tools: (isAgy ? [tool] : [tool, background.tool, ...(isCodex ? [] : operator.tools)]).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema,
         annotations: t.annotations || { destructiveHint: false, openWorldHint: false, readOnlyHint: t.name === 'workspace_sessions' } })) };
     }

@@ -951,6 +951,35 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   ws.input(id3, 'x', 'owner-1');
   assert.equal(rt3.mcpWarmPhase, 'aborted');
   assert.equal(rt3.addressedSendAvailable, false);
+
+  // 296-r8: Auth-timer skip branch (no signed-in model footer, old MCP listing already in viewport) recomputes promptReady & chatAvailable immediately!
+  const term6 = new XtermTerminal(['/bin/agy'], dir, {});
+  const rt6 = new AgyTui({ id: 's-auth-skip', provider: 'agy', cwd: dir }, { hookSocket: path.join(dir, 'hooks.sock'), hookTargets: new Map(), agyMcpTargets: new Map() }, {
+    sendTimeoutMs: 500,
+    humanInputQuietMs: 0,
+    mcpAuthWaitMs: 30,
+    mcpWarmTimeoutMs: 60,
+  });
+  rt6.bridgeDir = dir;
+  rt6.attach(term6);
+  term6.emit('started', 71722);
+  await paint(term6, [
+    'MCP Servers',
+    '>  ✓ naw_workspace  Tools: workspace_message',
+    'Keyboard: esc Exit',
+    rule,
+    '> ',
+    rule,
+    '? for shortcuts',
+  ], 4);
+  assert.equal(rt6.mcpWarmPhase, 'pending');
+  assert.equal(rt6.chatAvailable, false);
+  await new Promise(r => setTimeout(r, 60));
+  assert.equal(rt6.mcpWarmPhase, 'failed');
+  assert.equal(term6.writes.length, 0);
+  assert.equal(rt6.promptReady, true, 'auth-timer skip recomputes promptReady without needing another screen update');
+  assert.equal(rt6.chatAvailable, true, 'chatAvailable becomes true immediately after auth-timer skip');
+  assert.equal(rt6.addressedSendAvailable, false);
 });
 
 test('unhooked agy session clears temporary identity on exit and reload', async t => {
