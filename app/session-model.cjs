@@ -16,7 +16,7 @@ const NATIVE_DEFAULT = '原生默认';
 const CLAUDE_MODES = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'manual'];
 const BYPASS = 'bypassPermissions';
 const STRICT_MODES = ['default', 'manual', 'plan', 'dontAsk'];
-const TAIL_BYTES = 256 * 1024;
+const TAIL_BYTES = 256 * 1024, MODE_BYTES = 16 * 1024 * 1024;
 // Whether the change was made is not known, or it was and the session did not come back.
 const UNSURE_KEYS = ['error.modelChange.unconfirmed', 'error.modelChange.stopped'];
 
@@ -52,46 +52,50 @@ function claudeValue(value, record) {
   }
   return { model: value.model, effort: value.effort };
 }
-// What the session's own transcript says: whether there is a conversation to resume, and the permission mode it was left
-// in. Claude writes that as it exits, also when no turn followed the change, but not where it is the one written last;
-// null where it was killed after a later turn. Null altogether when it cannot be read.
+// What the session's own transcript says: whether there is a conversation to resume, and the permission mode written
+// last. Claude writes it as it exits, also when no turn followed the change, but not where it is the one written last:
+// the session was left in it unless it was killed after a later turn. Null when it cannot be read.
 function claudeTranscript(record) {
   const file = record.nativeTranscript;
   if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${record.nativeId}.jsonl`) return null;
-  let text, whole;
   try {
     const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
       const stat = fs.fstatSync(fd);
       if (!stat.isFile()) return null;
-      const { size } = stat, buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
-      fs.readSync(fd, buffer, 0, buffer.length, size - buffer.length);
-      text = buffer.toString('utf8'); whole = size <= TAIL_BYTES;
+      for (let bytes = Math.min(stat.size, TAIL_BYTES); ; bytes = Math.min(stat.size, bytes * 4)) {
+        const buffer = Buffer.alloc(bytes);
+        fs.readSync(fd, buffer, 0, bytes, stat.size - bytes);
+        const said = transcriptEnd(buffer.toString('utf8'), record.nativeId, bytes === stat.size);
+        if (said.written || bytes === stat.size) return said;
+        if (bytes >= MODE_BYTES) return { conversation: true };
+      }
     } finally { fs.closeSync(fd); }
-  } catch (error) { return error.code === 'ENOENT' ? { conversation: false, permissionMode: null } : null; }
-  const result = { conversation: !whole, permissionMode: null };
-  let written = null, left = false;
+  } catch (error) { return error.code === 'ENOENT' ? { conversation: false } : null; }
+}
+function transcriptEnd(text, nativeId, whole) {
+  let conversation = !whole, written = null, killed = false;
   for (const line of text.split('\n')) {
     let entry; try { entry = JSON.parse(line); } catch { continue; } // a tail's first line may be cut
-    if (['user', 'assistant'].includes(entry?.type)) result.conversation = true;
-    if (entry?.sessionId !== record.nativeId) continue;
-    if (entry.type === 'cost-state') left = true; // as it exits, always
+    if (['user', 'assistant'].includes(entry?.type)) conversation = true;
+    if (entry?.sessionId !== nativeId) continue;
+    if (entry.type === 'cost-state') killed = false; // as it exits, always
     if (typeof entry.permissionMode !== 'string') continue;
-    if (entry.type === 'permission-mode') { written = entry.permissionMode; left = true; }
-    else if (entry.type === 'user' && entry.isSidechain !== true) left = false;
+    if (entry.type === 'permission-mode') { written = entry.permissionMode; killed = false; }
+    else if (entry.type === 'user' && entry.isSidechain !== true) killed = true;
   }
-  if (left) result.permissionMode = written;
-  return result;
+  return { conversation, written, killed };
 }
 // The mode a resume asks for by name, null where Claude comes back by itself: it does in the mode last written, except
 // from bypass, and from default where the person's own default is another mode. Never bypass unless NAW knew it in it.
 function resumeMode(record) {
-  const known = record.nativePermissionMode, said = claudeTranscript(record), left = said?.permissionMode;
-  if (known === BYPASS) return CLAUDE_MODES.includes(left) ? left : BYPASS;
-  if (left === BYPASS) return CLAUDE_MODES.includes(known) ? known : null;
-  if (left) return left === 'default' ? left : null;
-  // Killed: Claude would go by an older mode. One that allows more than default is not asked for on what may be gone.
-  return said?.conversation && STRICT_MODES.includes(known) ? known : null;
+  const known = record.nativePermissionMode, { written, killed } = claudeTranscript(record) || {};
+  // After a kill what it was left in is gone: only what its last turn ran in, where that allows no more than default
+  // and the mode Claude would go by is not a tighter one.
+  if (killed && known !== BYPASS) return STRICT_MODES.includes(known) && !['plan', 'dontAsk'].includes(written) ? known : null;
+  if (known === BYPASS) return !killed && CLAUDE_MODES.includes(written) ? written : BYPASS;
+  if (written === BYPASS) return CLAUDE_MODES.includes(known) ? known : null;
+  return written === 'default' ? written : null;
 }
 function applyClaude(record, value) {
   const requested = { ...record.requestedSettings };
