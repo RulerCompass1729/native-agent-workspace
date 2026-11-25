@@ -204,7 +204,7 @@ test('mobile cleanup failure cannot preserve a closed window notification click'
   h.c.uiReady = false; h.fire(); h.notices[0].emit('click'); assert.ok(h.sandbox.pendingReveal);
   Object.assign(h.sandbox, { win, context: h.c, view: {}, id: 1,
     closeAppMobileSetup() { cleanups++; throw Error('Synthetic mobile cleanup failure'); } });
-  vm.runInContext(section(main, "  win.on('closed', () => {", '\n  try { await win.loadURL'), h.sandbox);
+  vm.runInContext(section(main, "  win.on('closed', () => {", '\n  try { await Promise.all('), h.sandbox);
   assert.throws(() => win.emit('closed'), /Synthetic mobile cleanup failure/);
   assert.equal(cleanups, 1); assert.equal(h.sandbox.pendingReveal, null);
   h.ready(); assert.equal(h.sent.length, 0);
