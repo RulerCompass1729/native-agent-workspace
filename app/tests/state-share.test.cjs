@@ -100,7 +100,7 @@ test('other backends, other sessions and a key that names two records share noth
   for (const c of [one, other, moved, twice]) c.client.close();
 });
 
-test('a client with no endpoint shares nothing; a closed one is dropped from its group and not kept alive by it', async () => {
+test('a client with no endpoint shares nothing; a closed one is dropped from its group', async () => {
   const at = endpoint(), frame = () => ({ event: 'state', data: { sessions: [{ id: 'a', messages: [message('1', 'x')] }], rooms: [] } });
   const plain = connection(null), alone = connection(null);
   plain.feed(frame()); alone.feed(frame());
