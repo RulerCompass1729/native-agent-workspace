@@ -169,6 +169,12 @@ if (testParent > 1) {
 }
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
+// How this run ends is recorded from here on (version-events.cjs), as early as this run is known to be the only one.
+let runMark = null;
+if (primary) try {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true, mode: 0o700 });
+  runMark = new RunMark(app.getPath('userData'), { version: app.getVersion() });
+} catch { /* Without a mark of its own this run is told by what is left there, if anything. */ }
 const windows = new Map();
 const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
@@ -1636,7 +1642,7 @@ async function autoBackendSwitch() {
     autoSwitchRunning = false;
   }
 }
-let versionEvents = null, runMark = null;
+let versionEvents = null;
 // Migration quiet windows (quiet-windows.cjs), or null when its record could not be opened: then none is opened.
 let quietWindows = null;
 // What this start brought and the backends still on an old version, with what each waits for, told once and again
@@ -3146,15 +3152,7 @@ app.on('activate', focusOrOpen);
 app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background')) focusOrOpen(); });
 if (primary) app.whenReady().then(() => { notificationScreen ||= new (require('./confirmation-notifications.cjs').NotificationScreen)(powerMonitor); });
 if (primary) app.whenReady().then(() => powerMonitor.on('resume', wakeAppMobileResume));
-// How this run ends is recorded from here on (version-events.cjs): before the startup window and boot.
-function beginRun() {
-  try {
-    const directory = app.getPath('userData');
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    runMark ||= new RunMark(directory, { version: app.getVersion() });
-  } catch { /* No mark: the next start says it has no record of this run. */ }
-}
-if (primary) app.whenReady().then(() => { beginRun(); return start(); });
+if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {
   if (tempReminders?.busy) {

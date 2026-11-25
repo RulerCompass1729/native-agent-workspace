@@ -7,8 +7,8 @@
 // secretary a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
 // switch, like answer-notices.cjs. NAW adds no queue item and opens no other channel.
 // Each start also says how the last run ended (2026-11-24: a crash read as 「重启完成 296->296」): a run leaves
-// main-running.json at its start and renames it to main-exited.json on its own quit path. Only a mark is evidence: a
-// run that could not leave one is told as having no record, never as normal.
+// main-running.json at its start and renames it to main-exited.json on its own quit path. Normal
+// needs that second mark; with neither, the next start says it has no record.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -109,7 +109,7 @@ function writeRecord(file, value) {
   fs.renameSync(temp, file);
 }
 
-// This run's mark, left at its start (main.cjs beginRun, before boot reads anything else). Judged first, then both old
+// This run's mark, left at its start (main.cjs, right after the single-instance lock). Judged first, then both old
 // marks go and this run's is written: a write that fails leaves none, so the next start says it has no record.
 class RunMark {
   constructor(directory, { version, now = Date.now }) {

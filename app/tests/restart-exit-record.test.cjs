@@ -217,27 +217,18 @@ test('main.cjs: the mark is renamed on will-quit, even when a disposer throws; b
   assert.doesNotMatch(before, /exitClean/u, 'a quit that is refused keeps the mark');
 });
 
-test('main.cjs: only the primary instance leaves a mark, before the startup window and boot; a second one never does', async t => {
+test('main.cjs: only the primary instance leaves a mark, right after the lock and before any window; a second one never does', t => {
   const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
-  const start = source.indexOf('function beginRun()'), line = source.indexOf('if (primary) app.whenReady()', start), end = source.indexOf('\n', line);
-  assert.ok(start > 0 && line > start);
-  assert.doesNotMatch(source, /whenReady\(\)\.then\(start\)/u, 'no other way into start at launch');
+  const lock = source.indexOf('const primary = app.requestSingleInstanceLock();'), start = source.indexOf('let runMark = null;'), end = source.indexOf('\n} catch', start);
+  assert.ok(lock > 0 && start > lock && end > start && start - lock < 400);
+  const lines = source.slice(start, source.indexOf('\n', end + 1));
   for (const primary of [true, false]) {
-    const dir = path.join(directory(t), 'profile'), order = [];
-    const context = vm.createContext({ primary, fs, RunMark, runMark: null, Promise,
-      app: { getPath: () => dir, getVersion: () => NEW, whenReady: async () => {} }, start: () => { order.push(fs.existsSync(marker(dir)) ? 'marked' : 'unmarked'); } });
-    vm.runInContext(source.slice(start, end), context);
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(order, primary ? ['marked'] : []);
+    const dir = path.join(directory(t), 'profile');
+    vm.runInContext(lines, vm.createContext({ primary, fs, RunMark, app: { getPath: () => dir, getVersion: () => NEW } }));
     assert.equal(fs.existsSync(marker(dir)), primary);
   }
-  // A profile it cannot write to does not stop the start.
-  const order = [];
-  const context = vm.createContext({ primary: true, fs, RunMark, runMark: null, Promise,
-    app: { getPath() { throw Error('synthetic'); }, getVersion: () => NEW, whenReady: async () => {} }, start: () => order.push('started') });
-  vm.runInContext(source.slice(start, end), context);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(order, ['started']);
+  // A profile it cannot use does not stop the start.
+  vm.runInContext(lines, vm.createContext({ primary: true, fs, RunMark, app: { getPath() { throw Error('synthetic'); }, getVersion: () => NEW } }));
   // Its record is the one VersionEvents tells.
   assert.match(source, /new VersionEvents\(dataDir, \{ version: app\.getVersion\(\), run: runMark,/u);
 });
