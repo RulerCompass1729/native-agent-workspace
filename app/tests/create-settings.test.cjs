@@ -34,7 +34,7 @@ test('a new Claude session gets the requested mode, model and effort; recovery a
   const source = fs.readFileSync(path.join(__dirname, '../adapters.cjs'), 'utf8');
   const from = source.indexOf('    const model = record.requestedSettings?.model || record.model;');
   const to = source.indexOf('\n    // A picker', from);
-  const posture = record => Array.from(vm.runInNewContext(source.slice(from, to) + '\nposture', { record, EFFORT_LEVELS: ['low', 'medium', 'high', 'xhigh', 'max'] }));
+  const posture = record => Array.from(vm.runInNewContext(source.slice(from, to) + '\nposture', { record, sessionModel: require('../session-model.cjs'), EFFORT_LEVELS: ['low', 'medium', 'high', 'xhigh', 'max'] }));
   const requestedSettings = { model: 'claude-opus-5-5', effort: 'xhigh', permissionMode: 'auto' };
   assert.deepEqual(posture({ requestedSettings }), ['--permission-mode', 'auto', '--model', 'claude-opus-5-5', '--effort', 'xhigh']);
   assert.deepEqual(posture({ skipPermissions: true, requestedSettings }), ['--permission-mode', 'bypassPermissions', '--model', 'claude-opus-5-5', '--effort', 'xhigh']);
