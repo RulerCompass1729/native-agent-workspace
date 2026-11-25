@@ -3335,7 +3335,7 @@
     "model.doneCodex": "「{name}」从下一轮起用 {value}。",
     "model.failed": "「{name}」没换成 {value}：{reason}",
     "model.unsure": "给「{name}」换 {value}：{reason}",
-    "model.screen": " 终端里可能没发出的字存在 {path}",
+    "model.screen": " 终端里可能有没发出的字，已存到 {path}",
     "steward.new.title": "新开一个会话当大管家",
     "steward.new.name": "大管家 {date}",
     "steward.new.folder": "不在任何协作空间里 · {folder}",

@@ -126,7 +126,7 @@ test('what happened is said in one line, with the reason it waits or failed for'
   assert.equal(line({ error: 'x', errorUiMessage: uiError('error.modelChange.stopped').uiMessage }), '给「Worker」换 claude-opus-5-5 · xhigh：它停下了，没能自动接回来。点「继续原生会话」接着聊，再看它现在的模型。');
   assert.deepEqual(read('renderer/model-dialog.js').match(/UNSURE = \[([^\]]+)\]/)[1].match(/error[.\w]+/g).sort(), [...UNSURE_KEYS].sort());
   assert.ok(zh('error.modelChange.stopped').includes(zh('header.resume')) && locale.format('en', 'error.modelChange.stopped').includes(locale.format('en', 'header.resume')));
-  assert.equal(line({ screen: '/saved/a' }).endsWith('可能没发出的字存在 /saved/a'), true); assert.equal(line({ model: null, effort: null }).includes('原生默认'), true);
+  assert.equal(line({ screen: '/saved/a' }).endsWith('可能有没发出的字，已存到 /saved/a'), true); assert.equal(line({ model: null, effort: null }).includes('原生默认'), true);
   assert.equal(line({ waiting: 'later-reason' }).endsWith('等这一轮结束'), true); assert.equal(line({}, null).startsWith('「a」'), true);
 });
 

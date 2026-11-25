@@ -295,8 +295,15 @@ test('a lost answer says nothing: the session does, and it is not changed again'
     made.session.state = 'starting'; await made.changes.pass(); made.session.state = 'idle'; await made.changes.pass(); assert.deepEqual(made.notices, [{ sessionId: 'a', ...OPUS }], name);
     const same = lost(() => {}); await same.changes.request('a', OPUS, 'native-a'); await same.changes.pass(); same.clock.now += SETTLE_MS - 1; await same.changes.pass(); assert.deepEqual(same.notices, [], 'It may still be under way');
     same.clock.now += 1; await same.changes.pass(); assert.deepEqual([same.notices.map(notice => notice.errorUiMessage.key), same.changeCalls().length], [['error.modelChange.unconfirmed'], 1]);
-    const ended = lost(session => { session.state = 'ended'; }); await ended.changes.request('a', OPUS, 'native-a'); await ended.changes.pass(); assert.deepEqual(ended.notices, [], 'It may be between the stop and the resume');
-    ended.clock.now += SETTLE_MS; await ended.changes.pass(); assert.deepEqual(ended.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.stopped']);
+    for (const state of ['ended', 'recoverable']) {
+      const ended = lost(session => { session.state = state; }); await ended.changes.request('a', OPUS, 'native-a'); await ended.changes.pass(); assert.deepEqual(ended.notices, [], 'It may be between the stop and the resume');
+      ended.clock.now += SETTLE_MS; await ended.changes.pass(); assert.deepEqual(ended.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.stopped'], state);
+    }
+    // Its end is not known either: it may still run.
+    for (const state of ['error', 'disconnected', 'background']) {
+      const unknown = lost(session => { session.state = state; }); await unknown.changes.request('a', OPUS, 'native-a'); await unknown.changes.pass(); assert.deepEqual(unknown.notices, []);
+      unknown.clock.now += SETTLE_MS; await unknown.changes.pass(); assert.deepEqual(unknown.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed'], state);
+    }
     // The native default cannot be told from what ran before.
     const plain = lost(() => {}); await plain.changes.request('a', { model: null, effort: 'high' }, 'native-a'); await plain.changes.pass(); assert.deepEqual(plain.notices, []);
     plain.clock.now += SETTLE_MS; await plain.changes.pass(); assert.deepEqual(plain.notices.map(notice => notice.errorUiMessage.key), ['error.modelChange.unconfirmed']);
@@ -391,7 +398,9 @@ test('what waits survives the app; a change that was being made then is only loo
   // Saved again before it is looked up, it is still only looked up.
   write([row]); const held = app(CLAUDE({ backendUnavailable: true }), { dataDir: dir }); await held.changes.pass(); held.changes.moved();
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).changes[0].applying, true);
-  for (const bad of [[{ ...row, at: NOW - 25 * 3600 * 1000 }], [{ ...row, at: NOW + 1000 }], [{ ...row, value: { model: '--x', effort: null } }], [{ ...row, id: 7 }], [null], 'x']) { write(bad); assert.deepEqual(app(CLAUDE(), { dataDir: dir }).changes.ids(), [], JSON.stringify(bad)); }
+  // Closed for longer than it is kept: said as the app starts, and not made.
+  for (const [applying, name] of [[false, 'expired'], [true, 'unconfirmed']]) { write([{ ...row, applying, at: NOW - KEEP_MS }]); const old = app(CLAUDE(), { dataDir: dir }); await old.changes.pass(); assert.deepEqual([old.changeCalls(), old.notices.map(notice => notice.errorUiMessage.key), old.changes.ids()], [[], ['error.modelChange.' + name], []]); }
+  for (const bad of [[{ ...row, at: NOW + 1000 }], [{ ...row, value: { model: '--x', effort: null } }], [{ ...row, id: 7 }], [null], 'x']) { write(bad); assert.deepEqual(app(CLAUDE(), { dataDir: dir }).changes.ids(), [], JSON.stringify(bad)); }
   fs.writeFileSync(file, '{'); assert.deepEqual(app(CLAUDE(), { dataDir: dir }).changes.ids(), []);
 });
 
@@ -491,6 +500,7 @@ test('what would keep the session from coming back is found before it is stopped
   // Where none was reported for this conversation, or it is no file of its own, the messages here say so.
   for (const other of [undefined, path.join(dir, 'native-b.jsonl'), 'native-a.jsonl']) { await changed({ nativeTranscript: other }); await refused({ nativeTranscript: other, messages: [] }, 'error.modelChange.unstarted'); }
   fs.rmSync(nativeTranscript); fs.writeFileSync(path.join(dir, 'else.jsonl'), JSON.stringify(mode)); fs.symlinkSync(path.join(dir, 'else.jsonl'), nativeTranscript); await changed({ nativeTranscript });
+  fs.rmSync(nativeTranscript); require('node:child_process').execFileSync('mkfifo', [nativeTranscript]); await changed({ nativeTranscript }); fs.rmSync(nativeTranscript); fs.mkdirSync(nativeTranscript); await changed({ nativeTranscript });
   // A turn under way may not be in it yet: the choices are shown.
   const first = workspace({ nativeTranscript: path.join(dir, 'x', 'native-a.jsonl'), state: 'working' }); assert.equal((await first.w.modelChoices('a')).provider, 'claude');
 });

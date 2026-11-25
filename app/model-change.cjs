@@ -20,6 +20,7 @@ const KEEP_MS = 24 * 3600 * 1000;
 const FILE = 'model-changes.json';
 const LIVE_STATES = ['idle', 'working', 'approval'];
 const MOVING_STATES = ['starting', 'stopping'];
+const STOPPED_STATES = ['ended', 'recoverable'];
 const OPEN_WAKES = ['staged', 'held', 'sending', 'consumed'];
 // The change may have been made all the same.
 const LOST_KEYS = ['error.confirmationTimeout', 'error.serviceClosed', 'error.modelChange.unconfirmed'];
@@ -75,7 +76,7 @@ function readPending(file, now) {
   let rows;
   try { rows = JSON.parse(fs.readFileSync(file, 'utf8')).changes; } catch { return []; }
   return (Array.isArray(rows) ? rows : []).filter(row => row && typeof row.id === 'string' && typeof row.nativeId === 'string' &&
-    sessionModel.validValue(row.value) && Number.isFinite(row.at) && now >= row.at && now - row.at < KEEP_MS);
+    sessionModel.validValue(row.value) && Number.isFinite(row.at) && now >= row.at);
 }
 function writePending(file, entries) {
   const rows = entries.map(({ id, nativeId, value, at, applying }) => ({ id, nativeId, value, at, applying }));
@@ -269,7 +270,7 @@ class ModelChanges {
     entry.settleAt ??= this.now() + SETTLE_MS;
     const over = this.now() >= entry.settleAt, live = LIVE_STATES.includes(session.state);
     if (live && (lost ? named(entry.value) && same(entry.value, sessionModel.current(session)) : matches(entry.value, sessionModel.current(session)))) return this.finish(entry);
-    if (!live && !MOVING_STATES.includes(session.state) && (!lost || over)) return this.finish(entry, { error: uiError('error.modelChange.stopped') });
+    if (lost ? over && STOPPED_STATES.includes(session.state) : !live && !MOVING_STATES.includes(session.state)) return this.finish(entry, { error: uiError('error.modelChange.stopped') });
     return over ? unsure() : this.wait(entry, 'applying');
   }
   finish(entry, { error = null } = {}) {

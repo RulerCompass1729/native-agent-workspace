@@ -57,9 +57,11 @@ function claudeTranscript(record) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${record.nativeId}.jsonl`) return null;
   let text, whole;
   try {
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
-      const { size } = fs.fstatSync(fd), buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) return null;
+      const { size } = stat, buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
       fs.readSync(fd, buffer, 0, buffer.length, size - buffer.length);
       text = buffer.toString('utf8'); whole = size <= TAIL_BYTES;
     } finally { fs.closeSync(fd); }
