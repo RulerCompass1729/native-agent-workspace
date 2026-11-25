@@ -154,7 +154,10 @@ function copyQueue(queue, waits = null) {
 // Audit rows store their action, target and undo words in the language of the moment, or the
 // method name; these labels let ui-locale show them in the reader's language (old rows too).
 // ui-locale checks each label against the stored words, so a name that is not a label stays.
-function templateLabel(raw, keys) {
+// A value may only be its own built-in phrase; a previous name never is, and a model or effort
+// the saved creation details name is not the native default.
+const ownPhrase = { target: ['standing.newSession'], model: ['standing.nativeDefault'], effort: ['standing.nativeDefault'], home: ['sidebar.independent'] };
+function templateLabel(raw, keys, chosen = {}) {
   const messages = require('./ui-messages.js');
   for (const key of keys) for (const locale of ['zh', 'en']) {
     const template = messages[locale][key], names = [...template.matchAll(/\{(\w+)\}/g)].map(match => match[1]);
@@ -164,7 +167,7 @@ function templateLabel(raw, keys) {
     const params = Object.fromEntries(names.map((name, i) => [name, found[i + 1]]));
     const labels = {};
     for (const name of names) {
-      const label = templateLabel(params[name], ['standing.newSession', 'standing.nativeDefault', 'sidebar.independent']);
+      const label = ownPhrase[name] && chosen[name] == null && templateLabel(params[name], ownPhrase[name]);
       if (label) labels[name] = label;
     }
     return { key, ...(names.length ? { params } : {}), ...(Object.keys(labels).length ? { labels } : {}) };
@@ -177,7 +180,8 @@ function auditLabels(event) {
   const labels = {}, action = 'background.action.' + audit.action;
   if (typeof params.command === 'string' && Object.hasOwn(require('./ui-messages.js').en, action)) labels.command = { key: action };
   const standing = String(event.uiMessage.key).startsWith('notice.background.standing.');
-  const target = standing && typeof params.target === 'string' && templateLabel(params.target, ['standing.creationTarget', 'standing.newSession']);
+  const targetKeys = ['standing.creationTarget', ...(/^create/.test(audit.action) ? ['standing.newSession'] : [])];
+  const target = standing && typeof params.target === 'string' && templateLabel(params.target, targetKeys, audit.creation || {});
   if (target) labels.target = target;
   const undoKeys = Object.keys(require('./ui-messages.js').en).filter(key => key.startsWith('standing.undo.'));
   const undo = standing && typeof params.undo === 'string' && templateLabel(params.undo, undoKeys);

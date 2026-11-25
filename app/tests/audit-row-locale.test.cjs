@@ -56,8 +56,19 @@ test('a chosen name or model is never translated, and a label that does not matc
   state.recordControlOperation(record('named', 'create', [{ provider: 'claude', name: '新建会话' }], 'complete', grant));
   state.recordControlOperation(record('renamed', 'rename', ['other', '归档会话'], 'complete',
     { actionText: locale.format('zh', 'background.action.rename'), target: '归档会话', undo: locale.format('zh', 'standing.undo.rename', { previous: '归档会话' }) }));
+  // Names that equal a built-in phrase (review note 1): each value reads only as its own phrase.
+  state.recordControlOperation(record('archivedNew', 'archiveSession', ['x'], 'complete', standing('zh', 'archiveSession', 'archived', '新会话')));
+  state.recordControlOperation(record('renamedHome', 'rename', ['x', 'y'], 'complete',
+    { actionText: locale.format('zh', 'background.action.rename'), target: '原生默认', undo: locale.format('zh', 'standing.undo.rename', { previous: '独立会话' }) }));
+  state.recordControlOperation(record('joinedNew', 'join', ['x', true], 'complete', standing('zh', 'joinRoom', 'placement', '独立会话', { home: '新会话' })));
+  state.recordControlOperation(record('createdOdd', 'create', [{ provider: 'claude' }], 'complete',
+    standing('zh', 'create', 'created', '独立会话', { creation: { model: '原生默认', effort: null } })));
   const shown = rows(dir), en = id => locale.displayText('en', shown[id].text, shown[id].uiMessage);
-  assert.equal(en('named'), '工作管家 · Create session · 新建会话 · Model: synthetic-model · Effort: high · Standing permission (Executed); Undo: Archive the new item from its menu; native sessions are retained');
+  assert.equal(en('archivedNew'), '工作管家 · Archive session · 新会话 · Standing permission (Executed); Undo: Restore the original item from Archives');
+  assert.equal(en('renamedHome'), '工作管家 · Rename another session · 原生默认 · Standing permission (Executed); Undo: Rename the item back to “独立会话” from its menu');
+  assert.equal(en('joinedNew'), '工作管家 · Join or move to space · 独立会话 · Standing permission (Executed); Undo: Move the member back to “新会话” from its menu');
+  assert.equal(en('createdOdd'), '工作管家 · Create session · 独立会话 · Model: 原生默认 · Effort: Native default · Standing permission (Executed); Undo: Archive the new item from its menu; native sessions are retained');
+  assert.equal(en('named'),'工作管家 · Create session · 新建会话 · Model: synthetic-model · Effort: high · Standing permission (Executed); Undo: Archive the new item from its menu; native sessions are retained');
   assert.equal(en('renamed'), '工作管家 · Rename another session · 归档会话 · Standing permission (Executed); Undo: Rename the item back to “归档会话” from its menu');
   const message = shown.named.uiMessage, plain = locale.format('en', message.key, message.params);
   for (const target of [{ key: 'standing.newSession' }, { key: 'error.operation' }, { key: 'background.action.create', params: { x: '1' } }])
