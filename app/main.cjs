@@ -504,7 +504,10 @@ function workspaceMenuReady() { return Boolean(wired && dsh && entry && dataDir 
 function switchWindowMode(mode, win = BrowserWindow.getFocusedWindow()) {
   if (!workspaceMenuReady() || !['chat', 'terminal'].includes(mode)) return;
   const context = win && windows.get(win.webContents.id);
-  if (context && context.win === win) sendToPage(context, 'workspace:switch-mode', mode);
+  if (context && context.win === win) {
+    localPages?.workspace(context);
+    sendToPage(context, 'workspace:switch-mode', mode);
+  }
 }
 function updateApplicationMenu() {
   const text = key => displayText(key, { app: app.name });
@@ -806,6 +809,7 @@ function flushReveal() {
   if (!context) return;
   const target = pendingReveal; pendingReveal = null;
   if (!backgroundTest) { if (context.win.isMinimized()) context.win.restore(); context.win.show(); context.win.focus(); }
+  localPages?.workspace(context);
   sendToPage(context, 'workspace:reveal-record', target);
 }
 function discardReveal(context) {
@@ -1275,8 +1279,8 @@ async function openWindow(saved) {
       view.active = false;
       try { saveViews(); } catch { view.active = true; }
     }
-    localPages?.closeOwner(context);
     windows.delete(id); context.statePush?.close(); context.imagePreviews?.close(); context.client.close({ leave: !quitting && !context.failed });
+    localPages?.closeOwner(context);
   });
   try { await win.loadURL(entry); await ready; }
   catch (error) { discardReveal(context); if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }

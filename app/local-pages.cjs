@@ -108,7 +108,7 @@ function validBounds(value) {
 function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, shell, screen, uiError, displayText, windowDefaults = {}, present, backgroundThrottling = true,
   notify = () => {}, timers = { set: setTimeout, clear: clearTimeout } }) {
   const open = new Map(), origins = new Map(), prepared = new Set();
-  // Tab pages: id -> { view, page, host, timer, retry }; hosts: main window context -> { active, top }.
+  // Tab pages: id -> { view, wc, page, host, timer, retry }; hosts: main window context -> { active, top }.
   const tabbed = new Map(), hosts = new Map(), resume = new Map();
   const show = present || (win => { if (win.isMinimized()) win.restore(); win.show(); win.focus(); });
 
@@ -219,8 +219,9 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
   }
   function release(entry) {
     timers.clear(entry.timer);
-    if (tabbed.get(entry.page.id) === entry) tabbed.delete(entry.page.id);
-    const wc = entry.view.webContents;
+    if (tabbed.get(entry.page.id) !== entry) return;
+    tabbed.delete(entry.page.id);
+    const { wc } = entry;
     if (!wc.isDestroyed()) {
       const url = wc.getURL();
       if (sameOrigin(entry.page.id, url)) resume.set(entry.page.id, url);
@@ -239,11 +240,17 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
   }
   function createView(page, target) {
     const view = new WebContentsView({ webPreferences: preferences(page.id) });
-    const entry = { view, page, host: null, timer: null, retry: null };
+    const wc = view.webContents, entry = { view, wc, page, host: null, timer: null, retry: null };
     tabbed.set(page.id, entry);
-    guard(view.webContents, entry);
-    view.webContents.on('before-input-event', (event, input) => { if (entry.host) step(entry.host, event, input); });
-    view.webContents.loadURL(target).catch(() => { /* did-fail-load shows the reason in the page. */ });
+    guard(wc, entry);
+    wc.on('before-input-event', (event, input) => { if (entry.host) step(entry.host, event, input); });
+    // A page can close itself; view.webContents is gone by then, so the entry keeps wc.
+    wc.once('destroyed', () => {
+      if (tabbed.get(entry.page.id) !== entry) return;
+      release(entry);
+      if (entry.host) tell(entry.host);
+    });
+    wc.loadURL(target).catch(() => { /* did-fail-load shows the reason in the page. */ });
     return entry;
   }
   // Shows NAW (id null) or a tab page in this window. A page shown in another window moves here as it is.
@@ -259,8 +266,14 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
     if (!page) throw uiError('error.localPage.unknown', { id: typeof id === 'string' ? id.slice(0, 64) : '' });
     origins.set(page.id, page.origin);
     let entry = tabbed.get(page.id);
-    if (entry) entry.page = page;
-    else entry = createView(page, target || resume.get(page.id) || page.url);
+    if (entry) {
+      const moved = entry.page.origin !== page.origin;
+      entry.page = page;
+      if (target || moved) entry.wc.loadURL(target || page.url).catch(() => {});
+    } else {
+      const last = resume.get(page.id);
+      entry = createView(page, target || (sameOrigin(page.id, last) ? last : page.url));
+    }
     if (current.active !== page.id) conceal(owner);
     timers.clear(entry.timer); entry.timer = null;
     const previous = entry.host;
@@ -275,7 +288,7 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
     current.active = page.id;
     entry.view.setVisible(true);
     place(owner);
-    entry.view.webContents.focus();
+    entry.wc.focus();
     tell(owner);
     return state(owner);
   }
@@ -288,10 +301,11 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
       return result;
     },
     show: (owner, id) => select(owner, id),
+    workspace(owner) { if (hosts.get(owner)?.active) select(owner, null); },
     reload(owner, id) {
       const entry = tabbed.get(id);
       if (!entry || entry.host !== owner) return select(owner, id);
-      const wc = entry.view.webContents;
+      const { wc } = entry;
       if (wc.getURL().startsWith('data:') && entry.retry) wc.loadURL(entry.retry).catch(() => {});
       else wc.reload();
       return state(owner);
@@ -314,16 +328,9 @@ function createLocalPages({ dataDir, BrowserWindow, WebContentsView, session, sh
       const target = pageUrl(page, requested, uiError);
       const given = requested !== undefined && requested !== null;
       if (page.tab && owner) {
-        const existing = tabbed.get(page.id);
-        if (existing) {
-          const moved = origins.get(page.id) !== page.origin;
-          origins.set(page.id, page.origin);
-          if (given || moved) existing.view.webContents.loadURL(target).catch(() => {});
-          select(owner, page.id);
-          return { id: page.id, url: target, reused: true, tab: true };
-        }
+        const reused = tabbed.has(page.id);
         select(owner, page.id, given ? target : null);
-        return { id: page.id, url: target, reused: false, tab: true };
+        return { id: page.id, url: target, reused, tab: true };
       }
       const current = open.get(page.id);
       if (current && !current.win.isDestroyed()) {

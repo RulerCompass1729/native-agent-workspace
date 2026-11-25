@@ -413,6 +413,49 @@ test('Control-Tab moves between tabs from NAW and from inside the page', async t
   assert.equal(key(w.win.webContents, { type: 'keyUp' }), false);
 });
 
+// Electron takes the view of a page that closes itself out of the window and drops its webContents.
+function closesItself(w, view) {
+  const wc = view.webContents;
+  wc.closed = true; view.webContents = undefined; w.win.contentView.removeChildView(view); wc.emit('destroyed');
+}
+for (const shown of [true, false])
+test(`a tab page that closes itself while ${shown ? 'shown' : 'hidden'} leaves NAW and opens again`, async t => {
+  const { fake, local, timers, pushed } = pages(t, [tabPage]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  if (!shown) local.show(w, null);
+  pushed.length = 0;
+  closesItself(w, fake.views[0]);
+  assert.equal(local.tabs(w).active, null);
+  assert.deepEqual(pushed.map(p => [p.to, p.state.active]), [[w, null]]);
+  assert.equal(timers.pending, 0, 'no release is left for a page that is gone');
+  assert.equal(local.reload(w, 'board').active, 'board');
+  assert.equal(fake.views.length, 2); assert.deepEqual(w.win.contentView.children, [fake.views[1]]);
+  closesItself(w, fake.views[1]); local.closeOwner(w);
+  assert.equal(timers.pending, 0);
+});
+test('a tab page whose declared address changed loads the new one when shown again, not the one it was left on', async t => {
+  const { dataDir, fake, local, timers } = pages(t, [tabPage]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  local.show(w, null);
+  declare(dataDir, [{ ...tabPage, url: 'http://127.0.0.1:8002/' }]);
+  local.show(w, 'board');
+  assert.deepEqual(fake.views[0].webContents.loads, ['http://127.0.0.1:8001/', 'http://127.0.0.1:8002/']);
+  local.show(w, 'board');
+  assert.equal(fake.views[0].webContents.loads.length, 2, 'the same address is not loaded again');
+  local.show(w, null); timers.advance(20 * 60 * 1000);
+  declare(dataDir, [{ ...tabPage, url: 'http://127.0.0.1:8003/' }]);
+  local.show(w, 'board');
+  assert.deepEqual(fake.views[1].webContents.loads, ['http://127.0.0.1:8003/']);
+});
+test('showing the workspace uncovers NAW and leaves a window already on it alone', async t => {
+  const { fake, local, pushed } = pages(t, [tabPage]), w = owner();
+  local.workspace(w); local.workspace(owner());
+  assert.deepEqual([pushed.length, w.win.webContents.focused], [0, 0]);
+  await local.open('board', undefined, { owner: w });
+  local.workspace(w);
+  assert.equal(local.tabs(w).active, null); assert.equal(fake.views[0].visible, false); assert.equal(w.win.webContents.focused, 1);
+});
+
 test('tab actions refuse unknown pages, page windows and background agents', async t => {
   const { fake, local } = pages(t, [tabPage, other]), w = owner();
   assert.equal(key(() => local.show(w, 'missing')), 'error.localPage.unknown');
@@ -432,6 +475,8 @@ test('the strip ships in both builds, and its IPC is the person\'s window only',
   assert.ok(html.includes('<link rel="stylesheet" href="window-tabs.css">'));
   assert.match(main, /register\('localPageTabs', \(c, action, value\) => \{\n    if \(c\.background\) throw uiError\('error\.localPage\.background'\);/u);
   assert.ok(main.includes("applicationHandlers.delete('localPageTabs');"));
-  assert.ok(main.includes('localPages?.closeOwner(context);'));
+  assert.match(main, /context\.client\.close\([^\n]*\n    localPages\?\.closeOwner\(context\);/u, 'The window is gone from the list whatever its pages do');
+  assert.match(main, /localPages\?\.workspace\(context\);\n  sendToPage\(context, 'workspace:reveal-record', target\);/u, 'A clicked notice uncovers NAW');
+  assert.match(main, /localPages\?\.workspace\(context\);\n    sendToPage\(context, 'workspace:switch-mode', mode\);/u);
   assert.ok(preload.includes("'openLocalPage', 'localPageTabs'") && preload.includes("['onLocalPageTabs', 'workspace:local-page-tabs']"));
 });
