@@ -47,7 +47,7 @@ function parse(text) {
     if (!validRoomId(roomId)) {
       throw Error('Invalid manager record');
     }
-    managers.set(roomId, identity(value));
+    managers.set(roomId, value === null ? null : identity(value));
   }
   return { managers, secretaryRetired: retired };
 }
@@ -56,9 +56,13 @@ class SpaceManagers {
   constructor(directory) {
     this.file = path.join(directory, 'space-managers.json');
     this.logFile = path.join(directory, 'rotation-log.jsonl');
+    // Space → its manager. Until the former secretary is retired, null for a space the person left without one.
     this.managers = new Map();
     // null until the former secretary was retired; then the space it became the manager of, if any.
     this.secretaryRetired = null;
+    this.read();
+  }
+  read() {
     this.failed = false;
     try {
       Object.assign(this, parse(readPrivate(this.file)));
@@ -83,7 +87,9 @@ class SpaceManagers {
     }
     const current = new Map();
     for (const [roomId, selected] of this.managers) {
-      current.set(roomId, successor(selected, entries));
+      if (selected) {
+        current.set(roomId, successor(selected, entries));
+      }
     }
     return current;
   }
@@ -142,13 +148,11 @@ class SpaceManagers {
     if (selected) {
       for (const [other, now] of this.failed ? [] : this.all()) {
         if (now.sessionId === selected.sessionId) {
-          managers.delete(other);
+          managers.set(other, null);
         }
       }
-      managers.set(roomId, selected);
-    } else {
-      managers.delete(roomId);
     }
+    managers.set(roomId, selected);
     if (!this.failed) {
       this.save(managers, this.secretaryRetired);
       return;
@@ -156,14 +160,16 @@ class SpaceManagers {
     // The unreadable record is kept aside, and the former secretary is not handed a space a second time.
     const aside = `${this.file}.damaged-${randomUUID()}`;
     try {
-      fs.renameSync(this.file, aside);
+      fs.linkSync(this.file, aside);
     } catch {
       throw uiError('error.manager.save');
     }
     try {
       this.save(managers, { roomId: null });
     } catch (error) {
-      fs.renameSync(aside, this.file);
+      try {
+        fs.unlinkSync(aside);
+      } catch {}
       throw error;
     }
   }
@@ -196,7 +202,8 @@ class SpaceManagers {
     this.save(managers, { roomId });
     return { status: 'retired', roomId, name: record.name, sessionId: record.id };
   }
-  save(managers, secretaryRetired) {
+  save(next, secretaryRetired) {
+    const managers = new Map([...next].filter(([, value]) => value || !secretaryRetired));
     const body = JSON.stringify({ version: 1, managers: Object.fromEntries(managers), secretaryRetired });
     if (Buffer.byteLength(body) > RECORD_MAX) {
       throw uiError('error.manager.save');

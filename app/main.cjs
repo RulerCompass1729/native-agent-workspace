@@ -872,6 +872,7 @@ function stewardReadsUnasked(actor, snapshot) {
 }
 // In the queue every join runs in: the session cannot leave the space while it becomes its manager.
 async function designateManager(c, roomId, id, { vacant = false } = {}) {
+  if (spaceManagers.failed) spaceManagers.read();
   const reset = spaceManagers.failed;
   if (reset) {
     const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('os.managerRecordTitle'), detail: displayText('os.managerRecordDetail'),

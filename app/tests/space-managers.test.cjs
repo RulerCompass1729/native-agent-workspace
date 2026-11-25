@@ -130,14 +130,29 @@ test('an unreadable record or log is an error, never nobody; choosing again keep
   assert.equal(fs.readFileSync(path.join(dir, aside[0]), 'utf8'), '{broken');
 });
 
-test('starting over that cannot be saved puts the unreadable record back', t => {
+test('starting over never leaves the place of the record empty; one that cannot be saved leaves it as it was', t => {
   const { dir, role } = setup(t);
   fs.writeFileSync(role.file, '{broken', { mode: 0o600 });
   const reopened = new SpaceManagers(dir);
-  reopened.save = () => { throw Error('full'); };
+  reopened.save = () => {
+    assert.equal(fs.readFileSync(role.file, 'utf8'), '{broken');
+    throw Error('full');
+  };
   assert.throws(() => reopened.set(ROOM_A, manager, { reset: true }), /full/);
   assert.equal(fs.readFileSync(role.file, 'utf8'), '{broken');
   assert.deepEqual(fs.readdirSync(dir), ['space-managers.json']);
+});
+
+test('a record that can be read again is, without starting over', t => {
+  const { dir, role } = setup(t);
+  role.set(ROOM_A, manager);
+  fs.chmodSync(role.file, 0o000);
+  const reopened = new SpaceManagers(dir);
+  assert.equal(reopened.failed, true);
+  fs.chmodSync(role.file, 0o600);
+  reopened.read();
+  assert.equal(reopened.failed, false);
+  assert.deepEqual(reopened.current(ROOM_A), manager);
 });
 
 test('a change that cannot be saved leaves the managers as they were, in memory and on disk', t => {
@@ -218,6 +233,30 @@ test('the former secretary is decided only once it and each of its spaces can be
     assert.equal(role.retireSecretary(manager, [session('manager', [ROOM_A])], rooms).roomId, ROOM_A, 'decided once it can be told');
     assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), manager);
   }
+});
+
+test('a space the person decided about while the former secretary was away is not handed to it', t => {
+  const rooms = [{ id: ROOM_A, archived: false }, { id: ROOM_B, archived: false }], back = [session('manager', [ROOM_A])];
+  const decisions = [
+    role => role.set(ROOM_A, null),
+    role => { role.set(ROOM_A, next); role.set(ROOM_A, null); },
+    role => { role.set(ROOM_A, next); role.set(ROOM_B, next); },
+  ];
+  for (const decide of decisions) {
+    const { dir, role } = setup(t);
+    assert.equal(role.retireSecretary(manager, [], rooms).status, 'waiting');
+    decide(role);
+    const reopened = new SpaceManagers(dir);
+    assert.equal(reopened.current(ROOM_A), null);
+    assert.equal(reopened.retireSecretary(manager, back, rooms).roomId, null);
+    assert.equal(reopened.current(ROOM_A), null);
+    assert.equal(JSON.parse(fs.readFileSync(role.file, 'utf8')).managers[ROOM_A], undefined, 'decided: nothing more to keep');
+    assert.equal(new SpaceManagers(dir).failed, false);
+  }
+  const { dir, role } = setup(t);
+  role.set(ROOM_B, next);
+  assert.equal(role.retireSecretary(manager, back, rooms).roomId, ROOM_A, 'another space is not a decision about this one');
+  assert.deepEqual(new SpaceManagers(dir).current(ROOM_B), next);
 });
 
 test('the former secretary waits for its backend, and never displaces a manager the person chose', t => {

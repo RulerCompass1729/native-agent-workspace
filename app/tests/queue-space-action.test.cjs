@@ -289,16 +289,17 @@ test('the former secretary becomes the manager of its space once its session is 
   assert.equal(events().length, 1);
   assert.equal(new RoomState(f.dir).value.events.filter(event => event.kind === 'manager').length, 1, 'the record is kept');
 });
-test('a space record that cannot be written does not undo the role, nor bring the former secretary back', async t => {
+test('a space record that cannot be written does not undo the role, nor the former secretary\'s', async t => {
   const f = fixture(t), person = { client: f.c.client }, secretary = { sessionId: 'manager', nativeId: 'native-manager' };
   f.room.noteManager = () => { throw Error('full'); };
   await f.handlers.get('spaceManager')(person, 'shared', 'manager');
   assert.deepEqual(f.managers.current('shared'), secretary);
   await f.handlers.get('spaceManager')(person, 'shared', null);
   assert.equal(f.managers.current('shared'), null);
-  const { context } = registered({ roomState: f.room, spaceManagers: f.managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map() } });
+  const managers = new SpaceManagers(fixture(t).dir);
+  const { context } = registered({ roomState: f.room, spaceManagers: managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map() } });
   await context.retireSecretary({ sessions: [f.record], rooms: [{ id: 'shared' }] });
-  assert.deepEqual(f.managers.current('shared'), secretary);
+  assert.deepEqual(managers.current('shared'), secretary);
 });
 test('over a record that cannot be read, a project manager is set only once the person agrees to start over', async t => {
   const f = fixture(t), person = { client: f.c.client }, shown = [];
@@ -311,6 +312,12 @@ test('over a record that cannot be read, a project manager is set only once the 
   const set = choice => handlers.get('spaceManager')(person, 'shared', choice);
   for (const choice of ['manager', null]) await set(choice);
   assert.equal(shown.length, 2);
+  const text = fs.readFileSync(managers.file, 'utf8');
+  fs.writeFileSync(managers.file, JSON.stringify({ version: 1, managers: {}, secretaryRetired: null }));
+  await set(null);
+  assert.deepEqual([shown.length, managers.failed], [2, false], 'read again before asking');
+  fs.writeFileSync(managers.file, text);
+  managers.read();
   assert.deepEqual([shown[0].cancelId, shown[0].defaultId, shown[0].buttons.length], [0, 0, 2]);
   assert.match(shown[0].detail, /别的空间的项目经理要再设一遍/u);
   assert.equal(managers.failed, true);
