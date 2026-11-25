@@ -29,7 +29,7 @@ function createFaultPlatform(c) {
     const isNew = version() === c.newVersion;
     if (!isNew && c.testFault === 'old-reopen-fails') fs.renameSync(c.executable, c.executable + '.disabled');
     cp.execFileSync('/usr/bin/open', ['-g', '-j', '-a', c.app], { timeout: 10000 });
-    if (isNew && c.testFault !== 'active-timeout') {
+    if (isNew && !['active-timeout', 'dsh-slow'].includes(c.testFault)) {
       let ready = false;
       for (let i = 0; i < 200; i++) {
         try { ready = JSON.parse(fs.readFileSync(path.join(c.data, 'fixture-started.json'))).version === c.newVersion; } catch {}

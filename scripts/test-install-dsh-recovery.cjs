@@ -39,7 +39,8 @@ let passed = 0, failed = 0;
     fs.promises.open = async function(file, ...args) { if (broken && String(file).startsWith(donorTree.root)) throw Object.assign(Error('synthetic EIO'), { code: 'EIO' }); return Reflect.apply(open, this, [file, ...args]); };
     const state = dir => ({ runtimeVersion: version, servicePid: 0, sessions: mode === 'retained' && dir === donorDir ? [{ id: 'synthetic retained record', state: 'ended' }] : [], room: { messages: [] } });
     const ctx = { fs, path, crypto, __dirname: app, process: { env: { NAW_APP_VERSION: version } }, uiError: key => Error(key), ...layout, ...locks, console: { warn: (...args) => warnings.push(args) },
-      require(name) { assert.equal(name, './dsh-tui.cjs'); assert.ok(fs.existsSync(path.join(root, 'services.lock'))); return { ...tui, inheritRuntime: async (...args) => { copies++; return tui.inheritRuntime(...args); } }; },
+      require(name) { assert.equal(name, './dsh-tui.cjs'); assert.ok(fs.existsSync(path.join(root, 'services.lock'))); return tui; },
+      dshCopy: helper.inProcess({ inheritRuntime: async (...args) => { copies++; return tui.inheritRuntime(...args); } }),
       ensureServiceAt: async dir => { boots++; return state(dir); }, connectService: async dir => ({ call: async method => { if (method === 'initial') return state(dir); if (method === 'shutdown') retired.push(dir); }, close() {} }), waitForShutdown: async () => {} };
     const predicates = source.indexOf('function emptyService(state)'); assert.ok(predicates >= 0 && predicates < start);
     Object.assign(ctx, vm.runInNewContext(source.slice(predicates, start) + '\n({emptyService,emptyStore})', ctx));

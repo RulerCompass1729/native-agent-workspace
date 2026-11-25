@@ -146,6 +146,7 @@ async function build() {
       'creation-defaults.cjs',
       'daemon.cjs',
       'discussion-guidelines.cjs',
+      'dsh-copy.cjs',
       'dsh-egress.cjs',
       'dsh-host.cjs',
       'dsh-server.mjs',
