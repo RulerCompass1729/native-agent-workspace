@@ -151,6 +151,40 @@ function copyQueue(queue, waits = null) {
   return copy;
 }
 
+// Audit rows store their action, target and undo words in the language of the moment, or the
+// method name; these labels let ui-locale show them in the reader's language (old rows too).
+// ui-locale checks each label against the stored words, so a name that is not a label stays.
+function templateLabel(raw, keys) {
+  const messages = require('./ui-messages.js');
+  for (const key of keys) for (const locale of ['zh', 'en']) {
+    const template = messages[locale][key], names = [...template.matchAll(/\{(\w+)\}/g)].map(match => match[1]);
+    const pattern = template.split(/\{\w+\}/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('([\\s\\S]*?)');
+    const found = new RegExp('^' + pattern + '$', 'u').exec(raw);
+    if (!found) continue;
+    const params = Object.fromEntries(names.map((name, i) => [name, found[i + 1]]));
+    const labels = {};
+    for (const name of names) {
+      const label = templateLabel(params[name], ['standing.newSession', 'standing.nativeDefault', 'sidebar.independent']);
+      if (label) labels[name] = label;
+    }
+    return { key, ...(names.length ? { params } : {}), ...(Object.keys(labels).length ? { labels } : {}) };
+  }
+  return null;
+}
+function auditLabels(event) {
+  const params = event.uiMessage?.params, audit = event.controlAudit;
+  if (!params || !String(event.uiMessage.key).startsWith('notice.background.')) return null;
+  const labels = {}, action = 'background.action.' + audit.action;
+  if (typeof params.command === 'string' && Object.hasOwn(require('./ui-messages.js').en, action)) labels.command = { key: action };
+  const standing = String(event.uiMessage.key).startsWith('notice.background.standing.');
+  const target = standing && typeof params.target === 'string' && templateLabel(params.target, ['standing.creationTarget', 'standing.newSession']);
+  if (target) labels.target = target;
+  const undoKeys = Object.keys(require('./ui-messages.js').en).filter(key => key.startsWith('standing.undo.'));
+  const undo = standing && typeof params.undo === 'string' && templateLabel(params.undo, undoKeys);
+  if (undo) labels.undo = undo;
+  return Object.keys(labels).length ? labels : null;
+}
+
 // Internal intake records stay in local space storage, including malformed
 // records kept for recovery. They are not part of a renderer event projection.
 function displayEvents(events) {
@@ -163,6 +197,8 @@ function displayEvents(events) {
       display.text = visibleText(event.text);
       display.controlAudit = { ...event.controlAudit, actor: { ...event.controlAudit.actor, name: visibleText(event.controlAudit.actor.name) } };
       if (typeof event.uiMessage?.params?.name === 'string') display.uiMessage = { ...event.uiMessage, params: { ...event.uiMessage.params, name: visibleText(event.uiMessage.params.name) } };
+      const labels = auditLabels(event);
+      if (labels) display.uiMessage = { ...display.uiMessage, labels };
     }
     return display;
   });

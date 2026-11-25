@@ -40,6 +40,10 @@
       if (names.length !== entries.length || entries.some(([name, item]) => !names.includes(name) ||
         !(item === null || typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item) || typeof item === 'string' && item.length <= 16000))) return null;
       const message = { version: 1, key: value.key, params: Object.freeze(Object.fromEntries(entries)) };
+      if (prefix === 'notice.' && Object.hasOwn(value, 'labels')) {
+        const labels = readLabels(value.labels, names, message.params, depth + 1, budget);
+        if (labels && !Object.hasOwn(labels, value.causeParam)) message.labels = labels;
+      }
       const hasCause = Object.hasOwn(value, 'cause'), hasParts = Object.hasOwn(value, 'parts');
       if (hasCause || hasParts || Object.hasOwn(value, 'causeParam') || Object.hasOwn(value, 'separator')) {
         if (typeof value.causeParam !== 'string' || !names.includes(value.causeParam) || prefix === 'notice.' && hasParts) return null;
@@ -68,6 +72,44 @@
       return Object.freeze(message);
     } catch { return null; }
   }
+  // A stored parameter that is a catalog label (an action, an undo step) reads in the reader's
+  // language. The label must render to the raw words in zh or en; a recorded method name may
+  // only take an action label. Otherwise every label is ignored and the raw words show.
+  const labelKey = key => typeof key === 'string' && Object.hasOwn(messages.en, key) &&
+    (key.startsWith('background.action.') || key.startsWith('standing.') || key === 'sidebar.independent');
+  function readLabels(value, names, params, depth, budget) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const entries = Object.entries(value);
+    if (!entries.length) return null;
+    const labels = {};
+    for (const [name, item] of entries) {
+      if (!names.includes(name) || typeof params[name] !== 'string') return null;
+      const label = readLabel(item, params[name], depth, budget);
+      if (!label) return null;
+      labels[name] = label;
+    }
+    return Object.freeze(labels);
+  }
+  function readLabel(value, raw, depth, budget) {
+    if (--budget.remaining < 0 || depth > 3 || !value || !labelKey(value.key)) return null;
+    const params = value.params ?? {};
+    if (typeof params !== 'object' || Array.isArray(params)) return null;
+    const names = [...new Set([...messages.en[value.key].matchAll(/\{(\w+)\}/g)].map(match => match[1]))];
+    const entries = Object.entries(params);
+    if (names.length !== entries.length || entries.some(([name, item]) => !names.includes(name) || typeof item !== 'string' || item.length > 16000)) return null;
+    const label = { key: value.key, params: Object.freeze(Object.fromEntries(entries)) };
+    if (Object.hasOwn(value, 'labels')) {
+      const nested = readLabels(value.labels, names, label.params, depth + 1, budget);
+      if (!nested) return null;
+      label.labels = nested;
+    }
+    const method = !names.length && value.key.startsWith('background.action.') && /^[A-Za-z]{1,64}(?:\.[A-Za-z]{1,64})?$/.test(raw);
+    return method || ['zh', 'en'].some(locale => renderLabel(locale, label) === raw) ? Object.freeze(label) : null;
+  }
+  function labelParams(locale, value) {
+    return value.labels ? { ...value.params, ...Object.fromEntries(Object.entries(value.labels).map(([name, label]) => [name, renderLabel(locale, label)])) } : value.params;
+  }
+  function renderLabel(locale, label) { return format(locale, label.key, labelParams(locale, label)); }
   function displayMessage(value, prefix = 'error.', raw) {
     const message = readDisplayMessage(value, prefix, 0, { remaining: 256 });
     return message && (arguments.length < 3 || matchesOriginal(message, raw)) ? message : null;
@@ -104,7 +146,7 @@
   }
   function renderMessage(locale, value) {
     const replacement = value.cause ? renderMessage(locale, value.cause) : value.parts?.map(part => part.uiMessage ? renderMessage(locale, part.uiMessage) : part.message).join(value.separator);
-    const params = value.cause || value.parts ? { ...value.params, [value.causeParam]: replacement } : value.params;
+    const params = value.cause || value.parts ? { ...labelParams(locale, value), [value.causeParam]: replacement } : labelParams(locale, value);
     return format(locale, value.key, params);
   }
   function displayText(locale, raw, value) {
