@@ -183,6 +183,7 @@ class Workspace extends EventEmitter {
     this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false; this.saveJob = null;
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
+    this.saved = null; // the JSON of both files as last saved (its parts) and the files that save left: unchanged()
     this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
@@ -365,7 +366,8 @@ class Workspace extends EventEmitter {
   // daily shape a 15 MB synchronous write held every terminal key and reply for tens of milliseconds each second.
   // A write renames only a snapshot newer than the one on disk, so an older one finishing late never replaces it.
   // The same JSON with reuse (a timed checkpoint) or without: kept JSON of a session's saved messages is spliced in.
-  storeSnapshot(replacement, reuse = false) {
+  // Null with `skip`, when that JSON is already on disk.
+  storeSnapshot(replacement, reuse = false, skip = false) {
     const now = Date.now();
     if (!reuse || !(now - this.savedAllAt < SAVE_ALL_MS)) { reuse = false; this.savedAllAt = now; }
     // No terminal bytes, credentials, environment, hook secrets or raw protocol.
@@ -376,12 +378,31 @@ class Workspace extends EventEmitter {
     const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
     if (this.mobileRetiredRequests !== null) mobile.mobileRetiredRequests = this.mobileRetiredRequests;
     const rest = { sessions: SAVED_MARK, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...(this.goalContinuation ? { goalContinuation: this.goalContinuation.journal() } : {}), ...mobile };
-    const sessions = records.map(([record, s]) => spliceSaved(JSON.stringify({ ...s, messages: SAVED_MARK, pendingTag: null }),
-      s.messages === record.messages ? this.savedMessages(record, reuse) : JSON.stringify(persistedMessages(s.messages))));
-    const workspace = (!sessions.includes(null) && spliceSaved(JSON.stringify(rest), `[${sessions.join(',')}]`)) ||
-      JSON.stringify({ ...rest, sessions: records.map(([, s]) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null })) });
+    const parts = records.map(([record, s]) => [JSON.stringify({ ...s, messages: SAVED_MARK, pendingTag: null }),
+      s.messages === record.messages ? this.savedMessages(record, reuse) : JSON.stringify(persistedMessages(s.messages))]);
+    const restJson = JSON.stringify(rest);
     const rooms = this.rooms.size > 1 ? JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }) : null;
-    return { seq: ++this.saveSeq, workspace, rooms };
+    const state = [restJson, rooms, ...parts.flat()];
+    if (skip && this.unchanged(state)) return null;
+    const sessions = parts.map(([json, messages]) => spliceSaved(json, messages));
+    const workspace = (!sessions.includes(null) && spliceSaved(restJson, `[${sessions.join(',')}]`)) ||
+      JSON.stringify({ ...rest, sessions: records.map(([, s]) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null })) });
+    return { seq: ++this.saveSeq, workspace, rooms, state };
+  }
+  // A daemon of live sessions reports a change about once a second, mostly of what is not saved: rewriting the same
+  // JSON each time wrote tens of gigabytes an hour. A file that is missing or not the one saved is written again.
+  unchanged(state) {
+    const same = this.saved !== null && this.saved.state.length === state.length && state.every((part, i) => part === this.saved.state[i]) &&
+      this.savedFiles(state) === this.saved.files;
+    if (same) this.saved.state = state; // the strings savedJson keeps now, so equal older ones are not kept beside them
+    return same;
+  }
+  markSaved(state) { this.saved = { state, files: this.savedFiles(state) }; }
+  savedFiles([, rooms]) {
+    return ['workspace.json', ...(rooms === null ? [] : ['room-records.json'])].map(name => {
+      const stat = fs.statSync(path.join(this.dataDir, name), { throwIfNoEntry: false });
+      return stat ? `${stat.ino}:${stat.size}:${stat.mtimeMs}` : 'missing';
+    }).join(' ');
   }
   // The JSON of a session's saved messages, kept with the change counters it was taken at. It is used again only
   // while neither counter has moved and the record still holds the same messages array.
@@ -406,12 +427,13 @@ class Workspace extends EventEmitter {
       const snapshot = this.storeSnapshot(replacement);
       fs.writeFileSync(temp, snapshot.workspace, { mode: 0o600 });
       // Numbered before the rename: a rename that fails after it took place still keeps an older checkpoint out.
-      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
+      this.renamedSeq = snapshot.seq; this.saved = null; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
       if (snapshot.rooms !== null) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
         fs.writeFileSync(pending, snapshot.rooms, { mode: 0o600 });
         fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
       }
+      this.markSaved(snapshot.state);
     } catch { this.saveFailed(); }
     return workspaceSaved;
   }
@@ -422,7 +444,8 @@ class Workspace extends EventEmitter {
     // One write at a time: a checkpoint due meanwhile is taken when it ends, from the state then.
     if (this.saveWriting) { this.saveAgain = true; return; }
     let snapshot;
-    try { snapshot = this.storeSnapshot(undefined, true); } catch { this.saveFailed(); return; }
+    try { snapshot = this.storeSnapshot(undefined, true, true); } catch { this.saveFailed(); return; }
+    if (!snapshot) return;
     this.saveWriting = true;
     const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
     const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
@@ -431,12 +454,12 @@ class Workspace extends EventEmitter {
       // Check and rename in one turn of the event loop, so a persist() cannot land between them. After close
       // nothing is renamed: close() saved last, and another daemon may already own the directory.
       if (snapshot.seq < this.renamedSeq || this.closed) return fs.promises.rm(temp, { force: true });
-      this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
-      if (snapshot.rooms === null) return;
+      this.renamedSeq = snapshot.seq; this.saved = null; fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
+      if (snapshot.rooms === null) return this.markSaved(snapshot.state);
       await fs.promises.writeFile(pending, snapshot.rooms, { mode: 0o600 });
       // Room records pair with the workspace file of the same snapshot.
       if (this.renamedSeq !== snapshot.seq || this.closed) return fs.promises.rm(pending, { force: true });
-      fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
+      fs.renameSync(pending, file); fs.chmodSync(file, 0o600); this.markSaved(snapshot.state);
     })().catch(() => { if (this.renamedSeq <= snapshot.seq && !this.storageWarning && !this.closed) this.saveFailed(); })
       .finally(() => { if (this.saveJob === job) this.saveJob = null; this.saveWriting = false; if (this.saveAgain) { this.saveAgain = false; this.persistLater(); } });
     this.saveJob = job;
