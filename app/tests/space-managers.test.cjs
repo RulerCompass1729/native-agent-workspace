@@ -114,12 +114,58 @@ test('an unreadable record or log is an error, never nobody; choosing again keep
   const reopened = new SpaceManagers(dir);
   assert.throws(() => reopened.current(ROOM_A), key('error.manager.state'));
   assert.throws(() => reopened.retireSecretary(manager, [session('manager', [ROOM_A])], [{ id: ROOM_A }]), key('error.manager.state'));
-  reopened.set(ROOM_B, next);
+  assert.throws(() => reopened.set(ROOM_B, next), key('error.manager.state'));
+  assert.throws(() => reopened.set(ROOM_B, null), key('error.manager.state'));
+  assert.equal(fs.readFileSync(role.file, 'utf8'), '{broken', 'nothing is written without the person starting over');
+  fs.chmodSync(dir, 0o500);
+  assert.throws(() => reopened.set(ROOM_B, next, { reset: true }), key('error.manager.save'));
+  fs.chmodSync(dir, 0o700);
+  assert.equal(reopened.failed, true);
+  reopened.set(ROOM_B, next, { reset: true });
+  assert.deepEqual(reopened.current(ROOM_B), next);
   assert.deepEqual(new SpaceManagers(dir).current(ROOM_B), next);
   assert.deepEqual(new SpaceManagers(dir).secretaryRetired, { roomId: null });
   const aside = fs.readdirSync(dir).filter(name => name.startsWith('space-managers.json.damaged-'));
   assert.equal(aside.length, 1);
   assert.equal(fs.readFileSync(path.join(dir, aside[0]), 'utf8'), '{broken');
+});
+
+test('starting over that cannot be saved puts the unreadable record back', t => {
+  const { dir, role } = setup(t);
+  fs.writeFileSync(role.file, '{broken', { mode: 0o600 });
+  const reopened = new SpaceManagers(dir);
+  reopened.save = () => { throw Error('full'); };
+  assert.throws(() => reopened.set(ROOM_A, manager, { reset: true }), /full/);
+  assert.equal(fs.readFileSync(role.file, 'utf8'), '{broken');
+  assert.deepEqual(fs.readdirSync(dir), ['space-managers.json']);
+});
+
+test('a change that cannot be saved leaves the managers as they were, in memory and on disk', t => {
+  const { dir, role } = setup(t);
+  role.set(ROOM_A, manager);
+  fs.chmodSync(dir, 0o500);
+  assert.throws(() => role.set(ROOM_A, next), key('error.manager.save'));
+  assert.throws(() => role.set(ROOM_A, null), key('error.manager.save'));
+  fs.chmodSync(dir, 0o700);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), manager);
+  role.set(ROOM_B, next);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  assert.deepEqual(role.current(ROOM_B), next);
+});
+
+test('a saved change counts though the directory cannot be synced', t => {
+  const { dir, role } = setup(t);
+  const open = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...rest) => {
+    if (file === dir) {
+      throw Error('no directory descriptor');
+    }
+    return open(file, ...rest);
+  });
+  role.set(ROOM_A, manager);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), manager);
 });
 
 test('links and records open to others are refused', t => {
@@ -141,6 +187,7 @@ test('the former secretary takes over its one live space; in none or in several 
     { sessions: [session('manager', [ROOM_A, ROOM_B])], rooms, roomId: null },
     { sessions: [session('manager', [ROOM_A, ROOM_B])], rooms: [{ id: ROOM_A, archived: false }, { id: ROOM_B, archived: true }], roomId: ROOM_A },
     { sessions: [session('manager', [ROOM_A], { archived: true })], rooms, roomId: null },
+    { sessions: [session('manager', [ROOM_A], { archived: true, state: 'ended' })], rooms, roomId: null },
     { sessions: [session('manager', [ROOM_A], { nativeId: 'another' })], rooms, roomId: null },
   ];
   for (const { sessions, rooms: list, roomId } of cases) {
@@ -151,6 +198,25 @@ test('the former secretary takes over its one live space; in none or in several 
     assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), roomId ? manager : null);
     assert.deepEqual(new SpaceManagers(dir).secretaryRetired, { roomId });
     assert.deepEqual(new SpaceManagers(dir).retireSecretary(manager, [session('manager', [ROOM_A])], rooms), { status: 'done' });
+  }
+});
+
+test('the former secretary is decided only once it and each of its spaces can be told', t => {
+  const rooms = [{ id: ROOM_A, archived: false }, { id: ROOM_B, archived: false }];
+  const waiting = [
+    [[session('manager', [ROOM_A], { nativeContextPending: true })], rooms],
+    [[session('manager', [ROOM_A], { state: 'ended' })], rooms],
+    [[session('manager', [ROOM_A], { state: 'background' })], rooms],
+    [[session('manager', [ROOM_A])], [rooms[1]]],
+    [[session('manager', [ROOM_A, ROOM_B])], [rooms[0], { ...rooms[1], unavailable: true }]],
+  ];
+  for (const [sessions, list] of waiting) {
+    const { dir, role } = setup(t);
+    assert.deepEqual(role.retireSecretary(manager, sessions, list), { status: 'waiting' });
+    assert.equal(role.secretaryRetired, null);
+    assert.equal(fs.existsSync(role.file), false);
+    assert.equal(role.retireSecretary(manager, [session('manager', [ROOM_A])], rooms).roomId, ROOM_A, 'decided once it can be told');
+    assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), manager);
   }
 });
 
@@ -182,17 +248,18 @@ test('a session in another space cannot reach a manager automatically; its own s
   const { dir, role } = setup(t);
   role.set(ROOM_A, manager);
   const target = session('manager', [ROOM_A]);
-  assert.equal(refusedSpace(dir, session('worker', [ROOM_A]), target), null);
-  assert.equal(refusedSpace(dir, session('worker', [ROOM_A, ROOM_B]), target), null);
-  assert.equal(refusedSpace(dir, session('outside', [ROOM_B]), target), ROOM_A);
-  assert.equal(refusedSpace(dir, session('butler', []), target), null);
-  assert.equal(refusedSpace(dir, session('outside', [ROOM_B]), session('worker', [ROOM_A])), null);
-  assert.equal(refusedSpace(dir, session('outside', [ROOM_B]), session('manager', [ROOM_B])), null);
+  assert.equal(refusedSpace(role, session('worker', [ROOM_A]), target), null);
+  assert.equal(refusedSpace(role, session('worker', [ROOM_A, ROOM_B]), target), null);
+  assert.equal(refusedSpace(role, session('outside', [ROOM_B]), target), ROOM_A);
+  assert.equal(refusedSpace(role, session('butler', []), target), null);
+  assert.equal(refusedSpace(role, session('outside', [ROOM_B]), session('worker', [ROOM_A])), null);
+  assert.equal(refusedSpace(role, session('outside', [ROOM_B]), session('manager', [ROOM_B])), null);
   fs.writeFileSync(role.file, '{broken', { mode: 0o600 });
-  assert.throws(() => refusedSpace(dir, session('outside', [ROOM_B]), target), key('error.manager.state'));
-  assert.equal(refusedSpace(dir, session('worker', [ROOM_A]), target), null);
-  assert.equal(refusedSpace(dir, session('outside', [ROOM_B]), session('butler', [])), null);
-  assert.equal(refusedSpace(dir, session('butler', []), target), null);
+  const broken = new SpaceManagers(dir);
+  assert.throws(() => refusedSpace(broken, session('outside', [ROOM_B]), target), key('error.manager.state'));
+  assert.equal(refusedSpace(broken, session('worker', [ROOM_A]), target), null);
+  assert.equal(refusedSpace(broken, session('outside', [ROOM_B]), session('butler', [])), null);
+  assert.equal(refusedSpace(broken, session('butler', []), target), null);
 });
 
 test('a manager is shown its own space\'s members only', t => {

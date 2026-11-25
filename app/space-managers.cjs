@@ -60,14 +60,10 @@ class SpaceManagers {
     // null until the former secretary was retired; then the space it became the manager of, if any.
     this.secretaryRetired = null;
     this.failed = false;
-    this.damaged = false;
     try {
       Object.assign(this, parse(readPrivate(this.file)));
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        this.failed = true;
-        this.damaged = true;
-      }
+      this.failed = error.code !== 'ENOENT';
     }
   }
   // Each space's designated session as it is now. Two spaces naming the same session is no one's role.
@@ -133,9 +129,13 @@ class SpaceManagers {
     }
     return { kind: 'secretary', name: labels.get(record.id) || record.name, sessionId: record.id };
   }
-  set(roomId, value) {
+  // `reset`: the person agreed to start over from a record that cannot be read, which drops every other space's manager.
+  set(roomId, value, { reset = false } = {}) {
     if (!validRoomId(roomId)) {
       throw Error('Invalid manager space');
+    }
+    if (this.failed && !reset) {
+      throw uiError('error.manager.state');
     }
     const selected = value === null ? null : identity(value);
     const managers = new Map(this.managers);
@@ -149,21 +149,26 @@ class SpaceManagers {
     } else {
       managers.delete(roomId);
     }
-    // A record that could not be read is kept aside: choosing one space's manager must not erase the others' unseen,
-    // nor hand the former secretary a space a second time.
-    if (this.damaged) {
-      try {
-        fs.renameSync(this.file, `${this.file}.damaged-${randomUUID()}`);
-      } catch {
-        throw uiError('error.manager.state');
-      }
-      this.damaged = false;
-      this.secretaryRetired = { roomId: null };
+    if (!this.failed) {
+      this.save(managers, this.secretaryRetired);
+      return;
     }
-    this.save(managers, this.secretaryRetired);
+    // The unreadable record is kept aside, and the former secretary is not handed a space a second time.
+    const aside = `${this.file}.damaged-${randomUUID()}`;
+    try {
+      fs.renameSync(this.file, aside);
+    } catch {
+      throw uiError('error.manager.save');
+    }
+    try {
+      this.save(managers, { roomId: null });
+    } catch (error) {
+      fs.renameSync(aside, this.file);
+      throw error;
+    }
   }
   // Once: the former secretary becomes the manager of the one live space it is in; in none or in several, it is only
-  // retired. `waiting` until its session is in the list, so that a start before its backend answers decides nothing.
+  // retired. `waiting` while it or one of its spaces cannot be told yet: not listed, stopped, or its backend away.
   retireSecretary(secretary, sessions, rooms) {
     if (this.failed) {
       throw uiError('error.manager.state');
@@ -176,12 +181,13 @@ class SpaceManagers {
       return { status: 'retired', roomId: null };
     }
     const record = sessions.find(session => session.id === secretary.sessionId);
-    if (!record) {
+    const listed = record ? roomIds(record).map(id => rooms.find(room => room.id === id)) : [];
+    const usable = usableRecord({ id: secretary.sessionId, nativeId: secretary.nativeId }, sessions);
+    const stopped = record && !record.archived && (record.nativeContextPending || ['ended', 'background'].includes(record.state));
+    if (!record || stopped || listed.some(room => !room || room.unavailable)) {
       return { status: 'waiting' };
     }
-    const live = new Set(rooms.filter(room => !room.archived && !room.unavailable).map(room => room.id));
-    const spaces = roomIds(record).filter(id => live.has(id));
-    const usable = usableRecord({ id: secretary.sessionId, nativeId: secretary.nativeId }, sessions);
+    const spaces = listed.filter(room => !room.archived).map(room => room.id);
     const roomId = usable && spaces.length === 1 && !this.managers.has(spaces[0]) ? spaces[0] : null;
     const managers = new Map(this.managers);
     if (roomId) {
@@ -193,7 +199,7 @@ class SpaceManagers {
   save(managers, secretaryRetired) {
     const body = JSON.stringify({ version: 1, managers: Object.fromEntries(managers), secretaryRetired });
     if (Buffer.byteLength(body) > RECORD_MAX) {
-      throw uiError('error.manager.state');
+      throw uiError('error.manager.save');
     }
     const temp = `${this.file}.${randomUUID()}.tmp`;
     let fd;
@@ -204,15 +210,9 @@ class SpaceManagers {
       fs.closeSync(fd);
       fd = undefined;
       fs.renameSync(temp, this.file);
-      const directory = fs.openSync(path.dirname(this.file), 'r');
-      try {
-        fs.fsyncSync(directory);
-      } finally {
-        fs.closeSync(directory);
-      }
     } catch {
-      this.failed = true;
-      throw uiError('error.manager.state');
+      // The record on disk and the one held here are as they were.
+      throw uiError('error.manager.save');
     } finally {
       if (fd !== undefined) {
         fs.closeSync(fd);
@@ -224,6 +224,14 @@ class SpaceManagers {
     this.managers = managers;
     this.secretaryRetired = secretaryRetired;
     this.failed = false;
+    try {
+      const directory = fs.openSync(path.dirname(this.file), 'r');
+      try {
+        fs.fsyncSync(directory);
+      } finally {
+        fs.closeSync(directory);
+      }
+    } catch { /* Saved; only its surviving a power cut is not certain. */ }
   }
 }
 
@@ -265,14 +273,14 @@ function mayManage(directory, id) {
 
 // The space that keeps this sender's messages from its manager, or null. The person, 2026-11-23: 「保证不会让项目经理被
 // 其他空间的任务干扰」: a session in another space is refused; one in no space (the butler, an integrator) is not.
-function refusedSpace(directory, sender, recipient) {
+function refusedSpace(managers, sender, recipient) {
   const own = roomIds(sender), theirs = roomIds(recipient);
   if (!own.length || !theirs.length) {
     return null;
   }
   let roomId;
   try {
-    roomId = new SpaceManagers(directory).roomOf(recipient);
+    roomId = managers.roomOf(recipient);
   } catch (error) {
     if (theirs.every(id => own.includes(id))) {
       return null;

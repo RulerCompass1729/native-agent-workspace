@@ -71,13 +71,25 @@ test("a project manager is shown its own space's board, queue and members, and n
   source.sessions.push({ id: 'member', nativeId: 'native-member', name: 'Member', roomIds: [A], messages: [{ text: 'MEMBER_BODY' }] });
   source.spaceManagers[A] = { sessionId: 'agent', nativeId: 'native-agent' };
   source.rotationChains.push({ spaces: [B], sessions: [{ id: 'gone', nativeId: 'native-gone', name: 'ELSEWHERE', handedAt: 1, outcome: 'done' }] });
-  const result = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: false, managedRoom: A });
+  const result = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: false, limit: [A] });
   assert.deepEqual(result.rooms.map(room => room.id), [A]);
   assert.equal(result.rooms[0].queue[0].text, A + '_TASK');
   assert.equal(result.room, undefined, 'the space open in its own view is another one');
   assert.deepEqual(result.sessions.map(s => s.id), ['agent', 'member']);
   assert.deepEqual(result.sessions.find(s => s.id === 'member').messages, [], "a member's conversation stays its own");
   assert.deepEqual(result.spaceManagers, { [A]: { sessionId: 'agent', nativeId: 'native-agent' } });
-  assert.deepEqual(result.rotationChains.map(chain => chain.sessions[0].id), ['other']);
+  assert.deepEqual(result.rotationChains.map(chain => [chain.spaces, chain.sessions[0].id]), [[[A], 'other']], 'nor the other spaces one was in');
   for (const text of [B + '_', 'Space ' + B, 'FOREIGN', 'ELSEWHERE', 'native-manager']) assert.equal(JSON.stringify(result).includes(text), false, text);
+});
+test('an agent whose spaces are all it may be shown is shown those and itself, and with none only itself', () => {
+  const source = fixture();
+  source.room = source.rooms[0];
+  source.spaceManagers[A] = { sessionId: 'agent', nativeId: 'native-agent' };
+  const both = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: true, limit: [A, B] });
+  assert.deepEqual([both.rooms.map(room => room.id), both.sessions.map(s => s.id), Object.keys(both.spaceManagers).length], [[A, B], ['agent', 'other'], 2]);
+  const one = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: true, limit: [A] });
+  assert.deepEqual([one.rooms.map(room => room.id), one.room.id, one.sessions.map(s => s.id)], [[A], A, ['agent']]);
+  assert.equal(JSON.stringify(one).includes('_NOTES'), false);
+  const none = conversationSnapshot(source, actor, null, 'room', { roomIds: [], metadataOnly: false, limit: [] });
+  assert.deepEqual([none.rooms, none.room, none.sessions.map(s => s.id), none.spaceManagers, none.rotationChains], [[], undefined, ['agent'], {}, []]);
 });

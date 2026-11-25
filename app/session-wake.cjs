@@ -260,7 +260,8 @@ async function relocate(w, intent) {
 // A message from another space does not reach a space's project manager (space-managers.cjs).
 function managerRefusal(w, sender, recipient) {
   try {
-    const roomId = require('./space-managers.cjs').refusedSpace(root(w), sender, recipient);
+    const { SpaceManagers, refusedSpace } = require('./space-managers.cjs');
+    const roomId = refusedSpace(new SpaceManagers(root(w)), sender, recipient);
     return roomId ? notSent(uiError('error.wake.managerSpace', { name: recipient.name })) : null;
   } catch (error) { return notSent(error); }
 }

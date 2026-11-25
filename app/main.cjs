@@ -29,7 +29,7 @@ const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { QueueSecretary, follow: followRotation, usableRecord, author: queueAuthor } = require('./queue-secretary.cjs');
-const { SpaceManagers } = require('./space-managers.cjs');
+const { SpaceManagers, refusedSpace } = require('./space-managers.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
 const { StewardStanding } = require('./steward-standing.cjs');
@@ -871,14 +871,22 @@ function stewardReadsUnasked(actor, snapshot) {
   try { return roomIds(record).length === 0; } catch { return false; }
 }
 // In the queue every join runs in: the session cannot leave the space while it becomes its manager.
-function designateManager(c, roomId, id, { vacant = false } = {}) {
+async function designateManager(c, roomId, id, { vacant = false } = {}) {
+  const reset = spaceManagers.failed;
+  if (reset) {
+    const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('os.managerRecordTitle'), detail: displayText('os.managerRecordDetail'),
+      buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 });
+    if (answer.response !== 1) return;
+  }
+  // The role is the record; a timeline that cannot be written does not undo it.
+  const note = (...args) => { try { roomState.noteManager(roomId, ...args); } catch { /* as above */ } };
   return roomState.serial(async () => {
     roomState.writable(roomId);
     const room = roomState.metadata(roomId);
     if (id === null) {
-      if (!spaceManagers.failed && !spaceManagers.current(roomId)) return;
-      spaceManagers.set(roomId, null);
-      roomState.noteManager(roomId, 'notice.room.managerCleared');
+      if (!reset && !spaceManagers.current(roomId)) return;
+      spaceManagers.set(roomId, null, { reset });
+      note('notice.room.managerCleared');
       return;
     }
     if (room.archived) throw uiError('error.queue.archived');
@@ -887,8 +895,8 @@ function designateManager(c, roomId, id, { vacant = false } = {}) {
     const record = sessions.find(s => s.id === id);
     if (!record?.nativeId || !usableRecord(record, sessions) || !isMember(record, roomId) || midRotation(id) || isStewardActor(record)) throw uiError('error.manager.invalid');
     if (vacant && activeManagers(sessions)[roomId]) throw uiError('error.manager.changed');
-    spaceManagers.set(roomId, { sessionId: record.id, nativeId: record.nativeId });
-    roomState.noteManager(roomId, 'notice.room.managerSet', { name: sessionLabels.labels.get(record.id) || record.name }, record.id);
+    spaceManagers.set(roomId, { sessionId: record.id, nativeId: record.nativeId }, { reset });
+    note('notice.room.managerSet', { name: sessionLabels.labels.get(record.id) || record.name }, record.id);
   });
 }
 // With the native defaults every Claude session the person opens has; no task, no input. One at a time for a space.
@@ -917,32 +925,60 @@ async function openManager(c, roomId) {
   return id;
 }
 // Once, when its session is listed: the former secretary manages the one space it is in, or nothing (space-managers.cjs).
+// Tried with a state at most every ten seconds until then.
+let retireSecretaryAt = 0;
 async function retireSecretary(snapshot) {
-  if (!spaceManagers || spaceManagers.failed || spaceManagers.secretaryRetired) return;
+  if (!spaceManagers || spaceManagers.failed || spaceManagers.secretaryRetired || Date.now() < retireSecretaryAt) return;
+  retireSecretaryAt = Date.now() + 10000;
   await roomState.serial(async () => {
     const state = roomState.apply(snapshot);
     const result = spaceManagers.retireSecretary(queueSecretary.current(), state.sessions, state.rooms);
-    if (result.roomId) roomState.noteManager(result.roomId, 'notice.room.managerFromSecretary', { name: sessionLabels.labels.get(result.sessionId) || result.name }, result.sessionId);
+    if (result.roomId) try {
+      roomState.noteManager(result.roomId, 'notice.room.managerFromSecretary', { name: sessionLabels.labels.get(result.sessionId) || result.name }, result.sessionId);
+    } catch { /* The role is the record. */ }
     if (result.status === 'retired') await broadcastRoom();
   });
 }
-// Where the role counts now: { roomId: { sessionId, nativeId } }, members of their own space only.
+// Where the role counts now: { roomId: { sessionId, nativeId } }, members of their own space only. A manager that is
+// handing over leaves its space a moment before its successor takes the role: it counts until then.
 function activeManagers(sessions) {
   const result = {};
   if (!spaceManagers) return result;
   for (const [roomId, value] of spaceManagers.all()) {
     const session = sessions.find(s => s.id === value.sessionId);
-    if (session && spaceManagers.roomOf(session) === roomId) result[roomId] = value;
+    if (session && (spaceManagers.roomOf(session) === roomId || queueDispatcher?.handingOver(session.id, roomId))) result[roomId] = value;
   }
   return result;
 }
+// An agent's message through a space's shared input reaches a project manager from its own space only, as a
+// workspace message does (session-wake.cjs). What the person confirmed is the person's.
+function assertManagerDelivery(c, ids) {
+  if (!spaceManagers || backgroundOperation.request()?.maintenanceApproved) return;
+  const sessions = c.client.snapshot().sessions, sender = sessions.find(s => s.id === c.actor.id && s.nativeId === c.actor.nativeId);
+  for (const id of ids) {
+    const recipient = sessions.find(s => s.id === id);
+    if (!recipient) continue;
+    if (sender ? refusedSpace(spaceManagers, sender, recipient) : spaceManagers.roomOf(recipient))
+      throw uiError('error.wake.managerSpace', { name: sessionLabels.labels.get(id) || recipient.name });
+  }
+}
 function conversationAccess(actor, snapshot) {
-  const access = { roomIds: [], metadataOnly: true, managedRoom: null };
+  // `limit`: the spaces this actor is shown, or null for every space as an agent is shown them.
+  const access = { roomIds: [], metadataOnly: true, limit: null };
   const current = snapshot?.sessions?.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
-  // Unknown roles get metadata only, and a project manager its own space only.
-  try { access.managedRoom = spaceManagers?.roomOf(current) || null; access.metadataOnly = false; } catch { /* Metadata only. */ }
+  try {
+    // A project manager is shown its own space only; one whose own row is not here, none.
+    const managed = current ? spaceManagers?.roomOf(current) : spaceManagers?.designated(actor);
+    if (managed) access.limit = current ? [managed] : [];
+    access.metadataOnly = false;
+  } catch {
+    // Who manages what is unknown: metadata only, and of its own spaces only. A session in no space manages none.
+    let own = [];
+    try { own = current ? roomIds(current) : []; } catch { /* Invalid membership grants nothing. */ }
+    if (!current || own.length) access.limit = own;
+  }
   if (current && !current.archived && !current.nativeContextPending && !roomState.value.archivedSessions?.includes(actor.id)) {
-    try { access.roomIds = roomIds(current).filter(id => !access.managedRoom || id === access.managedRoom); } catch { /* Invalid membership grants nothing. */ }
+    try { access.roomIds = roomIds(current).filter(id => !access.limit || access.limit.includes(id)); } catch { /* Invalid membership grants nothing. */ }
     // The butler sees every space as a member does (the person, 2026-11-11: 「大管家权限最高,应该啥都可以看到和操作」,
     // 「都能看,」; checklist 2026-11-12). Only while it is in no space, as its designation requires; what it reads through
     // NAW is a step in its record.
@@ -1552,6 +1588,7 @@ function register(name, handler) {
       if (backgroundOperation.deliveryTargets(name, args)) {
         await c.client.refresh();
         backgroundOperation.assertDeliveryPolicy(c.client.snapshot(), name, args);
+        assertManagerDelivery(c, backgroundOperation.deliveryTargets(name, args));
       }
       if (['approve', 'operatorAction', 'wakePolicy', 'backendSwitchSettings', 'quitService'].includes(name)) {
         const answer = await showDialog(c, 'message', { type: 'warning', message: name, detail: JSON.stringify(args), buttons: [displayText('common.cancel'), displayText('background.confirm')], cancelId: 0 });
@@ -2121,6 +2158,8 @@ async function boot() {
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('spaceCreate', async (_c, name) => { const id = roomState.create(name); await broadcastRoom(); return id; });
   register('spaceMerge', async (c, action, value) => {
+    // A preview holds other spaces' names, notes and records.
+    if (c.background && conversationAccess(c.actor, c.client.snapshot()).limit) throw uiError('error.background.spaceContent');
     if (!value || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw uiError("error.main.invalidMergeRequest");
     if (action === 'preview') return roomState.mergePreview(c.client, value);
     if (!validRoomId(value.operationId) || value.operationId === 'shared' || Object.keys(value).some(key => !['operationId', 'binding'].includes(key))) throw uiError("error.main.mergeRecordUnverifiable");

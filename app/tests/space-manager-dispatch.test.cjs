@@ -22,7 +22,7 @@ function member(id, extra = {}) {
   };
 }
 
-function plan(items, sessions, managers) {
+function plan(items, sessions, managers, earlier) {
   const waits = new Map();
   const actions = rules.planDispatch({
     rooms: [{ id: 'shared', name: 'Plans', queue: items, run: null }],
@@ -32,6 +32,7 @@ function plan(items, sessions, managers) {
     now: NOW,
     waits,
     ...(managers === undefined ? {} : { managers }),
+    ...(earlier === undefined ? {} : { earlier }),
   });
   return { sent: actions.filter(action => action.kind === 'dispatch').map(action => [action.itemId, action.sessionId]), waits };
 }
@@ -51,6 +52,17 @@ test('an item a project manager added goes to a member, never back to it or to a
   const successor = [member('next')];
   assert.deepEqual(plan([item('1', { creator: BY_MANAGER })], successor, new Map([['next', 'shared']])).sent, []);
   assert.deepEqual(plan([item('1', { creator: BY_MANAGER })], successor, new Map()).sent, [['1', 'next']]);
+});
+
+test('nor to the session that continues from a manager, whose role is still the old one', () => {
+  const taking = [member('next')], from = ids => id => id === 'next' ? ids : [];
+  const held = plan([item('1', { creator: BY_MANAGER })], taking, new Map(), from(['manager']));
+  assert.deepEqual(held.sent, [], 'it added the item itself, before the handover');
+  assert.deepEqual(held.waits.get('1'), [{ sessionId: 'next', reason: 'manager-item' }]);
+  const other = { ...BY_MANAGER, sessionId: 'former-manager' };
+  assert.deepEqual(plan([item('1', { creator: other })], taking, MANAGES, from(['manager'])).sent, [], "another manager's item");
+  assert.deepEqual(plan([item('1', { creator: other })], taking, MANAGES, from(['someone'])).sent, [['1', 'next']]);
+  assert.deepEqual(plan([item('1')], taking, MANAGES, from(['manager'])).sent, [['1', 'next']], "the person's item");
 });
 
 test("the person's and the butler's items may go to the manager", () => {
@@ -154,3 +166,49 @@ test('a role that cannot be read stops no other item', async t => {
   assert.deepEqual([held, sent].map(id => f.room.queueFind('shared', id).status), ['queued', 'sent']);
   assert.equal(f.client.sent[0][1].includes('项目经理'), false);
 });
+
+test('what a session continues from: finished rotations, and the one it has not finished taking over', async t => {
+  const f = await dispatcher(t, [member('a')], () => ({}));
+  const done = (from, to) => ({ event: 'done', old: { id: from }, new: { id: to } });
+  f.dispatcher.log = [done('first', 'second')];
+  f.dispatcher.rotations = { second: { phase: 'handed', newId: 'third', roomIds: ['shared'] } };
+  assert.deepEqual(f.dispatcher.earlierSessions('second'), ['first']);
+  assert.deepEqual(f.dispatcher.earlierSessions('third'), ['second', 'first']);
+  assert.deepEqual(f.dispatcher.earlierSessions('a'), []);
+  for (const phase of ['failed', 'kept']) {
+    f.dispatcher.rotations = { second: { phase, newId: 'third', roomIds: ['shared'] } };
+    assert.deepEqual(f.dispatcher.earlierSessions('third'), [], phase);
+  }
+  f.dispatcher.rotations = {};
+});
+
+test('a session hands its place over from the moment its successor has the handoff until the rotation ends', async t => {
+  const f = await dispatcher(t, [member('a')], () => ({}));
+  const record = { phase: 'handed', newId: 'next', roomIds: ['shared'], handoffConfirmed: true };
+  const over = value => {
+    f.dispatcher.rotations = value ? { manager: value } : {};
+    return f.dispatcher.handingOver('manager', 'shared');
+  };
+  assert.equal(over(record), true);
+  assert.equal(over({ ...record, handoffConfirmed: undefined }), false);
+  assert.equal(over({ ...record, phase: 'failed' }), false);
+  assert.equal(over({ ...record, phase: 'kept' }), false);
+  assert.equal(over({ ...record, roomIds: ['other'] }), false);
+  assert.equal(over(null), false);
+});
+
+for (const step of ['plan', 'send']) {
+  test(`what a session continues from is read at the ${step}`, async t => {
+    const f = await dispatcher(t, [member('next')], () => ({}));
+    let reads = 0;
+    f.dispatcher.earlierSessions = () => {
+      reads += 1;
+      return (reads === 1) === (step === 'plan') ? ['manager'] : [];
+    };
+    const id = f.room.queueAdd('from the manager', null, 'shared', BY_MANAGER);
+    await f.dispatcher.schedule();
+    assert.deepEqual(f.client.sent, []);
+    assert.equal(f.room.queueFind('shared', id).status, 'queued');
+    assert.deepEqual(f.room.queueWaits.get(id), [{ sessionId: 'next', reason: 'manager-item' }]);
+  });
+}

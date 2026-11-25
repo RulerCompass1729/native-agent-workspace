@@ -1377,7 +1377,7 @@ function planDispatch(input) {
           candidates = [item.assignee];
         }
       }
-      const allowed = candidates.filter(id => managerItemMayGo(item, id, input.managers));
+      const allowed = candidates.filter(id => managerItemMayGo(item, id, input.managers, input.earlier?.(id)));
       if (candidates.length && !allowed.length) {
         waits?.set(item.id, candidates.map(sessionId => ({ sessionId, reason: 'manager-item' })));
         continue;
@@ -1553,12 +1553,12 @@ function notesDue(room, session) {
 
 // What a space's project manager added goes to no project manager and not back to itself: an agent's own item must
 // not start it again, directly or through another manager. `managers`: session id → the space it manages; null, a
-// record that cannot be read, holds such items.
-function managerItemMayGo(item, sessionId, managers = new Map()) {
+// record that cannot be read, holds such items. `earlier`: the sessions this one continues from.
+function managerItemMayGo(item, sessionId, managers = new Map(), earlier = []) {
   if (item.creator?.kind !== 'secretary' || item.addedBy === 'steward') {
     return true;
   }
-  return managers !== null && !managers.has(sessionId) && item.creator.sessionId !== sessionId;
+  return managers !== null && [sessionId, ...earlier].every(id => !managers.has(id) && item.creator.sessionId !== id);
 }
 
 // With every item sent to a space's project manager; nothing is sent to it only to say this.
@@ -2815,6 +2815,25 @@ class QueueDispatcher {
     }
   }
 
+  // Its successor in this space has its handoff and it is not ended yet.
+  handingOver(id, roomId) {
+    const record = this.rotations[id];
+    return Boolean(record?.handoffConfirmed && !RESTING_PHASES.includes(record.phase) && record.roomIds?.includes(roomId));
+  }
+
+  // What `id` continues from, the session it has not finished taking over included.
+  earlierSessions(id) {
+    const ids = new Set(this.continuedFrom(id));
+    for (const [oldId, record] of Object.entries(this.rotations)) {
+      if (record.newId === id && oldId !== id && !RESTING_PHASES.includes(record.phase)) {
+        for (const earlier of [oldId, ...this.continuedFrom(oldId)]) {
+          ids.add(earlier);
+        }
+      }
+    }
+    return [...ids];
+  }
+
   rotationChains() {
     if (!this.chainsCache) {
       try {
@@ -3295,6 +3314,7 @@ class QueueDispatcher {
       rotationGates,
       unmatched: unmatched ? [unmatched] : [],
       managers: this.managerRooms(current.snapshot.sessions),
+      earlier: id => this.earlierSessions(id),
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
@@ -3754,7 +3774,7 @@ class QueueDispatcher {
     }
     // As it is now: the person may have made this member the project manager since the plan.
     const managers = this.managerRooms(current.snapshot.sessions);
-    if (!managerItemMayGo(item, session.id, managers)) {
+    if (!managerItemMayGo(item, session.id, managers, this.earlierSessions(session.id))) {
       waits?.set(item.id, [{ sessionId: session.id, reason: 'manager-item' }]);
       return;
     }

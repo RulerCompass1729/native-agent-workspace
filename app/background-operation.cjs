@@ -52,10 +52,11 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
   try { rooms = access ? access.roomIds : require('./collaboration-spaces.cjs').roomIds(owner); } catch { /* Unknown membership grants nothing. */ }
   const metadataOnly = Boolean(access?.metadataOnly);
   // A space's project manager is shown that space: its members, its board and queue, and nothing of other spaces.
-  const managed = access?.managedRoom || null;
-  const inManaged = s => { try { return require('./collaboration-spaces.cjs').isMember(s, managed); } catch { return false; } };
-  const shownSessions = managed ? value.sessions.filter(s => s.id === actor.id || inManaged(s)) : value.sessions;
-  const shownRooms = (value.rooms || []).filter(room => !managed || room.id === managed);
+  const limit = access?.limit || null;
+  const shown = id => !limit || limit.includes(id);
+  const within = s => { try { return limit.some(id => require('./collaboration-spaces.cjs').isMember(s, id)); } catch { return false; } };
+  const shownSessions = limit ? value.sessions.filter(s => s.id === actor.id || within(s)) : value.sessions;
+  const shownRooms = (value.rooms || []).filter(room => shown(room.id));
   const result = scalars(value, ['protocol', 'runtimeVersion', 'appVersion', 'storageRetryable', 'peerHandoffsAvailable', 'peerDirectedAvailable']);
   result.sessions = shownSessions.map(s => {
     const own = s.id === actor.id && s.nativeId === actor.nativeId;
@@ -73,13 +74,12 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
       ...(member && Array.isArray(item.wait) ? { wait: item.wait.map(entry => scalars(entry, ['sessionId', 'reason', 'readiness'])) } : {}) }));
     return projected;
   });
-  if (value.room && (!managed || value.room.id === managed)) result.room = result.rooms.find(room => room.id === value.room.id) || pick(value.room, ['id', 'name', 'archived', 'unavailable']);
+  if (value.room && shown(value.room.id)) result.room = result.rooms.find(room => room.id === value.room.id) || pick(value.room, ['id', 'name', 'archived', 'unavailable']);
   if (Array.isArray(value.capabilities)) result.capabilities = value.capabilities.filter(v => typeof v === 'string');
   if (value.wakePolicy) result.wakePolicy = Object.fromEntries(Object.entries(pick(value.wakePolicy, ['enabled', 'unavailable'])).filter(([_k, v]) => typeof v === 'boolean'));
   if (value.operatorPolicy) result.operatorPolicy = { enabled: value.operatorPolicy.enabled === true };
   if (value.spaceManagers) {
-    const shown = Object.entries(value.spaceManagers).filter(([id]) => !managed || id === managed);
-    result.spaceManagers = Object.fromEntries(shown.map(([id, manager]) => [id, scalars(manager, ['sessionId', 'nativeId'])]));
+    result.spaceManagers = Object.fromEntries(Object.entries(value.spaceManagers).filter(([id]) => shown(id)).map(([id, manager]) => [id, scalars(manager, ['sessionId', 'nativeId'])]));
   }
   if (value.butler) result.butler = scalars(value.butler, ['intake', 'errorCode', 'activation', 'recordPeriod']);
   if (value.viewState) result.viewState = scalars(value.viewState, ['selected', 'spaceId', 'mode', 'preference']);
@@ -87,7 +87,7 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
   if (value.appBuild) result.appBuild = scalars(value.appBuild, ['version', 'commit', 'installedAt']);
   if (value.diagnostics) result.diagnostics = scalars(value.diagnostics, ['shellModelCalls', 'dispatches']);
   if (Array.isArray(value.services)) result.services = value.services.map(service => scalars(service, ['version', 'active', 'sessions']));
-  if (Array.isArray(value.rotationChains)) result.rotationChains = value.rotationChains.filter(chain => !managed || (chain.spaces || []).includes(managed)).map(chain => ({ spaces: (chain.spaces || []).filter(id => typeof id === 'string'),
+  if (Array.isArray(value.rotationChains)) result.rotationChains = value.rotationChains.filter(chain => !limit || (chain.spaces || []).some(shown)).map(chain => ({ spaces: (chain.spaces || []).filter(id => typeof id === 'string' && shown(id)),
     sessions: (chain.sessions || []).map(s => scalars(s, ['id', 'nativeId', 'name', 'handedAt', 'outcome'])) }));
   return result;
 }

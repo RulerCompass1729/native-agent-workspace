@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const { uiError } = require('../ui-errors.cjs');
 const os = require('node:os');
 const { RoomState } = require('../room-state.cjs');
-const { SpaceManagers } = require('../space-managers.cjs');
+const { SpaceManagers, refusedSpace } = require('../space-managers.cjs');
 const { author: queueAuthor, usableRecord } = require('../queue-secretary.cjs');
 const { roomIds, isMember, roomId: validRoomId } = require('../collaboration-spaces.cjs');
 const backgroundOperation = require('../background-operation.cjs');
@@ -91,15 +91,15 @@ function registered(extra) {
     require: require('node:module').createRequire(path.join(__dirname, '../main.cjs')),
     applicationHandlers: handlers, backgroundOperation, uiError,
     ipcMain: { handle: (name, handler) => ipc.set(name, handler) },
-    path, randomUUID: () => 'generated', validRoomId, roomIds, isMember, usableRecord, queueAuthor, broadcastRoom: async () => {},
+    path, randomUUID: () => 'generated', validRoomId, roomIds, isMember, usableRecord, queueAuthor, refusedSpace, broadcastRoom: async () => {},
     isCurrentHumanContext: c => c.background !== true, midRotation: () => false, stewardOf: () => null, assertNativeCreation() {},
     displayText: (key, params) => require('../ui-locale.js').format('zh', key, params),
     creationDefaults: { get: () => ({ repository: null, directory: '/synthetic/project' }) },
-    queueDispatcher: { schedule() {} }, stewardCaller: async () => null, ...extra,
+    queueDispatcher: { schedule() {}, handingOver: () => false }, stewardCaller: async () => null, ...extra,
   });
   const start = source.indexOf('function register(name, handler) {');
   vm.runInContext(source.slice(start, source.indexOf('async function replaceBackendSockets', start)), context);
-  for (const [first, last] of [["function isStewardActor(", "// Whether the butler reads another"], ["function designateManager(", "function conversationAccess("],
+  for (const [first, last] of [["function isStewardActor(", "// Whether the butler reads another"], ["async function designateManager(", "// A background window's own state that"], ["  register('spaceMerge',", "  register('spaceAction',"],
     ["  register('spaceAction',", "  register('spaceFiles',"], ["  register('spaceManager',", "  // Designating or revoking the integrator"]]) {
     const a = source.indexOf(first), b = source.indexOf(last, a);
     if (a !== -1) vm.runInContext(source.slice(a, b), context);
@@ -270,17 +270,135 @@ test('the former secretary becomes the manager of its space once its session is 
   const f = fixture(t), secretary = { sessionId: 'manager', nativeId: 'native-manager' };
   const { context } = registered({ roomState: f.room, spaceManagers: f.managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map([['manager', 'Trusted label']]) } });
   const events = () => f.room.value.events.filter(event => event.kind === 'manager');
+  const again = () => vm.runInContext('retireSecretaryAt = 0', context);
   await context.retireSecretary({ sessions: [], room: {}, rooms: [{ id: 'shared' }] });
   assert.deepEqual([f.managers.secretaryRetired, events().length], [null, 0], 'its backend has not answered yet');
   const snapshot = { sessions: [f.record], rooms: [{ id: 'shared' }] };
   await context.retireSecretary(snapshot);
+  assert.equal(f.managers.secretaryRetired, null, 'not looked at with every state');
+  const wait = vm.runInContext('retireSecretaryAt', context) - Date.now();
+  assert.ok(wait > 0 && wait <= 10000);
+  again();
+  await context.retireSecretary(snapshot);
   assert.deepEqual(f.managers.current('shared'), secretary);
   assert.deepEqual(events().map(event => [event.uiMessage.key, event.uiMessage.params.name, event.sessionId]), [['notice.room.managerFromSecretary', 'Trusted label', 'manager']]);
   f.managers.set('shared', null);
+  again();
   await context.retireSecretary(snapshot);
   assert.equal(f.managers.current('shared'), null, 'what the person revoked is not brought back');
   assert.equal(events().length, 1);
   assert.equal(new RoomState(f.dir).value.events.filter(event => event.kind === 'manager').length, 1, 'the record is kept');
+});
+test('a space record that cannot be written does not undo the role, nor bring the former secretary back', async t => {
+  const f = fixture(t), person = { client: f.c.client }, secretary = { sessionId: 'manager', nativeId: 'native-manager' };
+  f.room.noteManager = () => { throw Error('full'); };
+  await f.handlers.get('spaceManager')(person, 'shared', 'manager');
+  assert.deepEqual(f.managers.current('shared'), secretary);
+  await f.handlers.get('spaceManager')(person, 'shared', null);
+  assert.equal(f.managers.current('shared'), null);
+  const { context } = registered({ roomState: f.room, spaceManagers: f.managers, queueSecretary: { current: () => secretary }, sessionLabels: { labels: new Map() } });
+  await context.retireSecretary({ sessions: [f.record], rooms: [{ id: 'shared' }] });
+  assert.deepEqual(f.managers.current('shared'), secretary);
+});
+test('over a record that cannot be read, a project manager is set only once the person agrees to start over', async t => {
+  const f = fixture(t), person = { client: f.c.client }, shown = [];
+  f.managers.set('22222222-2222-4222-8222-222222222222', { sessionId: 'other', nativeId: 'native-other' });
+  fs.writeFileSync(f.managers.file, '{broken', { mode: 0o600 });
+  const managers = new SpaceManagers(f.dir);
+  let response = 0;
+  const { handlers } = registered({ roomState: f.room, spaceManagers: managers, sessionLabels: { labels: new Map() },
+    showDialog: async (c, kind, options) => { assert.equal(c, person); shown.push(options); return { response }; } });
+  const set = choice => handlers.get('spaceManager')(person, 'shared', choice);
+  for (const choice of ['manager', null]) await set(choice);
+  assert.equal(shown.length, 2);
+  assert.deepEqual([shown[0].cancelId, shown[0].defaultId, shown[0].buttons.length], [0, 0, 2]);
+  assert.match(shown[0].detail, /别的空间的项目经理要再设一遍/u);
+  assert.equal(managers.failed, true);
+  assert.equal(fs.readFileSync(managers.file, 'utf8'), '{broken', 'cancelled: nothing is written');
+  response = 1;
+  await set('manager');
+  assert.deepEqual(managers.current('shared'), { sessionId: 'manager', nativeId: 'native-manager' });
+  await set(null);
+  assert.equal(shown.length, 3, 'a record that is read asks nothing');
+  assert.equal(managers.current('shared'), null);
+});
+test('a manager handing over counts as one until its successor does', t => {
+  const f = fixture(t), over = new Set();
+  f.designate();
+  const { context } = registered({ roomState: f.room, spaceManagers: f.managers, sessionLabels: { labels: new Map() },
+    queueDispatcher: { schedule() {}, handingOver: (id, roomId) => roomId === 'shared' && over.has(id) } });
+  const active = record => Object.keys(context.activeManagers([record]));
+  assert.deepEqual(active(f.record), ['shared']);
+  assert.deepEqual(active({ ...f.record, roomIds: [] }), []);
+  over.add('manager');
+  assert.deepEqual(active({ ...f.record, roomIds: [] }), ['shared']);
+  assert.deepEqual(active({ ...f.record, id: 'someone', roomIds: [] }), []);
+});
+// R162 (the person, 2026-11-23): 「保证不会让项目经理被其他空间的任务干扰」. The same limit as a workspace message's.
+test("no shared input of another space's agent reaches a project manager; its own space's and the person's do", async t => {
+  const f = fixture(t), B = '22222222-2222-4222-8222-222222222222';
+  f.designate();
+  const row = (id, rooms) => ({ id, nativeId: 'native-' + id, name: 'Session ' + id, state: 'idle', roomIds: rooms });
+  let sessions = [f.record, row('worker', ['shared']), row('outside', [B]), row('alone', []), row('both', ['shared', B]), row('target', ['shared'])];
+  f.c.client.snapshot = () => ({ wakePolicy: { enabled: true }, sessions });
+  f.c.client.entries = [{ state: { sessions, capabilities: [backgroundOperation.CAPABILITY] } }];
+  const reached = [], { handlers, context } = registered({ roomState: f.room, spaceManagers: f.managers, sessionLabels: { labels: new Map([['manager', 'Space lead']]) } });
+  context.reached = reached;
+  const direct = ['send', 'queue', 'steer'], shared = ['forward', 'queueShared', 'steerShared', 'run'];
+  for (const name of [...direct, 'input', 'spaceAction']) vm.runInContext(`register('${name}', (c, ...args) => { reached.push(args); })`, context);
+  const call = (from, name, args, request = {}) => {
+    const actor = { ...f.sender, id: from, nativeId: 'native-' + from, name: from };
+    const c = { ...f.c, actor };
+    return backgroundOperation.run(actor, () => handlers.get(name)(c, ...args), { context: c, valid: async () => {}, ...request });
+  };
+  const ways = [...direct.map(name => [name, to => [to, 'text']]), ['input', to => [to, 'text']],
+    ...shared.map(name => ['spaceAction', to => ['shared', name, [name === 'run' ? ['target', to] : to, 'text']]])];
+  const refused = error => error.uiMessage?.key === 'error.wake.managerSpace' && error.uiMessage.params.name === 'Space lead';
+  for (const [name, args] of ways) {
+    const label = name + ' ' + args('manager')[1];
+    reached.length = 0;
+    await assert.rejects(call('outside', name, args('manager')), refused, label);
+    assert.deepEqual(reached, [], label);
+    for (const from of ['worker', 'alone', 'both']) await call(from, name, args('manager'));
+    await call('outside', name, args('worker'));
+    await call('manager', name, args('manager'));
+    assert.equal(reached.length, 5, label);
+    await call('outside', name, args('manager'), { maintenanceApproved: true });
+    assert.equal(reached.length, 6, 'what the person confirmed is theirs');
+  }
+  // Its own row is not here: which spaces it is in is unknown.
+  sessions = sessions.filter(entry => entry.id !== 'worker');
+  await assert.rejects(call('worker', 'send', ['manager', 'text']), refused);
+  await call('worker', 'send', ['target', 'text']);
+  // Nor is the same session in another native context itself.
+  sessions = [...sessions, { ...row('worker', ['shared']), nativeId: 'another' }];
+  await assert.rejects(call('worker', 'send', ['manager', 'text']), refused);
+  fs.writeFileSync(f.managers.file, '{broken', { mode: 0o600 });
+  const broken = registered({ roomState: f.room, spaceManagers: new SpaceManagers(f.dir), sessionLabels: { labels: new Map() } });
+  const send = (from, to) => {
+    const actor = { ...f.sender, id: from, nativeId: 'native-' + from, name: from }, c = { ...f.c, actor };
+    return backgroundOperation.run(actor, () => broken.handlers.get('send')(c, to, 'text'), { context: c, valid: async () => {} });
+  };
+  const unknown = error => error.uiMessage?.key === 'error.manager.state';
+  await assert.rejects(send('outside', 'target'), unknown);
+  await send('both', 'target');
+  await send('alone', 'target');
+  await send('outside', 'alone');
+});
+test("a project manager's agent cannot read other spaces through a merge preview", async t => {
+  const f = fixture(t), calls = [], roomState = f.room;
+  roomState.mergePreview = () => { calls.push('preview'); return 'shown'; };
+  roomState.mergeStatus = () => { calls.push('status'); return 'shown'; };
+  const { handlers } = registered({ roomState, spaceManagers: f.managers, sessionLabels: { labels: new Map() }, hasSavedSpaceDraft: () => false, views: [] });
+  f.c.client.snapshot = () => ({ sessions: [f.record] });
+  const value = Object.assign(Object.create(null), { operationId: '33333333-3333-4333-8333-333333333333' });
+  const merge = action => backgroundOperation.run(f.sender, () => handlers.get('spaceMerge')(f.c, action, value), { context: f.c, valid: async () => {} });
+  f.c.client.entries = [{ state: { sessions: [], capabilities: [backgroundOperation.CAPABILITY] } }];
+  assert.equal(await merge('preview'), 'shown');
+  f.designate();
+  for (const action of ['preview', 'status', 'discard', 'commit', 'undo']) await assert.rejects(merge(action), error => error.uiMessage?.key === 'error.background.spaceContent', action);
+  assert.deepEqual(calls, ['preview']);
+  assert.equal(await handlers.get('spaceMerge')({ client: f.c.client }, 'status', value), 'shown', 'the person still can');
 });
 test('a session the person archived cannot be made project manager, and an archived one can no longer add to the queue', async t => {
   const f = fixture(t);
@@ -362,26 +480,34 @@ test('stewardCaller: only the designated session, as it is now, outside every sp
 test('the butler, in no space, reads every space as a member; others keep their own spaces; an unreadable designation is nobody', () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const start = source.indexOf('function conversationReaderAllowed(actor) {'), end = source.indexOf('function controlRequestActors(client) {', start);
-  let steward = { sessionId: 'butler', nativeId: 'native-butler' }, managed = () => null;
-  const context = vm.createContext({ stewardOf: () => { if (steward instanceof Error) throw steward; return steward; }, spaceManagers: { roomOf: record => managed(record), designated: record => managed(record) },
+  let steward = { sessionId: 'butler', nativeId: 'native-butler' }, managed = () => null, designated = record => managed(record);
+  const context = vm.createContext({ stewardOf: () => { if (steward instanceof Error) throw steward; return steward; }, spaceManagers: { roomOf: record => managed(record), designated: record => designated(record) },
     roomState: { value: { archivedSessions: [] }, spaces: { rooms: [{ id: 'web' }, { id: 'empty' }] } }, roomIds: s => s.roomIds });
   vm.runInContext(source.slice(start, end), context);
   const snapshot = { room: { id: 'shared' }, rooms: [{ id: 'shared' }, { id: 'web' }, { id: 'docs' }], sessions: [
     { id: 'butler', nativeId: 'native-butler', roomIds: [] }, { id: 'member', nativeId: 'native-member', roomIds: ['web'] }] };
   const access = actor => JSON.parse(JSON.stringify(context.conversationAccess(actor, snapshot)));
   const butler = { id: 'butler', nativeId: 'native-butler' }, member = { id: 'member', nativeId: 'native-member' };
-  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs', 'empty'], metadataOnly: false, managedRoom: null }, 'a space nobody joined yet included');
-  assert.deepEqual(access(member), { roomIds: ['web'], metadataOnly: false, managedRoom: null });
+  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs', 'empty'], metadataOnly: false, limit: null }, 'a space nobody joined yet included');
+  assert.deepEqual(access(member), { roomIds: ['web'], metadataOnly: false, limit: null });
   snapshot.sessions[1].roomIds = ['web', 'docs']; managed = record => record?.id === 'member' ? 'web' : null;
-  assert.deepEqual(access(member), { roomIds: ['web'], metadataOnly: false, managedRoom: 'web' }, "a project manager reads its own space only");
+  assert.deepEqual(access(member), { roomIds: ['web'], metadataOnly: false, limit: ['web'] }, "a project manager reads its own space only");
   assert.equal(context.conversationReaderAllowed(member), false);
   managed = () => { throw Error('unreadable'); };
-  assert.deepEqual(access(member), { roomIds: ['web', 'docs'], metadataOnly: true, managedRoom: null }, 'an unreadable role reads metadata only');
-  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs', 'empty'], metadataOnly: false, managedRoom: null }, 'the butler reads also then');
+  assert.deepEqual(access(member), { roomIds: ['web', 'docs'], metadataOnly: true, limit: ['web', 'docs'] }, 'an unreadable role reads metadata only, of its own spaces');
+  snapshot.sessions.push({ id: 'alone', nativeId: 'native-alone', roomIds: [] });
+  assert.deepEqual(access({ id: 'alone', nativeId: 'native-alone' }), { roomIds: [], metadataOnly: true, limit: null }, 'one in no space manages none');
+  assert.deepEqual(access({ id: 'gone', nativeId: 'native-gone' }), { roomIds: [], metadataOnly: true, limit: [] }, 'nor is one whose own row is not here shown any');
+  snapshot.sessions.pop();
+  assert.deepEqual(access(butler), { roomIds: ['shared', 'web', 'docs', 'empty'], metadataOnly: false, limit: null }, 'the butler reads also then');
   assert.equal(context.conversationReaderAllowed(butler), true);
   steward = { sessionId: 'butler', nativeId: 'older-native' };
-  assert.deepEqual(access(butler), { roomIds: [], metadataOnly: true, managedRoom: null }, 'another native session of it is not the butler');
-  steward = Error('unreadable'); assert.deepEqual(access(butler), { roomIds: [], metadataOnly: true, managedRoom: null });
+  assert.deepEqual(access(butler), { roomIds: [], metadataOnly: true, limit: null }, 'another native session of it is not the butler');
+  managed = () => null; designated = record => record.id === 'gone' ? 'web' : null;
+  assert.deepEqual(access({ id: 'gone', nativeId: 'native-gone' }), { roomIds: [], metadataOnly: false, limit: [] }, 'a manager whose own row is not here is shown no space');
+  assert.deepEqual(access({ id: 'stranger', nativeId: 'native-stranger' }), { roomIds: [], metadataOnly: false, limit: null });
+  designated = record => managed(record); managed = () => { throw Error('unreadable'); };
+  steward = Error('unreadable'); assert.deepEqual(access(butler), { roomIds: [], metadataOnly: true, limit: null });
   // What the agent's view then holds: queue text and space content for every space.
   steward = { sessionId: 'butler', nativeId: 'native-butler' }; managed = () => null; snapshot.sessions[1].roomIds = ['web'];
   const rotation = { kind: 'rotation', rotationReason: { sessionId: 'member', reason: 'refresh-failed' } };
