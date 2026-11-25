@@ -265,7 +265,7 @@ test('the butler\'s own held message that did not go out is one event, naming th
   f.advance(120 * 60000); wake.retryHeld(f.source); await settle();
   assert.equal(row.wake.status, 'not-sent');
   observe(); observe();
-  const own = outcome => ({ memberId: f.b, reason: 'own-message-undelivered', outcome, title: new Date(f.now()).toISOString() });
+  const own = outcome => ({ memberId: f.b, itemId: row.id, reason: 'own-message-undelivered', outcome, title: new Date(f.now()).toISOString() });
   assert.deepEqual(f.events().map(e => [e.kind, e.sourceRef, e.payload]), [['blocked', `wake-undelivered:${f.b}`, own('not-sent:busy-hold-expired')]]);
   // Withdrawn while held; and one refused at once.
   f.advance(1000); await f.turn('again', 'Secret second task.');

@@ -1042,7 +1042,8 @@ function bindClient(context) {
     try { butlerIngress?.observeRecoveryFailures(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
-    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [] }); }
+    try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [],
+      wasButler: (id, nativeId, at, chain) => stewardRecord?.heldRole(id, nativeId, at, chain) }); }
     catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }
@@ -2479,7 +2480,10 @@ async function boot() {
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
     if (id !== null && handoff !== null && !validDuty(handoff)) throw uiError('error.steward.handoffInvalid');
     let record = null, standingLost = false, reached = null;
-    if (id === null) stewardRole.set(null);
+    // Who held the role until now is written just before the person's choice replaces it: a rotation's successor that made
+    // no call since would otherwise be missing, and with it what it sent (StewardRecord.heldRole).
+    const recordHolder = () => { try { stewardRecord?.sync(stewardOf()); } catch { /* As below. */ } };
+    if (id === null) { recordHolder(); stewardRole.set(null); }
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
     else await roomState.serial(async () => {
       // The backend's own list does not say which sessions the person archived; the desktop's record does.
@@ -2494,6 +2498,7 @@ async function boot() {
       // The same butler again keeps it: the designation may have named it only through the rotation log.
       let again = false;
       try { const now = stewardRole.current(); again = now?.sessionId === record.id && now.nativeId === record.nativeId; } catch { /* Not known to be the same one. */ }
+      recordHolder();
       stewardRole.set({ sessionId: record.id, nativeId: record.nativeId }, duty);
       const keep = typeof standing === 'boolean' ? standing : again || null;
       let unsaved = false; if (carry && keep !== null) try { carry(keep); } catch { unsaved = true; }
