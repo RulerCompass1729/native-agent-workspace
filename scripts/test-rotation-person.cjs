@@ -62,9 +62,9 @@ class Model {
     return held;
   }
   rule(pattern, reply) { this.rules.unshift({ pattern, reply }); }
-  reply(text) {
+  reply(text, history) {
     const rule = this.rules.find(r => r.pattern.test(text));
-    if (rule) return typeof rule.reply === 'function' ? rule.reply(text) : rule.reply;
+    if (rule) return typeof rule.reply === 'function' ? rule.reply(text, history) : rule.reply;
     if (text.includes('请现在只写交接')) return { text: 'HANDOFF_WRITTEN 在 feature-x 分支，提交 abc1234，下一步跑全量测试。' };
     if (text.includes('请现在只补一段')) return { text: 'SUPPLEMENT_WRITTEN 交接之后人说了一句，没有别的变化。' };
     if (text.includes('交接之后又有新内容，它补的一段如下')) return { text: 'SUPPLEMENT_TAKEN 已并进交接。' };
@@ -75,12 +75,12 @@ class Model {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return; }
     const request = JSON.parse(body), last = request.messages.findLast(m => m.role === 'user');
     const blocks = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content;
-    const result = blocks.find(b => b.type === 'tool_result');
+    const result = blocks.find(b => b.type === 'tool_result'), history = JSON.stringify(request.messages);
     const text = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n');
     // Only the root's turns have tools; the CLI's own side requests (a title) get a word.
     const main = Boolean(request.tools?.length), number = ++this.number;
-    const answer = result ? { text: 'TOOL_RESULT_READ ' + JSON.stringify(result.content).slice(0, 60) } : main ? this.reply(text) : { text: 'ok' };
-    const row = { number, main, text: text.slice(-400), tools: request.tools?.length || 0, control: request.tools?.some(t => t.name === CONTROL) || false, search: request.tools?.some(t => t.name === 'ToolSearch') || false, ...(result ? { result: typeof result.content === 'string' ? result.content : (result.content || []).map(c => c.text || '').join('') } : {}) };
+    const answer = result ? { text: 'TOOL_RESULT_READ ' + JSON.stringify(result.content).slice(0, 60) } : main ? this.reply(text, history) : { text: 'ok' };
+    const row = { number, main, history, text: text.slice(-400), tools: request.tools?.length || 0, control: request.tools?.some(t => t.name === CONTROL) || false, search: request.tools?.some(t => t.name === 'ToolSearch') || false, ...(result ? { result: typeof result.content === 'string' ? result.content : (result.content || []).map(c => c.text || '').join('') } : {}) };
     this.turns.push(row);
     const held = main && !result ? this.holds.find(h => !h.arrived && h.pattern.test(text)) : null;
     if (held) { held.arrived = true; await held.released; }
@@ -120,7 +120,7 @@ const rotationRows = () => { try { return fs.readFileSync(path.join(profile, 'ro
 const rowsOf = id => rotationRows().filter(row => row.old?.id === id);
 const dispatchRecord = id => { try { return JSON.parse(fs.readFileSync(path.join(profile, 'queue-dispatch.json'), 'utf8')).rotations?.[id] ?? null; } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 
-async function start({ options = {}, env = {} } = {}) {
+async function start({ options = {}, env = {}, permissions = {} } = {}) {
   const modules = path.join(code, 'app', 'claude-loopback.cjs'), loopback = require(modules);
   const binary = fs.realpathSync(path.join(os.userInfo().homedir, '.local/bin/claude'));
   fixture = loopback.create({ directory: base, provider: 'claude', respond: (req, res, body) => model.respond(req, res, body) });
@@ -135,7 +135,7 @@ async function start({ options = {}, env = {} } = {}) {
   assert.equal(fs.readFileSync(stubCalls, 'utf8'), 'codex --version\n', 'A stub that is started says so'); fs.rmSync(stubCalls);
   const trusted = {}; for (const dir of [cwd, fs.realpathSync(cwd)]) for (const name of [dir, dir + '-sessions']) trusted[name] = { hasTrustDialogAccepted: true };
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, autoCompactEnabled: false, customApiKeyResponses: { approved: [loopback.FIXTURE_KEY], rejected: [] }, theme: 'dark', projects: trusted }), { mode: 0o600 });
-  fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ model: 'claude-opus-5-5', effortLevel: 'high', permissions: { allow: ['mcp__native_workspace__workspace_control'] } }), { mode: 0o600 });
+  fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ model: 'claude-opus-5-5', effortLevel: 'high', permissions: { allow: ['mcp__native_workspace__workspace_control'], ...permissions } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim, codex: path.join(stubs, 'codex') }), { mode: 0o600 });
   assertIsolated({ profile, executable: electron, code });
   const outer = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_')));
@@ -161,7 +161,6 @@ async function start({ options = {}, env = {} } = {}) {
     const tick = dispatcher.tick.bind(dispatcher);
     dispatcher.tick = () => tick().catch(error => { say('pass failed:', error.stack); throw error; });
     await dispatcher.start();
-    person = { actions: [] };
     say(`Claude ${version} on loopback; code ${code}; no window; options ${JSON.stringify({ ...given, humanQuietMs: HUMAN_QUIET_MS, ...env })}`);
     return;
   }
@@ -225,7 +224,45 @@ async function assertFinished(id, { waited } = {}) {
   return { old, next, done, rows };
 }
 const supplementsTo = next => next.messages.filter(m => m.role === 'user' && m.text?.includes('交接之后又有新内容，它补的一段如下'));
-const actionsBetween = (from, to) => person.actions.filter(row => row.at >= from && row.at <= to);
+// What the product itself recorded of the person on a session: control changes, the human input revision, the
+// dispatcher's own time of their last act, and the messages that are not NAW's.
+const typedBy = s => s.messages.filter(m => m.role === 'user' && !m.dispatchPurpose && !m.text?.startsWith('【NAW ')).map(m => m.text);
+const humanAt = id => windowless ? dispatcher.humanAt.get(id) ?? null : app.evaluate((_, id) => globalThis.nawRotationHumanAt(id), id);
+async function personMarks(id) {
+  const s = await session(id);
+  return { control: s.controlRevision, human: s.wakeHumanRevision ?? 0, at: await humanAt(id), typed: typedBy(s).length };
+}
+// The rotation ends with the person doing nothing from `marks` on, by the product's own values: at every look until NAW
+// itself stops the old session (which counts as a control change of its own), and at the end.
+async function finishedAlone(id, marks, limit = 300000) {
+  say('the person\'s marks', JSON.stringify(marks));
+  let looks = 0;
+  await until(async () => {
+    const s = await session(id);
+    if (!['stopping', 'ended'].includes(s.state)) { looks++; assert.equal(s.controlRevision, marks.control, 'No control change by anyone'); }
+    return rowsOf(id).some(row => ['done', 'kept', 'failed'].includes(row.event));
+  }, 'an end of the rotation', limit);
+  await finished(id);
+  const { control: _, ...end } = await personMarks(id), { control: __, ...before } = marks;
+  assert.ok(looks > 3, 'It was looked at meanwhile');
+  assert.deepEqual(end, before, 'The product recorded no act of the person on the old session since');
+  const next = rowsOf(id).find(row => row.event === 'done')?.new.id;
+  if (!next) return;
+  const after = await personMarks(next);
+  assert.deepEqual([after.human, after.typed, after.at], [0, 0, null], 'nor on the successor');
+}
+// The successor is asked for work, as the person would: it answers from the conversation that was handed over.
+async function assertWorks(id, next) {
+  const ask = '接着做并回一句 ' + randomUUID().slice(0, 8), answer = 'SUCCESSOR_ANSWER ' + ask.slice(-8);
+  model.rule(new RegExp(ask), { text: answer });
+  if (!windowless) await person.open(next, 'chat');
+  await tell(next, ask);
+  await until(async () => (await ready(next)) && (await session(next)).messages.some(m => m.role === 'assistant' && m.text === answer), 'the successor does what it is asked');
+  const turn = model.turns.find(t => t.main && t.text.includes(ask));
+  assert.ok(turn.history.includes('HANDOFF_WRITTEN'), 'from the conversation with the handoff');
+  assert.equal((await session(id)).state, 'ended', 'The old session stays ended');
+  say('the successor was asked for work and answered:', answer);
+}
 // A member whose conversation is past the record limit, left alone: due by its quiet alone.
 async function dueMember() {
   if (!windowless) await revealDefaultSpace(page);
@@ -257,10 +294,10 @@ const scenarios = {
     held.release();
     await until(() => rowsOf(id).some(row => ['waiting', 'kept', 'done'].includes(row.event)), 'the rotation says what it does');
     say('after the interruption', rowsOf(id).map(row => `${row.event}:${row.reason}`).join(','));
-    const quiet = Date.now(); await finished(id);
+    await finishedAlone(id, await personMarks(id));
     const r = await assertFinished(id, { waited: true });
     assert.equal(supplementsTo(r.next).length, 1, 'The successor was told once');
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'It finished with the person doing nothing');
+    await assertWorks(id, r.next.id);
   },
   // (a2) The person types in the old session's composer while it writes its handoff, and clears it.
   async a2() {
@@ -273,9 +310,9 @@ const scenarios = {
     held.release();
     await until(() => rowsOf(id).some(row => ['waiting', 'kept', 'failed', 'done'].includes(row.event)), 'the rotation says what it does');
     say('after the interruption', rowsOf(id).map(row => `${row.event}:${row.reason}`).join(','));
-    const quiet = Date.now(); await finished(id);
-    await assertFinished(id, { waited: true });
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'It finished with the person doing nothing');
+    await finishedAlone(id, await personMarks(id));
+    const r = await assertFinished(id, { waited: true });
+    await assertWorks(id, r.next.id);
   },
   // (b) A draft left in the old session's composer: it waits as long as the draft is there, and finishes once cleared.
   async b() {
@@ -292,9 +329,9 @@ const scenarios = {
     assert.equal(await page.locator('#message-input').inputValue(), '还没发的草稿', 'in the window too');
     await person.erase(id, 6, 'chat');
     await until(async () => !(await session(id)).liveDraft, 'the draft is cleared');
-    const quiet = Date.now(); await finished(id);
-    await assertFinished(id, { waited: true });
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'It finished with the person doing nothing');
+    await finishedAlone(id, await personMarks(id));
+    const r = await assertFinished(id, { waited: true });
+    await assertWorks(id, r.next.id);
   },
   // (b2) The same with text left in the native terminal's prompt, then sent.
   async b2() {
@@ -311,10 +348,10 @@ const scenarios = {
     assert.ok(/draftleft/.test(await person.screen(id)), 'The prompt is untouched');
     await person.focus(id, 'terminal'); await person.pressEnter();
     await until(async () => (await session(id)).messages.some(m => m.role === 'user' && m.text === 'draftleft'), 'it was sent');
-    const quiet = Date.now(); await finished(id);
+    await finishedAlone(id, await personMarks(id));
     const r = await assertFinished(id, { waited: true });
     assert.equal(supplementsTo(r.next).length, 1, 'The successor was told once');
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'It finished with the person doing nothing');
+    await assertWorks(id, r.next.id);
   },
   // (c) The person sends the old session a message after its handoff: a supplement goes to the same successor, then it ends.
   async c() {
@@ -323,41 +360,49 @@ const scenarios = {
     await heldAtSuccessor(id, held);
     const before = dispatchRecord(id).newId;
     await person.open(id, 'chat');
-    await person.sendMessage(id, '交接之后人说的一句');
+    const said = '交接之后人说的一句 ' + randomUUID().slice(0, 8);
+    await person.sendMessage(id, said);
+    // The old session's addition says the person's sentence only if its own request to the model carried it.
+    model.rule(/请现在只补一段/, (text, history) => ({ text: 'SUPPLEMENT_WRITTEN ' + (history.includes(said) ? said : 'NOT_SEEN') }));
+    const told1 = model.hold(/交接之后又有新内容，它补的一段如下/);
     held.release();
     await until(() => rowsOf(id).some(row => ['waiting', 'kept', 'done'].includes(row.event)), 'the rotation says what it does');
-    const quiet = Date.now(); await finished(id);
+    const marks = await personMarks(id);
+    await until(() => told1.arrived, 'the addition at the successor\'s model', 180000);
+    const still = await session(id);
+    assert.ok(still && still.state !== 'ended' && !rowsOf(id).some(row => ['done', 'archived'].includes(row.event)), 'The old session still runs while its successor is told: ' + still?.state);
+    told1.release();
+    await finishedAlone(id, marks);
     const r = await assertFinished(id, { waited: true });
     assert.equal(r.done.new.id, before, 'The same successor');
     const told = supplementsTo(r.next);
     assert.equal(told.length, 1, 'The successor was told once');
-    assert.ok(told[0].text.includes('SUPPLEMENT_WRITTEN'), 'what the old session added');
-    const archivedAt = r.rows.find(row => row.event === 'done').time;
-    assert.ok(told[0].time <= archivedAt, 'before the old session was ended');
-    assert.ok(r.old.messages.some(m => m.role === 'user' && m.text === '交接之后人说的一句'), 'The message stays in the old record');
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'It finished with the person doing nothing');
+    assert.ok(told[0].text.includes('SUPPLEMENT_WRITTEN ' + said), 'The person\'s own sentence, in what the old session added');
+    assert.ok(model.turns.find(t => t.main && t.text.includes('交接之后又有新内容，它补的一段如下')).history.includes(said), 'It reached the successor\'s model');
+    assert.ok(r.old.messages.some(m => m.role === 'user' && m.text === said), 'The message stays in the old record');
+    await assertWorks(id, r.next.id);
   },
   // (d) Nobody interrupts.
   async d() {
     await start({ env: CONTENT });
-    const id = await dueMember(), quiet = Date.now();
-    await finished(id);
+    const id = await dueMember();
+    await finishedAlone(id, await personMarks(id));
     const r = await assertFinished(id, { waited: false });
     assert.equal(supplementsTo(r.next).length, 0, 'Nothing was added');
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'No person action from its last turn on');
+    await assertWorks(id, r.next.id);
   },
   // (f) A member left alone, its conversation large and its cache warm: changed for its size, nobody acting.
   async f() {
     await start({ options: CONTEXT });
     if (!windowless) await revealDefaultSpace(page);
     const id = await create('合成成员');
-    const { quiet, at } = await fill(id);
-    await finished(id, 240000);
+    const at = await fill(id);
+    await finishedAlone(id, await personMarks(id), 240000);
     const r = await assertFinished(id, { waited: false });
     const asked = r.rows.find(row => row.event === 'requested');
     assert.equal(asked.reason, 'context', 'for its size');
     assert.ok(asked.time - at >= CONTEXT.quietContextMs, `not before the quiet time: ${asked.time - at} ms after its last request`);
-    assert.equal(actionsBetween(quiet, Date.now()).length, 0, 'No person action from its last turn on');
+    await assertWorks(id, r.next.id);
   },
   // (f2) The same, 990 tokens below the production limit: left as it is through twice the quiet time.
   async f2() {
@@ -379,38 +424,49 @@ const scenarios = {
     await until(async () => (await ready(id)) && (await session(id)).messages.some(m => m.role === 'assistant'), 'the duty statement\'s turn');
     await page.evaluate(() => workspace.stewardWake(true));
     assert.deepEqual(await stewardSlot(), [id], 'The butler sits at the top');
-    const { quiet } = await fill(id);
-    await finished(id, 240000);
+    model.rule(/【NAW 事件】/, text => ({ tool: { name: CONTROL, input: { action: 'invoke', method: 'stewardEvents', arguments: positionIn(text), operation_id: randomUUID() } } }));
+    await fill(id);
+    await finishedAlone(id, await personMarks(id), 240000);
     const r = await assertFinished(id, { waited: false });
     assert.equal(r.rows.find(row => row.event === 'requested').reason, 'context', 'for its size');
-    const seats = r.rows.filter(row => row.event === 'done').length, through = Date.now();
-    assert.equal(actionsBetween(quiet, through).length, 0, 'No person action from its last turn to the archive');
-    assert.equal(seats, 1);
     await until(async () => (await stewardSlot()).join() === r.next.id, 'the successor sits at the top, alone');
     assert.ok(r.next.messages.some(m => m.role === 'user' && m.text?.includes('大管家由你接着当')), 'Its handoff says it goes on as the butler');
     assert.equal((await page.evaluate(() => workspace.stewardWake())).on, true, 'Waking on events is still on');
     say('role: the successor', r.next.id, 'holds the seat; old', id);
+    // Whatever was recorded before (a fresh profile's own start) is read first; the wake asked for is another one.
+    const events = () => fs.readFileSync(path.join(profile, 'butler-ledger.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'event');
+    const woken = () => Number((JSON.parse(fs.readFileSync(path.join(profile, 'steward-wake.json'), 'utf8')).woken || ':0').split(':')[1]);
+    const wakes = async () => (await session(r.next.id)).messages.filter(m => m.role === 'user' && m.text?.startsWith('【NAW 事件】'));
+    const reads = from => model.turns.slice(from).filter(t => t.result).map(t => { try { return JSON.parse(t.result); } catch { return null; } }).filter(Boolean);
+    await until(async () => woken() === events().length && reads(0).length >= (await wakes()).length && await ready(r.next.id), 'earlier events are read', 240000);
+    say('drained:', events().map(row => row.data.kind + ':' + row.data.payload?.reason).join(','), 'wakes', (await wakes()).length, 'reads', JSON.stringify(reads(0)).slice(0, 600));
+    for (const read of reads(0)) assert.equal(read.state, 'complete', 'An earlier read went through');
+    const drained = events().length, turnsBefore = model.turns.length;
     // Something NAW records as an event: a member's item ends in a question for the person.
-    model.rule(/【NAW 事件】/, text => ({ tool: { name: CONTROL, input: { action: 'invoke', method: 'stewardEvents', arguments: positionIn(text), operation_id: randomUUID() } } }));
     model.rule(/合成任务甲/, { text: '需要你决定：合成问题要不要做？' });
     await revealDefaultSpace(page);
     const member = await create('合成成员');
     await page.evaluate(([id, text]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [member, '合成任务甲']);
-    await until(async () => (await session(r.next.id)).messages.some(m => m.text?.startsWith('【NAW 事件】')), 'NAW wakes the successor', 240000);
-    const read = await until(() => model.turns.find(t => t.result && /"events"|"state"/.test(t.result)), 'the successor\'s stewardEvents answer', 120000);
-    say('stewardEvents answered the successor:', read.result.slice(0, 900));
-    const answer = JSON.parse(read.result);
+    const decision = await until(() => events().slice(drained).find(row => row.data.kind === 'decision'), 'NAW records the decision', 120000);
+    const wake = await until(async () => (await wakes()).find(m => m.time >= decision.time), 'NAW wakes the successor for it', 240000);
+    say('decision recorded', decision.time, 'woken', wake.time, wake.text.slice(0, 160).replaceAll('\n', ' '));
+    const answer = await until(() => reads(turnsBefore).find(read => read.value?.events?.some(event => event.kind === 'decision')), 'the successor reads the decision', 120000);
+    say('stewardEvents answered the successor:', JSON.stringify(answer).slice(0, 900));
     assert.equal(answer.state, 'complete', 'The call went through');
-    assert.ok(answer.value.events.some(event => event.kind === 'decision'), 'and gave it the event');
-    assert.equal((await session(id)).messages.filter(m => m.text?.startsWith('【NAW 事件】')).length, 0, 'The old session was not woken');
+    assert.equal(answer.value.events.find(event => event.kind === 'decision').payload.spaceId, 'shared');
+    assert.equal((await session(id)).messages.filter(m => m.text?.startsWith('【NAW 事件】') && m.time >= r.done.time).length, 0, 'The old session was not woken');
+    await assertWorks(id, r.next.id);
   },
   // (g) Each named action once, on one session: what the harness does reaches NAW as the person's.
   async g() {
-    await start({ options: { quietMs: null } });
+    await start({ options: { quietMs: null }, permissions: { defaultMode: 'default' } });
     const id = await create('合成成员', { join: false });
     await person.open(id, 'chat');
     await person.keepDraft(id, 'draft kept');
+    const kept = await personMarks(id);
+    assert.ok(kept.at, 'A kept draft is the person at the session');
     await person.idle(1500);
+    assert.deepEqual(await personMarks(id), kept, 'Idle is nothing to the product');
     assert.equal((await session(id)).liveDraft, 'draft kept', 'A kept draft stays');
     await person.pressEnter();
     await until(async () => (await session(id)).messages.some(m => m.role === 'user' && m.text === 'draft kept'), 'Enter sends it');
@@ -428,6 +484,7 @@ const scenarios = {
     assert.ok((await session(id)).controlRevision > control, 'and counts as the person\'s control');
     assert.equal((await session(id)).terminalInputPending, true);
     await person.erase(id, 5, 'terminal');
+    await until(async () => !/typed/.test(await person.screen(id)), 'erase takes it off the native screen');
     model.rule(/ask first/, { tool: { name: 'Bash', input: { command: 'touch synthetic-card-check', description: 'Synthetic check' } } });
     await person.open(id, 'chat');
     await person.sendMessage(id, 'ask first');
@@ -436,7 +493,10 @@ const scenarios = {
     await until(async () => await page.locator('#terminal-area .xterm-screen').first().isVisible(), 'the card\'s button opens the terminal');
     await person.pressEsc();
     await until(async () => (await session(id)).state === 'idle', 'the request is refused');
-    assert.deepEqual([...new Set(person.actions.map(a => a.action))].sort(), ['click card', 'erase', 'idle', 'open', 'press Enter', 'press Esc', 'type'].sort());
+    const s = await session(id), end = await personMarks(id);
+    assert.deepEqual(typedBy(s), ['draft kept', 'stop me', 'ask first'], 'The product has exactly what the person sent');
+    assert.equal(fs.existsSync(path.join(s.cwd, 'synthetic-card-check')), false, 'The refused command did not run');
+    assert.ok(end.at > kept.at && end.control > kept.control && end.human > 0, 'The product counted the acts as the person\'s: ' + JSON.stringify(end));
   },
 };
 // The production numbers stay: 180,000 tokens, a one hour cache, nine tenths of it. Shortened: the quiet time before a
@@ -461,8 +521,7 @@ async function fill(id, read = 180000) {
   model.rule(/CONTEXT_FILL/, { text: 'FILLED', usage: { ...FILL, cache_read_input_tokens: read } });
   await tell(id, 'CONTEXT_FILL');
   await until(async () => (await ready(id)) && (await session(id)).messages.some(m => m.role === 'assistant' && m.text === 'FILLED'), `a request of ${read + 5010} tokens`);
-  const quiet = Date.now();
-  return { quiet, at: (await session(id)).messages.findLast(m => m.role === 'assistant').time };
+  return (await session(id)).messages.findLast(m => m.role === 'assistant').time;
 }
 const stewardSlot = () => page.locator('#steward-slot .session-row').evaluateAll(rows => rows.map(row => row.dataset.sessionRow));
 

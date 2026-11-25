@@ -8,5 +8,9 @@ const given = JSON.parse(process.env.NAW_TEST_ROTATION_OPTIONS || '{}');
 for (const [key, value] of Object.entries(given)) if (!ALLOWED.includes(key) || !Number.isSafeInteger(value) || value < 0) throw Error('rotation-clock: ' + key);
 const Base = rules.QueueDispatcher;
 rules.QueueDispatcher = class QueueDispatcher extends Base {
-  constructor(options) { super({ ...options, ...given }); }
+  constructor(options) {
+    super({ ...options, ...given });
+    // Read only: when the product last noted the person at a session (noteHuman), for the test to compare.
+    globalThis.nawRotationHumanAt = id => this.humanAt.get(id) ?? null;
+  }
 };
