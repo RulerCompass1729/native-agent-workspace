@@ -170,8 +170,8 @@ test('only exact versions newer than the baseline are checked automatically', ()
 
 test('5. every Codex method NAW calls is either in the manifest or knowingly ungated', () => {
   // Calls that no version-gated capability depends on; adding a new call means classifying it here.
-  const ungated = ['account/rateLimits/read', 'config/mcpServer/reload', 'config/value/write', 'mcpServerStatus/list', 'thread/goal/get',
-    'thread/loaded/list', 'thread/unsubscribe', 'turn/interrupt'];
+  const ungated = ['account/rateLimits/read', 'config/mcpServer/reload', 'config/value/write', 'mcpServerStatus/list', 'model/list', 'thread/goal/get',
+    'thread/loaded/list', 'thread/settings/update', 'thread/unsubscribe', 'turn/interrupt'];
   const manifest = new Set(Object.values(surface.MANIFEST).flat().map(i => i.method));
   const app = path.join(__dirname, '..'), calls = new Set();
   for (const name of fs.readdirSync(app).filter(n => n.endsWith('.cjs'))) {
