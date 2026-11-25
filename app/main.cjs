@@ -943,7 +943,7 @@ function recordsChanged(force = false) {
   for (const c of windows.values()) sendToPage(c, 'workspace:records-changed');
 }
 function stewardWakeChanged() {
-  const status = stewardWake?.view().blocked || null;
+  const status = stewardWake?.view({ early: true }).blocked || null;
   for (const context of windows.values()) sendToPage(context, 'workspace:steward-wake', status);
   recordsChanged(true);
 }
@@ -1017,7 +1017,7 @@ function bindClient(context) {
   client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (context.background) backgroundOperation.assertDeliveryPolicy(client.snapshot(), method, args);
     // The person working in a session keeps queued NAW work out of it for a while.
-    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0]);
+    else if (humanSessionWork(method, args)) queueDispatcher?.noteHuman(args[0], method);
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
@@ -1082,7 +1082,7 @@ function displayState(snapshot, context, read = null) {
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
   const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
-    ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
+    ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
   return context?.background ? backgroundOperation.conversationSnapshot(result, context.actor, read, context.view.selected, conversationAccess(context.actor, snapshot)) : result;

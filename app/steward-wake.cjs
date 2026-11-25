@@ -5,10 +5,13 @@
 // dispatcher's pass that runs it (queue-dispatch.cjs wakeSteward):
 // (1) the message carries only a position: the butler reads stewardEvents from it itself (main.cjs);
 // (2) a butler at work is not called; once it is idle (the same readiness, idle settling and quiet after the person as a
-//     member before its next queue item), one message covers everything recorded since; the person's own act, such as a
-//     click on a card (R200, 2026-11-24: 「我点了卡为撒你没反应」), is told also inside a migration's quiet window;
+//     member before its next queue item), one message covers everything recorded since; the person's own act
+//     (R200, 2026-11-24: 「我点了卡为撒你没反应」) is told also inside a migration's quiet window; their answer on one of
+//     the butler's own cards (R209, 2026-11-24: 「比如点击卡之后我期望你这边应该有反应」) passes whatever only keeps it
+//     undisturbed, not a turn, an input on its way or a rotation under way, and what holds it is shown at once;
 // (3) two wakes are at least a minute apart, the limit of NAW's other automatic messages (session-wake.cjs COOLDOWN);
-//     an attempt that failed counts too, so a send that keeps failing is tried once a minute at most;
+//     an attempt that failed counts too, so a send that keeps failing is tried once a minute at most; an answer on its
+//     own card waits that minute only after a failed attempt;
 // (4) a butler running on DeepSeek is never called, nor one whose model NAW does not know;
 // (5) every wake is a line in 「大管家的记录」 under NAW's name, written before the message is sent: a wake whose line
 //     cannot be written is not sent.
@@ -30,6 +33,8 @@ const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // in a row, until one of its calls or a release goes through, so a call refused every time cannot keep waking it.
 // The record is read a page at a time up to REFUSAL_PAGES pages; refusals beyond them still count as refusals only.
 const REFUSAL_WAKES = 3, REFUSED = 'control-refused', REFUSAL_PAGES = 20;
+// Its turn, which ends by itself: a click waiting for it is not shown before STALL_MS.
+const TURN_REASONS = Object.freeze(['not-idle', 'busy', 'not-settled']);
 const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const PATROL_CHOICES = Object.freeze([null, 15, 30, 60]), PATROL_MAX = 240;
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
@@ -42,6 +47,8 @@ const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
 // Recorded by person-actions.cjs; a card or grant that ran out of time is not the person's act.
 const personAct = e => e.kind === 'request' && /^person-action:[a-z]+:(?!expire$)/u.test(e.payload?.reason ?? '');
+// The person's answer on a card one of `ids` raised.
+const cardClick = (e, ids) => e.kind === 'request' && /^person-action:confirmation:(?:confirm|reject)$/u.test(e.payload?.reason ?? '') && ids.has(e.payload.memberId);
 const identity = value => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'nativeId,sessionId' &&
   validId(value.sessionId) && validId(value.nativeId));
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
@@ -97,6 +104,8 @@ class StewardWake {
     this.file = path.join(directory, FILE);
     Object.assign(this, { ledger, selected, record, now, gapMs, changed });
     this.blocked = null;
+    // In memory: how the last attempt failed, or null.
+    this.failure = null;
     // In memory only: a restart allows the butler REFUSAL_WAKES more.
     this.refusalWakes = 0;
     // In memory: the open work's hash and the interval of the last patrol sent, and whether one is wanted this pass.
@@ -122,14 +131,16 @@ class StewardWake {
   // A held wake is said whether or not anything is due now. The person sees it after STALL_MS; `held` (the butler's
   // own read) says it at once: after the 286 install restart, the butler read none for ten minutes and took the
   // rotation block as cleared (2026-11-23 04:52Z).
+  // `early` (the person's desktop): a held click on its card too, at once; the phone's alarm waits for STALL_MS.
   // since and minutes are the current reason's; waitingSince and waitingMinutes the whole wait, when that is longer.
-  view({ held = false } = {}) {
+  view({ held = false, early = false } = {}) {
     const on = this.active(), b = this.blocked, minutes = since => Math.floor(Math.max(0, this.now() - since) / 60000);
-    const blocked = on && b?.reason && (b.visible || held) ? {
+    const blocked = on && b?.reason && (b.visible || held || early && b.card) ? {
       since: b.reasonSince, reason: b.reason, minutes: minutes(b.reasonSince),
       ...(b.since < b.reasonSince ? { waitingSince: b.since, waitingMinutes: minutes(b.since) } : {}),
       ...(b.reason === 'quiet-window' && b.deadline ? { deadline: b.deadline } : {}),
       ...(b.step ? { step: b.step, ...this.undelivered() } : {}),
+      ...(early && b.card ? { card: true } : {}),
     } : null;
     return { on, at: on ? this.state.at : null, failed: this.failed, ...(on && this.state.patrol ? { patrol: this.state.patrol } : {}), ...(blocked ? { blocked } : {}) };
   }
@@ -148,8 +159,8 @@ class StewardWake {
     } catch { return {}; }
   }
   clearBlocked() {
-    const visible = this.blocked?.visible; this.blocked = null;
-    if (visible) try { this.changed(); } catch { /* Visibility never grants a send. */ }
+    const shown = this.blocked?.visible || this.blocked?.card; this.blocked = null;
+    if (shown) try { this.changed(); } catch { /* Visibility never grants a send. */ }
   }
   // An event or a patrol is waiting to go out.
   pending() { return this.due() || this.patrolWanted && this.active(); }
@@ -160,7 +171,8 @@ class StewardWake {
     blocked.reason = cause;
     blocked.deadline = Number.isSafeInteger(deadline) && deadline > 0 ? deadline : null;
   }
-  skip(reason, deadline = null) {
+  // `click`: the person's answer on its own card waits, so what holds it is said at once, but for its turn.
+  skip(reason, deadline = null, click = false) {
     // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
     if (this.blocked?.step) return;
     if (!this.pending()) { this.clearBlocked(); return; }
@@ -168,15 +180,21 @@ class StewardWake {
     if (!this.blocked || now < this.blocked.since) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked, previous = blocked.reason;
     this.reasonNow(blocked, reason, now, deadline);
+    const card = blocked.card;
+    blocked.card = click && !TURN_REASONS.includes(blocked.reason);
     // The refusal limit is said at once: no later pass would clear it by itself.
-    if (now - blocked.since < STALL_MS && blocked.reason !== 'control-refused-limit') return;
+    const stalled = now - blocked.since >= STALL_MS || blocked.reason === 'control-refused-limit';
+    if (!stalled && !blocked.card) {
+      if (card && !blocked.visible) try { this.changed(); } catch { /* Retried by the next state read. */ }
+      return;
+    }
     if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
       blocked.recordedReason = blocked.reason; blocked.records++;
       try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); }
       catch { blocked.reason = 'record-unavailable'; }
     }
-    const minute = Math.floor((now - blocked.since) / 60000), changed = !blocked.visible || previous !== blocked.reason || minute !== blocked.minute;
-    blocked.visible = true; blocked.minute = minute;
+    const minute = Math.floor((now - blocked.since) / 60000), changed = !(blocked.visible || card) || previous !== blocked.reason || Boolean(card) !== blocked.card || minute !== blocked.minute;
+    blocked.visible = blocked.visible || stalled; blocked.minute = minute;
     if (changed) try { this.changed(); } catch { /* Retried by the next state read. */ }
   }
   // The butler's own handoff left unresolved (queue-dispatch.cjs ownHandoffStep): no wake reaches it until the person
@@ -189,7 +207,7 @@ class StewardWake {
     if (!before) this.blocked = { since: now, reason: null, records: 0, recordedReason: null, visible: false, minute: -1 };
     const blocked = this.blocked;
     this.reasonNow(blocked, reason, now);
-    blocked.step = HOLD_STEPS.includes(step) ? step : 'release';
+    blocked.step = HOLD_STEPS.includes(step) ? step : 'release'; blocked.card = false;
     if (blocked.records < MAX_BLOCK_RECORDS && blocked.recordedReason !== blocked.reason) {
       blocked.recordedReason = blocked.reason; blocked.records++;
       try { this.record({ kind: 'wakeBlocked', reason: blocked.reason, since: blocked.since }); } catch { /* The step is still said. */ }
@@ -290,13 +308,14 @@ class StewardWake {
       return true;
     } catch { return false; }
   }
-  // Whether the person acted after the position last named. Unreadable counts as not.
-  personActed() {
+  // Whether the person acted after the position last named; with `ids`, answered a card one of them raised. Unreadable
+  // counts as not.
+  personActed(ids = null) {
     try {
       let position = from(this.latest(), this.state.woken);
       for (;;) {
         const { events, through, more } = this.ledger().eventsAfter(position, 100);
-        if (events.some(personAct)) return true;
+        if (events.some(e => ids ? cardClick(e, ids) : personAct(e))) return true;
         if (!more) return false;
         position = through;
       }
@@ -312,16 +331,16 @@ class StewardWake {
   // One wake of `session`, the butler as the dispatcher names it now (after a rotation, the successor the role followed
   // to; the switch holds for the person's designation, which a rotation keeps), found ready and settled (condition 2 is
   // the dispatcher's), whose model is `model`. `send(text, itemId)` is the dispatcher's own send of a NAW message and gives its delivery
-  // tag. Gives what was done, or null when nothing was.
-  async wake(session, model, send) {
-    const now = this.now();
+  // tag; `click` when the person answered its card. Gives what was done, or null when nothing was.
+  async wake(session, model, send, click = false) {
+    const now = this.now(), skip = reason => this.skip(reason, null, click);
     if (!this.due()) { this.clearBlocked(); return null; }
-    if (!this.rested(now)) { this.skip('cooldown'); return null; }
-    if (typeof model !== 'string' || !model) { this.skip('model-unknown'); return null; }
-    if (/deepseek/iu.test(model)) { this.skip('model-excluded'); return null; }
+    if (!this.rested(now) && (!click || this.failure)) { skip(click ? this.failure : 'cooldown'); return null; }
+    if (typeof model !== 'string' || !model) { skip('model-unknown'); return null; }
+    if (/deepseek/iu.test(model)) { skip('model-excluded'); return null; }
     const latest = this.latest(), position = from(latest, this.state.woken), id = randomUUID();
     const refusals = this.refusalsOnly(latest);
-    if (refusals && this.refusalWakes >= REFUSAL_WAKES) { this.skip('control-refused-limit'); return null; }
+    if (refusals && this.refusalWakes >= REFUSAL_WAKES) { skip('control-refused-limit'); return null; }
     try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
     catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
     let tag = null, outcome;
@@ -333,6 +352,7 @@ class StewardWake {
       // wake names it again rather than skipping what it would have announced.
       outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
     }
+    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     const next = { ...this.state, at: now, woken: outcome.state === 'sent' ? latest : this.state.woken };
     try { this.write(next); } catch { /* Failed: no further wake until it is set again. */ }
     try {
@@ -340,7 +360,7 @@ class StewardWake {
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a wake without an outcome. */ }
     if (outcome.state === 'sent') { this.clearBlocked(); if (refusals) this.refusalWakes++; }
-    else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
+    else skip(this.failure);
     return { state: outcome.state, position, through: latest };
   }
   // One patrol of `session`, checked by the dispatcher as for a wake, after patrolDue gave `minutes` for `work`.
@@ -361,13 +381,14 @@ class StewardWake {
     } catch (error) {
       outcome = { state: error?.notSent ? 'not-sent' : 'unconfirmed', error: String(error?.message ?? '').slice(0, 300) || null };
     }
+    this.failure = outcome.state === 'sent' ? null : `send-${outcome.state}`;
     try { this.write({ ...this.state, at: now }); } catch { /* Failed: no further message until it is set again. */ }
     try {
       this.record({ kind: 'outcome', step: id, state: outcome.state, reason: null, error: outcome.error, duplicate: false,
         operationId: typeof tag === 'string' && validId(tag) ? tag : null });
     } catch { /* Seen as a patrol without an outcome. */ }
     if (outcome.state === 'sent') { this.patrolLast = { hash: work.hash, minutes }; this.patrolWanted = false; this.clearBlocked(); }
-    else this.skip(outcome.state === 'not-sent' ? 'send-not-sent' : 'send-unconfirmed');
+    else this.skip(this.failure);
     return { state: outcome.state, minutes };
   }
 }

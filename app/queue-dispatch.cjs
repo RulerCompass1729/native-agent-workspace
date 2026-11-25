@@ -524,6 +524,8 @@ function sessionReady(session, wakePolicy) {
 
 // The session as if its backend were in no quiet window.
 const pastWindow = session => session && { ...session, quietWindow: undefined };
+// For the person's answer on its own card: nor its own command or timer running in the background, once reported.
+const pastClick = session => session && { ...pastWindow(session), background: 0, scheduled: 0 };
 
 // While a session works, what else holds it now (2026-11-23: a draft held the butler 258 minutes, read as not-idle in
 // each of its own turns). busy stays not-idle: an approval or question flagged on the session belongs to the turn (a
@@ -2500,6 +2502,8 @@ class QueueDispatcher {
     this.vacancySince = new Map();
     this.vacancyIdentity = new Map();
     this.humanAt = new Map();
+    // The last key the person typed in a session's terminal here.
+    this.typedAt = new Map();
     this.rotationWaitReasons = new Map();
     this.pending = null;
     this.again = false;
@@ -2952,9 +2956,10 @@ class QueueDispatcher {
   }
 
   // The person's own input, takeover or view of a session (main.cjs IPC).
-  noteHuman(sessionId) {
+  noteHuman(sessionId, method) {
     if (typeof sessionId === 'string' && sessionId) {
       this.humanAt.set(sessionId, this.now());
+      if (method === 'input') this.typedAt.set(sessionId, this.now());
       this.vacancySince.delete(sessionId); this.vacancyIdentity.delete(sessionId);
       this.dirty = true;
     }
@@ -3107,6 +3112,18 @@ class QueueDispatcher {
     });
   }
 
+  // The person answered a card of the butler's, or of one it continued from, since its last wake.
+  cardClicked() {
+    let id = null; try { id = this.steward()?.sessionId; } catch { return false; }
+    return Boolean(id) && this.stewardWake.personActed(new Set([id, ...this.continuedFrom(id)]));
+  }
+
+  // Such an answer may change no session, and time alone ends these holds: a pass then. Other holds end with a state
+  // event, or are looked at by the next full pass.
+  clickSoon() {
+    return Boolean(this.stewardWake) && [undefined, 'not-settled', 'person-recent'].includes(this.clickHeld) && this.stewardWake.due() && this.cardClicked();
+  }
+
   // Someone just became idle or stopped typing: their time arrives without a new state event.
   settlingSoon(now) {
     for (const since of this.idleSince.values()) {
@@ -3250,7 +3267,7 @@ class QueueDispatcher {
     const rotating = this.activeRotations().length > 0;
     const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
-      this.answerSoon(now);
+      this.answerSoon(now) || this.clickSoon();
     if (!due) {
       return;
     }
@@ -3349,38 +3366,47 @@ class QueueDispatcher {
   // `quietPending`: what the plan found short only of its quiet. A wake then would restart the butler's 2 quiet minutes
   // before its compaction rotation, so it waits for the rotation, which the successor's wake follows.
   async wakeSteward(current, holding, quietPending) {
+    const event = this.stewardWake.due(), click = event && this.cardClicked();
+    this.clickHeld = click ? 'held' : undefined;
     try {
       // The butler's own handoff holds every wake, the patrol's included, until the person's step.
       const own = this.ownHandoffStep(current.snapshot.sessions);
       if (own) return this.stewardWake.hold('rotation-control-unresolved', own);
       this.stewardWake.endHold();
-      const event = this.stewardWake.due(), work = event ? null : this.openWork(current);
+      const work = event ? null : this.openWork(current);
       const minutes = work ? this.stewardWake.patrolDue(work.idleMs, work) : null;
       if (!event && minutes === null) { this.stewardWake.clearBlocked(); return; }
       const steward = this.stewardOutside(current.snapshot.sessions);
-      const skip = reason => this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined);
+      const skip = reason => {
+        if (click) this.clickHeld = reason;
+        this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined, click);
+      };
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
       const listed = current.snapshot.sessions.find(s => s.id === steward.sessionId), policy = current.snapshot.wakePolicy;
-      // The person's own act is told past a quiet window (R200), and past nothing else. The turn it starts makes the move
-      // wait for its quiet again; the window's deadline stays. No idle clock runs in a window: its last activity counts.
-      const past = Boolean(event && listed.quietWindow && this.stewardWake.personActed()), butler = past ? pastWindow(listed) : listed;
-      const idle = past ? sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs)
-        : settled(steward.sessionId, this.idleSince, current.now, this.settleMs);
+      // The person's own act is told past a quiet window (R200), and their answer on its own card (R209) also past its
+      // background work, the two minutes after they used it and the quiet a rotation waits for. The turn it starts makes
+      // a move or rotation wait for its quiet again; a window's deadline stays. Where no idle clock runs, its last
+      // activity counts.
+      const as = click ? pastClick : event && listed.quietWindow && this.stewardWake.personActed() ? pastWindow : null, butler = as ? as(listed) : listed;
+      const idle = settled(steward.sessionId, this.idleSince, current.now, this.settleMs) ||
+        Boolean(as) && sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs);
       if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
-      if (quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
-      const why = {}, fresh = await this.freshReady(steward.sessionId, this.humanQuietMs, why, past);
+      if (!click && quietPending?.get(steward.sessionId) === 'compact') return skip('engaged');
+      const why = {}, fresh = await this.freshReady(steward.sessionId, click ? 0 : this.humanQuietMs, why, as);
       if (!fresh) return skip(why.reason || 'state-unavailable');
+      // Keys typed in its terminal may be an input on its way that no draft shows.
+      if (click && humanRecent(steward.sessionId, this.typedAt, fresh.now, Math.min(this.humanQuietMs, ANSWER_QUIET_MS))) return skip('person-recent');
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
       const send = (text, itemId) => this.send(fresh.session, text, itemId);
-      if (event) await this.stewardWake.wake(fresh.session, model, send);
-      else await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
+      if (!event) await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
+      else if ((await this.stewardWake.wake(fresh.session, model, send, click))?.state === 'sent') this.clickHeld = undefined;
     } catch (error) {
       // Nothing was sent, or the wake kept its own outcome: the next pass looks again.
-      this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable');
+      this.stewardWake.skip(error?.code === 'STEWARD_WAKE_RECORD_UNAVAILABLE' ? 'record-unavailable' : 'source-unavailable', undefined, click);
     }
   }
 
@@ -3644,8 +3670,8 @@ class QueueDispatcher {
   }
 
   // Read fresh state once, right before sending; skip if the member moved on (`why.reason` says how, when given).
-  // `past`: a quiet window does not hold this send (wakeSteward).
-  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, past = false) {
+  // `as`: the session as this send may see it, what does not hold it left out (wakeSteward).
+  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, as = null) {
     const held = () => {
       if (this.isolation.unknown) return 'trust-unknown';
       if (Object.hasOwn(this.isolation.holds, sessionId)) return 'trust-hold';
@@ -3658,7 +3684,7 @@ class QueueDispatcher {
     why.reason = held();
     if (why.reason) return null;
     const session = current.snapshot.sessions.find(s => s.id === sessionId);
-    const ready = sessionReady(past ? pastWindow(session) : session, current.snapshot.wakePolicy);
+    const ready = sessionReady(as ? as(session) : session, current.snapshot.wakePolicy);
     if (!ready.ready) {
       why.reason = ready.reason;
       return null;
