@@ -1893,8 +1893,8 @@ function plainReply(text) {
     .replace(/\u001b[@-Z\\-_]/gu, ' ');
 }
 
-// The same rules as workspace.cjs isTerminalResponse (a unit test keeps them equal),
-// plus focus reports: a terminal's own replies are not the person typing.
+// The same rules as workspace.cjs isTerminalResponse (a unit test keeps them equal) except
+// the wheel, which here still counts as the person using the session.
 function isPointerHover(data) {
   if (!/^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data)) {
     return false;

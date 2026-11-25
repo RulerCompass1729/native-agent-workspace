@@ -3054,6 +3054,7 @@ class Codex extends EventEmitter {
     // Re-subscribe to the owned thread. Omit every configuration override except a profile's
     // model catalog (codexResumeParams): thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
+    const running = this.turnId;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
     this.rememberHistoryWatermarks();
@@ -3100,6 +3101,18 @@ class Codex extends EventEmitter {
       try { await this.openTerminal(); }
       catch { this.emit('activity', ...uiActivity("notice.activity.connectedTerminalOpenFailed")); }
     }
+    await this.keepRunningTurn(running, rpc, current);
+  }
+  // The turn that ran when the connection dropped is this connection's too only when native says that it is the
+  // thread's latest turn and still in progress; without that answer it stays unknown, as before.
+  async keepRunningTurn(turnId, rpc, current) {
+    if (!turnId || !verifiedCodexProtocol(rpc) || !current()) return;
+    let page;
+    try { page = await rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' }); }
+    catch { return; }
+    const latest = page?.data?.[0];
+    if (!current() || this.turnId || this.textEndedTurns.has(turnId) || latest?.id !== turnId || latest.status !== 'inProgress') return;
+    this.turnId = turnId; this.turn(turnId).liveStarted = true;
   }
   transportClosed() {
     if (this.closed || this.backendExitConfirmed) return;

@@ -1800,13 +1800,12 @@ for (const [label, ids, participantStop] of [['has the old session in it', ['a',
 
 test('only a terminal\'s own replies are ignored; every key the person presses counts', () => {
   const { isTerminalResponse } = require('../workspace.cjs');
-  const replies = ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;95;0c', '\x1b[0n', '\x1b[?2004;1$y', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[<35;10;5M'];
+  const replies = ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;95;0c', '\x1b[0n', '\x1b[?2004;1$y', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[<35;10;5M', '\x1b[I', '\x1b[O'];
   for (const reply of replies) {
     assert.equal(isTerminalResponse(reply), true, JSON.stringify(reply));
     assert.equal(rules.terminalReplyOnly(reply), true, JSON.stringify(reply));
   }
-  assert.equal(rules.terminalReplyOnly('\x1b[I'), true, 'focus in');
-  assert.equal(rules.terminalReplyOnly('\x1b[O'), true, 'focus out');
+  assert.deepEqual([isTerminalResponse('\x1b[<64;10;5M'), rules.terminalReplyOnly('\x1b[<64;10;5M')], [true, false], 'the wheel: the person may be reading here');
   const keys = ['a', '\r', '\x03', '\x7f', '\x1b[A', '\x1bOA', '\x1b[Z', '\x1b[3~', '\x1b[5~', '\x1b[1;5C', '\x1b[15~', '\x1b[<0;10;5M', 'hi\x1b[I'];
   for (const key of keys) {
     assert.equal(isTerminalResponse(key), false, JSON.stringify(key));
