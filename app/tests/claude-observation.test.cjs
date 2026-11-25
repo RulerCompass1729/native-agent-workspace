@@ -2066,6 +2066,51 @@ test('connection, capacity and forbidden failures use one shared budget rather t
   assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); assert.equal(f.w.capacityStatus(f.s.id).reason, 'connection');
   assert.deepEqual(f.sent, ['继续', '继续', '继续']);
 });
+// The stream went silent after part of the answer and native's own timer ended it: the saved row of 2026-11-25 without
+// its text, as real 2.1.331 and 2.1.332 write it.
+const streamRow = { apiErrorStatus: undefined, apiError: 'stream_idle_timeout', error: 'server_error', streamCutCause: 'watchdog', truncatedAfterOutput: true };
+for (const order of ['relay-last', 'relay-before-delivery', 'hook-before-end'])
+for (const apiErrorStatus of [undefined, null])
+test(`a Claude stream that went idle is reported for the bounded continuation, through the real bridge: ${order} ${apiErrorStatus === null ? 'null' : 'omitted'}`, async t => {
+  const { f, ends, turn, blocks } = await capacityThroughBridge(t, '2.1.323', { ...streamRow, apiErrorStatus }, order, 'Synthetic native error words');
+  assert.deepEqual(ends, [{ nativeId: f.r.record.nativeId, turnId: turn, status: 'failed', errorInfo: 'connectionFailed' }]);
+  assert.ok(!JSON.stringify(blocks).includes('Synthetic native error words'));
+});
+for (const change of [{ apiErrorStatus: 0 }, { apiErrorStatus: 'null' }, { apiErrorStatus: 408 }, { apiErrorStatus: 429 }, { apiErrorStatus: 500 },
+  { apiError: 'computer_slept' }, { apiError: 'no_response' }, { apiError: 'rate_limit' }, { apiError: 'max_output_tokens' },
+  { apiError: 'stream_idle' }, { apiError: ['stream_idle_timeout'] }, { apiError: undefined }, { error: 'rate_limit', apiError: null, apiErrorStatus: 429 },
+  { isApiErrorMessage: false }, { isSidechain: true }, { sessionId: randomUUID() }, { uuid: randomUUID() }, { message: { model: 'ordinary-model' } }])
+test('the idle-stream continuation rejects other typed metadata: ' + JSON.stringify(change), t => {
+  const f = capacityWorkspace(t, undefined, { ...streamRow, ...change });
+  f.fail({ errorRowUnclassified: true }); f.stop(); f.w.tickCapacity(Date.now() + 86400000);
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.events.filter(event => event.errorInfo), []);
+});
+for (const boundary of freshFailureBoundaries)
+test('an idle stream keeps the existing fresh-failure guard: ' + boundary,
+  t => freshFailureBoundary(t, boundary, streamRow, 'connectionFailed'));
+for (const boundary of [...scheduledBoundaries, 'takeover', 'member-change'])
+test('the idle-stream continuation yields to ' + boundary, t => scheduledYields(t, boundary, streamRow));
+test('an idle stream ends its scheduled continuation when the person presses Esc', async t => {
+  const f = capacityWorkspace(t, undefined, streamRow); f.fail({ errorRowUnclassified: true }); f.stop();
+  const { due } = f.w.capacityStatus(f.s.id); f.r.emit('interrupted', {});
+  f.w.tickCapacity(due); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);
+});
+test('an idle stream shares the 2/5/10 minutes and the limit of three with a lost connection', async t => {
+  const f = capacityWorkspace(t, undefined, streamRow); f.fail({ errorRowUnclassified: true }); f.stop();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const recovery = f.w.capacityStatus(f.s.id); assert.equal(recovery?.reason, 'connection'); assert.equal(recovery.attempt, attempt);
+    assert.ok(recovery.due - Date.now() > [120000, 300000, 600000][attempt] - 1000);
+    f.w.tickCapacity(recovery.due - 1); assert.equal(f.sent.length, attempt);
+    f.w.tickCapacity(recovery.due); await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.sent, Array(attempt + 1).fill('继续'));
+    if (attempt === 0) Object.assign(f.row, connectionRow); // the budget is one for both causes
+    nextFailure(f, null);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted');
+  f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+});
 test('only Claude admits the typed connection failure; another provider never acquires this retry reason', t => {
   const f = capacityWorkspace(t, undefined, connectionRow); f.s.provider = 'codex'; f.fail(); f.stop();
   assert.equal(f.w.capacityStatus(f.s.id), null); assert.deepEqual(f.sent, []);

@@ -1181,6 +1181,7 @@ async function startQueueDispatcher() {
       countCompactions: true,
       // Not yet built: it throws, and the dispatcher tries again on its next pass.
       rotationStalled: stall => butlerIngress.rotationStalled(stall),
+      errorStalled: stall => butlerIngress.errorStalled(stall),
     };
     if (backgroundTest && process.env.NAW_TEST_QUEUE_DIRECTORY_MIGRATION === '1') options.migrateDirectories = true;
     // B6 integration handoffs are closed in the daily app: only a verified isolated test run can

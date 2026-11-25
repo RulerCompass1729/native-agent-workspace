@@ -55,3 +55,20 @@ for(const boundary of ['draft','takeover','member-change'])test('review stale co
  const f=await exhausted(t,'claude','connection');if(boundary==='draft')f.w.setDraft(f.s.id,'Synthetic unsent words','window');if(boundary==='takeover')f.w.claim(f.s.id,'other-window');if(boundary==='member-change')f.w.join(f.s.id,false);
  const member=f.w.snapshot().sessions.find(s=>s.id===f.s.id);assert.equal(member.capacityRecovery,null);for(const listener of f.listeners)listener({sessions:[member]});assert.equal(f.ingress.ledger.eventsAfter(null).events.filter(e=>e.kind==='failure').length,0);assert.equal(f.sent.length,3);
 });
+// The same queue item through the real adapter, workspace snapshot and dispatcher: what NAW continues is not told while
+// it is scheduled; what it does not continue is told after three minutes in 'error'.
+for(const [label,row,reason] of [['an idle stream',{apiErrorStatus:undefined,apiError:'stream_idle_timeout',error:'server_error'},'connection'],['a server error',{apiErrorStatus:500,apiError:undefined,error:'server_error'},null],['a usage limit',{apiErrorStatus:429,apiError:undefined,error:'rate_limit'},null],['a sign-in failure',{apiErrorStatus:401,apiError:undefined,error:'authentication_failed'},null]])
+test('a sent item whose member stopped on '+label+(reason?' is continued, and not told meanwhile':' is told to the butler, and not continued'),async t=>{
+ const f=capacityWorkspace(t,undefined,row),{room,ingress,id}=wire(f),clock={now:Date.now()};
+ const capabilities=[rules.CAPABILITY],client=Object.assign(new EventEmitter(),{close(){},refresh:async()=>{},route:()=>({client,state:{capabilities}}),
+  snapshot:()=>({...f.w.snapshot(),capabilities,wakePolicy:{enabled:true},operatorPolicy:{domains:[]}}),call:async m=>{if(m==='initial')return client.snapshot();throw Error(m);}});
+ const d=new rules.QueueDispatcher({roomState:room,dataDir:f.dir,connect:async()=>client,clients:()=>client,steward:()=>null,now:()=>clock.now,settleMs:8000,tickMs:3600000,
+  transcriptRoot:require('node:path').join(f.dir,'none'),sampleProcesses:async()=>'',samplePressure:async()=>'',compactions:{async sample(){return new Map();}},errorStalled:s=>ingress.errorStalled(s)});
+ t.after(()=>d.close());
+ const told=()=>ingress.ledger.eventsAfter(null).events.filter(e=>e.payload.reason==='error-stalled');
+ f.fail({errorRowUnclassified:true});f.stop();assert.equal(f.s.state,'error');
+ assert.equal(f.w.capacityStatus(f.s.id)?.reason??null,reason);
+ for(let n=0;n<=19;n++){d.dirty=true;await d.schedule();clock.now+=10000;}
+ assert.deepEqual(told().map(e=>[e.kind,e.payload.memberId,e.payload.itemId]),reason?[]:[['blocked',f.s.id,id]]);
+ assert.equal(room.queueFind('shared',id).status,'sent');assert.deepEqual(f.sent,[]);
+});

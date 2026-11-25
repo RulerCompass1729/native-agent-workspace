@@ -503,8 +503,9 @@ function claudeFailureCause(file, nativeId, messageId) {
           row.isApiErrorMessage !== true || row.message?.model !== '<synthetic>') return false;
         // Native 2.1.323 omits the HTTP status on a connection error; explicit
         // null is the other no-status encoding. No other value is admitted.
+        // stream_idle_timeout: native's own idle timer gave up on an open stream after part of the answer (2.1.331).
         return row.apiErrorStatus === 529 ? 'serverOverloaded' : row.apiErrorStatus === 403 ? 'requestForbidden'
-          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && row.apiError === 'connection_failed' ? 'connectionFailed' : false;
+          : (row.apiErrorStatus === null || row.apiErrorStatus === undefined) && ['connection_failed', 'stream_idle_timeout'].includes(row.apiError) ? 'connectionFailed' : false;
       } catch { /* torn line: no authority to retry */ }
     }
   } catch (error) { return error.code === 'ENOENT' ? null : false; }
@@ -1114,8 +1115,8 @@ class Claude extends EventEmitter {
     turn.failureReads = (turn.failureReads || 0) + 1;
     turn.pendingFailure = cause === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
-    // An unknown error body grants nothing: only the saved typed 403 or the
-    // exact no-status connection_failed pair can admit this otherwise unnamed
+    // An unknown error body grants nothing: only the saved typed 403 or an
+    // exact no-status connection cause can admit this otherwise unnamed
     // failure. Other unknown rows retain their existing behavior.
     if (turn.errorRowUnclassified && cause !== 'requestForbidden' && cause !== 'connectionFailed') return;
     turn.endReported = true;

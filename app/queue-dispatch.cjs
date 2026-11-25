@@ -139,6 +139,8 @@ const TICK_MS = 3000;
 const FULL_PASS_MS = 30000;
 // A session due for rotation this long and still not rotated is told to the butler's record (noteRotationStalls).
 const ROTATION_STALL_MS = 60 * 60 * 1000;
+// A sent item's member this long in 'error' with nothing continuing it is told to the butler's record (noteErrorStalls).
+const ERROR_STALL_MS = 3 * 60 * 1000;
 // How long the designated integrator's session must be missing from every pass before it counts as gone.
 const INTEGRATOR_ABSENT_MS = 10 * 60 * 1000;
 const DECISION_MARKERS = ['需要你决定：', '需要你决定:', 'Needs your decision:'];
@@ -1208,6 +1210,8 @@ function planDispatch(input) {
   // A session due for rotation that this pass leaves as it is, with the first gate that held it (input.rotationGates,
   // filled when the caller passes a Map). Not one: a session being rotated, rotated by this pass, or handed off.
   const gates = input.rotationGates instanceof Map ? input.rotationGates : null;
+  // Open sent items whose member stands in 'error' on this pass (filled when the caller passes a Map).
+  const errorItems = input.errorItems instanceof Map ? input.errorItems : null;
   function stalled(id, gate) {
     const session = byId.get(id);
     if (!gates || gates.has(id) || !gate || gate === 'rotating' || !session || session.archived ||
@@ -1318,6 +1322,8 @@ function planDispatch(input) {
         continue;
       }
       if (member.state !== 'idle' || member.pendingTag || !settled(member.id, idleSince, now, settleMs)) {
+        // Told, never settled here (noteErrorStalls).
+        if (member.state === 'error' && errorItems) errorItems.set(item.id, { member, tag: item.tag });
         hold(member.id, 'sent-item-open');
         continue;
       }
@@ -2478,6 +2484,9 @@ class QueueDispatcher {
     // Told one line per stall and gate (noteRotationStalls); `stalls` holds since when, in memory only.
     this.rotationStalled = typeof options.rotationStalled === 'function' ? options.rotationStalled : null;
     this.stalls = new Map();
+    // Told one line per sent item (noteErrorStalls); `errorStalls` holds since when, in memory only.
+    this.errorStalled = typeof options.errorStalled === 'function' ? options.errorStalled : null;
+    this.errorStalls = new Map();
     this.tickMs = options.tickMs ?? TICK_MS;
     this.transcriptRoot = options.transcriptRoot || claudeProjects();
     // Sessions whose model is known nowhere yet: asked again after a while, never rested for a week.
@@ -3277,12 +3286,13 @@ class QueueDispatcher {
     // B6: the session that holds an open handoff gets no queue work and is not rotated, so what
     // it writes until the handoff is closed is not a member's reply; it is not listed as vacant either.
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
-    const waits = new Map(), quietPending = new Map(), rotationGates = new Map();
+    const waits = new Map(), quietPending = new Map(), rotationGates = new Map(), errorItems = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
     const actions = planDispatch({
       waits,
       quietPending,
       rotationGates,
+      errorItems,
       unmatched: unmatched ? [unmatched] : [],
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
@@ -3326,6 +3336,7 @@ class QueueDispatcher {
       }
     }
     this.noteRotationStalls(rotationGates, current.snapshot.sessions, current.now);
+    this.noteErrorStalls(errorItems, current.now);
     // In memory only: the person and the butler read why each queued item is still waiting (queue item 5614a65c).
     if (this.roomState.setQueueWaits(waits)) this.broadcast().catch(() => {});
     if (this.observeQueueState) await this.observeQueueState(queueVacancies({ ...current.snapshot,
@@ -3613,6 +3624,39 @@ class QueueDispatcher {
       try {
         this.rotationStalled({ memberId: id, nativeId, reason, gate, since: stall.since });
         stall.told.add(key);
+      } catch { /* Tried again on the next pass; nothing else waits on it. */ }
+    }
+  }
+
+  // Sent items whose member has stood in 'error' three minutes, with no automatic continuation scheduled or going out
+  // (2026-11-25, a member that stayed so with its item open and nobody told): one line to the butler's record per
+  // delivery. Only told: nothing is settled, sent again or continued. While the person is at that session (a draft, a
+  // recent input) it waits. A spent retry limit and a Codex usage limit have lines of their own.
+  noteErrorStalls(items, now) {
+    for (const id of [...this.errorStalls.keys()]) {
+      if (!items.has(id)) this.errorStalls.delete(id);
+    }
+    for (const [id, { member, tag }] of items) {
+      const recovery = member.capacityRecovery, nativeId = member.nativeId ?? null;
+      let stall = this.errorStalls.get(id);
+      if (!stall || stall.memberId !== member.id || stall.nativeId !== nativeId || stall.tag !== tag) {
+        stall = { since: now, memberId: member.id, nativeId, tag, exhaustedTurnId: null, told: false };
+        this.errorStalls.set(id, stall);
+      }
+      // Being continued, or its state is not known: the three minutes start again.
+      if (['scheduled', 'sending'].includes(recovery?.status) || member.pendingTag || member.nativeContextPending || member.backendUnavailable || member.transportDisconnected) {
+        stall.since = now;
+        continue;
+      }
+      if (recovery?.status === 'exhausted') {
+        stall.exhaustedTurnId = recovery.turnId;
+        continue;
+      }
+      if (!this.errorStalled || stall.told || now - stall.since < ERROR_STALL_MS || codexQuotaBlock(member) ||
+          (typeof member.liveDraft === 'string' && member.liveDraft.trim()) || humanRecent(member.id, this.humanAt, now, this.humanQuietMs)) continue;
+      try {
+        this.errorStalled({ memberId: member.id, nativeId, itemId: id, tag, since: stall.since, exhaustedTurnId: stall.exhaustedTurnId });
+        stall.told = true;
       } catch { /* Tried again on the next pass; nothing else waits on it. */ }
     }
   }
