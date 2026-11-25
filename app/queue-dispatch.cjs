@@ -3279,7 +3279,7 @@ class QueueDispatcher {
     const butler = this.stewardSession(current.snapshot.sessions)?.steward.sessionId;
     const waits = new Map(), quietPending = new Map(), rotationGates = new Map();
     const engaged = this.integration ? this.integration.holding() : undefined;
-    const actions = planDispatch({
+    const input = {
       waits,
       quietPending,
       rotationGates,
@@ -3310,7 +3310,22 @@ class QueueDispatcher {
       engaged,
       outside: steward ? [steward.sessionId] : [],
       butler,
-    });
+    };
+    let actions = planDispatch(input);
+    // The size a member would be rotated for is read again first, and the pass planned by what it is now.
+    const checked = new Set();
+    for (;;) {
+      const rotation = actions.find(action => action.kind === 'rotate' && action.reason === 'context' && !checked.has(action.sessionId));
+      if (!rotation) break;
+      checked.add(rotation.sessionId);
+      try {
+        await this.compactions.recheck(current.snapshot.sessions.find(session => session.id === rotation.sessionId), current.now);
+      } catch {
+        // Its size was dropped before the read.
+      }
+      for (const told of [waits, quietPending, rotationGates]) told.clear();
+      actions = planDispatch(input);
+    }
     for (const action of actions) {
       if (this.closed) {
         return;
