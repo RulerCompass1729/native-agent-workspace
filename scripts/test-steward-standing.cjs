@@ -93,22 +93,50 @@ async function main() {
     name = 'cost-' + name;
     await (await app.browserWindow(page)).evaluate((w, size) => w.setContentSize(size.width, size.height), { width, height }); await delay(200); checkForeground();
     if (name.includes('confirm')) {
-      await page.locator('.background-card').filter({ hasText: '需确认的配置' }).evaluate(el => el.scrollIntoView({ block: 'start' }));await delay(100);
+      await page.locator('article.background-card').filter({ hasText: '需确认的配置' }).evaluate(el => el.scrollIntoView({ block: 'start' }));await delay(100);
     }
     await page.screenshot({ path: path.join(pictures, name + '.png') }); shots.push(name + '.png');
   }
   await open(); assert.equal(await toggle.isChecked(), false); await shot('zh-off-850', 850);
   await toggle.check(); await until(async () => (await page.evaluate(() => workspace.stewardStanding())).on, 'Person enables standing permission');
   await shot('zh-on-1240', 1240); await shot('zh-on-850', 850); await dialog.getByRole('button', { name: '完成', exact: true }).click();
-  const unknown = await control('stewardStanding', [true]); assert.equal(unknown.state, 'not-executed'); assert.equal(unknown.reason, 'unknown-command');
-  record('switch defaults off; person can enable it; agent cannot invoke it');
+  record('switch defaults off; person can enable it');
+  // R234: the designated butler switches it itself, through the real MCP call, without a card.
+  for (const on of [false, true]) {
+    const switched = await control('stewardStanding', [on]); assert.equal(switched.state, 'complete', JSON.stringify(switched));
+    assert.equal(switched.value.on, on); assert.equal(switched.value.by, 'butler');
+  }
+  assert.equal((await page.evaluate(() => workspace.initial())).backgroundConfirmations.length, 0);
+  await open(); await dialog.getByText(/大管家打开的 \d\d:\d\d/).first().waitFor(); assert.equal(await toggle.isChecked(), true);
+  for (const words of ['你打开了', '它关掉了', '它打开了']) assert.equal(await dialog.locator('summary').filter({ hasText: words + '「允许大管家直接整理本机工作」' }).count(), 1, words);
+  await shot('zh-butler-on-1240', 1240); await shot('zh-butler-on-850', 850); await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  const bell = page.locator('#records-dialog'), rows = bell.locator('[data-kind="standing"]');
+  await until(async () => await page.locator('#records-badge').innerText() === '2', 'The bell counts what the butler switched');
+  await page.locator('#records-button').click(); await rows.first().waitFor(); assert.equal(await rows.count(), 2);
+  await shot('zh-bell-pending-850', 850); await bell.locator('[data-action="allConfirmations"]').click(); assert.equal(await rows.count(), 3);
+  for (const words of ['你打开的', '大管家关掉的', '大管家打开的']) assert.equal(await rows.filter({ hasText: words }).count(), 1, words);
+  await shot('zh-bell-1240', 1240); await shot('zh-bell-850', 850); await page.keyboard.press('Escape');
+  record('butler switches it itself: no card, its steps in the record, when it turned it on, and the bell');
+  await open(); await toggle.uncheck(); await until(async () => !(await page.evaluate(() => workspace.stewardStanding())).on, 'Person turns it off');
+  const refused = await control('stewardStanding', [true]); assert.notEqual(refused.state, 'complete'); assert.match(refused.error, /只有用户能再打开/, JSON.stringify(refused));
+  assert.equal((await page.evaluate(() => workspace.stewardStanding())).on, false);
+  await toggle.check(); await until(async () => (await page.evaluate(() => workspace.stewardStanding())).on, 'Person turns it on again');
+  await dialog.getByRole('button', { name: '完成', exact: true }).click();
+  record('once the person turned it off the butler cannot turn it on; the person can');
   const sessionsBefore = (await page.evaluate(() => workspace.initial())).sessions.length;
+  // What the window shows of the member is no current native report (steward-standing.cjs settingMatches): the same settings ask.
+  const shown = await control('create', [{ provider: 'claude', cwd: profile, name: '只有显示值', skipPermissions: true,
+    settings: { model: 'synthetic-model-a', effort: 'low' } }]);
+  assert.equal(shown.state, 'confirmation-required'); assert.equal(shown.approvedBy, undefined);
+  await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), shown);
+  record('settings equal only to what the window shows ask');
+  await fixture('observeSettings', peer, { model: 'synthetic-model-a', effort: 'low' });
   const changed = await control('create', [{ provider: 'claude', cwd: profile, name: '需确认的配置', skipPermissions: true,
     settings: { model: 'synthetic-model-b', effort: 'max' } }]);
   assert.equal(changed.state, 'confirmation-required'); assert.equal(changed.approvedBy, undefined);
   assert.match(changed.confirmation.options.detail, /synthetic-model-b/); assert.match(changed.confirmation.options.detail, /max/);
   assert.equal((await page.evaluate(() => workspace.initial())).sessions.length, sessionsBefore);
-  const card = page.locator('.background-card').filter({ hasText: '需确认的配置' });await card.waitFor();
+  const card = page.locator('article.background-card').filter({ hasText: '需确认的配置' });await card.waitFor();
   await page.locator('#chat-maximize').click();
   await card.locator('details summary').click();await shot('zh-confirm-1240',1240);await shot('zh-confirm-850',850);
   await shot('zh-confirm-full',850,1100);
@@ -119,9 +147,10 @@ async function main() {
   assert.equal(effortOnly.state, 'confirmation-required');
   await page.evaluate(r => workspace.backgroundDecision(r.actor.id, r.actor.nativeId, r.id, 0), effortOnly);
   record('changed model or effort asks before creating a session; the real card contains both selections');
+  await fixture('observeSettings', peer, { model: 'synthetic-model-a', effort: 'low' }); // Reported again: good for a minute only.
   const matching = await control('create', [{ provider: 'claude', cwd: profile, name: '同配置成员', skipPermissions: true,
     settings: { model: 'synthetic-model-a', effort: 'low' } }]);
-  assert.equal(matching.state, 'complete');assert.equal(matching.approvedBy, 'standing');
+  assert.equal(matching.state, 'complete', JSON.stringify(matching));assert.equal(matching.approvedBy, 'standing');
   assert.deepEqual(matching.standing.creation, { model: 'synthetic-model-a', effort: 'low' });
   const created = await control('create', [{ provider: 'claude', cwd: profile, name: '新开发成员', skipPermissions: true, view: 'chat' }]);
   assert.equal(created.state, 'complete', JSON.stringify(created)); assert.equal(created.approvedBy, 'standing');

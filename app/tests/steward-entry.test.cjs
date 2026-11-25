@@ -381,6 +381,8 @@ test('every sentence exists in both languages, and the words say what the design
     'notice.wake.stewardEnded',
     // The events the butler reads; their refusals are checked in steward-events.test.cjs.
     'error.steward.eventsButlerOnly', 'error.steward.eventsPosition', 'error.steward.eventsUnavailable',
+    // Its switch of the permission to organize (R234); checked in steward-standing-butler.test.cjs.
+    'error.steward.standingOnly', 'error.steward.standingInvalid', 'error.steward.standingPersonOff', 'error.steward.standingUnavailable', 'error.steward.standingUnknown',
     // Waking the butler on events; its refusals are checked in steward-wake.test.cjs.
     'error.steward.wakeOnly', 'error.steward.wakeInvalid', 'error.steward.wakeNoButler', 'error.steward.wakeUnavailable',
     // Patrol while idle (R120); checked in steward-wake.test.cjs.
@@ -443,6 +445,22 @@ test('the person takes it back while designating: it is off, for the previous bu
   await f.call('outside'); assert.equal(s.on(), false, 'designated again, it is not on by itself');
 });
 
+// R234: the person's off in the designation dialog is the person's, so it is a line of the record; what stays on or was not asked is not.
+test('taking it back while designating is a line of the record and the person\'s off, also when the butler turned it off meanwhile', async t => {
+  const f = fixture(t), s = standing(f), lines = [];
+  f.context.stewardRecord = { sync() {}, designated: value => lines.push(value.sessionId), standingSwitch: on => lines.push(on) };
+  await f.call('outside'); s.turn(true); await f.call('other', null, true); await f.call('other');
+  assert.deepEqual(lines.splice(0), ['outside', 'other', 'other']);
+  await f.call('outside', null, false); assert.deepEqual(lines.splice(0), ['outside', false]);
+  await f.call('other', null, false); assert.deepEqual(lines.splice(0), ['other'], 'already the person\'s off');
+  s.turn(true); s.value.setByButler({ id: 'other', nativeId: 'native-other' }, false);
+  await f.call('outside', null, false); assert.deepEqual(lines.splice(0), ['outside', false]);
+  assert.throws(() => s.value.setByButler({ id: 'outside', nativeId: 'native-outside' }, true), { code: 'STEWARD_STANDING_PERSON_OFF' });
+  // Not saved: said, and no line claims it.
+  s.turn(true); s.value.write = () => { throw Error('synthetic'); };
+  assert.equal((await f.call('other', null, false)).standingLost, true); assert.deepEqual(lines, ['other']);
+});
+
 test('not on for the butler being replaced: leaving the line on turns nothing on', async t => {
   // Never turned on; on only for an earlier designation; turned off; nobody designated; unreadable.
   const never = fixture(t); await never.call('outside'); await never.call('other', null, true);
@@ -496,7 +514,8 @@ test('an agent cannot carry it, and a permission that cannot be saved is said wh
   const late = fixture(t), l = standing(late); await late.call('outside'); l.turn(true); const write = l.value.write;
   l.value.write = function (next) { write.call(this, next); throw Error('synthetic'); };
   assert.equal(Object.hasOwn(await late.call('other', null, true), 'standingLost'), false); assert.equal(l.on(), true);
-  assert.equal((await late.call('outside', null, false)).standingLost, true);
+  // Taken back by such a save: it is off, by the person, and that is in the record; nothing is said to be lost.
+  assert.equal(Object.hasOwn(await late.call('outside', null, false), 'standingLost'), false); assert.deepEqual([l.read().on, l.read().source.by], [false, 'person']);
   // Turned off elsewhere while the dialog was open: nothing is carried, and that is said; not asked, nothing is said.
   const g = fixture(t), off = standing(g); await g.call('outside'); off.turn(true); off.turn(false);
   assert.equal((await g.call('other', null, true)).standingLost, true); assert.equal(off.on(), false);

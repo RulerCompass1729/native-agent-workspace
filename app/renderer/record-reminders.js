@@ -46,11 +46,16 @@
       if (disposed || !dialog.open || dialog.dataset.view !== 'reminders' || !clockRows.some(({ row }) => row.actionable && row.expiresAt > now())) return;
       clock = setTimeout(() => { clock = null; updateTimes(); armClock(); }, 1000); clock.unref?.();
     }
+    const pad = n => String(n).padStart(2, '0');
+    function shortTime(at) {
+      const date = new Date(at), time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      return date.toDateString() === new Date(now()).toDateString() ? time : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
+    }
     function timestamp(el, value) {
       el.className = 'records-confirmation-time';
       const date = new Date(Number.isSafeInteger(value) ? value : NaN), today = new Date(now());
       if (!Number.isSafeInteger(value) || !Number.isFinite(date.getTime())) { say(el, 'reading.unknownTime'); return ''; }
-      const pad = n => String(n).padStart(2, '0'), day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+      const day = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
       const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
       const full = `${date.getFullYear()}-${day} ${time}:${pad(date.getSeconds())} ${date.toTimeString().split(' ')[1]}`;
       el.textContent = date.toDateString() === today.toDateString() ? time : `${day} ${time}`;
@@ -147,6 +152,7 @@
       if (entry.kind === 'age') return ['records.item.age', { blocks: entry.blocks, oldest: entry.oldestDay || oldest, total, size: bytes }];
       if (entry.kind === 'size') return ['records.item.size', { size: size(entry.bytes), oldest, total }];
       if (entry.kind === 'unavailable') return [record.record === 'steward' ? (entry.cause === 'history' ? 'records.item.stewardUnavailable' : 'records.item.stewardUnavailableOther') : entry.cause === 'history' ? 'records.item.unavailable' : 'records.item.unavailableOther', {}];
+      if (entry.kind === 'standing') return [`records.item.standing${entry.by === 'butler' ? 'Butler' : 'You'}${entry.on ? 'On' : 'Off'}`, { time: shortTime(entry.at) }];
       if (entry.manifest) return ['records.item.unreadableManifest', {}];
       return ['records.item.unreadable', { blocks: entry.blocks, from: entry.fromSequence, through: entry.throughSequence }];
     }
@@ -160,7 +166,8 @@
       const head = make('div', 'records-panel-head');
       const close = control('records.close', 'close', () => dialog.close()); close.className = 'records-close';
       head.append(title, close); dialog.append(head);
-      const due = (current?.records || []).map(record => ({ record, items: record.items.filter(entry => entry.shown) })).filter(group => group.items.length);
+      // What the person switched themselves is not due; it is listed with everything.
+      const due = (current?.records || []).map(record => ({ record, items: record.items.filter(entry => entry.shown || filter === 'all' && entry.kind === 'standing') })).filter(group => group.items.length);
       if (!current) dialog.append(make('p', 'records-note', 'records.failed', { reason: '—' }));
       else if (!Array.isArray(current.confirmations) && !due.length && !current.temp?.shown && !lastResult) dialog.append(make('p', 'records-empty', 'records.nothing'));
       if (Array.isArray(current?.confirmations)) dialog.append(confirmationSection());
@@ -205,7 +212,9 @@
         for (const entry of items) {
           const [key, params] = item(record, entry), row = make('div', 'records-item'), actions = make('div', 'records-actions');
           row.dataset.kind = entry.kind; row.append(make('p', '', key, params));
-          if (entry.kind === 'unreadable' || entry.kind === 'unavailable') actions.append(control('records.reveal', 'reveal', () => api.records('reveal', record.record, null).catch(() => {})));
+          if (entry.kind === 'standing' && !entry.shown) { section.append(row); continue; }
+          if (entry.kind === 'standing') { /* Nothing to export: the record keeps it. */ }
+          else if (entry.kind === 'unreadable' || entry.kind === 'unavailable') actions.append(control('records.reveal', 'reveal', () => api.records('reveal', record.record, null).catch(() => {})));
           else actions.append(control('records.export', 'export', () => exportView(record.record)));
           actions.append(control('records.acknowledge', 'acknowledge', async () => {
             try { current = await api.records('acknowledge', record.record, entry.kind, entry.level); } catch { /* Shown again next time; nothing is lost. */ }
