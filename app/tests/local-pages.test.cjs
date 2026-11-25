@@ -17,9 +17,20 @@ const board = { id: 'board', title: 'Board', url: 'http://127.0.0.1:8001/' };
 function electron() {
   const created = [], partitions = new Map(), external = [];
   class Contents extends EventEmitter {
-    constructor() { super(); this.loads = []; }
+    constructor() { super(); this.loads = []; this.reloads = 0; this.closed = false; this.focused = 0; }
     setWindowOpenHandler(handler) { this.openHandler = handler; }
     loadURL(url) { this.loads.push(url); return Promise.resolve(); }
+    getURL() { return this.loads.at(-1) || ''; }
+    reload() { this.reloads++; }
+    focus() { this.focused++; }
+    isDestroyed() { return this.closed; }
+    close() { this.closed = true; this.emit('destroyed'); }
+  }
+  const views = [];
+  class View {
+    constructor(options) { this.options = options; this.webContents = new Contents(); this.visible = true; this.bounds = null; views.push(this); }
+    setBounds(bounds) { this.bounds = bounds; }
+    setVisible(visible) { this.visible = visible; }
   }
   class Window extends EventEmitter {
     constructor(options) { super(); this.options = options; this.webContents = new Contents(); this.destroyed = false; this.shown = 0; this.title = options.title; created.push(this); }
@@ -47,13 +58,37 @@ function electron() {
   };
   const shell = { openExternal: url => { external.push(url); return Promise.resolve(); } };
   const screen = { getAllDisplays: () => [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }] };
-  return { created, partitions, external, BrowserWindow: Window, session, shell, screen };
+  return { created, views, partitions, external, BrowserWindow: Window, WebContentsView: View, session, shell, screen };
+}
+function clock() {
+  let now = 0, next = 1;
+  const pending = new Map();
+  return {
+    set(fn, ms) { const id = next++; pending.set(id, { at: now + ms, fn }); return id; },
+    clear(id) { pending.delete(id); },
+    advance(ms) { now += ms; for (const [id, job] of [...pending]) if (job.at <= now) { pending.delete(id); job.fn(); } },
+    get pending() { return pending.size; },
+  };
+}
+// A main window as main.cjs hands it over: its context, its content view and its zoom.
+function owner(width = 1240, height = 822) {
+  const children = [];
+  const contents = new EventEmitter();
+  Object.assign(contents, { zoom: 1, focused: 0, getZoomFactor() { return this.zoom; }, focus() { this.focused++; }, isDestroyed: () => false });
+  const win = new EventEmitter();
+  Object.assign(win, {
+    width, height, destroyed: false, webContents: contents,
+    contentView: { children, addChildView(view) { children.push(view); }, removeChildView(view) { const i = children.indexOf(view); if (i >= 0) children.splice(i, 1); } },
+    getContentBounds() { return { x: 0, y: 0, width: this.width, height: this.height }; },
+    isDestroyed() { return this.destroyed; },
+  });
+  return { win };
 }
 function pages(t, list = [board]) {
   const dataDir = tempDir(t); declare(dataDir, list);
-  const fake = electron();
-  const local = createLocalPages({ dataDir, ...fake, uiError, displayText: (k, p) => uiLocale.format('zh', k, p) });
-  return { dataDir, fake, local };
+  const fake = electron(), timers = clock(), pushed = [];
+  const local = createLocalPages({ dataDir, ...fake, uiError, displayText: (k, p) => uiLocale.format('zh', k, p), timers, notify: (to, state) => pushed.push({ to, state }) });
+  return { dataDir, fake, local, timers, pushed };
 }
 
 test('declarations accept only http on 127.0.0.1 or localhost', t => {
@@ -212,8 +247,191 @@ test('the main window keeps its own session filter and the bridge stays on the m
   const filter = "  session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));\n";
   assert.equal(main.split(filter).length, 2);
   assert.equal(main.match(/defaultSession\.webRequest/gu).length, 1);
-  assert.match(main, /register\('openLocalPage', \(c, id, requested\) => \(localPages \|\|= createLocalPages\(\{[\s\S]*?\}\)\)\.open\(id, requested, \{ background: c\.background \}\)\);/u);
+  assert.match(main, /register\('openLocalPage', \(c, id, requested\) => currentLocalPages\(\)\.open\(id, requested, \{ background: c\.background, owner: c \}\)\);/u);
+  assert.match(main, /localPages \|\|= createLocalPages\(\{/u);
   const source = fs.readFileSync(path.join(__dirname, '../local-pages.cjs'), 'utf8');
   assert.doesNotMatch(source, /defaultSession|preload\s*:/u);
   assert.match(fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8'), /'openLocalFile', 'openLocalPage'/u);
+});
+
+const tabPage = { ...board, tab: true };
+const other = { id: 'other', title: 'Other', url: 'http://localhost:9000/' };
+const MINUTE = 60 * 1000;
+
+test('a declaration may ask for a tab; anything but true or false is refused', t => {
+  const dir = tempDir(t);
+  declare(dir, [tabPage, { ...other, tab: false }]);
+  assert.deepEqual([...readDeclarations(dir, uiError).values()], [
+    { id: 'board', title: 'Board', url: 'http://127.0.0.1:8001/', origin: 'http://127.0.0.1:8001', tab: true },
+    { id: 'other', title: 'Other', url: 'http://localhost:9000/', origin: 'http://localhost:9000' },
+  ]);
+  for (const tab of ['true', 1, null, {}]) {
+    declare(dir, [board, { ...other, tab }]);
+    try { readDeclarations(dir, uiError); assert.fail(String(tab)); } catch (error) { assert.equal(error.uiMessage?.key, 'error.localPage.entryTab', String(tab)); assert.deepEqual(error.uiMessage.params, { index: 2 }); }
+  }
+});
+
+test('without a tab page every window has no tabs', async t => {
+  const empty = pages(t, [board]), w = owner();
+  assert.deepEqual(empty.local.tabs(w), { tabs: [], active: null });
+  const none = pages(t, []);
+  fs.rmSync(path.join(none.dataDir, FILE));
+  assert.deepEqual(none.local.tabs(w), { tabs: [], active: null });
+  declare(none.dataDir, '{ broken');
+  assert.deepEqual(none.local.tabs(w), { tabs: [], active: null });
+  await empty.local.open('board', undefined, { owner: w });
+  assert.equal(empty.fake.created.length, 1, 'A page without "tab" still opens its own window');
+  assert.equal(empty.fake.views.length, 0);
+  assert.equal(w.win.contentView.children.length, 0);
+});
+
+test('a tab page opens in the asking window under the tab strip, isolated like a page window', async t => {
+  const { fake, local, pushed } = pages(t, [tabPage, other]), w = owner();
+  assert.deepEqual(local.tabs(w), { tabs: [{ id: 'board', title: 'Board' }], active: null });
+  const result = await local.open('board', undefined, { owner: w });
+  assert.deepEqual(result, { id: 'board', url: 'http://127.0.0.1:8001/', reused: false, tab: true });
+  assert.equal(fake.created.length, 0, 'No window is opened for a tab page');
+  assert.equal(fake.views.length, 1);
+  const [view] = fake.views, prefs = view.options.webPreferences;
+  assert.deepEqual(w.win.contentView.children, [view]);
+  assert.equal(prefs.partition, 'persist:naw-local-page-board');
+  assert.equal('preload' in prefs, false);
+  assert.equal(prefs.sandbox, true); assert.equal(prefs.contextIsolation, true); assert.equal(prefs.nodeIntegration, false); assert.equal(prefs.webviewTag, false);
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/']);
+  assert.deepEqual(view.bounds, { x: 0, y: 30, width: 1240, height: 792 });
+  assert.equal(view.visible, true);
+  assert.equal(view.webContents.focused, 1);
+  assert.deepEqual(pushed.at(-1), { to: w, state: { tabs: [{ id: 'board', title: 'Board' }], active: 'board' } });
+  const wc = view.webContents;
+  const navigate = url => { let prevented = false; wc.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
+  assert.equal(navigate('http://127.0.0.1:8001/?x=1'), false);
+  assert.equal(navigate('http://example.com/'), true);
+  let attached = false; wc.emit('will-attach-webview', { preventDefault: () => { attached = true; } }); assert.equal(attached, true);
+  assert.deepEqual(wc.openHandler({ url: 'https://example.com/doc' }), { action: 'deny' });
+  assert.deepEqual(fake.external, ['https://example.com/doc']);
+  const ses = fake.partitions.get('persist:naw-local-page-board');
+  const filter = url => { let reply; ses.filter({ url }, value => { reply = value; }); return reply.cancel; };
+  assert.equal(filter('http://127.0.0.1:8001/api'), false);
+  assert.equal(filter('http://localhost:9000/'), true);
+});
+
+test('switching to NAW and back within 20 minutes keeps the page loaded', async t => {
+  const { fake, local, timers } = pages(t, [tabPage]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  const [view] = fake.views;
+  local.show(w, null);
+  assert.equal(view.visible, false);
+  assert.equal(w.win.webContents.focused, 1);
+  assert.deepEqual(local.tabs(w).active, null);
+  timers.advance(19 * MINUTE + 59 * 1000);
+  local.show(w, 'board');
+  assert.equal(view.visible, true);
+  assert.equal(fake.views.length, 1);
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/']);
+  assert.equal(view.webContents.reloads, 0);
+  assert.equal(timers.pending, 0, 'A shown page has no release timer');
+  local.show(w, null);
+  timers.advance(10 * MINUTE);
+  assert.deepEqual(await local.open('board', undefined, { owner: w }), { id: 'board', url: 'http://127.0.0.1:8001/', reused: true, tab: true });
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/'], 'Opening without a path only switches');
+  await local.open('board', '/?tab=b', { owner: w });
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/', 'http://127.0.0.1:8001/?tab=b'], 'A plugin path still moves the page');
+});
+
+test('a page hidden for 20 minutes is released and loads again when shown', async t => {
+  const { fake, local, timers } = pages(t, [tabPage]), w = owner();
+  await local.open('board', '/?tab=a', { owner: w });
+  const [first] = fake.views;
+  local.show(w, null);
+  timers.advance(20 * MINUTE);
+  assert.equal(first.webContents.closed, true);
+  assert.deepEqual(w.win.contentView.children, []);
+  assert.deepEqual(local.tabs(w), { tabs: [{ id: 'board', title: 'Board' }], active: null }, 'The tab stays after its page is released');
+  local.show(w, 'board');
+  assert.equal(fake.views.length, 2);
+  const [, second] = fake.views;
+  assert.deepEqual(w.win.contentView.children, [second]);
+  assert.deepEqual(second.webContents.loads, ['http://127.0.0.1:8001/?tab=a'], 'It reloads where the person left it');
+});
+
+test('the reload button reloads the shown page', async t => {
+  const { fake, local } = pages(t, [tabPage]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  local.reload(w, 'board');
+  assert.equal(fake.views[0].webContents.reloads, 1);
+  assert.equal(fake.views.length, 1);
+});
+
+test('another window takes the page over without reloading it', async t => {
+  const { fake, local, pushed } = pages(t, [tabPage]), a = owner(), b = owner(850, 572);
+  await local.open('board', undefined, { owner: a });
+  const [view] = fake.views;
+  local.show(b, 'board');
+  assert.equal(fake.views.length, 1);
+  assert.deepEqual(a.win.contentView.children, []);
+  assert.deepEqual(b.win.contentView.children, [view]);
+  assert.deepEqual(view.bounds, { x: 0, y: 30, width: 850, height: 542 });
+  assert.equal(view.webContents.loads.length, 1);
+  assert.equal(local.tabs(a).active, null);
+  assert.equal(local.tabs(b).active, 'board');
+  assert.ok(pushed.some(p => p.to === a && p.state.active === null), 'The first window is told it shows NAW again');
+});
+
+test('the page follows the window size, the strip height and zoom', async t => {
+  const { fake, local } = pages(t, [tabPage]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  const [view] = fake.views;
+  w.win.width = 900; w.win.height = 640; w.win.emit('resize');
+  assert.deepEqual(view.bounds, { x: 0, y: 30, width: 900, height: 610 });
+  w.win.webContents.zoom = 1.25; local.layout(w, 30);
+  assert.deepEqual(view.bounds, { x: 0, y: 38, width: 900, height: 602 });
+  for (const top of [-1, 'x', 500, NaN]) assert.throws(() => local.layout(w, top));
+});
+
+test('closing a window releases its page at once', async t => {
+  const { fake, local, timers } = pages(t, [tabPage, { ...other, tab: true }]), w = owner();
+  await local.open('board', undefined, { owner: w });
+  local.show(w, 'other');
+  assert.equal(fake.views.length, 2);
+  assert.equal(timers.pending, 1);
+  local.closeOwner(w);
+  assert.deepEqual(fake.views.map(v => v.webContents.closed), [true, true]);
+  assert.equal(timers.pending, 0);
+  assert.deepEqual(local.tabs(owner()).active, null);
+});
+
+test('Control-Tab moves between tabs from NAW and from inside the page', async t => {
+  const { fake, local } = pages(t, [tabPage]), w = owner();
+  local.tabs(w);
+  const key = (wc, input) => { let prevented = false; wc.emit('before-input-event', { preventDefault: () => { prevented = true; } }, { type: 'keyDown', key: 'Tab', control: true, shift: false, alt: false, meta: false, ...input }); return prevented; };
+  assert.equal(key(w.win.webContents, {}), true);
+  assert.equal(local.tabs(w).active, 'board');
+  const [view] = fake.views;
+  assert.equal(key(view.webContents, { shift: true }), true);
+  assert.equal(local.tabs(w).active, null);
+  assert.equal(key(w.win.webContents, { control: false }), false);
+  assert.equal(key(w.win.webContents, { type: 'keyUp' }), false);
+});
+
+test('tab actions refuse unknown pages, page windows and background agents', async t => {
+  const { fake, local } = pages(t, [tabPage, other]), w = owner();
+  assert.equal(key(() => local.show(w, 'missing')), 'error.localPage.unknown');
+  assert.equal(key(() => local.show(w, 'other')), 'error.localPage.unknown');
+  assert.equal(await rejection(local.open('board', '/', { background: true, owner: w })), 'error.localPage.background');
+  assert.equal(await rejection(local.open('board', 'http://evil.example/', { owner: w })), 'error.localPage.path');
+  assert.equal(fake.views.length, 0);
+  assert.equal(fake.created.length, 0);
+});
+
+test('the strip ships in both builds, and its IPC is the person\'s window only', () => {
+  const read = name => fs.readFileSync(path.join(__dirname, '..', '..', name), 'utf8');
+  const build = read('scripts/build-ui.cjs'), html = read('app/renderer/index.html'), main = read('app/main.cjs'), preload = read('app/preload.cjs');
+  assert.ok(build.indexOf("'window-tabs.js'") > 0 && build.indexOf("'window-tabs.js'") < build.indexOf("'renderer.js'"));
+  assert.ok(build.includes("css += `\\n#window-tabs{${palette}}\\n` + read('app/renderer/window-tabs.css');"), 'The strip sits outside .naw and needs its own palette');
+  assert.ok(html.indexOf('src="window-tabs.js"') > 0 && html.indexOf('src="window-tabs.js"') < html.indexOf('src="renderer.js"'));
+  assert.ok(html.includes('<link rel="stylesheet" href="window-tabs.css">'));
+  assert.match(main, /register\('localPageTabs', \(c, action, value\) => \{\n    if \(c\.background\) throw uiError\('error\.localPage\.background'\);/u);
+  assert.ok(main.includes("applicationHandlers.delete('localPageTabs');"));
+  assert.ok(main.includes('localPages?.closeOwner(context);'));
+  assert.ok(preload.includes("'openLocalPage', 'localPageTabs'") && preload.includes("['onLocalPageTabs', 'workspace:local-page-tabs']"));
 });

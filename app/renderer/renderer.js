@@ -8110,6 +8110,8 @@ sidebarHoverCard = (() => {
   return surface && window.nativeWorkspaceHoverCard ? window.nativeWorkspaceHoverCard.mount({ root: [surface, $('header')], surface, resolve: sidebarHoverItem, build: sidebarHoverBuild }) : null;
 })();
 disposers.push(() => sidebarHoverCard?.dispose(), ui.language.subscribe(() => sidebarHoverCard?.dismiss()));
+const windowTabs = nativeWorkspaceWindowTabs.mount({ api, text: uiText, onLanguage: fn => ui.language.subscribe(fn), onError: toastError });
+disposers.push(() => windowTabs.dispose());
 $('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
 disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); butlerReviewView.refresh(); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); else if (current()?.archived) document.title = sessionWindowTitle(current()); }));
 disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
