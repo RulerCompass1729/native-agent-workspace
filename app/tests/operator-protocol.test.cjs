@@ -133,7 +133,7 @@ test('private synchronous endpoint validates lease/epoch and returns a report on
 test('native creation parameters constrain only an operator-created default session and leave ordinary defaults intact', async () => {
   const vm = require('node:vm'), source = fs.readFileSync(path.join(__dirname, '../adapters.cjs'), 'utf8');
   const from = source.indexOf('    const model = record.requestedSettings?.model || record.model;'), to = source.indexOf('\n    // A picker', from);
-  const posture = record => vm.runInNewContext(source.slice(from, to) + '\nposture', { record, EFFORT_LEVELS: ['low', 'medium', 'high'] });
+  const posture = record => vm.runInNewContext(source.slice(from, to) + '\nposture', { record, sessionModel: require('../session-model.cjs'), EFFORT_LEVELS: ['low', 'medium', 'high'] });
   assert.deepEqual(Array.from(posture({})), []);
   assert.deepEqual(Array.from(posture({ operatorCreation: { permission: 'default' } })), ['--permission-mode', 'default']);
   assert.deepEqual(Array.from(posture({ skipPermissions: true, operatorCreation: { permission: 'bypass' } })), ['--permission-mode', 'bypassPermissions']);

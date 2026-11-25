@@ -1,14 +1,13 @@
 'use strict';
-// Memory and disk admission for packaging during a daily install. The stop thresholds follow two recorded failures
-// on the maintainer machine: an out-of-memory stop with swap 96.6% used and 14 GB of disk left, and a kernel panic
-// with the compressor at 100% of its segment limit.
+// Memory and disk admission for packaging during a daily install. It stops for the compressor near its segment limit
+// (a kernel panic had it at 100%) and for less than 8 GiB of disk; critical pressure is waited for ten minutes.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
-const { admit, check, growth } = require('../../scripts/install-admission.cjs');
+const { spawnSync } = require('node:child_process');
+const { admit, check, growth, LIMITS } = require('../../scripts/install-admission.cjs');
 
 const GiB = 2 ** 30;
 const NOW = Date.parse('2026-11-24T05:00:00Z');
@@ -16,9 +15,6 @@ const INSTALL = { version: '0.1.0-alpha.999', commit: 'abcdef1234567', now: NOW 
 
 function reading(extra) {
   return { pressure: 1, swapUsed: 2 * GiB, swapTotal: 4 * GiB, segments: 100, segmentLimit: 1000, freeBytes: 40 * GiB, ...extra };
-}
-function consent(extra) {
-  return { answer: '照装', version: INSTALL.version, commit: INSTALL.commit, at: new Date(NOW - 60e3).toISOString(), ...extra };
 }
 const codes = result => result.reasons.map(r => r.code);
 
@@ -28,77 +24,62 @@ test('normal pressure goes ahead', () => {
   assert.deepEqual(codes(result), []);
 });
 
-test('warn pressure asks the person with the reading, the packaging estimate and the risk', () => {
-  const result = admit(reading({ pressure: 2, swapUsed: 17 * GiB, swapTotal: 18 * GiB }), INSTALL);
-  assert.equal(result.decision, 'ask');
-  assert.deepEqual(codes(result), ['pressure-warn']);
-  assert.match(result.ask, /^需要你决定：/u);
-  assert.match(result.ask, /内存压力 2 级/u);
-  assert.match(result.ask, /swap 用了 17\.0\/18\.0 GiB/u);
-  assert.match(result.ask, /打包要用多少内存：还没量过/u);
-  assert.match(result.ask, /风险：/u);
-  assert.match(result.ask, /照装/u);
-  assert.match(result.ask, /等等/u);
-  assert.match(result.ask, /只对 0\.1\.0-alpha\.999 这一次装机有效/u);
-  assert.match(result.ask, /（硬门，不按默认）$/u);
-});
+for (const pressure of [2, 3]) {
+  test(`pressure ${pressure} goes ahead without asking, and says so`, () => {
+    const result = admit(reading({ pressure, swapUsed: 17 * GiB, swapTotal: 18 * GiB }), INSTALL);
+    assert.equal(result.decision, 'go');
+    assert.deepEqual(codes(result), ['pressure-warn']);
+    assert.match(result.notice, new RegExp(`^照装：内存压力 ${pressure} 级，swap 用了 17\\.0/18\\.0 GiB`, 'u'));
+    assert.equal('ask' in result, false);
+  });
+}
 
-test('a measured packaging growth is told in the question', () => {
-  const estimate = { swapGrowthBytes: 3 * GiB, segmentGrowth: 0.12, from: '0.1.0-alpha.998' };
-  const result = admit(reading({ pressure: 2 }), { ...INSTALL, estimate });
-  assert.match(result.ask, /上次（0\.1\.0-alpha\.998）打包 swap 最多涨 3\.0 GiB、压缩段涨 12%/u);
-});
+for (const [name, extra] of [
+  ['swap almost full with 9 GiB of disk', { swapUsed: 22.9 * GiB, swapTotal: 23 * GiB, freeBytes: 9 * GiB }],
+  ['swap almost full with 14 GiB of disk', { swapUsed: 36.6 * GiB, swapTotal: 37.9 * GiB, freeBytes: 14 * GiB }],
+  ['swap almost full with room on disk', { swapUsed: 17 * GiB, swapTotal: 18 * GiB, freeBytes: 28 * GiB }],
+]) {
+  test(`${name} does not stop`, () => {
+    assert.equal(admit(reading(extra), INSTALL).decision, 'go');
+  });
+}
 
-test('consent for this version and commit lets warn pressure go ahead', () => {
-  const result = admit(reading({ pressure: 2 }), { ...INSTALL, consent: consent() });
-  assert.equal(result.decision, 'go');
-  assert.equal(result.consented, true);
-});
-
-const stale = [
-  ['another version', { version: '0.1.0-alpha.998' }],
-  ['another commit', { commit: '1234567abcdef' }],
-  ['an answer to wait', { answer: '等等' }],
-  ['an answer older than two hours', { at: new Date(NOW - 2 * 3600e3 - 1).toISOString() }],
-  ['an unreadable time', { at: 'soon' }],
-];
-for (const [name, extra] of stale) {
-  test(`consent with ${name} still asks`, () => {
-    assert.equal(admit(reading({ pressure: 2 }), { ...INSTALL, consent: consent(extra) }).decision, 'ask');
+for (const [name, extra] of [['swap use', { swapUsed: null }], ['swap size', { swapTotal: null }], ['swap', { swapUsed: undefined, swapTotal: undefined }]]) {
+  test(`${name} that cannot be read does not stop, and is said to be unread`, () => {
+    const result = admit(reading({ pressure: 2, ...extra }), INSTALL);
+    assert.equal(result.decision, 'go');
+    assert.match(result.notice, /，swap 没读到，压缩段用到上限的 10%/u);
+    assert.doesNotMatch(result.notice, /NaN|null|undefined/u);
   });
 }
 
 const stops = [
   ['critical pressure', { pressure: 4 }, 'pressure-critical'],
   ['the compressor near its segment limit (the panic was at 100%)', { segments: 850, segmentLimit: 1000 }, 'compressor-near-limit'],
-  ['swap almost full with too little disk to grow (the out-of-memory stop: 96.6%, 14 GB)', { swapUsed: 36.6 * GiB, swapTotal: 37.9 * GiB, freeBytes: 14 * GiB }, 'swap-cannot-grow'],
   ['less than 8 GiB of disk', { freeBytes: 7.9 * GiB }, 'disk-low'],
   ['an unreadable pressure level', { pressure: null }, 'unreadable'],
   ['unreadable compressor segments', { segments: null }, 'unreadable'],
   ['an unreadable segment limit', { segmentLimit: null }, 'unreadable'],
   ['a segment limit of zero', { segmentLimit: 0 }, 'unreadable'],
-  ['unreadable swap use', { swapUsed: null }, 'unreadable'],
-  ['an unreadable swap size', { swapTotal: null }, 'unreadable'],
+  ['unreadable free disk', { freeBytes: null }, 'unreadable'],
 ];
 for (const [name, extra, code] of stops) {
-  test(`${name} stops without asking, even with consent`, () => {
-    const result = admit(reading({ pressure: 2, ...extra }), { ...INSTALL, consent: consent() });
+  test(`${name} stops`, () => {
+    const result = admit(reading({ pressure: 2, ...extra }), INSTALL);
     assert.equal(result.decision, 'stop');
-    assert.ok(codes(result).includes(code), codes(result).join(','));
-    assert.equal(result.ask, null);
+    assert.deepEqual(codes(result), [code]);
     assert.match(result.notice, /^装机停下：/u);
   });
 }
+
+test('just inside both limits goes ahead', () => {
+  assert.equal(admit(reading({ segments: 849, segmentLimit: 1000, freeBytes: 8 * GiB }), INSTALL).decision, 'go');
+});
 
 test('a measured packaging growth counts toward the segment limit', () => {
   const near = reading({ segments: 760, segmentLimit: 1000 });
   assert.equal(admit(near, INSTALL).decision, 'go');
   assert.equal(admit(near, { ...INSTALL, estimate: { segmentGrowth: 0.1 } }).decision, 'stop');
-});
-
-test('swap nearly full with room on disk to grow does not stop by itself', () => {
-  const result = admit(reading({ swapUsed: 17 * GiB, swapTotal: 18 * GiB, freeBytes: 28 * GiB }), INSTALL);
-  assert.equal(result.decision, 'go');
 });
 
 test('the growth over a packaging run is the peak above its start', () => {
@@ -112,59 +93,89 @@ test('the command reads this machine, writes its record and exits by the decisio
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.resolve(__dirname, '../../scripts/install-admission.cjs');
   const out = path.join(dir, 'admission.json');
-  const run = spawnSync(process.execPath, [script, 'check', '--version', INSTALL.version, '--commit', INSTALL.commit, '--out', out], { encoding: 'utf8' });
+  // Longer than the whole wait: this machine may itself be at critical pressure, and the test does not wait for it.
+  const run = spawnSync(process.execPath, [script, 'check', '--version', INSTALL.version, '--commit', INSTALL.commit, '--out', out, '--every-seconds', '700'], { encoding: 'utf8' });
   const record = JSON.parse(fs.readFileSync(out, 'utf8'));
-  assert.equal(run.status, { go: 0, stop: 75, ask: 76 }[record.decision], run.stderr);
+  assert.equal(run.status, { go: 0, stop: 75 }[record.decision], run.stderr);
   for (const field of ['pressure', 'freeBytes', 'swapUsed', 'swapTotal', 'segments', 'segmentLimit']) {
     assert.equal(typeof record.reading[field], 'number', field);
   }
   assert.ok(run.stdout.split('\n').some(line => line.startsWith('NOTICE ') || line.startsWith('GO ')), run.stdout);
-
-  const consentFile = path.join(dir, 'consent.json');
-  execFileSync(process.execPath, [script, 'consent', '--version', INSTALL.version, '--commit', INSTALL.commit, '--file', consentFile, '--by', 'synthetic person reply']);
-  const written = JSON.parse(fs.readFileSync(consentFile, 'utf8'));
-  assert.deepEqual([written.answer, written.version, written.commit, written.by], ['照装', INSTALL.version, INSTALL.commit, 'synthetic person reply']);
-  assert.equal(fs.statSync(consentFile).mode & 0o777, 0o600);
 });
 
-test('waiting (等等) is bounded, says what it waits for and until when, and goes once pressure drops', async t => {
+// One check whose machine gives these readings in turn, with the clock moved by each wait.
+async function waits(t, readings, o = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-admission-wait-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const out = path.join(dir, 'admission.json');
-  const readings = [reading({ pressure: 2 }), reading({ pressure: 2 }), reading({ pressure: 1 })];
-  const seen = [];
-  const lines = [];
-  const log = console.log;
+  const lines = [], records = [], log = console.log, began = Date.now();
+  let now = began, reads = 0;
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(globalThis, 'setTimeout', (run, ms) => { now += ms; setImmediate(run); });
   console.log = line => lines.push(String(line));
   t.after(() => { console.log = log; });
   const read = () => {
-    const next = readings.shift();
-    if (readings.length === 1) {
-      seen.push(JSON.parse(fs.readFileSync(out, 'utf8')));
+    if (reads) {
+      records.push(JSON.parse(fs.readFileSync(out, 'utf8')));
     }
-    return next;
+    return reading(readings[Math.min(reads++, readings.length - 1)]);
   };
-  const code = await check({ version: INSTALL.version, commit: INSTALL.commit, out, 'wait-minutes': '1', 'every-seconds': '0.01' }, read);
+  const code = await check({ version: INSTALL.version, commit: INSTALL.commit, out, ...o }, read);
   console.log = log;
-  assert.equal(code, 0);
-  assert.equal(seen[0].decision, 'ask');
-  assert.match(seen[0].waitingFor, /内存压力降到 1 级/u);
-  assert.ok(Date.parse(seen[0].until) - Date.parse(seen[0].since) === 60e3, JSON.stringify(seen[0]));
-  assert.equal(lines.filter(line => line.startsWith('NOTICE 装机在等：')).length, 1, lines.join('\n'));
-  assert.match(lines.find(line => line.startsWith('NOTICE 装机在等：')), /最多等到 \d\d:\d\d PT/u);
-  const record = JSON.parse(fs.readFileSync(out, 'utf8'));
-  assert.equal(record.decision, 'go');
-  assert.ok(record.waitedSince);
-  assert.ok(lines.some(line => line.startsWith('GO ')), lines.join('\n'));
+  return { code, reads, minutes: (now - began) / 60e3, lines, records, last: JSON.parse(fs.readFileSync(out, 'utf8')) };
+}
+const notices = run => run.lines.filter(line => line.startsWith('NOTICE 装机在等：'));
+
+test('critical pressure is read again every 30 s, and packaging starts when it is over', async t => {
+  const run = await waits(t, [{ pressure: 4 }, { pressure: 4 }, { pressure: 2 }]);
+  assert.deepEqual([run.code, run.reads, run.minutes], [0, 3, 1]);
+  assert.deepEqual([run.records[0].decision, run.records[0].waitingFor], ['stop', '内存压力降到 4 级以下']);
+  assert.equal(Date.parse(run.records[0].until) - Date.parse(run.records[0].since), 600e3);
+  assert.equal(notices(run).length, 1, run.lines.join('\n'));
+  assert.match(notices(run)[0], /最多等到 \d\d:\d\d PT/u);
+  assert.deepEqual([run.last.decision, typeof run.last.waitedSince], ['go', 'string']);
+  assert.ok(run.lines.some(line => line.startsWith('GO 照装：内存压力 2 级，')), run.lines.join('\n'));
 });
 
-test('waiting ends at its deadline with the question still open', async t => {
-  const lines = [];
-  const log = console.log;
-  console.log = line => lines.push(String(line));
-  t.after(() => { console.log = log; });
-  const code = await check({ version: INSTALL.version, commit: INSTALL.commit, 'wait-minutes': '0.001', 'every-seconds': '0.01' }, () => reading({ pressure: 2 }));
-  console.log = log;
-  assert.equal(code, 76);
-  assert.ok(lines.some(line => line.startsWith('ASK 需要你决定：')), lines.join('\n'));
+test('critical pressure that stays ten minutes stops, and says it stayed', async t => {
+  const run = await waits(t, [{ pressure: 4 }]);
+  assert.deepEqual([run.code, run.reads, run.minutes], [75, 21, 10]);
+  assert.deepEqual([run.last.decision, codes(run.last)], ['stop', ['pressure-critical']]);
+  assert.ok(run.lines.some(line => line.startsWith('NOTICE 装机停下：') && line.endsWith('（等了 10 分钟，内存压力还是 4 级）')), run.lines.join('\n'));
+});
+
+for (const [name, first, code] of [
+  ['the compressor near its limit', { segments: 850 }, 'compressor-near-limit'],
+  ['7.9 GiB of disk', { freeBytes: 7.9 * GiB }, 'disk-low'],
+  ['7.9 GiB of disk and critical pressure', { freeBytes: 7.9 * GiB, pressure: 4 }, 'disk-low'],
+  ['an unreadable pressure', { pressure: null }, 'unreadable'],
+]) {
+  test(`${name} stops at the first reading, however long the wait`, async t => {
+    const run = await waits(t, [first, {}], { 'wait-minutes': '15' });
+    assert.deepEqual([run.code, run.reads, run.minutes, run.last.waitedSince], [75, 1, 0, null]);
+    assert.equal(codes(run.last)[0], code);
+  });
+}
+
+test('a limit reached while it waits for critical pressure stops it then', async t => {
+  const run = await waits(t, [{ pressure: 4 }, { pressure: 4, freeBytes: 7 * GiB }, {}]);
+  assert.deepEqual([run.code, run.reads], [75, 2]);
+  assert.ok(!run.last.notice.includes('等了 10 分钟'), run.last.notice);
+});
+
+for (const pressure of [1, 2]) {
+  test(`pressure ${pressure} is not waited for, even when told to wait`, async t => {
+    const run = await waits(t, [{ pressure }], { 'wait-minutes': '15' });
+    assert.deepEqual([run.code, run.reads], [0, 1]);
+  });
+}
+
+test('a stop that did not wait does not say it did', async t => {
+  const run = await waits(t, [{ pressure: 4 }], { 'every-seconds': '700' });
+  assert.deepEqual([run.code, run.reads, run.last.notice.includes('等了 10 分钟')], [75, 1, false]);
+});
+
+test('the record holds the limits that were used', () => {
+  assert.deepEqual(admit(reading(), INSTALL).limits, LIMITS);
+  assert.deepEqual(LIMITS, { minFreeBytes: 8 * GiB, segmentStop: 0.85, criticalWaitMs: 600e3 });
 });
