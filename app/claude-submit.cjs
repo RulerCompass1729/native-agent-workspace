@@ -7,14 +7,16 @@ const http = require('node:http');
 const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 
+const COMPACTION_MS = 300000;
+
 class SubmissionChannel extends EventEmitter {
-  constructor(timeout = 15000) { super(); this.timeout = timeout; this.poll = null; this.pending = null; this.connected = false; }
+  constructor(timeout = 15000) { super(); this.timeout = timeout; this.poll = null; this.pending = null; this.connected = false; this.compacting = false; }
   status(connected) { if (this.connected !== connected) { this.connected = connected; this.emit('change'); } }
   receive(response) {
     // The native listener asks for another command only after the previous
     // submit/result attempt has settled. If its result was lost, end this
     // uncertain wait; never redeliver the already-authorized native input.
-    if (this.pending?.waitForNativeTurn && this.pending.delivered && this.pending.authorized) this.finish(uiError("error.nativeWaitingInputUnconfirmed"));
+    if ((this.pending?.waitForNativeTurn || this.compacting) && this.pending?.delivered && this.pending.authorized) this.finish(uiError("error.nativeWaitingInputUnconfirmed"));
     // A held message is gone with the listener that held it (a reload): never authorized, so never sent.
     else if (this.pending?.held && !this.pending.authorized) this.finish(uiError("error.submission.holdEnded"));
     if (this.poll) this.poll.end(JSON.stringify({ idle: true }));
@@ -31,7 +33,7 @@ class SubmissionChannel extends EventEmitter {
     if (!this.connected) return Promise.reject(Object.assign(uiError("error.safeSubmissionNotReady"), { notSent: true }));
     if (this.pending) return Promise.reject(Object.assign(uiError("error.previousSubmissionPending"), { notSent: true }));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout);
+      const timer = this.limit();
       this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, midturn: midturn === true, midturnText: midturn === true && typeof midturnText === 'string' && midturnText ? midturnText : undefined, held: false, own: guard?.ownInput === true, deadline: Date.now() + this.timeout };
       this.flush();
     });
@@ -64,9 +66,22 @@ class SubmissionChannel extends EventEmitter {
     // Claude's own submit promise may wait until its queued turn starts. Once
     // authorized, a wall-clock timeout would invite a duplicate of native work
     // that is still queued. Connection/context closure still rejects the wait.
-    if (p.waitForNativeTurn) clearTimeout(p.timer);
+    if (p.waitForNativeTurn || this.compacting) clearTimeout(p.timer);
     return true;
   }
+  // Native compacts this session's context: it keeps an authorized input queued and answers when its turn starts,
+  // after the compaction (2.1.332, measured: 30 to 220 s). That time is not counted; the whole limit follows it.
+  // An end nobody reports (a compaction that failed) is taken after COMPACTION_MS.
+  compaction(running) {
+    if (this.compacting === running) return;
+    this.compacting = running; clearTimeout(this.compactionTimer);
+    if (running) this.compactionTimer = setTimeout(() => this.compaction(false), COMPACTION_MS).unref();
+    const p = this.pending;
+    if (!p?.authorized || p.waitForNativeTurn) return;
+    clearTimeout(p.timer);
+    if (!running) p.timer = this.limit();
+  }
+  limit() { return setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout); }
   result(message) {
     const p = this.pending;
     if (!p || p.tag !== message.id) return false;
@@ -93,7 +108,7 @@ class SubmissionChannel extends EventEmitter {
     if (error) error.notSent ??= !p.authorized;
     this.pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve(receipt);
   }
-  close() { this.status(false); this.finish(uiError("error.safeSubmissionClosed")); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
+  close() { this.compaction(false); this.status(false); this.finish(uiError("error.safeSubmissionClosed")); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
 }
 
 // This credential never crosses JSON. Only the already authenticated native
