@@ -1037,7 +1037,7 @@ function bindClient(context) {
     try { butlerIngress?.observeUnbound(data?.sessions); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeControlRefusals(data?.sessions, { steward: () => stewardRole?.current() }); } catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeWakeUndelivered(data?.sessions, { steward: () => stewardRole?.current(), formerly: id => queueDispatcher?.continuedFrom(id) || [],
-      wasButler: (id, nativeId, at) => stewardRecord?.heldRole(id, nativeId, at) }); }
+      wasButler: (id, nativeId, at, chain) => stewardRecord?.heldRole(id, nativeId, at, chain) }); }
     catch { /* Retried on the next state. */ }
     try { butlerIngress?.observeHumanInputs(data?.sessions, { steward: () => stewardRole?.current(), name: s => sessionLabels.labels.get(s.id) || s.name }); }
     catch { /* Retried on the next state; no native input is replayed. */ }

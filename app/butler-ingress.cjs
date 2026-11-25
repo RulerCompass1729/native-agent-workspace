@@ -324,31 +324,32 @@ class ButlerIngress {
   // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
   // Only failures since this intake started: the history before it is not announced again.
   // `formerly(id)`: the sessions the butler continued from (done rotations); one to those is the current butler's too.
-  // Of the butler's own messages, any its call was told is saved: memberId is its recipient, itemId the message. Own is
-  // also what a session sent while it held the role, by the role record (`wasButler(id, nativeId, at)`): a butler the
-  // person replaced directly is on no rotation chain, and its backend can withdraw one while main is not running.
+  // Of the butler's own messages, any its call was told is saved: memberId is its recipient, itemId the message.
+  // Own is what a session sent while it held the role, whoever it is to, by the role record
+  // (`wasButler(id, nativeId, at, chain)`: true, false, or undefined when the record cannot say): a butler the person
+  // replaced directly is on no rotation chain, and its backend can withdraw one while main is not running. When the
+  // record cannot say, what the current butler and those sessions sent is own; any other told message to the butler
+  // is recorded as one to the butler, also one whose arrival NAW could not confirm.
   observeWakeUndelivered(sessions = [], { steward, formerly, wasButler } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
     let earlier = []; try { earlier = formerly?.(current.sessionId) || []; } catch { /* The current session alone. */ }
     const butler = new Set([current.sessionId, ...(Array.isArray(earlier) ? earlier : []).filter(id => typeof id === 'string' && id)]);
-    const held = (id, { nativeId, time }) => { try { return wasButler?.(id, nativeId, time) === true; } catch { return false; } };
+    const held = (id, { nativeId, time }) => { try { const value = wasButler?.(id, nativeId, time, butler); return typeof value === 'boolean' ? value : undefined; } catch { return undefined; } };
     for (const s of Array.isArray(sessions) ? sessions : []) {
       if (typeof s?.id !== 'string' || !s.id) continue;
-      const own = butler.has(s.id);
+      const linked = butler.has(s.id);
       for (const row of Array.isArray(s.messages) ? s.messages : []) {
         const failed = undeliveredRow(row, true);
         if (!failed || row.wake.senderId !== s.id) continue;
-        const { recipientId } = row.wake;
-        if (!own && butler.has(recipientId)) {
-          const toButler = undeliveredRow(row); if (toButler) this.undeliveredWake(s.id, row.id, toButler);
-          continue;
+        const { recipientId, told } = row.wake, inRole = held(s.id, row.wake);
+        if ((inRole ?? linked) && toldSaved(row)) this.undeliveredWake(s.id, row.id, failed, { recipientId, since: inRole && told === true ? 0 : this.humanSince });
+        else if (!linked && butler.has(recipientId)) {
+          const toButler = undeliveredRow(row) || (inRole === undefined && told === true ? failed : null);
+          if (toButler) this.undeliveredWake(s.id, row.id, toButler);
         }
-        if (!toldSaved(row)) continue;
-        const inRole = held(s.id, row.wake);
-        if (own || inRole) this.undeliveredWake(s.id, row.id, failed, { recipientId, since: inRole && row.wake.told === true ? 0 : this.humanSince });
       }
-      if (!own) for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
+      if (!linked) for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
         if (!butler.has(entry?.recipientId)) continue;
         const code = isCode(entry.sourceIssue) ? entry.sourceIssue : keyCode(entry.key);
         this.undeliveredWake(s.id, entry.id, { outcome: 'not-sent', code, at: entry.at });

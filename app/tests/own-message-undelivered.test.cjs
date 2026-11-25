@@ -67,7 +67,7 @@ async function fixture(t, { receiveFails = false } = {}) {
     // The person designates `next` from their window, as main does; `follow`: a done rotation handed the role on.
     designate: next => { role = next; f.main.record.designated(next); }, follow: (next, from) => { role = next; chain = from; },
     observe: (main = f.main, sessions = source.snapshot().sessions) => main.ingress.observeWakeUndelivered(sessions, { steward: () => role, formerly: () => chain,
-      wasButler: (...who) => main.record.heldRole?.(...who) === true }),
+      wasButler: (...who) => main.record.heldRole?.(...who) }),
     events: (main = f.main) => main.ledger.snapshot().events.filter(e => e.eventId.startsWith('wake-undelivered:')),
     outcomes: main => f.events(main).map(e => e.payload.outcome),
     advance: ms => { now += ms; }, now: () => now };
@@ -290,6 +290,91 @@ test('withdrawn while the app was closed: recorded when it opens, once; an ordin
   assert.equal(f.events(later).length, 1);
 });
 
+// 300's integration review, B3: which report a message gets is decided by who held the role as it was sent.
+const synthetic = (f, sender, recipientId, id, extra) => ({ id, origin: 'agent-wake-intent', uiMessage: { version: 1, key: 'notice.wake.restored', params: {} },
+  wake: { id, senderId: sender.sessionId, nativeId: sender.nativeId, recipientId, body: 'Secret.', time: f.now(), settledAt: f.now() + MIN, status: 'unconfirmed', told: true, ...extra } });
+const person = id => ({ sessionId: id, nativeId: 'native-' + id });
+const reported = f => f.events().map(e => [e.payload.itemId ?? null, e.payload.reason, e.payload.memberId, e.payload.outcome]);
+
+test('a butler\'s saved message to the session the person then designates directly: its own, arrival unconfirmed, once', async t => {
+  const f = await fixture(t);
+  await f.begin('one', 'Secret saved task.');
+  assert.equal(f.row().wake.status, 'staged'); f.advance(1000);
+  f.designate(f.session(f.target, f.b)); f.source.persist(); f.advance(MIN);
+  const reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  const row = reopened.get(f.a).messages.findLast(m => m.wake), at = f.now();
+  assert.deepEqual([row.wake.status, row.uiMessage.key], ['unconfirmed', 'notice.wake.restored']);
+  f.observe(f.main, reopened.snapshot().sessions); f.observe(f.main, reopened.snapshot().sessions);
+  assert.deepEqual(f.events().map(e => e.payload), [own(f, row, 'unconfirmed:restored', at)]);
+  f.advance(1000); const later = f.open(); f.observe(later, reopened.snapshot().sessions);
+  assert.equal(f.events(later).length, 1, 'main restarting records it no second time');
+  // Also one that did not go out: the same message is not also one to the butler.
+  const g = await fixture(t); g.busy();
+  const two = await g.begin('two', 'Secret held task.'); await two.finish(); g.advance(1000);
+  g.designate(g.session(g.target, g.b)); g.advance(MIN); await g.stop(g.a); g.observe(); g.observe();
+  assert.deepEqual(g.events().map(e => e.payload), [own(g, g.row(), 'cancelled:disconnecting')]);
+  // Refused as it was called, so never said to be saved: to the butler of now as before, not its own.
+  const h = await fixture(t); h.target.get(h.b).wakeDisabled = true;
+  const off = await h.begin('off', 'Secret refused task.'); await off.finish(); assert.equal(off.result.status, 'not-sent');
+  h.advance(1000); h.designate(h.session(h.target, h.b)); h.observe();
+  assert.deepEqual(h.events().map(e => [e.payload.reason, e.payload.memberId]), [['wake-undelivered', h.a]]);
+});
+
+test('sent by the butler of now before it became the butler: not its own, also once it has rotated', async t => {
+  const f = await fixture(t), b = person('b'), c = person('c');
+  const early = [synthetic(f, b, 'member', 'early'), synthetic(f, b, f.a, 'early-to-butler', { status: 'not-sent', uiMessage: undefined })];
+  f.advance(1000); f.designate(b); f.advance(1000);
+  const sessions = () => [{ id: b.sessionId, nativeId: b.nativeId, messages: [...early, ...mine] }]; let mine = [];
+  f.observe(f.main, sessions()); assert.deepEqual(reported(f), []);
+  mine = [synthetic(f, b, 'member', 'mine')];
+  f.observe(f.main, sessions()); assert.deepEqual(reported(f), [['mine', 'own-message-undelivered', 'member', 'unconfirmed:restored']]);
+  // The same native session only: its workspace id under another native identity did not hold the role.
+  mine.push(synthetic(f, { ...b, nativeId: 'native-before' }, 'member', 'other-native'));
+  f.observe(f.main, sessions()); assert.equal(f.events().length, 1);
+  // After a rotation what it sent before its designation is still nobody's own.
+  f.advance(1000); f.follow(c, [b.sessionId]); f.observe(f.main, sessions()); f.main.record.sync(c); f.observe(f.main, sessions());
+  assert.equal(f.events().length, 1);
+});
+
+test('along a rotation chain: what each session sent in its turn is the butler\'s of now, lines in the record or not', async t => {
+  const f = await fixture(t), a = f.session(f.source, f.a), [b, c] = [person('b'), person('c')];
+  const sessions = [{ id: f.a, nativeId: a.nativeId, messages: [synthetic(f, a, 'member', 'of-a')] }];
+  f.advance(1000);
+  // B followed A and made no call: the record has no line of it. C followed B, and the record has not noticed yet.
+  sessions.push({ id: 'b', nativeId: b.nativeId, messages: [synthetic(f, b, 'member', 'of-b'), synthetic(f, b, 'c', 'of-b-to-c')] });
+  f.advance(1000); f.follow(c, ['b', f.a]);
+  sessions.push({ id: 'c', nativeId: c.nativeId, messages: [synthetic(f, c, 'member', 'of-c')] });
+  f.observe(f.main, sessions); f.observe(f.main, sessions);
+  assert.deepEqual(reported(f).map(r => r.slice(0, 2)), ['of-a', 'of-b', 'of-b-to-c', 'of-c'].map(id => [id, 'own-message-undelivered']));
+  f.main.record.sync(c); f.observe(f.main, sessions); assert.equal(f.events().length, 4);
+  // The person designates the chain's newest again: what came before is still its own.
+  f.advance(1000); f.designate(c); sessions[1].messages.push(synthetic(f, b, 'member', 'of-b-again', { time: f.now() - 1500 }));
+  f.advance(1000); f.observe(f.main, sessions); assert.equal(f.events().at(-1).payload.itemId, 'of-b-again');
+  // Told it was saved and lost while the app was closed: B's too, as of a session with a line.
+  sessions[1].messages.push(synthetic(f, b, 'member', 'of-b-closed', { time: f.now() - 2500, settledAt: f.now() - 2400 }));
+  const later = f.open(); f.observe(later, sessions); assert.equal(f.events(later).at(-1).payload.itemId, 'of-b-closed'); assert.equal(f.events(later).length, 6);
+});
+
+test('no role record to read: nothing the butler was told is saved is left out, and none is guessed to be another session\'s', async t => {
+  const broken = { 'it throws': () => { throw Error('unreadable'); }, 'it cannot say': () => undefined };
+  for (const [name, wasButler] of Object.entries(broken)) {
+    const f = await fixture(t), a = f.session(f.source, f.a), b = person('b'), c = person('c');
+    const sessions = [{ id: f.a, nativeId: a.nativeId, messages: [synthetic(f, a, 'b', 'a-to-b'), synthetic(f, a, 'member', 'a-to-member'), synthetic(f, a, 'b', 'a-to-b-unmarked', { told: undefined })] },
+      { id: 'b', nativeId: b.nativeId, messages: [synthetic(f, b, 'member', 'of-b'), synthetic(f, b, 'member', 'of-b-history', { settledAt: 1 })] }, { id: 'c', nativeId: c.nativeId, messages: [synthetic(f, c, 'member', 'of-c')] }];
+    const observe = () => f.main.ingress.observeWakeUndelivered(sessions, { steward: () => b, formerly: () => ['c'], wasButler });
+    observe(); observe();
+    // A, on no chain, may have been the butler: its message to the butler of now is said as what it is, from A to the
+    // butler; nothing says whose the one to a member is.
+    assert.deepEqual(reported(f), [[null, 'wake-undelivered', f.a, 'unconfirmed:restored'], ['of-b', 'own-message-undelivered', 'member', 'unconfirmed:restored'],
+      ['of-c', 'own-message-undelivered', 'member', 'unconfirmed:restored']], name);
+    // Readable again: the one that could not be placed is recorded, the others no second time.
+    f.advance(1000); f.designate(b); const later = f.open(); f.advance(1000);
+    const events = () => later.ingress.observeWakeUndelivered(sessions, { steward: () => b, formerly: () => [], wasButler: (...who) => later.record.heldRole(...who) });
+    events(); events();
+    assert.deepEqual(f.events(later).slice(3).map(e => [e.payload.itemId, e.payload.reason]), [['a-to-member', 'own-message-undelivered'], ['a-to-b-unmarked', 'own-message-undelivered']], name);
+  }
+});
+
 test('refused when it was called: the call said so, no event', async t => {
   const f = await fixture(t);
   f.target.get(f.b).wakeDisabled = true;
@@ -317,15 +402,19 @@ test('a sender that never was the butler: no event; a message to the butler is r
   // The butler of before writes to the one of now: the same row, recorded as a message to the butler.
   const to = await g.begin('to', 'Secret two.'); await to.finish('failed'); g.observe();
   assert.deepEqual(g.events().map(e => e.payload), [{ memberId: g.a, reason: 'wake-undelivered', outcome: 'cancelled:turn-not-completed', title: new Date(g.now()).toISOString() }]);
-  // One it took without confirming is in its own conversation, or lost: as before, no event.
-  // Also when its sender still held the role as it was sent.
-  g.designate(g.session(g.source, g.a)); g.advance(1000); g.options.silent = true;
-  const quietly = await g.begin('quietly', 'Secret three.'); g.advance(1000); g.designate(g.session(g.target, g.b)); await quietly.finish();
+  // One an ordinary session sent that it took without confirming is in its own conversation, or lost: as before, no event.
+  g.advance(1000); g.options.silent = true;
+  const quietly = await g.begin('quietly', 'Secret three.'); g.advance(1000); await quietly.finish();
   assert.equal(g.row().wake.status, 'unconfirmed'); g.observe(); assert.equal(g.events().length, 1);
   // The butler's own message to the session it continued from is its own.
   const h = await fixture(t); h.follow(h.session(h.source, h.a), [h.b]);
   const back = await h.begin('back', 'Secret four.'); await back.finish('failed'); h.observe();
   assert.deepEqual(h.events().map(e => e.payload), [own(h, h.row(), 'cancelled:turn-not-completed')]);
+  // Refused as it was called, with a row or without one: the call said so.
+  h.target.get(h.b).wakeDisabled = true; h.advance(1000);
+  const off = await h.begin('off', 'Secret five.'); await off.finish(); assert.equal(off.result.status, 'not-sent');
+  h.observe(h.main, [{ ...h.source.get(h.a), wakeUndelivered: [{ id: randomUUID(), at: h.now(), recipientId: h.b, key: null }] }]);
+  assert.equal(h.events().length, 1);
 });
 
 test('rows of a backend from before the mark: withdrawn, held or lost are recorded; one refused at once, or from before the intake, is not', async t => {
@@ -373,6 +462,36 @@ test('the role record says who held the role and when, in its own words only', a
   assert.equal(record.heldRole(f.c, f.source.get(f.c).nativeId, at), false);
 });
 
+test('the role record says neither yes nor no of a time it cannot know', async t => {
+  const f = await fixture(t), record = f.main.record, a = f.session(f.source, f.a), [b, c] = [person('b'), person('c')];
+  const held = (who, at, chain) => record.heldRole(who.sessionId, who.nativeId, at, chain && new Set(chain));
+  assert.deepEqual([held(a, undefined), record.heldRole(f.a, undefined, f.now())], [undefined, undefined]);
+  // Along a chain: the line of one stands for those it handed the role to.
+  const t1 = f.now();
+  assert.deepEqual([held(b, t1), held(b, t1, ['b', f.a]), held(b, t1, ['b'])], [false, true, undefined], 'alone; a chain from A; designated, and the record is behind');
+  f.advance(1000); f.designate(b); const t2 = f.now();
+  assert.deepEqual([held(b, t1, ['b']), held(b, t2, ['b']), held(a, t2, ['b']), held({ ...b, nativeId: 'other' }, t2, ['b'])], [false, true, false, false]);
+  // Started: the butler was designated some time after the line before, when no line could be written.
+  f.advance(1000); f.designate(null); const ended = f.now(); f.advance(1000); const t3 = f.now(); f.advance(1000);
+  record.append({ kind: 'role', event: 'started', session: { id: 'c', nativeId: 'native-c' } });
+  assert.deepEqual([held(c, ended), held(c, t3), held(c, t3, ['c', 'b']), held(b, t3, ['c', 'b']), held(b, t3), held(c, t2)], [undefined, undefined, undefined, undefined, false, false]);
+  // A line that cannot be written: what came before stands, later nobody knows.
+  f.advance(1000); const t4 = f.now(); f.advance(1000); record.log.append = () => { throw Error('Synthetic'); };
+  assert.throws(() => record.designated(b)); const t5 = f.now();
+  assert.deepEqual([held(c, t4), held(b, t1), held(c, t5), held(b, t5, ['b'])], [true, false, undefined, undefined]);
+  // Before the first line: not the butler if that line is a designation, not known if it was already one.
+  const first = await fixture(t); assert.equal(first.main.record.heldRole('b', 'native-b', 1), false);
+  const dir = path.join(first.root, 'started'); fs.mkdirSync(dir, { mode: 0o700 });
+  const started = new StewardRecord(dir, { steward: () => b, selected: () => b, now: () => first.now() });
+  assert.equal(started.heldRole('c', 'native-c', first.now()), undefined, 'no line at all');
+  started.sync(b); assert.equal(started.heldRole('c', 'native-c', first.now() - 1), undefined);
+  // A block that cannot be read.
+  const file = fs.readdirSync(path.join(f.mainDir, 'history'), { recursive: true }).map(name => path.join(f.mainDir, 'history', String(name))).find(name => fs.statSync(name).isFile() && /steward/.test(name));
+  fs.writeFileSync(file, 'not a record\n', { mode: 0o600 });
+  const unread = f.open().record; assert.equal(unread.failed, true);
+  assert.deepEqual([unread.heldRole(f.a, a.nativeId, t1), unread.heldRole('b', 'native-b', t2)], [undefined, undefined]);
+});
+
 test('main: each backend state is judged with the role record, and the butler a rotation made is recorded before another is designated', async t => {
   const f = await fixture(t); f.busy();
   const one = await f.begin('one', 'Secret held task.'); await one.finish(); f.advance(1000); await f.stop(f.a);
@@ -384,6 +503,13 @@ test('main: each backend state is judged with the role record, and the butler a 
     queueDispatcher: null, sessionLabels: { labels: new Map() }, roomState: new RoomState(f.mainDir), broadcastRoom: async () => {} });
   client.emit('state', f.source.snapshot());
   assert.deepEqual(f.outcomes(), ['cancelled:disconnecting']);
+  // The sessions the butler continued from go with it: one between two of the record's lines is its own too.
+  const between = person('between'); f.advance(1000);
+  const linked = new EventEmitter(), other = { background: true, client: linked, win: { isDestroyed: () => false } };
+  vm.runInNewContext(bind + '\nbindClient(context);', { context: other, butlerIngress: f.main.ingress, stewardRole: { current: () => person('last') }, stewardRecord: f.main.record,
+    queueDispatcher: { continuedFrom: id => id === 'last' ? ['between', f.c] : [] }, sessionLabels: { labels: new Map() }, roomState: new RoomState(f.mainDir), broadcastRoom: async () => {} });
+  linked.emit('state', { sessions: [{ id: 'between', nativeId: between.nativeId, messages: [synthetic(f, between, 'member', 'early', { time: f.now() - 60000 }), synthetic(f, between, 'member', 'of-between', { settledAt: 1 })] }] });
+  assert.deepEqual(reported(f).slice(1).map(r => r[0]), ['of-between'], 'also lost before this intake, told it was saved');
   // The person's designation.
   const handler = main.slice(main.indexOf("  register('steward', async (c, id, duty = null) => {"), main.indexOf("  register('stewardEvents', async (c, position = null) => {"));
   for (const next of [null, 'next']) {
