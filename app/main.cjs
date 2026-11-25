@@ -242,7 +242,7 @@ function appMobileBroker() {
 }
 function appMobileWorkspace() {
   return new (require('./mobile-workspace.cjs').MobileWorkspace)({
-    snapshot: client => displayState(confirmationSnapshot(client)), roomState, labels: sessionLabels.labels,
+    snapshot: client => displayState(confirmationSnapshot(client)), roomState, labels: { get: id => sessionLabels.labels.get(id) },
     records: {
       status: (state, client) => appRecordsStatus(state || (client && confirmationSnapshot(client))),
       acknowledge: (...args) => { const result = recordReminders.acknowledge(dataDir, ...args); mobileBroker?.refreshPush(); return result; },
@@ -1148,7 +1148,8 @@ async function startQueueDispatcher() {
       clients: personClient,
       // A connection of its own is no page a person sees: what it creates is the person's window's to use.
       connect: owner => connect(dataDir, owner, { page: false }),
-      labels: sessionLabels.labels,
+      // A rename replaces the Map of names, and a retried start what holds it: each name is read when it is asked for.
+      labels: { get: id => sessionLabels.labels.get(id) },
       broadcast: broadcastRoom,
       notify: notifyRotation,
       // The butler stays in no space: the dispatcher rotates it by this name and hands its duty statement on
