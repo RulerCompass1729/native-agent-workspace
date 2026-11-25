@@ -516,6 +516,8 @@ test('from what is recorded now, as before: off for the previous butler, turned 
   const revoked = await start(); await revoked.f.call(null); await revoked.f.call('other'); await check(revoked, 'revoked');
   const later = await start(); await later.f.call('other'); await later.f.call(null); await later.f.call('other'); await check(later, 'revoked after it');
   const replaced = await start(); await replaced.f.call('other'); fs.rmSync(replaced.ledger.file, { force: true }); replaced.clock.now++; replaced.ledger = new ButlerLedger(replaced.f.directory, { now: () => replaced.clock.now }); replaced.event(7); await check(replaced, 'another record');
+  const older = await start(); older.event(2); const copy = fs.readFileSync(older.ledger.file); older.event(3); older.event(4); await older.woken(); await older.f.call('other');
+  fs.writeFileSync(older.ledger.file, copy, { mode: 0o600 }); older.ledger = new ButlerLedger(older.f.directory, { now: () => older.clock.now }); await check(older, 'an older copy of the same record');
   const unsaved = await start(); const write = unsaved.wake.write; unsaved.wake.write = function () { this.failed = true; throw Error('synthetic'); };
   await unsaved.f.call('other'); assert.deepEqual([unsaved.f.role.selected, unsaved.wake.view().on, unsaved.wake.view().failed], [OTHER, false, true]);
   unsaved.wake.write = write; await unsaved.f.call('busy-codex'); await check(unsaved, 'not saved');

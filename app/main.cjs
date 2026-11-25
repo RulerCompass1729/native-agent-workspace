@@ -2483,8 +2483,8 @@ async function boot() {
     // The designation stands even if its line cannot be written; the butler's next call is then refused.
     try { stewardRecord?.designated(id === null ? null : stewardRole.selected); } catch { /* The bell and the refused call say so. */ }
     // Waking the butler on events (steward-wake.cjs) holds for the designation it was turned on for: designating or
-    // revoking, the same session again included, turns it off, until the person or that butler turns it on. Turned on
-    // after a designation, it goes on from where it stood; after a revocation, from what is recorded then.
+    // revoking, the same session again included, turns it off, until the person or that butler turns it on. A
+    // designation made while it was on keeps where it stood for then; a revocation keeps nothing.
     try { stewardWake?.redesignated(reached); } catch { /* A state that cannot be saved wakes nobody until it is set again. */ }
     await broadcastRoom();
     if (id === null) return null;

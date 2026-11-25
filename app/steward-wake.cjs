@@ -14,7 +14,8 @@
 // The switch is the person's and the designated butler's alone (main.cjs stewardWake), off by default. It holds for the
 // designation it was turned on for: designating or revoking the butler, the same session again included, turns it off
 // (main.cjs steward), and it is not on for a session other than the one designated. A designation made while it is on
-// keeps how far it had got, and the next time it is on goes on from there (redesignated). Nothing here calls a model: a wake is one NAW
+// keeps how far it had got, and the next time it is turned on goes on from there, unless it was turned off or the butler
+// revoked in between (redesignated). Nothing here calls a model: a wake is one NAW
 // message into the butler's own conversation, under the person's automatic-message switch, like a queue item.
 // Patrol while idle (R120, PM brief 2026-11-23): with the switch on and an interval set, a butler idle that long while
 // work is unfinished gets one 【NAW 巡查】 with counts only, through the same checks and record as a wake. With nothing
@@ -193,18 +194,20 @@ class StewardWake {
   }
   // Turned on, it starts from what is recorded now: older events are not news. Two exceptions, so that nothing waiting
   // is skipped: turned on again while on, it keeps its position; after a designation made while it was on, it starts
-  // from the position kept then (redesignated). The time of the last wake is kept either way: turning it off and on
-  // does not shorten the minute between wakes. Turned off, it also clears a switch or a position kept for an earlier
-  // designation, so that designating that session again does not turn it back on.
+  // from the position kept then (redesignated; an older version could also leave one when turned off during a wake).
+  // The time of the last wake is kept either way: turning it off and on does not shorten the minute between wakes.
+  // Turned off, it also clears a switch or a position kept for an earlier designation, so that designating that session
+  // again does not turn it back on.
   set(on) {
     if (typeof on !== 'boolean') throw fault('Invalid steward wake switch', 'STEWARD_WAKE_INVALID');
     if (!on) return this.off(null);
     if (this.active()) return this.view();
     let designated = null; try { designated = this.selected(); } catch { throw fault('The designation cannot be read', 'STEWARD_WAKE_UNAVAILABLE'); }
     if (!identity(designated)) throw fault('No butler is designated', 'STEWARD_WAKE_NO_BUTLER');
+    // A position kept past the end of this record (an older copy was put back) names nothing in it.
     const latest = this.latest(), kept = this.state.on ? null : from(latest, this.state.woken);
     this.write({ version: 1, on: true, designation: { sessionId: designated.sessionId, nativeId: designated.nativeId },
-      woken: kept || latest, at: this.failed ? null : this.state.at, patrol: null });
+      woken: kept && newer(latest, kept) ? kept : latest, at: this.failed ? null : this.state.at, patrol: null });
     this.patrolLast = null; this.patrolWanted = false;
     return this.view();
   }
