@@ -68,6 +68,16 @@ function screenShowsModelFooter(screen) {
   return false;
 }
 
+function countMcpLines(lines) {
+  let heading = 0, ready = 0, exit = 0;
+  for (const line of lines || []) {
+    if (line.includes('MCP Servers')) heading++;
+    if (line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) ready++;
+    if (line.includes('esc Exit')) exit++;
+  }
+  return { heading, ready, exit };
+}
+
 function screenMcpOverlay(screen) {
   const view = screenLines(screen);
   if (!view) return null;
@@ -81,30 +91,23 @@ function screenMcpOverlay(screen) {
     if (RULE_LINE.test(view.lines[i].trim())) { topRule = i; break; }
   }
   if (topRule < 0 || bottomRule - topRule <= 1) return null;
-  let headingIdx = -1, readyIdx = -1, exitIdx = -1;
+  let inMcp = false, hasReady = false, hasExit = false;
   for (let i = bottomRule + 1; i < view.lines.length; i++) {
     const line = view.lines[i];
-    if (headingIdx < 0 && line.includes('MCP Servers')) headingIdx = i;
-    if (headingIdx >= 0 && readyIdx < 0 && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) readyIdx = i;
-    if (headingIdx >= 0 && line.includes('esc Exit')) exitIdx = i;
+    if (line.includes('MCP Servers')) inMcp = true;
+    if (inMcp && line.includes('✓') && line.includes('naw_workspace') && line.includes('workspace_message')) hasReady = true;
+    if (inMcp && line.includes('esc Exit')) hasExit = true;
   }
-  if (headingIdx < 0 || exitIdx < 0) return null;
-  return {
-    headingIdx,
-    headingLine: view.lines[headingIdx],
-    readyIdx,
-    readyLine: readyIdx >= 0 ? view.lines[readyIdx] : null,
-    exitIdx,
-    exitLine: view.lines[exitIdx],
-  };
+  if (!inMcp || !hasExit) return null;
+  return { hasReady, counts: countMcpLines(view.lines) };
 }
 
-function isFreshMcpOverlay(screen, preLines, requireReady = false) {
+function isFreshMcpOverlay(screen, preCounts, requireReady = false) {
   const overlay = screenMcpOverlay(screen);
-  if (!overlay || !Array.isArray(preLines)) return false;
-  if (preLines[overlay.headingIdx] === overlay.headingLine || preLines[overlay.exitIdx] === overlay.exitLine) return false;
+  if (!overlay || !preCounts) return false;
+  if (overlay.counts.heading <= preCounts.heading || overlay.counts.exit <= preCounts.exit) return false;
   if (!requireReady) return true;
-  return overlay.readyIdx >= 0 && preLines[overlay.readyIdx] !== overlay.readyLine;
+  return overlay.hasReady && overlay.counts.ready > preCounts.ready;
 }
 
 function editorState(screen) {
@@ -300,7 +303,7 @@ class AgyTui extends EventEmitter {
     this.humanInputTimer = null;
     this.mcpWarmPhase = 'idle'; // 'idle' | 'pending' | 'opening' | 'closing' | 'ready' | 'failed' | 'aborted'
     this.mcpServerListed = false;
-    this.mcpWarmPreLines = null;
+    this.mcpWarmPreCounts = null;
     this.mcpWarmTimer = null;
     this.mcpAuthTimer = null;
     this.mcpCalls = new Map();
@@ -325,7 +328,7 @@ class AgyTui extends EventEmitter {
     if (this.mcpWarmPhase !== 'pending' || this.stopped || !this.terminal?.alive || !this.terminal.screen) return;
     if (editorState(this.terminal.screen) !== 'empty' || this.humanInputUnconfirmed() || this.liveTurn || this.pendingSend) return;
     this.clearMcpWarmTimers();
-    this.mcpWarmPreLines = screenLines(this.terminal.screen)?.lines || [];
+    this.mcpWarmPreCounts = countMcpLines(screenLines(this.terminal.screen)?.lines);
     this.mcpWarmPhase = 'opening';
     this.syncCapabilities();
     // agy TUI skips plugin MCP loading before keyring auth finishes; opening /mcp once after auth
@@ -342,7 +345,7 @@ class AgyTui extends EventEmitter {
       if (this.mcpWarmPhase !== 'opening' && this.mcpWarmPhase !== 'closing') return;
       const screen = this.terminal?.screen;
       const shouldEsc = this.mcpWarmPhase === 'opening' && this.terminal?.alive && screen &&
-        editorState(screen) !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreLines, false);
+        editorState(screen) !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreCounts, false);
       this.mcpWarmPhase = 'failed';
       if (shouldEsc) {
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
@@ -381,8 +384,8 @@ class AgyTui extends EventEmitter {
         this.mcpAuthTimer.unref?.();
       }
     } else if (this.mcpWarmPhase === 'opening') {
-      // Require authenticated tools/list callback plus newly painted viewport cells (diffed against pre-warmup screen).
-      if (this.mcpServerListed && state !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreLines, true)) {
+      // Require authenticated tools/list callback plus strictly new MCP overlay rows beyond the pre-warmup viewport count.
+      if (this.mcpServerListed && state !== 'empty' && isFreshMcpOverlay(screen, this.mcpWarmPreCounts, true)) {
         this.mcpWarmPhase = 'closing';
         try { this.terminal.input('\x1b'); } catch { /* Best effort. */ }
       }
@@ -526,7 +529,7 @@ class AgyTui extends EventEmitter {
     this.trustConfirmSent = false;
     this.clearMcpWarmTimers();
     this.mcpServerListed = false;
-    this.mcpWarmPreLines = null;
+    this.mcpWarmPreCounts = null;
     this.mcpWarmPhase = this.needsMcpWarmup() ? 'pending' : 'idle';
     if (!validConversationId(this.record.nativeId)) this.record.nativeId = null;
     terminal.on('data', event => {

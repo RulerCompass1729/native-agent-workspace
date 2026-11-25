@@ -883,14 +883,14 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
   assert.equal(rt1.chatAvailable, true);
   assert.equal(rt1.addressedSendAvailable, true);
 
-  // 296-r4/r5: Stale pre-warmup listing + rules already on screen, partial redraw erases bottom composer,
-  // split OSC title sequence emits naw_workspace/workspace_message without changing viewport cells, and noteMcpListed() arrives
-  // -> MUST NOT send Escape (even on timeout!) until newly painted viewport cells show a fresh /mcp overlay!
+  // 296-r4/r5/r6: Stale pre-warmup listing + rules already on screen, deleting a line above to shift its row indices,
+  // erasing bottom composer, split OSC title sequence, AND noteMcpListed() -> MUST NOT send Escape (even on timeout!).
   const id5 = await ws.create('agy', dir, 'owner-1', '', 'terminal', { skipPermissions: true });
   const rt5 = ws.runtimes.get(id5), term5 = terms[1];
   term5.emit('started', 71721);
-  // Pre-warmup screen has an old scrolled-up MCP listing with its own rules above the active empty composer.
+  // Pre-warmup screen has a header line + an old scrolled-up MCP listing with its own rules above the active empty composer.
   await paint(term5, [
+    'Banner line',
     rule,
     '> ',
     rule,
@@ -901,24 +901,24 @@ test('296 followup: /mcp warmup loads naw_workspace after model footer, ignores 
     '> ',
     rule,
     '? for shortcuts    auto · Gemini 4 Neon · high',
-  ], 7);
+  ], 8);
   assert.equal(rt5.mcpWarmPhase, 'opening');
   const writesAfterOpen5 = term5.writes.length;
-  // Partial redraw erases rows 7..10 (current composer), then split OSC title carries both names without touching viewport cells.
-  const eraseBottom = '\x1b[7;1H\x1b[J';
-  await new Promise(resolve => term5.screen.write(eraseBottom, resolve));
-  term5.emit('data', { data: eraseBottom });
+  // Delete line 1 (shifting the old listing + rules up by 1 row!) and erase the current composer below, then send split OSC title.
+  const shiftAndErase = '\x1b[1;1H\x1b[1M\x1b[7;1H\x1b[J';
+  await new Promise(resolve => term5.screen.write(shiftAndErase, resolve));
+  term5.emit('data', { data: shiftAndErase });
   for (const part of ['\x1b]0;naw_workspace ', 'workspace_message\x07']) {
     await new Promise(resolve => term5.screen.write(part, resolve));
     term5.emit('data', { data: part });
   }
   rt5.noteMcpListed();
-  assert.equal(rt5.mcpWarmPhase, 'opening', 'stale cells + split OSC title never sends Escape');
+  assert.equal(rt5.mcpWarmPhase, 'opening', 'shifted stale listing + split OSC title never sends Escape');
   assert.equal(term5.writes.length, writesAfterOpen5);
-  // 296-r5 #2: Even when the warmup timer expires on that stale screen, ZERO Escape is sent!
+  // Even when the warmup timer expires on that shifted stale screen, ZERO Escape is sent!
   await new Promise(r => setTimeout(r, 90));
   assert.equal(rt5.mcpWarmPhase, 'failed');
-  assert.equal(term5.writes.length, writesAfterOpen5, 'timeout on stale frame never sends Escape');
+  assert.equal(term5.writes.length, writesAfterOpen5, 'timeout on shifted stale frame never sends Escape');
 
   // 296-r1/r2 #1: Human types and submits a visible draft while warmup is pending -> warmup aborts immediately,
   // so an empty-composer repaint arriving BEFORE PreInvocation never writes /mcp behind the human submission!
