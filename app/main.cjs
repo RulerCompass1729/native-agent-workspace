@@ -1861,7 +1861,7 @@ async function boot() {
     } catch { outboxUnavailable = true; } // Existing warning surface; never block ordinary app startup.
   }
   sessionLabels = new SessionLabels(dataDir);
-  // One copy for the run, as each writes its whole file: a retried start keeps it and reads again only what it could not.
+  // One copy for the run, as each writes its whole file: a retried start keeps it and reads its files again.
   if (roomState) roomState.readAgain(); else roomState = new RoomState(dataDir);
   // The butler stays outside every space, by any way of joining (steward step 2, batch 2).
   roomState.joinGuard = id => keepStewardOutside(id, true);
