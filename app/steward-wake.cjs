@@ -45,8 +45,14 @@ const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
 // Recorded by person-actions.cjs; a card or grant that ran out of time is not the person's act.
 const personAct = e => e.kind === 'request' && /^person-action:[a-z]+:(?!expire$)/u.test(e.payload?.reason ?? '');
-// The person's answer on a card one of `ids` raised.
-const cardClick = (e, ids) => e.kind === 'request' && /^person-action:confirmation:(?:confirm|reject)$/u.test(e.payload?.reason ?? '') && ids.has(e.payload.memberId);
+// The person's answer on a card one of `holders` ({ sessionId, nativeId }) raised. The event names the session and its
+// operation; `askers` gives the native session that asked. One that cannot be told apart is an ordinary event.
+const cardClick = (e, holders, askers) => {
+  if (e.kind !== 'request' || !/^person-action:confirmation:(?:confirm|reject)$/u.test(e.payload?.reason ?? '')) return false;
+  const { memberId, itemId } = e.payload, own = holders.filter(h => h.sessionId === memberId).map(h => h.nativeId);
+  const asked = own.length ? askers(memberId, itemId) : [];
+  return asked.length > 0 && asked.every(nativeId => own.includes(nativeId));
+};
 const identity = value => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'nativeId,sessionId' &&
   validId(value.sessionId) && validId(value.nativeId));
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
@@ -97,10 +103,10 @@ const fault = (message, code) => Object.assign(Error(message), { code });
 class StewardWake {
   // `ledger()` gives the event record (butler-ledger.cjs) or null; `selected()` the designation as the person made it
   // ({ sessionId, nativeId } or null; a rotation keeps it); `record(line)` writes a line to 「大管家的记录」 and throws
-  // when it cannot.
-  constructor(directory, { ledger, selected, record, now = Date.now, gapMs = GAP_MS, changed = () => {} }) {
+  // when it cannot; `askers(sessionId, operationId)` gives the native sessions whose card for it the person answered.
+  constructor(directory, { ledger, selected, record, askers = () => [], now = Date.now, gapMs = GAP_MS, changed = () => {} }) {
     this.file = path.join(directory, FILE);
-    Object.assign(this, { ledger, selected, record, now, gapMs, changed });
+    Object.assign(this, { ledger, selected, record, askers, now, gapMs, changed });
     this.blocked = null;
     // In memory: how the last attempt failed, or null; and whether the person's answer on the butler's own card waits, as
     // the dispatcher's pass found (wakeSteward).
@@ -308,14 +314,14 @@ class StewardWake {
       return true;
     } catch { return false; }
   }
-  // Whether the person acted after the position last named; with `ids`, answered a card one of them raised. Unreadable
-  // counts as not.
-  personActed(ids = null) {
+  // Whether the person acted after the position last named; with `holders`, answered a card one of them raised.
+  // Unreadable counts as not.
+  personActed(holders = null) {
     try {
       let position = from(this.latest(), this.state.woken);
       for (;;) {
         const { events, through, more } = this.ledger().eventsAfter(position, 100);
-        if (events.some(e => ids ? cardClick(e, ids) : personAct(e))) return true;
+        if (events.some(e => holders ? cardClick(e, holders, this.askers) : personAct(e))) return true;
         if (!more) return false;
         position = through;
       }

@@ -276,6 +276,12 @@ class BackgroundControl {
     if (prior) rows[rows.indexOf(prior)] = record; else rows.push(record);
     this.archivedBySession.set(record.actor.id, rows);
   }
+  // The native sessions whose card for operation `id`, asked as session `sessionId`, the person answered. Usually one:
+  // an operation id can be used again after the native session changed in place.
+  askers(sessionId, id) {
+    return [...this.data.records, ...(this.archivedBySession.get(sessionId) || [])]
+      .filter(r => r.id === id && r.actor.id === sessionId && Number.isSafeInteger(r.humanDecision)).map(r => r.actor.nativeId);
+  }
   // A settled record that changes later (a send confirmed on a later receipt) is added to its block again.
   reappend(record) {
     if (this.failed) throw Error('Background operation storage is unavailable');

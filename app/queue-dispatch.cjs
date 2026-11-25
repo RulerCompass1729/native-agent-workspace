@@ -2813,6 +2813,19 @@ class QueueDispatcher {
     }
   }
 
+  // `steward` and the native sessions it continued from through done rotations, nearest first. A session whose native
+  // session changed in place did not continue what that one had raised.
+  holders(steward) {
+    const line = [], listed = at => line.some(h => h.sessionId === at.sessionId && h.nativeId === at.nativeId);
+    for (let at = steward; validId(at?.sessionId) && validId(at.nativeId) && !listed(at);) {
+      const { sessionId, nativeId } = at;
+      line.push({ sessionId, nativeId });
+      const old = this.log.findLast(e => e.event === 'done' && e.new?.id === sessionId && e.new.nativeId === nativeId)?.old;
+      at = old && { sessionId: old.id, nativeId: old.nativeId };
+    }
+    return line;
+  }
+
   rotationChains() {
     if (!this.chainsCache) {
       try {
@@ -3118,10 +3131,7 @@ class QueueDispatcher {
 
   // The person answered a card of the butler's, or of one it continued from, since its last wake.
   cardClicked() {
-    try {
-      const id = this.steward()?.sessionId;
-      return Boolean(id) && this.stewardWake.personActed(new Set([id, ...this.continuedFrom(id)]));
-    } catch { return false; }
+    try { return this.stewardWake.personActed(this.holders(this.steward())); } catch { return false; }
   }
 
   // Such an answer may change no session, and time alone ends these holds: a pass then. Other holds end with a state

@@ -1867,7 +1867,7 @@ async function boot() {
   // person's designation, which a rotation keeps.
   try {
     stewardWake ||= new StewardWake(dataDir, { ledger: () => butlerIngress?.ledger || null, selected: () => stewardRole.selected,
-      changed: stewardWakeChanged,
+      changed: stewardWakeChanged, askers: (sessionId, id) => backgroundControl?.askers(sessionId, id) || [],
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }

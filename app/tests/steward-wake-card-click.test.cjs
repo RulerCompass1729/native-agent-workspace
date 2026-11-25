@@ -41,7 +41,8 @@ function fixture(t, { butler = {}, windows = [], compactions = {}, log = [], ste
       return `tag-${sent.length}`;
     } });
   let shown = 0;
-  const wake = new StewardWake(dir, { ledger: () => ledger, selected: () => BUTLER, now: () => clock.now, record: line => lines.push(line), changed: () => { shown++; } });
+  const wake = new StewardWake(dir, { ledger: () => ledger, selected: () => BUTLER, now: () => clock.now, record: line => lines.push(line), changed: () => { shown++; },
+    askers: (sessionId, id) => f.rows.filter(r => r.id === id && r.actor.id === sessionId).map(r => r.actor.nativeId) });
   fs.writeFileSync(path.join(dir, 'quiet-windows.json'), JSON.stringify({ format: 1, windows, history: [] }), { mode: 0o600 });
   const quiet = new QuietWindows(dir, { now: () => clock.now, moveWait: rules.moveWait });
   const dispatcher = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => clock.now, settleMs: 8000, tickMs: 3000,
@@ -149,7 +150,7 @@ test('an idle clock that runs decides, whatever the last activity says', async t
 
 test('a rotation record that cannot be read makes no event a click, and stops no pass', async t => {
   const f = fixture(t);
-  f.dispatcher.continuedFrom = () => { throw Error('SYNTHETIC'); };
+  f.dispatcher.holders = () => { throw Error('SYNTHETIC'); };
   await f.run(MIN); f.dispatcher.noteHuman('butler', 'send'); const used = f.clock.now;
   f.event(); await f.run(5 * MIN);
   assert.equal(f.wakes().length, 1); assert.ok(f.wakes()[0].at - used >= 2 * MIN);
