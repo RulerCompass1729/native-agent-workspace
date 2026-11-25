@@ -2935,9 +2935,11 @@ function setSessionTimerList(open) {
   if (list) list.hidden = !sessionTimerOpen;
 }
 function jumpToSessionTimer(id, from) {
-  const list = $('messages');
   if (from?.closest('.session-timer-list')) { setSessionTimerList(false); $('session-timers').querySelector('.session-timer-more')?.focus(); }
-  if (!pointToMessage(list, focusedReadingKey(sessionTimerSession), id)) { toastMessage('toast.selectionMissing'); return; }
+  jumpToCard($('messages'), focusedReadingKey(sessionTimerSession), id);
+}
+function jumpToCard(list, key, id) {
+  if (!pointToMessage(list, key, id)) { toastMessage('toast.selectionMissing'); return; }
   const target = list.querySelector('[data-search-target]');
   clearTimeout(sessionTimerFlash);
   sessionTimerFlash = setTimeout(() => { if (target?.dataset.searchTarget === 'true') delete target.dataset.searchTarget; }, 2000);
@@ -3118,11 +3120,11 @@ function renderConfirmationBatch(box, role) {
     const config = node('p', undefined, 'background-batch-config');
     ui.display.computed(config, 'text', () => backgroundBatchConfig(cards[0].summary));
     box.append(config);
-    if (cards[0].summary?.risks?.length) {
-      const risks = node('ul', undefined, 'background-risks');
-      for (const risk of cards[0].summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
-      box.append(risks);
-    }
+  }
+  if (cards[0].summary?.risks?.length) {
+    const risks = node('ul', undefined, 'background-risks');
+    for (const risk of cards[0].summary.risks) risks.append(uiNode('li', 'background.risk.' + risk, undefined, `background-risk${risk === 'deletesSharedHistory' ? ' background-risk-delete' : ''}`));
+    box.append(risks);
   }
   const list = node('ul', undefined, 'background-batch-list');
   cards.forEach((card, index) => {
@@ -3166,13 +3168,39 @@ function renderConfirmationBatch(box, role) {
   review.addEventListener('click', () => { confirmationBatchOpen.add(role.batch.key); lastMessages = ''; lastRoomMessages = ''; render(); });
   buttons.append(cancel, review, all); box.append(buttons);
 }
+function appendBackgroundNotes(box, op, card) {
+  // Said before the click: confirming cannot deliver this input now (background-control.cjs deliveryBlocked).
+  const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
+  if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
+  if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
+  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
+  if (card && !op.replacedBy && !op.disposition && op.standingFallback === 'standing-other-designation') {
+    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
+  }
+  return blocked;
+}
+// A card its batch answers is one plain line that leads to the batch; it looks like nothing that can be answered here.
+function renderMergedCard(box, role, summary, item) {
+  const line = node('p', undefined, 'background-line'), sentence = node('span', undefined, 'background-sentence'), note = node('span', undefined, 'background-merged-note'), go = node('button', '', 'small');
+  ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
+  ui.display.text(note, 'background.batch.merged', { count: role.batch.cards.length });
+  ui.display.text(go, 'background.batch.go');
+  ui.display.computed(go, 'aria-label', () => uiText('background.batch.goName', { target: backgroundSummaryText(summary) }));
+  go.addEventListener('click', () => {
+    let list = item.parentElement;
+    while (list && !messageViews.has(list)) list = list.parentElement;
+    if (list) jumpToCard(list, messageViews.get(list).key, globalThis.nativeWorkspaceConfirmationBatch.holder(role.batch).id);
+  });
+  line.append(sentence, note, go); box.append(line);
+}
 function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
   const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
-  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition));
+  const batchRole = confirmationBatchRole(op), folded = Boolean(summary && batchRole && !batchRole.open && !batchRole.anchor && !batchRole.batch.started);
+  entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition && !folded));
   entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
-  const batchRole = confirmationBatchRole(op), pending = op && confirmationCardPending(op);
+  const pending = op && confirmationCardPending(op);
   const key = JSON.stringify([op, disconnected, backgroundExecutionUnavailable(), confirmationBatchKey(batchRole), Boolean(pending), pending?.failed, pending?.settled]);
   if (key === entry.backgroundKey) return;
   entry.backgroundKey = key;
@@ -3182,6 +3210,7 @@ function renderBackgroundControls(entry, message) {
   const box = node('div', undefined, `background-operation${card ? ' background-controls' : ''}`);
   entry.backgroundControls = box; entry.actions.before(box);
   if (batchRole?.anchor && !batchRole.open) { box.classList.add('background-batch'); renderConfirmationBatch(box, batchRole); return; }
+  if (folded) { box.className = 'background-operation background-merged'; renderMergedCard(box, batchRole, summary, entry.item); appendBackgroundNotes(box, op, card); return; }
   const line = node('p', undefined, 'background-line'), state = node('span', undefined, 'background-state'), sentence = node('span', undefined, 'background-sentence');
   const answered = card && !op.replacedBy && !op.disposition && op.answer;
   const stateKey = op.stateUiMessage?.key || (op.replacedBy ? 'background.card.void' : answered ? (op.answer === 'queued' ? 'background.card.queued' : 'background.card.answerRunning')
@@ -3209,14 +3238,7 @@ function renderBackgroundControls(entry, message) {
     ui.display.computed(note, 'text', () => uiText('background.card.repeated', { time: backgroundClock(op.repeated.time) }));
     box.append(note);
   }
-  // Said before the click: confirming cannot deliver this input now (background-control.cjs deliveryBlocked).
-  const blocked = card && !op.replacedBy && !op.disposition && op.deliveryBlocked ? 'background.card.reason.' + op.deliveryBlocked : '';
-  if (blocked && op.resultNotice?.key !== blocked) { const note = node('p', undefined, 'background-note is-warning'); ui.display.text(note, blocked); box.append(note); }
-  if (op.resultNotice) { const notice = node('p'); ui.display.text(notice, op.resultNotice.key, op.resultNotice.params); box.append(notice); }
-  // The butler's standing permission was turned on for an earlier butler (R118): where the person can turn it on again.
-  if (card && !op.replacedBy && !op.disposition && op.standingFallback === 'standing-other-designation') {
-    const why = node('p', undefined, 'background-note'); ui.display.text(why, 'background.card.standingOtherDesignation'); box.append(why);
-  }
+  const blocked = appendBackgroundNotes(box, op, card);
   const raw = backgroundDetailText(op);
   if (raw) box.append(backgroundDetails(uiNode('summary', 'background.card.details'), raw));
   const mergedAway = batchRole && !batchRole.open;

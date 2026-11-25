@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const os = require('node:os'), vm = require('node:vm');
-const { BackgroundControl } = require('../../background-control.cjs'), locale = require('../../ui-locale.js');
+const { BackgroundControl, dialog } = require('../../background-control.cjs'), locale = require('../../ui-locale.js');
 const actor = { id: 'agent', nativeId: 'native', provider: 'codex', name: 'Agent' };
 const identity = { nativeId: 'native', sessionId: 'native-session', turnId: 'turn', callId: 'call' };
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -8,8 +8,8 @@ async function fixture(failB = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-batch-recovery-'));
   let release, revision = 0;
   const hold = new Promise(resolve => { release = resolve; }), entered = [], effects = [];
-  const sessions = [{ ...actor, state: 'idle', roomIds: [] }, ...['A', 'B', 'C'].map(id => ({
-    id, nativeId: 'native-' + id, name: 'Target ' + id, provider: 'codex', state: 'idle', roomIds: [],
+  const sessions = [{ ...actor, state: 'idle', roomIds: [] }, ...['A', 'B', 'C', 'D', 'E'].map(id => ({
+    id, nativeId: 'native-' + id, name: 'Target ' + id, provider: ['D', 'E'].includes(id) ? 'claude' : 'codex', state: 'idle', roomIds: [],
     terminalState: { alive: true, epoch: 'epoch-' + id, observationIndex: 1 },
   }))];
   const c = { background: true, view: { selected: actor.id, draft: '' }, confirmationActors: () => [actor],
@@ -23,8 +23,13 @@ async function fixture(failB = false) {
     }], ['input', async (_context, id, text) => {
       entered.push(id); if (id === 'A') await hold;
       effects.push(id + ':' + text);
+    }], // stop asks its own question, as main's handler does.
+    ['stop', async (context, id) => {
+      const [message, detail, button] = ['D', 'E'].includes(id) ? ['End?', 'What ending does', 'End session'] : ['Disconnect?', 'What disconnecting does', 'Disconnect'];
+      if ((await dialog(context, 'message', { message, detail, buttons: ['Keep session', button], cancelId: 0 })).response !== 1) return;
+      entered.push(id); effects.push('stop:' + id);
     }]]),
-    confirmation: (_actor, args) => args.method === 'input'
+    confirmation: (_actor, args) => args.method === 'stop' ? null : args.method === 'input'
       ? { message: 'Input?', detail: JSON.stringify({ method: 'input', arguments: args.arguments }, null, 2), buttons: ['Cancel', 'Confirm'], cancelId: 0 }
       : { message: 'Archive?', buttons: ['Cancel', 'Archive'], cancelId: 0 },
     audit: () => {}, confirmationFingerprint: row => c.fingerprint(row.command),
@@ -32,10 +37,13 @@ async function fixture(failB = false) {
   const ask = async id => assert.equal((await control.call({ sender: actor, identity, valid: () => true }, {
     action: 'invoke', operation_id: id, method: 'archiveSession', arguments: [id],
   })).state, 'confirmation-required');
+  const askStop = async id => assert.equal((await control.call({ sender: actor, identity, valid: () => true }, {
+    action: 'invoke', operation_id: 'stop-' + id, method: 'stop', arguments: [id],
+  })).state, 'confirmation-required');
   const askInput = async (id, target, text) => assert.equal((await control.call({ sender: actor, identity, valid: () => true }, {
     action: 'invoke', operation_id: id, method: 'input', arguments: [target, text],
   })).state, 'confirmation-required');
-  return { control, c, entered, effects, release, ask, askInput, bump: () => { revision++; },
+  return { control, c, entered, effects, release, ask, askInput, askStop, bump: () => { revision++; },
     cards: () => control.confirmations({ sessions, rooms: [] }),
     async cleanup() { release(); await control.close(); fs.rmSync(dir, { recursive: true }); },
   };
@@ -59,7 +67,7 @@ function render(cards, started) {
     backgroundSummaryText: summary => summary.target || summary.method,
     backgroundActionText: summary => text('background.action.' + summary.action), backgroundButtonKeys: () => null,
     backgroundClock: () => '', backgroundRemaining() {}, scheduleBackgroundExpiryClock() {}, api: {}, toastError() {},
-    ui: { display: { computed: (el, _property, fn) => { el.textContent = fn(); },
+    ui: { display: { computed: (el, property, fn) => { if (property === 'text') el.textContent = fn(); else (el.computed ||= {})[property] = fn(); },
       text: (el, key, params) => { el.textContent = text(key, params); }, attribute() {}, unbind() {} } },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../renderer/confirmation-batch.js'), 'utf8'), sandbox);

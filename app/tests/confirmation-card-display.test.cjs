@@ -80,6 +80,20 @@ test('both shared-history commands name the actual space and warn that deletion 
   // Merely archiving a space must not be described as permanent deletion.
   assert.deepEqual(operation.operationSummary({ method: 'archiveRoom', arguments: [] }, {}, names).risks, []);
 });
+test('a stop card names what its question does to which session, and marks that it stops work', () => {
+  const names = { sessions: [{ id: 'c', name: 'Claude one', provider: 'claude' }, { id: 'x', name: 'Codex one', provider: 'codex' }, { id: 'd', name: 'DSH one', provider: 'dsh' }] };
+  for (const [id, action, zh, en] of [['c', 'endSession', '结束会话 · 对象：Claude one', 'End session · Session: Claude one'],
+    ['x', 'disconnectCodex', '断开 Codex 会话 · 对象：Codex one', 'Disconnect Codex session · Session: Codex one'],
+    ['d', 'endSession', '结束会话 · 对象：DSH one', 'End session · Session: DSH one']]) {
+    const summary = operation.operationSummary({ method: 'stop', arguments: [id] }, { id: 'agent' }, names);
+    assert.deepEqual([summary.action, summary.method, summary.risks], [action, 'stop', ['stopsWork']]);
+    assert.equal(page('zh').backgroundSummaryText(summary), zh);
+    assert.equal(page('en').backgroundSummaryText(summary), en);
+  }
+  // A session that is not in the state cannot be told apart: no action, so it is never merged.
+  assert.equal(operation.operationSummary({ method: 'stop', arguments: ['gone'] }, { id: 'agent' }, names).action, null);
+  assert.equal(operation.operationSummary({ method: 'stop', arguments: [] }, { id: 'agent' }, {}).action, null);
+});
 test('the permanent strip counts confirmations separately from decisions and picture reviews', () => {
   const source = fs.readFileSync(path.join(__dirname, '../renderer/activity-stream.js'), 'utf8');
   const sandbox = vm.createContext({}); vm.runInContext(source, sandbox);
