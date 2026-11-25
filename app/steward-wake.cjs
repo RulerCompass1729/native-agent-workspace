@@ -33,8 +33,6 @@ const STALL_MS = 10 * 60 * 1000, MAX_BLOCK_RECORDS = 16;
 // in a row, until one of its calls or a release goes through, so a call refused every time cannot keep waking it.
 // The record is read a page at a time up to REFUSAL_PAGES pages; refusals beyond them still count as refusals only.
 const REFUSAL_WAKES = 3, REFUSED = 'control-refused', REFUSAL_PAGES = 20;
-// Its turn, which ends by itself: a click waiting for it is not shown before STALL_MS.
-const TURN_REASONS = Object.freeze(['not-idle', 'busy', 'not-settled']);
 const HOLD_STEPS = Object.freeze(['release', 'update-backend']);
 const PATROL_CHOICES = Object.freeze([null, 15, 30, 60]), PATROL_MAX = 240;
 const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-settled','engaged','identity-changed','model-unknown','model-excluded','cooldown',
@@ -173,7 +171,8 @@ class StewardWake {
     blocked.deadline = Number.isSafeInteger(deadline) && deadline > 0 ? deadline : null;
   }
   // While the person's answer on its own card waits, what holds it is said at once, but for its turn.
-  skip(reason, deadline = null) {
+  // `turn`: its own turn or question holds it, so a click waiting for that is not shown before STALL_MS.
+  skip(reason, deadline = null, turn = false) {
     // A failed pass during a hold read nothing new: the hold stays as the last read found it (289 #2).
     if (this.blocked?.step) return;
     if (!this.pending()) { this.clearBlocked(); return; }
@@ -182,7 +181,7 @@ class StewardWake {
     const blocked = this.blocked, previous = blocked.reason;
     this.reasonNow(blocked, reason, now, deadline);
     const card = blocked.card;
-    blocked.card = this.clicked && !TURN_REASONS.includes(blocked.reason);
+    blocked.card = this.clicked && !turn;
     // The refusal limit is said at once: no later pass would clear it by itself.
     const stalled = now - blocked.since >= STALL_MS || blocked.reason === 'control-refused-limit';
     if (!stalled && !blocked.card) {

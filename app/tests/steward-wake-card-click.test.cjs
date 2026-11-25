@@ -132,11 +132,19 @@ test('a click less than a minute after the last wake does not wait for that minu
   f.push({ state: 'idle', lastActivityAt: f.clock.now - 20 * SEC });
   f.click(); const at = f.clock.now; f.sent.length = 0;
   await f.run(15 * SEC);
-  soon(f, at);
+  soon(f, at, 14 * SEC);
   // An ordinary event still does.
   f.push({ state: 'idle', lastActivityAt: f.clock.now - 20 * SEC }); f.sent.length = 0;
   f.event(2); const next = f.clock.now; await f.run(2 * MIN);
   assert.equal(f.wakes().length, 1); assert.ok(f.wakes()[0].at - next >= 40 * SEC);
+});
+
+test('an idle clock that runs decides, whatever the last activity says', async t => {
+  const f = fixture(t, { butler: { state: 'working' } });
+  await f.run(MIN); f.click();
+  f.push({ state: 'idle', lastActivityAt: f.clock.now - 30 * SEC }); const ended = f.clock.now;
+  await f.run(15 * SEC);
+  soon(f, ended, 14 * SEC); assert.ok(f.wakes()[0].at - ended >= 8 * SEC);
 });
 
 test('every click is told once: several before a wake in one, one after it in the next', async t => {
@@ -159,8 +167,10 @@ test('a draft is not interrupted: the hold is shown and recorded at once, and th
   assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['person-typing', true]);
   assert.deepEqual(f.blockedLines(), ['person-typing']); assert.ok(f.shown() > 0);
   assert.doesNotMatch(JSON.stringify([f.lines, f.desk()]), /SYNTHETIC PRIVATE/u);
+  const told = f.shown();
   await f.run(5 * MIN);
   assert.deepEqual(f.blockedLines(), ['person-typing'], 'one line for one reason'); assert.deepEqual(f.sent, []);
+  assert.ok(f.shown() - told <= 6, 'the page is told once a minute, not each pass');
   const before = f.shown();
   f.push({ liveDraft: '' }); const at = f.clock.now;
   await f.run(30 * SEC);
@@ -173,6 +183,17 @@ test('an ordinary event held by a draft is still said after ten minutes, not at 
   assert.equal(f.desk(), null); assert.deepEqual(f.blockedLines(), []);
   await f.run(2 * MIN);
   assert.equal(f.desk()?.reason, 'person-typing'); assert.equal(f.desk().card, undefined);
+  // A click now is named at once, in a hold already shown.
+  await f.run(3 * SEC); const told = f.shown();
+  f.click(); await f.run(3 * SEC);
+  assert.equal(f.desk().card, true); assert.ok(f.shown() > told);
+});
+
+test('its own handoff left unresolved takes over from a click held by something else', async t => {
+  const f = fixture(t, { butler: { liveDraft: 'x' } });
+  f.click(); await f.run(6 * SEC); assert.equal(f.desk()?.card, true);
+  f.dispatcher.ownHandoffStep = () => 'release'; f.push(); await f.run(6 * SEC);
+  assert.deepEqual([f.desk()?.step, f.desk()?.card], ['release', undefined]);
 });
 
 test('the phone is not alarmed before ten minutes, and its alarm keeps its form after', async t => {
@@ -223,9 +244,11 @@ test('its own background command or timer does not hold a click, only the other 
     f.click(); const at = f.clock.now; await f.run(15 * SEC);
     soon(f, at);
   }
-  const unread = fixture(t, { butler: { backgroundStale: true, background: 1 } });
-  unread.click(); await unread.run(MIN);
-  assert.deepEqual(unread.sent, []); assert.equal(unread.desk()?.reason, 'background-unconfirmed', 'shown at once');
+  // Interrupted, or moved to another context: no report of it comes before its next turn.
+  const unread = fixture(t, { butler: { backgroundStale: true, background: null } });
+  unread.event(); await unread.run(2 * MIN); assert.deepEqual(unread.sent, []);
+  unread.click(); const at = unread.clock.now; await unread.run(15 * SEC);
+  soon(unread, at);
 });
 
 test('every other gate still holds a click, and says so at once', async t => {
@@ -240,6 +263,13 @@ test('every other gate still holds a click, and says so at once', async t => {
     ['a space it joined', f => { f.butler.roomIds = ['shared']; f.butler.roomId = 'shared'; }, 'in-space'],
     ['another native session', f => { f.butler.nativeId = 'native-other'; }, 'identity-unavailable'],
     ['an unavailable backend', f => { f.butler.backendUnavailable = true; }, 'unavailable'],
+    ['a failed turn', f => { f.butler.state = 'error'; }, 'not-idle'],
+    ['ended', f => { f.butler.state = 'ended'; }, 'not-idle'],
+    ['recoverable', f => { f.butler.state = 'recoverable'; }, 'not-idle'],
+    ['disconnected', f => { f.butler.state = 'disconnected'; }, 'not-idle'],
+    ['a context not saved', f => { f.butler.nativeContextPending = true; }, 'busy'],
+    ['an interrupt on its way', f => { f.butler.interruptPending = true; }, 'busy'],
+    ['a message waiting in its queue', f => { f.butler.pendingQueue = [{ id: 'q' }]; }, 'busy'],
     ['a trust question', f => { f.dispatcher.isolation.holds = { butler: { reason: 'synthetic' } }; }, 'trust-hold'],
   ]) {
     const f = fixture(t);
@@ -253,9 +283,16 @@ test('every other gate still holds a click, and says so at once', async t => {
   await unread.run(MIN); unread.client.refresh = async () => { throw Error('SYNTHETIC PRIVATE REFRESH ERROR'); };
   unread.click(); await unread.run(9 * SEC);
   assert.deepEqual([unread.desk()?.reason, unread.desk()?.card], ['source-unavailable', true]); assert.deepEqual(unread.blockedLines(), ['source-unavailable']);
-  const busy = fixture(t);
-  await busy.run(MIN); busy.butler.approval = { id: 'a' }; busy.click(); await busy.run(MIN);
-  assert.deepEqual(busy.sent, []); assert.equal(busy.desk(), null, 'its own question on screen says it');
+  for (const turn of [{ approval: { id: 'a' } }, { claudeQuestion: { id: 'q' } }, { nativeInputRequired: true }, { state: 'working' }, { state: 'approval' }]) {
+    const busy = fixture(t);
+    await busy.run(MIN); Object.assign(busy.butler, turn); busy.click(); await busy.run(MIN);
+    assert.deepEqual(busy.sent, []); assert.equal(busy.desk(), null, 'its turn, or its own question on screen'); assert.deepEqual(busy.blockedLines(), []);
+    // Started between the pass and the send: not shown either.
+    const late = fixture(t), refresh = late.client.refresh;
+    await late.run(MIN); late.client.refresh = async () => { Object.assign(late.butler, turn); return refresh(); };
+    late.click(); await late.dispatcher.schedule();
+    assert.deepEqual(late.sent, []); assert.equal(late.desk(), null); assert.deepEqual(late.blockedLines(), []);
+  }
   const off = fixture(t);
   off.wake.set(false); off.click(); await off.run(5 * MIN);
   assert.deepEqual(off.sent, [], 'event wake off'); assert.equal(off.desk(), null);
@@ -269,11 +306,21 @@ test('a send that fails is shown at once and tried once a minute, not every thre
     const tries = () => f.lines.filter(l => l.kind === 'wake').length;
     assert.equal(tries(), 1); assert.deepEqual([f.desk()?.reason, f.desk()?.card], [reason, true]); assert.deepEqual(f.blockedLines(), [reason]);
     f.click('card-2'); await f.run(9 * SEC); assert.equal(tries(), 1, 'another click does not hurry a send that fails');
-    f.refuse = null; await f.run(MIN);
+    f.refuse = null; for (let i = 0; i < 30 && !f.sent.length; i++) await f.run(0);
     assert.equal(tries(), 2); assert.equal(f.wakes().length, 1); assert.equal(f.desk(), null);
     f.push({ state: 'idle', lastActivityAt: f.clock.now - 20 * SEC }); f.click('card-3'); const at = f.clock.now; f.sent.length = 0;
-    await f.run(15 * SEC); soon(f, at);
+    await f.run(15 * SEC); soon(f, at, 14 * SEC);
   }
+});
+
+test('a patrol that failed is a failed attempt too', async t => {
+  const f = fixture(t, { others: [session('worker', { state: 'working' })] });
+  f.wake.setPatrol(15); f.refuse = {};
+  for (let i = 0; i < 400 && !f.lines.some(l => l.kind === 'patrol'); i++) await f.run(0);
+  assert.ok(f.lines.some(l => l.kind === 'patrol'));
+  f.click(); await f.run(45 * SEC);
+  assert.equal(f.lines.filter(l => l.kind === 'wake').length, 0); assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['send-unconfirmed', true]);
+  f.refuse = null; await f.run(MIN); assert.equal(f.wakes().length, 1);
 });
 
 test('only the butler\'s own card: another agent\'s card, an expired one and the person\'s other acts wait as before', async t => {
@@ -302,13 +349,22 @@ test('a card of the session the butler continued from counts; of a session it on
   }
 });
 
-test('a rotation really under way still holds it, and it is shown at once', async t => {
+test('a rotation really under way, or a handoff it holds, still holds it and is shown at once', async t => {
   const f = fixture(t, { compactions: { butler: 3 }, butler: { lastActivityAt: START - HOUR } });
   await f.run(2 * MIN);
   assert.ok(f.sent.some(s => /^【NAW 换会话】/u.test(s.text)), 'the rotation went out'); f.sent.length = 0;
   f.push({ state: 'idle', lastActivityAt: f.clock.now - MIN });
   f.click(); await f.run(6 * SEC);
-  assert.deepEqual(f.wakes(), []); assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['engaged', true]);
+  assert.deepEqual(f.wakes(), []); assert.equal(f.desk(), null, 'its turn ended a moment ago');
+  for (const [name, rotations, holding] of [['a rotation', { butler: { phase: 'requested', oldId: 'butler' } }, []], ['a handoff', {}, ['butler']]]) {
+    const g = fixture(t), wakeSteward = g.dispatcher.wakeSteward.bind(g.dispatcher);
+    g.dispatcher.wakeSteward = async (current, _, quiet) => {
+      const kept = g.dispatcher.rotations; g.dispatcher.rotations = rotations;
+      try { return await wakeSteward(current, holding, quiet); } finally { g.dispatcher.rotations = kept; }
+    };
+    await g.run(MIN); g.click(); await g.run(6 * SEC);
+    assert.deepEqual(g.wakes(), [], name); assert.deepEqual([g.desk()?.reason, g.desk()?.card], ['engaged', true], name); assert.deepEqual(g.blockedLines(), ['engaged'], name);
+  }
 });
 
 test('a click that changes no session is looked at within a tick, confirmed or cancelled', async t => {
