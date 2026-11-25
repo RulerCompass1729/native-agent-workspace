@@ -1302,7 +1302,7 @@ async function openWindow(saved) {
   ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
   win.webContents.on('did-start-loading', () => { context.uiReady = false; });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('page-title-updated', event => { event.preventDefault(); win.setTitle('Native Agent Workspace'); });
+  win.webContents.on('page-title-updated', event => { event.preventDefault(); if (!win.isDestroyed()) win.setTitle('Native Agent Workspace'); });
   win.webContents.on('will-navigate', (event, url) => { if (!trusted(url)) event.preventDefault(); });
   win.webContents.on('will-attach-webview', event => event.preventDefault());
   const id = win.webContents.id;
