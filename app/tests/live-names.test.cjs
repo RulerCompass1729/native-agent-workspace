@@ -21,7 +21,7 @@ function phone(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-live-names-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const sandbox = { roomState: new RoomState(dir), sessionLabels: new SessionLabels(dir), submissionState: state => state, confirmationInbox: require('../confirmation-inbox.cjs'),
-    backgroundControl: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false, queueSecretary: null, integratorRole: null, stewardRole: null,
+    backgroundControl: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false, activeManagers: () => ({}), integratorRole: null, stewardRole: null,
     stewardWake: null, queueDispatcher: null, sessionModelChanges: null, butlerIngress: null, localVendorIcons: () => ({}), endedByMove: () => [], roomPeerIdentity: require('../peer-handoffs.cjs').identity,
     viewStorageWarning: '', viewStorageWarningUiMessage: null,
     require: name => { assert.equal(name, './mobile-workspace.cjs'); return require('../mobile-workspace.cjs'); } };
