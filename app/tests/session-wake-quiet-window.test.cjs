@@ -150,17 +150,26 @@ test('at most 32 held on one backend: the 33rd is not sent and says so; after th
   assert.equal(f.writes.length, 3);
 });
 
-test('the person still ends a held one: pausing handoffs at once, typing into the sender at its next look', async t => {
+test('the person still ends a held one: pausing handoffs at once, Esc in the sender at its next look; typing into the sender leaves it (3c)', async t => {
   const f = await fixture(t); f.open(40);
   const one = await f.turn('one', 'Paused.'); await one.finish();
   f.source.pauseAll('你暂停了后续交接');
   assert.deepEqual([f.rows().at(-1).wake.status, f.rows().at(-1).text], ['cancelled', '全部交接已暂停；自动消息未投递。\nPaused.']);
   const g = await fixture(t); g.open(40);
   const two = await g.turn('two', 'Typed over.'); await two.finish();
-  g.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
+  g.source.get(g.a).view = 'terminal'; g.ra.terminal = { alive: true, input() {} }; g.source.input(g.a, '\x1b', 'source-owner');
   g.advance(MIN); await g.retry();
   assert.deepEqual([g.rows().at(-1).wake.status, g.rows().at(-1).text], ['cancelled', '存着的自动消息没有补送：补送前核对发送方和授权没通过。\nTyped over.'], 'even with the window still open');
   assert.equal(g.writes.length, 0);
+  // Another agent's message and the person's own words into the sender do not end it.
+  for (const enter of [h => h.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' }), h => h.ra.emit('nativeControlBoundary', 'control:input')]) {
+    const h = await fixture(t); h.open(40);
+    const three = await h.turn('three', 'Goes.'); await three.finish();
+    enter(h); h.advance(MIN); await h.retry();
+    assert.equal(h.rows().at(-1).wake.status, 'held', 'the window is still open');
+    h.close(); h.advance(MIN); await h.retry();
+    assert.deepEqual([h.rows().at(-1).wake.status, h.writes.length], ['submitted', 1]);
+  }
 });
 
 test('scrolling or typing in the sender\'s terminal during its turn leaves its message held for the window', async t => {

@@ -314,30 +314,33 @@ class ButlerIngress {
   // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
   // Only failures since this intake started: the history before it is not announced again.
   // `formerly(id)`: the sessions the butler continued from (done rotations); one to those is the current butler's too.
+  // Of the butler's own messages, only one its call was told is held, or held since (session-wake.cjs): memberId is its recipient.
   observeWakeUndelivered(sessions = [], { steward, formerly } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
     let earlier = []; try { earlier = formerly?.(current.sessionId) || []; } catch { /* The current session alone. */ }
     const butler = new Set([current.sessionId, ...(Array.isArray(earlier) ? earlier : []).filter(id => typeof id === 'string' && id)]);
     for (const s of Array.isArray(sessions) ? sessions : []) {
-      if (typeof s?.id !== 'string' || !s.id || butler.has(s.id)) continue;
+      if (typeof s?.id !== 'string' || !s.id) continue;
+      const own = butler.has(s.id);
       for (const row of Array.isArray(s.messages) ? s.messages : []) {
         const failed = undeliveredRow(row);
-        if (failed && butler.has(row.wake.recipientId) && row.wake.senderId === s.id) this.undeliveredWake(s.id, row.id, failed);
+        if (!failed || row.wake.senderId !== s.id) continue;
+        if (own ? Number.isSafeInteger(row.wake.heldAt) || row.wake.busyHold : butler.has(row.wake.recipientId)) this.undeliveredWake(s.id, row.id, failed, own ? row.wake.recipientId : undefined);
       }
-      for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
+      if (!own) for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
         if (!butler.has(entry?.recipientId)) continue;
         const code = isCode(entry.sourceIssue) ? entry.sourceIssue : keyCode(entry.key);
         this.undeliveredWake(s.id, entry.id, { outcome: 'not-sent', code, at: entry.at });
       }
     }
   }
-  undeliveredWake(memberId, id, { outcome, code, at }) {
+  undeliveredWake(senderId, id, { outcome, code, at }, recipientId) {
     if (typeof id !== 'string' || !id || !Number.isSafeInteger(at) || at < this.humanSince) return false;
-    const eventId = `wake-undelivered:${hash([memberId, id])}`;
+    const eventId = `wake-undelivered:${hash([senderId, id])}`, memberId = recipientId || senderId;
     if (this.undeliveredWakes.has(eventId)) return false;
     this.record({ eventId, sourceRef: `wake-undelivered:${memberId}`, kind: 'blocked',
-      payload: { memberId, reason: 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
+      payload: { memberId, reason: recipientId ? 'own-message-undelivered' : 'wake-undelivered', outcome: `${outcome}:${code}`, title: new Date(at).toISOString() } });
     this.undeliveredWakes.add(eventId);
     return true;
   }

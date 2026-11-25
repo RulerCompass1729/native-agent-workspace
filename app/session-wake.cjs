@@ -179,21 +179,36 @@ function notSent(error, hold) {
 // Option A (board 11-12 21:2x, the person 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」.
 // A message the designated butler refuses only for its 60-second limit is kept by its sender's backend and offered
 // again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (three in
-// a row, busy, waiting, switched off, a changed identity) and every other recipient stay as before: not sent, not
-// retried. Each offer is a full delivery attempt again, so the person acting on either session or pausing all
-// handoffs still ends it. The recipient's backend says so, with the time its limit opens. No turn of the sender stands
-// behind a held message, so the input allowance of a running turn does not cover it: any input into the sender since
-// it was first held ends it (the person's and another agent's are one count there).
-function holdFor(w, s, error) {
-  if (error?.cooldown !== true || !isSteward(w, s)) return undefined;
-  const at = s.wakeBudget?.lastAt;
-  return Number.isSafeInteger(at) ? { hold: true, retryAt: at + COOLDOWN } : undefined;
+// a row, waiting, switched off, a changed identity), and the limit of every other recipient, stay as before: not sent,
+// not retried. Each offer is a full delivery attempt again, so the person acting on the recipient, stopping or taking over
+// the sender, or pausing all handoffs still ends it. The recipient's backend says so, with the time its limit opens.
+// Ordinary input into the sender does not end it, whatever holds it (the person, 11-24, 3b and 3c: 「真人往发送方打的
+// 普通字、别的 agent 的消息，都不撤」): sourceIssue, which every look and the recipient's take check, leaves it out.
+//
+// R187/R188: from any sender, one refused because the recipient is at work is held too, at most QUIET_HELD_MAX on this
+// backend and BUSY_HOLD_MS each, and offered every minute. Marked busyHold, its recipient takes it only when idle,
+// never in a running turn, and it waits out the recipient's other passing states. The limits stay as they are.
+const BUSY = 'error.wake.recipientBusy', BUSY_HOLD_HOURS = 2, BUSY_HOLD_MS = BUSY_HOLD_HOURS * 3600000;
+function holdFor(w, s, error, intent) {
+  const key = error?.uiMessage?.key, at = s.wakeBudget?.lastAt;
+  const limit = error?.cooldown === true && Number.isSafeInteger(at) ? { hold: true, retryAt: at + COOLDOWN } : undefined;
+  if (key === BUSY || intent?.busyHold && QUIET_PASSING.includes(key)) return limit || { hold: true, retryAt: Date.now() + COOLDOWN };
+  return isSteward(w, s) ? limit : undefined;
 }
-// The sender's side checks the answer too: only a refusal for the limit, of a message to the person's designated
-// butler, is ever held.
+// The sender's side checks the answer too: only a refusal for the recipient being at work, or for the limit of a
+// message to the person's designated butler, is ever held.
 function holdable(w, intent, result) {
-  if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt) || result.reasonUiMessage?.key !== 'error.wake.recipientCooldown') return false;
-  return stillButler(w, intent);
+  if (result?.status !== 'not-sent' || result.hold !== true || !Number.isSafeInteger(result.retryAt)) return false;
+  const key = result.reasonUiMessage?.key;
+  if (intent.busyHold && QUIET_PASSING.includes(key)) return Date.now() < intent.busyHold.deadline;
+  if (key === BUSY) return busyRows(w) < QUIET_HELD_MAX;
+  return key === 'error.wake.recipientCooldown' && stillButler(w, intent);
+}
+const busyHold = () => ({ deadline: Date.now() + BUSY_HOLD_MS });
+function busyRows(w) {
+  let count = 0;
+  for (const s of w.sessions.values()) for (const m of s.messages || []) if (m.wake?.busyHold && ['staged', 'held', 'sending', 'consumed'].includes(m.wake.status)) count++;
+  return count;
 }
 // The designation as it is now still names the recipient's native session: the person can end or move the role.
 function stillButler(w, intent) {
@@ -227,12 +242,9 @@ const ownKey = w => path.relative(root(w), w.dataDir) || '.';
 const quietSame = () => notSent(uiError('error.wake.quietWindowSameBackend'));
 const shortKey = key => key === '.' ? 'root' : String(key).split('/').pop().slice(0, 7);
 // Looked at again each minute (and at its deadline), so a window that closes early lets it go then.
-function holdQuiet(w, row, window) {
+function holdQuiet(row, window) {
   const intent = row.wake, now = Date.now();
   intent.status = 'held'; intent.heldAt ??= now;
-  // As for the 60-second limit: once held, any input into its sender ends it.
-  const s = w.sessions.get(intent.senderId);
-  if (s) intent.heldProof ??= identity(s);
   intent.retryAt = Math.max(now + 1000, Math.min(window.deadline, now + QUIET_CHECK_MS));
   row.text = `收件方的后台在迁移前的安静窗口里；这条先存着，窗口结束后再试一次。\n${intent.body}`;
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.quietHeld', params: { body: intent.body } }, 'notice.', row.text) || undefined;
@@ -363,31 +375,57 @@ async function stageOnce(w, s, r, native, args) {
   row.uiNameMessage = uiActivity('notice.wake.name')[1];
   // The butler's limit can open before this turn ends: the message stays staged, and is held then if it has not.
   const waits = !intent.quietWindow && !full && !same && refused && holdable(w, intent, target.readiness);
+  if (waits && target.readiness.reasonUiMessage.key === BUSY) intent.busyHold = busyHold();
   if (same) refusedNotice(row, quietSame());
   else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
+  // Answered as held below: it is told of, should it be lost (untold), also before anything held it.
+  if (intent.quietWindow || waits) intent.saidHeld = true;
+  const lost = untold(s, native.nativeId);
+  let missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
-  if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text };
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; delete intent.saidHeld; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  // Told in this answer only with its mark on disk. Marked after the answer's own save, which can fail partway and
+  // leave on disk what it was to save. If the mark is not saved, a later answer tells it.
+  if (lost.length) {
+    for (const { wake: told } of lost) told.senderTold = true;
+    w.changed();
+    if (!w.persist()) {
+      for (const { wake: told } of lost) delete told.senderTold;
+      w.edited?.(s); missed = '';
+    }
+  }
+  if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
-    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方的后台在安静窗口（迁移 ${shortKey(target.key)}）中，窗口最长还有约 ${minutes} 分钟，结束后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。` };
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方的后台在安静窗口（迁移 ${shortKey(target.key)}）中，窗口最长还有约 ${minutes} 分钟，结束后由 NAW 再送一次；你不要等待或重试。真人可随时撤销。${missed}` };
   }
+  if (intent.busyHold) return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方正在干活，NAW 先存着，每分钟看一次，它空下来后送一次（不插进它正在跑的回合；最多等 ${BUSY_HOLD_HOURS} 小时，没送成会在你下一次用这个工具时告诉你）；你不要等待或重试。真人可随时撤销。${missed}` };
   if (waits) {
     // About when: the ones held here for the same recipient go first, a minute apart from the earliest, and none
     // before its limit opens.
     const queued = heldRows(w).filter(({ row: other }) => other.wake.recipientId === intent.recipientId).map(({ row: other }) => other.wake.retryAt);
     const at = Math.max(target.readiness.retryAt, queued.length ? Math.min(...queued) + COOLDOWN * queued.length : 0);
     const minutes = Math.max(1, Math.ceil((at - Date.now()) / 60000));
-    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：已排着，约 ${minutes} 分钟后由 NAW 再送一次（当前原生回合结束时限制已过就直接送）；你不要等待或重试。真人可随时撤销。` };
+    return { status: 'staged', id: intent.id, readiness: 'held', message: `已保存，尚未投递。收件方 60 秒内刚收过一条自动消息：已排着，约 ${minutes} 分钟后由 NAW 再送一次（当前原生回合结束时限制已过就直接送）；你不要等待或重试。真人可随时撤销。${missed}` };
   }
   const readiness = target.readiness?.status === 'ready' ? 'checked' : 'deferred';
-  // To the butler, the turn's end can still meet its limit; then the message is held instead of tried only once.
-  const once = stillButler(w, intent) ? '当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；' : '当前原生回合正常结束后只尝试一次；';
-  return { status: 'staged', id: intent.id, readiness, message: `已保存，尚未投递。${once}不要等待或重试。真人可随时撤销。` + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') };
+  // The turn's end can still meet the recipient at work, or the butler's limit; then the message is held.
+  const once = stillButler(w, intent) ? '当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；若正在干活、接不了，也先存着，空下来后再送一次（收件方的后台是旧版本时不存）；' : '当前原生回合正常结束后尝试投递；那时收件方若正在干活、接不了，NAW 先存着，空下来后再送一次（收件方的后台是旧版本时不存，只试一次）；';
+  return { status: 'staged', id: intent.id, readiness, message: `已保存，尚未投递。${once}不要等待或重试。真人可随时撤销。` + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') + missed };
+}
+// Messages this native session was told are held, that did not go out or may not have, each said once with its next
+// call's answer: nothing else tells an agent of it without starting a turn (the butler is also woken, butler-ingress.cjs).
+function untold(s, nativeId) {
+  return (s.messages || []).filter(({ wake: intent }) => (intent?.saidHeld || intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
+}
+function lostNotice({ wake: intent, text }) {
+  const shown = String(text), reason = shown.endsWith(intent.body) ? shown.slice(0, -intent.body.length) : shown;
+  const outcome = intent.status === 'unconfirmed' ? '没能确认是否送到，可能已经送到，先别重发' : '没有送到';
+  return `\n你之前存着等送的一条${outcome}：发给 ${intent.recipientId}，「${intent.body.slice(0, 80)}」：${reason.trim().replace(/\n/g, ' ')}`;
 }
 // Why a wake staged in a turn was withdrawn when that turn's end was reported. T-141: `boundary` is a turn whose
 // authority an input or permission boundary took mid-turn; steward step 2, batch 0: `incomplete`, one that ended
@@ -429,7 +467,7 @@ function keepQuiet(w, row) {
   if (!quiet) return false;
   if (intent.targetKey === ownKey(w)) refusedNotice(row, quietSame());
   else if (!intent.quietWindow && quietRows(w) >= QUIET_HELD_MAX) refusedNotice(row, quietFull());
-  else { intent.quietWindow = { id: quiet.id, deadline: quiet.deadline }; holdQuiet(w, row, quiet); }
+  else { intent.quietWindow = { id: quiet.id, deadline: quiet.deadline }; holdQuiet(row, quiet); }
   return true;
 }
 // At the turn's end: held while the recipient's backend is in a quiet window (one staged before it opened too),
@@ -446,7 +484,7 @@ function transfer(w, row, readdress = false) {
   // A recipient that cannot be found again was never offered it: not sent.
   const located = readdress ? relocate(w, intent).then(() => null, error => notSent(error)) : Promise.resolve(null);
   return located.then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
-    if (holdable(w, intent, result)) hold(w, row, result.retryAt);
+    if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
       intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
@@ -465,13 +503,22 @@ function heldRows(w) {
   for (const s of w.sessions.values()) for (const row of s.messages || []) if (row.wake?.status === 'held') rows.push({ s, row });
   return rows;
 }
-function hold(w, row, retryAt) {
+function hold(w, row, { retryAt, reasonUiMessage }) {
   const intent = row.wake, now = Date.now();
   intent.status = 'held'; intent.heldAt ??= now;
-  const s = w.sessions.get(intent.senderId);
-  if (s) intent.heldProof ??= identity(s);
   // Never sooner than a second from now, never later than the limit itself allows.
   intent.retryAt = Math.min(Math.max(retryAt, now + 1000), now + COOLDOWN + 1000);
+  if (reasonUiMessage.key === BUSY) intent.busyHold ??= busyHold();
+  if (intent.busyHold) {
+    // A window that closed is over: only the recipient keeps this one now, on the backend it is on.
+    delete intent.quietWindow;
+    intent.retryAt = Math.max(now + 1000, Math.min(intent.retryAt, intent.busyHold.deadline));
+    // What refused it is the recipient's own state: the others held here for it are looked at with it, not each on its own.
+    for (const other of heldRows(w)) if (other.row.wake.recipientId === intent.recipientId) other.row.wake.retryAt = Math.max(other.row.wake.retryAt, intent.retryAt);
+    row.text = `收件方还没空下来；这条先存着，空下来后再试一次。\n${intent.body}`;
+    row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.busyHeld', params: { body: intent.body } }, 'notice.', row.text) || undefined;
+    return;
+  }
   row.text = `收件方 60 秒内刚收过一条自动消息；这条先存着，限制过了再试一次。\n${intent.body}`;
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.held', params: { body: intent.body } }, 'notice.', row.text) || undefined;
 }
@@ -490,15 +537,10 @@ function arm(w) {
 }
 function dropHeld(w, row, issue) {
   const intent = row.wake;
-  intent.status = 'cancelled'; intent.cancellation = { ...issue, at: Date.now() };
+  intent.status = 'cancelled'; intent.settledAt = Date.now(); intent.cancellation = { ...issue, at: intent.settledAt };
   row.text = `存着的自动消息没有补送：补送前核对发送方和授权没通过。\n${intent.body}`;
   row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.heldCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined;
   try { durable(w); } catch { /* Shown now; the next save keeps it. */ }
-}
-function heldIssue(s, intent) {
-  const current = identity(s);
-  if (JSON.stringify(current) === JSON.stringify(intent.heldProof)) return null;
-  return { code: 'source-identity-changed', fields: Object.keys(current).filter(key => JSON.stringify(current[key]) !== JSON.stringify(intent.heldProof?.[key])) };
 }
 function retryHeld(w) {
   clearTimeout(w.wakeHoldTimer); w.wakeHoldTimer = null; w.wakeHoldAt = null;
@@ -516,11 +558,12 @@ function retryHeld(w) {
       const r = w.runtimes.get(s.id);
       let issue;
       // The sender as complete() checks it at the turn's end, and the butler role; the recipient's side checks everything again.
-      // A message held for a quiet window was never only the butler's to keep.
-      const quietly = Boolean(row.wake.quietWindow);
-      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || heldIssue(s, row.wake) || (quietly || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
+      // A message held for a quiet window, or for a recipient at work, was never only the butler's to keep.
+      const quietly = Boolean(row.wake.quietWindow), busy = row.wake.busyHold;
+      try { issue = !r ? { code: 'source-runtime-changed' } : !w.peerRunner ? { code: 'backend-unsupported' } : sourceIssue(w, s, r, row.wake) || (quietly || busy || stillButler(w, row.wake) ? null : { code: 'steward-role-ended' }); }
       catch (error) { issue = { code: 'authorization-unreadable', reason: error.message }; }
       if (issue) { dropHeld(w, row, issue); continue; }
+      if (busy && Date.now() >= busy.deadline) { refusedNotice(row, notSent(uiError('error.wake.busyHoldExpired', { hours: BUSY_HOLD_HOURS }))); try { durable(w); } catch { /* Shown now; the next save keeps it. */ } continue; }
       if (keepQuiet(w, row)) { try { durable(w); } catch { /* Shown now; a later attempt checks storage first. */ } continue; }
       // A save that fails before the attempt sends nothing.
       try { transfer(w, row, quietly); pending = true; } catch (error) { dropHeld(w, row, { code: 'storage-unavailable', reason: error.message }); }
@@ -530,7 +573,9 @@ function retryHeld(w) {
 function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
-  for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
+  // One being offered can still be taken, but is not held again.
+  for (const row of w.sessions.get(id)?.messages || []) if (['sending', 'consumed'].includes(row.wake?.status)) row.wake.withdrawn = true;
+  else if (['staged', 'held'].includes(row.wake?.status)) {
     w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.wake.settledAt = Date.now(); row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);
@@ -607,9 +652,11 @@ async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
 }
 // How a message reaches the recipient now (the wake proposal, item 1, 2026-11-12): a turn of its own when it is idle;
 // in the middle of a turn, the native way the person's own input takes there: Claude's queue (read at the running
-// turn's next tool boundary, or as its next turn) and Codex's steer into the running turn. null: neither is open.
-function routeFor(s, r) {
+// turn's next tool boundary, or as its next turn) and Codex's steer into the running turn. null: neither is open, or
+// the message was held for a recipient at work, which goes only when it is idle.
+function routeFor(s, r, intent) {
   if (s.state === 'idle') return { mode: 'send' };
+  if (intent?.busyHold) return null;
   if (s.state !== 'working' || s.approval || r.nativeInputRequired) return null;
   if (s.provider === 'claude' && r.queueAvailable === true && !r.pendingQueue) return { mode: 'queue' };
   if (s.provider === 'codex' && r.steerAvailable === true && !r.pendingSteer && typeof r.turnId === 'string' && r.turnId) return { mode: 'steer', turnId: r.turnId };
@@ -620,7 +667,7 @@ function routeFor(s, r) {
 // changed identity, the switch, approval and the limit alike. Checked in the order the single condition had.
 // `mode` is the way in (by default the one open now); with `tag`, an input of that mode already under way, which
 // keeps its own native slot and, for steer, the turn it named (`turnId`).
-function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r)?.mode, turnId) {
+function recipientIssue(w, s, r, intent, tag, mode = routeFor(s, r, intent)?.mode, turnId) {
   if (w.closed || w.storageWarning) return ['error.wake.recipientUnreachable'];
   if (!enabled(w) || s.wakeDisabled) return ['error.wake.recipientDisabled'];
   if (boundary(w) !== intent.boundary) return ['error.wake.recipientBoundaryChanged'];
@@ -680,7 +727,9 @@ async function check(w, spec) {
 async function receive(w, spec) {
   if (!spec || typeof spec.sourceKey !== 'string' || !readLayout(root(w)).entries.includes(spec.sourceKey) || typeof spec.id !== 'string' ||
       typeof spec.senderId !== 'string' || !spec.senderId) throw uiError("error.wake.sourceInvalid");
-  const s = w.get(spec.recipientId), r = w.runtime(s.id);
+  let s, r;
+  // Ended before the take: nothing was written, so it is not an unknown outcome.
+  try { s = w.get(spec.recipientId); r = w.runtime(s.id); } catch (error) { return notSent(error); }
   const proof = identity(s), generation = boundary(w);
   const intent = await w.peerRunner.takeWake(spec);
   let route;
@@ -694,8 +743,8 @@ async function receive(w, spec) {
       if (!goalAllows(status)) throw uiError('error.wake.nativeGoalStateDisallows', { status });
     }
     refuseRecipient(w, s, r, intent);
-    route = routeFor(s, r);
-  } catch (error) { return notSent(error, holdFor(w, s, error)); }
+    route = routeFor(s, r, intent);
+  } catch (error) { return notSent(error, holdFor(w, s, error, intent)); }
   reserveBudget(s, intent.id, intent.senderId, intent.nativeId);
   // The ticket holds the way chosen here: a message sent as a turn of its own stays one, and a midturn one keeps
   // its slot and turn. Every native step checks it again.
