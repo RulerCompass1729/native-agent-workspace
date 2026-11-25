@@ -89,7 +89,9 @@ test('a card its batch answers is one line with a way there: no waiting badge, n
   assert.equal(toggles['background-card'], false);
   assert.equal(box.className, 'background-operation background-merged');
   assert.match(box.textContent, /Target B.*已并入「全部确认（2）」/);
-  assert.deepEqual(all(box).filter(el => el.tag === 'button').map(el => el.textContent), ['去确认']);
+  const go = all(box).filter(el => el.tag === 'button');
+  assert.deepEqual(go.map(el => el.textContent), ['去确认']);
+  assert.match(go[0].computed['aria-label'], /^去确认：.*Target B/, 'each line\'s button is named by its own card');
   assert.deepEqual([find(box, 'background-state'), find(box, 'background-details'), find(box, 'background-buttons')], [[], [], []]);
   // What the merged card does not say about this one stays here.
   delete entry.backgroundKey; entry.backgroundControls = null; cards[1].message.backgroundOperation.deliveryBlocked = 'temporarily-unavailable';

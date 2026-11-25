@@ -157,7 +157,8 @@ async function run() {
     await until(async () => await page.locator('[data-search-target]').count() === 0, 'The mark clears');
     await merged.last().evaluate(el => el.scrollIntoView({ block: 'start' })); await wait(300);
     assert.equal(await inView(), false, 'Only the merged line is in view');
-    await merged.last().getByRole('button', { name: '去确认', exact: true }).click();
+    assert.equal(new Set(await merged.locator('button').evaluateAll(list => list.map(b => b.getAttribute('aria-label')))).size, 3, 'Each merged line names its own card');
+    await merged.last().getByRole('button', { name: /^去确认：/ }).click();
     assert.equal(await card(records[0]).getAttribute('data-search-target'), 'true');
     await until(inView, 'A merged line leads to the batch');
     const more = page.locator('#stream-waiting-more');

@@ -42,7 +42,7 @@ test('a countdown says where it leads, the rest reuse the card words; names spel
   assert.deepEqual(words(zh, label({ kind: 'running', at: 0 }, 10400)), ['执行中 · 已 10 秒', '执行中，已 10 秒，跳到这条消息']);
   assert.deepEqual(words(zh, label({ kind: 'expired', at: 0 }, 1000)), ['已到期 · 未执行', '已到期，未执行，跳到这条消息']);
   assert.deepEqual(words(zh, label({ kind: 'countdown', at: 23000 }, 0)), ['去确认 · 剩余 0:23', '去确认，剩余 23 秒，跳到这条消息']);
-  assert.deepEqual(words(en, label({ kind: 'countdown', at: 83000 }, 0)), ['Go to card · 1:23 left', 'Go to card, 1 min 23 s left. Jump to this message']);
+  assert.deepEqual(words(en, label({ kind: 'countdown', at: 83000 }, 0)), ['Go to confirm · 1:23 left', 'Go to confirm, 1 min 23 s left. Jump to this message']);
   assert.deepEqual(words(en, label({ kind: 'running', at: 0 }, 10400)), ['Running · 10s elapsed', 'Running, 10 s elapsed. Jump to this message']);
   assert.equal(shape([{ target: 'a', kind: 'countdown', at: 1 }]), shape([{ target: 'a', kind: 'countdown', at: 2 }]));
   assert.notEqual(shape([{ target: 'a', kind: 'countdown' }]), shape([{ target: 'a', kind: 'expired' }]));

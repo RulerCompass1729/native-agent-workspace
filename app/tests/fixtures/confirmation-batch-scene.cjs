@@ -67,7 +67,7 @@ function render(cards, started) {
     backgroundSummaryText: summary => summary.target || summary.method,
     backgroundActionText: summary => text('background.action.' + summary.action), backgroundButtonKeys: () => null,
     backgroundClock: () => '', backgroundRemaining() {}, scheduleBackgroundExpiryClock() {}, api: {}, toastError() {},
-    ui: { display: { computed: (el, _property, fn) => { el.textContent = fn(); },
+    ui: { display: { computed: (el, property, fn) => { if (property === 'text') el.textContent = fn(); else (el.computed ||= {})[property] = fn(); },
       text: (el, key, params) => { el.textContent = text(key, params); }, attribute() {}, unbind() {} } },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../renderer/confirmation-batch.js'), 'utf8'), sandbox);

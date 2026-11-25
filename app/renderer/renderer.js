@@ -3183,6 +3183,7 @@ function renderMergedCard(box, role, summary, item) {
   ui.display.computed(sentence, 'text', () => backgroundSummaryText(summary));
   ui.display.text(note, 'background.batch.merged', { count: role.batch.cards.length });
   ui.display.text(go, 'background.batch.go');
+  ui.display.computed(go, 'aria-label', () => uiText('background.batch.goName', { target: backgroundSummaryText(summary) }));
   go.addEventListener('click', () => {
     let list = item.parentElement;
     while (list && !messageViews.has(list)) list = list.parentElement;
@@ -3194,7 +3195,7 @@ function renderBackgroundControls(entry, message) {
   const op = message.backgroundOperation, question = op?.state === 'confirmation-required' && op.confirmation;
   const card = question?.kind === 'message' && Array.isArray(question.options?.buttons), summary = op?.summary;
   // Before the unchanged-record return: the reading list rewrites the row's class name on every pass.
-  const batchRole = confirmationBatchRole(op), folded = Boolean(batchRole && !batchRole.open && !batchRole.anchor && !batchRole.batch.started);
+  const batchRole = confirmationBatchRole(op), folded = Boolean(summary && batchRole && !batchRole.open && !batchRole.anchor && !batchRole.batch.started);
   entry.item.classList.toggle('background-card', Boolean(card && !op.replacedBy && !op.disposition && !folded));
   entry.item.classList.toggle('background-void', Boolean(op?.disposition || card && op.replacedBy));
   const pending = op && confirmationCardPending(op);

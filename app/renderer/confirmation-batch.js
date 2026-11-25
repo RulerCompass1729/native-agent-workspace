@@ -1,8 +1,8 @@
 // Waiting cards that one "Confirm all" may answer together: the same agent, the same reversible method with no risk
 // mark, each actionable on its own. Creation may carry its permission risk: it is part of the shared configuration
 // shown once, and every card is still checked and receipted one by one in the main process. Input joins a batch only
-// with its complete text, which each row opens to. Stopping sessions may carry its own mark, shown once; ending a
-// session and disconnecting Codex, or two different answers, are never one card.
+// with its complete text, which each row opens to. Stopping sessions may carry its own mark, shown once (on the phone, the
+// question's own text); ending a session and disconnecting Codex, or two different answers, are never one card.
 (function (root) {
   const METHODS = new Set(['archiveSession', 'create', 'resume', 'restoreSession', 'input', 'stop']);
   const STOPS = new Set(['endSession', 'disconnectCodex']);
