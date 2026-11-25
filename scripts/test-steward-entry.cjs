@@ -94,7 +94,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   checks.push('With nobody designated the entry is at the top of the sidebar and says so; the built-in butler row stays hidden; the chooser offers a new session and nothing else');
 
   // The cast: a space with one member, and two sessions of the person's own.
-  await page.locator('#create-first-space').click(); await page.locator('#space-create-name').fill('网站改版'); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#create-first-space').click(); await page.locator('#space-create-name').fill('网站改版'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
   const member = await create('Claude 前端', 'claude'); await joinSpace(page);
   const main = await create('Claude 主会话', 'claude');
   await fixture('history', main, [
@@ -139,14 +139,14 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   checks.push('From another session, the row at the top opens the butler\'s conversation');
 
   // 4. Its menus: change and revoke are offered on it; reordering and spaces are not. On another session,
-  //    "make it the butler" stands above the secretary's item; a space member is not offered it.
+  //    "make it the butler" stands above the integrator's item; a space member is not offered it.
   await page.locator('#session-header-more').click(); let items = await menuItems(); await shot('zh-1280-butler-menu'); await closeMenu();
-  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.queueSecretarySet'), say('menu.integratorSet')], 'No space to join; its model, its record, change and revoke');
+  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.integratorSet')], 'No space to join; its model, its record, change and revoke');
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); items = await menuItems(); await closeMenu();
   for (const key of ['menu.stewardChange', 'menu.stewardRevoke', 'menu.rename', 'menu.archiveSession']) assert.ok(items.includes(say(key)), key);
   for (const text of [say('menu.moveUp'), say('menu.moveDown'), say('menu.stewardSet'), say('menu.joinSpace', { name: '网站改版' })]) assert.equal(items.includes(text), false, text);
   await page.locator(`#session-list .session-row[data-session-row="${docs}"]`).click({ button: 'right' }); items = await menuItems(); await shot('zh-1280-session-menu'); await closeMenu();
-  assert.ok(items.indexOf(say('menu.stewardSet')) >= 0 && items.indexOf(say('menu.stewardSet')) < items.indexOf(say('menu.queueSecretarySet')), 'Offered above the secretary\'s item');
+  assert.ok(items.indexOf(say('menu.stewardSet')) >= 0 && items.indexOf(say('menu.stewardSet')) < items.indexOf(say('menu.integratorSet')), 'Offered above the integrator\'s item');
   await page.locator(`#session-list .session-row[data-session-row="${member}"]`).click({ button: 'right' }); items = await menuItems(); await closeMenu();
   assert.equal(items.includes(say('menu.stewardSet')), false, 'A space member is not offered the designation');
   // Renaming it from its row renames the session; the row is still named for the butler and says the new name below.
@@ -157,7 +157,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); await page.getByRole('menuitem', { name: say('menu.rename'), exact: true }).click();
   await page.locator('#rename-name').fill('Claude 主会话'); await page.locator('#confirm-rename').click();
   await until(async () => (await sidebar()).title === 'Claude 主会话', 'Renamed back');
-  checks.push('The butler\'s menus offer change and revoke and no reordering or spaces; another session of the person\'s is offered "make it the butler" above the secretary\'s item, a space member is not; renaming the butler from its row renames the session and the row stays named for the butler');
+  checks.push('The butler\'s menus offer change and revoke and no reordering or spaces; another session of the person\'s is offered "make it the butler" above the integrator\'s item, a space member is not; renaming the butler from its row renames the session and the row stays named for the butler');
 
   // 5. The rules the main process holds, whatever the window offers: a member cannot be designated, an unknown
   //    session cannot, the butler cannot be joined to a space, and each refusal changes nothing.

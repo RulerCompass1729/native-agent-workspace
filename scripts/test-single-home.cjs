@@ -84,7 +84,7 @@ async function run() {
     for (const s of (await snapshot()).sessions) assert.deepEqual({ nativeId:s.nativeId,draft:s.liveDraft,model:s.model }, identity.get(s.id));
   }
   async function placement(id, expected) { await until(async()=>JSON.stringify(await home(id))===JSON.stringify(expected), 'Confirmed same-native placement'); await unique(); }
-  async function create(name) { await page.locator('#new-space').click(); await page.locator('#space-create-name').fill(name); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({state:'hidden'}); return (await snapshot()).rooms.find(r=>r.name===name).id; }
+  async function create(name) { await page.locator('#new-space').click(); await page.locator('#space-create-name').fill(name); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({state:'hidden'}); return (await snapshot()).rooms.find(r=>r.name===name).id; }
   async function menu(id, text) { await page.locator(`#session-list [data-session-menu="${id}"]`).click(); await page.getByRole('menuitem',{name:text,exact:true}).click(); }
   async function undo(name) { await page.getByRole('button',{name:`撤销移动到「${name}」`,exact:true}).click(); }
   await check('01 V3 zero-space discovery and permanent creation in grouped and flat views', async()=>{

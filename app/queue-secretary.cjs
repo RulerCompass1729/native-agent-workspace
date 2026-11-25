@@ -1,9 +1,9 @@
 'use strict';
-// A single, person-selected session may add queue items. This grants no native
-// execution tools or other queue powers. Rotation follows only the written log.
+// The one secretary NAW used to have, retired for a project manager in each space (space-managers.cjs). Its record is
+// only read, once, to make it the manager of its own space; it is never written, so an older build finds it as it was.
+// The rotation log and the rules that follow it are here too, for every record that names a session.
 const fs = require('node:fs');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
 const { uiError } = require('./ui-errors.cjs');
 
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -144,40 +144,18 @@ class QueueSecretary {
     } catch (error) { if (error.code !== 'ENOENT') throw uiError('error.queue.secretaryState'); }
     return successor(this.selected, entries);
   }
-  set(value) {
-    const selected = value === null ? null : identity(value);
-    const temp = `${this.file}.${randomUUID()}.tmp`;
-    let fd;
-    try {
-      fd = fs.openSync(temp, 'wx', 0o600);
-      fs.writeFileSync(fd, JSON.stringify({ version: 1, selected }));
-      fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-      fs.renameSync(temp, this.file);
-      const directory = fs.openSync(path.dirname(this.file), 'r');
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    } catch { this.failed = true; throw uiError('error.queue.secretaryState'); }
-    finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temp); } catch {} }
-    this.selected = selected;
-    this.failed = false;
-  }
-  creator(actor, records, labels) {
-    const current = this.current();
-    const record = usableRecord(actor, records);
-    if (!current || current.sessionId !== actor?.id || current.nativeId !== actor?.nativeId || !record) throw uiError('error.queue.secretaryOnly');
-    return { kind: 'secretary', name: labels.get(record.id) || record.name, sessionId: record.id };
-  }
-  // A session taking back an item it queued itself (the person, 2026-11-12 21:1x, 「可以」), or claiming one queued
-  // for it: the caller as the person's record has it now, whether or not it is still the secretary. Room state
-  // compares it with the item's creator or assignee, and status, in the same step as the change.
-  author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly') {
-    const record = usableRecord(actor, records);
-    if (!record) throw uiError(refusal);
-    return { name: labels.get(record.id) || record.name, sessionId: record.id };
-  }
+}
+// A session taking back an item it queued itself (the person, 2026-11-12 21:1x, 「可以」), or claiming one queued
+// for it: the caller as the person's record has it now. Room state compares it with the item's creator or assignee,
+// and status, in the same step as the change.
+function author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly') {
+  const record = usableRecord(actor, records);
+  if (!record) throw uiError(refusal);
+  return { name: labels.get(record.id) || record.name, sessionId: record.id };
 }
 // The caller's own session as the person's record has it now: the very native session, not archived, ended,
 // in the background or still moving in.
 function usableRecord(actor, records) {
   return records.find(record => record.id === actor?.id && record.nativeId === actor?.nativeId && !record.archived && !record.nativeContextPending && !['ended', 'background'].includes(record.state)) || null;
 }
-module.exports = { QueueSecretary, successor, follow, rotationEdges };
+module.exports = { QueueSecretary, successor, follow, rotationEdges, usableRecord, author };

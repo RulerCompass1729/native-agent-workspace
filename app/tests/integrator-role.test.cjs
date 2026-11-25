@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { IntegratorRole } = require('../integrator-role.cjs');
-const { QueueSecretary } = require('../queue-secretary.cjs');
+const { SpaceManagers } = require('../space-managers.cjs');
 
 // The record of who the person designated as integrator (B6, section 5). Synthetic identities only.
 function fixture(t) {
@@ -40,15 +40,15 @@ test('only a session id with its native id is a designation', t => {
   assert.equal(fs.readFileSync(file, 'utf8'), before); assert.deepEqual(role.current(), ONE);
 });
 
-test('after a session rotation the designation follows the written log to the successor, as the secretary does', t => {
+test('after a session rotation the designation follows the written log to the successor, as a project manager does', t => {
   const { open, log, directory } = fixture(t);
   const role = open(); role.set(ONE);
   const two = { sessionId: 'session-2', nativeId: 'native-2' }, three = { sessionId: 'session-3', nativeId: 'native-3' };
   fs.writeFileSync(log, [edge('done', ONE, two), edge('done', two, three)].join('\n') + '\n', { mode: 0o600 });
   assert.deepEqual(role.current(), three);
-  // The same log gives the secretary the same successor: one rule for both.
-  const secretary = new QueueSecretary(directory); secretary.set(ONE);
-  assert.deepEqual(secretary.current(), role.current());
+  // The same log gives a project manager the same successor: one rule for both.
+  const managers = new SpaceManagers(directory); managers.set('shared', ONE);
+  assert.deepEqual(managers.current('shared'), role.current());
   // A handoff that was only kept, not done, does not move the designation.
   fs.writeFileSync(log, edge('kept', ONE, two) + '\n', { mode: 0o600 });
   assert.deepEqual(role.current(), ONE);

@@ -79,7 +79,7 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(7000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-space').waitFor();
   assert.deepEqual((await snapshot()).sessions.map(s => s.id).sort(), [...backends.New.ids, old].sort(), 'GUI reads exactly both owned daemons');
   await check('01 create an empty space in the grouped sidebar', async () => {
-    await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Claude 聊天室'); await page.locator('#confirm-space-create').click();
+    await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Claude 聊天室'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click();
     await until(() => JSON.parse(fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8')).rooms.length === 1, 'New space stored');
     space = JSON.parse(fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8')).rooms[0].id;
     if (await page.locator('#sessions-grouped').getAttribute('aria-pressed') !== 'true') await page.locator('#sessions-grouped').click();

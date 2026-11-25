@@ -30,54 +30,70 @@ class Element {
 }
 function fixture() {
   const l = localeUI();
-  const calls = [], menus = [], record = { id: 'secretary-one', nativeId: 'native-one', name: 'Literal <name>', state: 'idle', serviceCapabilities: ['observe'] };
-  const state = { sessions: [record], queueSecretary: null };
+  const calls = [], menus = [], record = { id: 'manager-one', nativeId: 'native-one', name: 'Literal <name>', state: 'idle', serviceCapabilities: ['observe'], roomIds: ['shared'] };
+  const space = { id: 'shared', name: 'Plans' };
+  const state = { sessions: [record], spaceManagers: {} };
   const row = { more: new Element('button') };
   const c = vm.createContext({ ...l, state, disconnected: false, node: (tag, text, cls) => new Element(tag, text, cls),
     queueSpace: 'shared', queueMemberName: id => 'Recipient ' + id, queueReasonKey: () => null, queueOutcomeNode: () => null, queueAnswerNode: () => null,
     button: (text, action, cls) => { const el = new Element('button', text, cls); el.click = action; return el; },
-    api: { queueSecretary: async id => calls.push(['secretary', id]), initial: async () => state, spaceAction: async (...args) => calls.push(args) },
+    api: { spaceManager: async (roomId, id) => calls.push(['manager', roomId, id]), initial: async () => state, spaceAction: async (...args) => calls.push(args) },
     updateState: () => calls.push(['refresh']), render: () => calls.push(['render']), renderQueue() {},
-    allSpaces: () => [], sidebarSessions: () => [record], orderedMembers: () => [record], backendVersionNotice: () => null, sessionChainModel: () => null, sidebarDetails: () => [], sidebarFactsKey: () => '',
+    allSpaces: () => [], spaceRecord: id => id === 'shared' ? space : null, spaceName: room => room.name, window: { nativeWorkspaceSpaces: { roomIds: record => record.roomIds || [] } }, sidebarSessions: () => [record], orderedMembers: () => [record], backendVersionNotice: () => null, sessionChainModel: () => null, sidebarDetails: () => [], sidebarFactsKey: () => '',
     sessionRows: new Map([[record.id, row]]), sessionRow: () => row, contentMenu: null, roomMenu: null, sessionMenu: null, attempt: fn => fn(), focusSessionAction() {},
     ui: { ...l.ui, menu: options => { menus.push(options); return () => {}; } },
   });
   vm.runInContext(section('const uiNode =', 'const states ='), c);
+  vm.runInContext(section('function managedSpace(', 'function hierRole('), c);
   vm.runInContext(section('let operatorSettingBusy =', '// A background operation'), c);
   vm.runInContext(section('function sessionMenuModel(', 'function memberMenuKey('), c);
   vm.runInContext(section('function queueRow(', 'function renderQueue('), c);
-  return { c, record, calls, menus, state, l };
+  return { c, record, calls, menus, state, space, l };
 }
 function descendants(el, cls) { return el.children.flatMap(child => [...(child.className?.split(' ').includes(cls) ? [child] : []), ...descendants(child, cls)]); }
-test('the existing session menu can designate, replace and revoke the unique secretary without confirmation', async () => {
+const own = record => ({ shared: { sessionId: record.id, nativeId: record.nativeId } });
+test("the existing session menu can designate, replace and revoke its space's project manager without confirmation", async () => {
   const f = fixture();
   f.c.openSessionMenu(f.record.id);
   let menu = f.menus.at(-1);
-  const set = menu.items.find(item => item.id === 'queue-secretary-set');
-  assert.equal(set?.label, '设为秘书（可替我加到队列）');
-  await menu.onSelect('queue-secretary-set');
+  const set = menu.items.find(item => item.id === 'manager-set');
+  assert.equal(set?.label, '设为「Plans」的项目经理');
+  await menu.onSelect('manager-set');
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.calls, [['secretary', f.record.id], ['refresh'], ['render']]);
-  f.state.queueSecretary = { sessionId: f.record.id, nativeId: f.record.nativeId };
+  assert.deepEqual(f.calls, [['manager', 'shared', f.record.id], ['refresh'], ['render']]);
+  f.state.spaceManagers = own(f.record);
   const model = f.c.sessionMenuModel(f.record.id, { more: {} });
-  assert.ok(model.items.find(item => item.id === 'queue-secretary-revoke'));
-  assert.ok(!model.items.find(item => item.id === 'queue-secretary-set'));
+  assert.equal(model.items.find(item => item.id === 'manager-revoke')?.label, '撤销项目经理');
+  assert.ok(!model.items.find(item => item.id === 'manager-set'));
   f.c.openSessionMenu(f.record.id, { x: 0, y: 0 });
-  await f.menus.at(-1).onSelect('queue-secretary-revoke');
+  await f.menus.at(-1).onSelect('manager-revoke');
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.calls.at(-3), ['secretary', null]);
-  f.state.queueSecretary = { sessionId: 'another-session', nativeId: 'another-native' };
-  assert.ok(f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'queue-secretary-set'));
+  assert.deepEqual(f.calls.at(-3), ['manager', 'shared', null]);
+  f.state.spaceManagers = { shared: { sessionId: 'another-session', nativeId: 'another-native' } };
+  assert.ok(f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'manager-set'));
 });
-test('secretary rows display the recorded name and full session id as text in the existing task cell', () => {
-  const f = fixture(), creator = { kind: 'secretary', name: '<Secretary & 中文>', sessionId: 'secretary-1234-5678-full-id' };
+test('only a member of one open space is offered the role; a manager that left its space still shows the revoke', () => {
+  const f = fixture(), items = () => Array.from(f.c.sessionMenuModel(f.record.id, {}).items).filter(item => item.id.startsWith('manager-')).map(item => item.id);
+  assert.deepEqual(items(), ['manager-set']);
+  for (const change of [{ roomIds: [] }, { roomIds: ['elsewhere'] }, { roomIds: ['shared', 'space-2'] }, { nativeId: null }, { archived: true }]) {
+    const saved = { ...f.record }; Object.assign(f.record, change);
+    assert.deepEqual(items(), change.roomIds?.length === 2 ? ['manager-set'] : [], JSON.stringify(change));
+    for (const name of Object.keys(change)) { if (name in saved) f.record[name] = saved[name]; else delete f.record[name]; }
+  }
+  f.space.archived = true;
+  assert.deepEqual(items(), []);
+  f.space.archived = false; f.state.spaceManagers = own(f.record); f.record.roomIds = [];
+  assert.deepEqual(items(), ['manager-revoke']);
+});
+test('rows a project manager added display the recorded name and full session id as text in the existing task cell', () => {
+  const f = fixture(), creator = { kind: 'secretary', name: '<Manager & 中文>', sessionId: 'manager-1234-5678-full-id' };
   const row = f.c.queueRow({ id: 'item', text: '<Original task>', status: 'queued', creator }, new Set());
   const body = descendants(row, 'queue-text')[0];
   assert.ok(body.textContent.includes('<Original task>'));
-  assert.ok(body.textContent.includes('秘书 <Secretary & 中文>（secretary-1234-5678-full-id）添加'));
+  assert.ok(body.textContent.includes('项目经理 <Manager & 中文>（manager-1234-5678-full-id）添加'));
   assert.equal(descendants(row, 'queue-creator').length, 1);
   f.l.setLanguage('en'); f.l.ui.display.refresh(row);
-  assert.ok(body.textContent.includes('Added by secretary <Secretary & 中文> (secretary-1234-5678-full-id)'));
+  assert.ok(body.textContent.includes('Added by project manager <Manager & 中文> (manager-1234-5678-full-id)'));
   assert.ok(body.textContent.includes('<Original task>'));
 });
 test('person and legacy rows distinguish recorded human input from an unknown historical source', () => {
@@ -136,7 +152,7 @@ test('a waiting row says 「等你决定」 only for a decision; with a reason i
   assert.equal(status(decision), 'Needs your decision · Recipient member');
 });
 
-test('the compact session menu and member menu expose the same secretary choice and reject a changed role', async () => {
+test('the compact session menu and member menu expose the same project manager choice and reject a changed role', async () => {
   for (const kind of ['header', 'member']) {
     const f = fixture(), anchor = new Element('button');
     const control = new Element('button'); control.click = () => f.calls.push(['original']);
@@ -153,35 +169,35 @@ test('the compact session menu and member menu expose the same secretary choice 
       f.c.openMemberMenu(f.record.id, anchor);
     }
     const menu = f.menus.at(-1);
-    assert.equal(menu.items.find(item => item.id === 'queue-secretary-set')?.label, '设为秘书（可替我加到队列）');
-    await menu.onSelect('queue-secretary-set');
+    assert.equal(menu.items.find(item => item.id === 'manager-set')?.label, '设为「Plans」的项目经理');
+    await menu.onSelect('manager-set');
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(f.calls[0], ['secretary', f.record.id]);
+    assert.deepEqual(f.calls[0], ['manager', 'shared', f.record.id]);
     f.calls.length = 0;
-    f.state.queueSecretary = { sessionId: f.record.id, nativeId: f.record.nativeId };
+    f.state.spaceManagers = own(f.record);
     // The open menu was rendered against the earlier role: no stale action may now run.
     if (kind === 'member') f.c.toastMessage = () => {};
-    menu.onSelect('queue-secretary-set');
+    menu.onSelect('manager-set');
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(f.calls, []);
   }
 });
 
-test('unavailable sessions cannot become secretary and disconnected menus cannot execute it', async () => {
+test('unavailable sessions cannot become project manager and disconnected menus cannot execute it', async () => {
   const f = fixture();
   f.record.nativeId = null;
-  assert.ok(!f.c.sessionMenuModel(f.record.id, {}).items.some(item => item.id.startsWith('queue-secretary-')));
+  assert.ok(!f.c.sessionMenuModel(f.record.id, {}).items.some(item => item.id.startsWith('manager-')));
   f.record.nativeId = 'native-one';
   f.c.disconnected = true;
-  const action = f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'queue-secretary-set');
+  const action = f.c.sessionMenuModel(f.record.id, {}).items.find(item => item.id === 'manager-set');
   assert.equal(action.disabled, true);
   f.c.openSessionMenu(f.record.id);
-  f.menus.at(-1).onSelect('queue-secretary-set');
+  f.menus.at(-1).onSelect('manager-set');
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls, []);
 });
 
-test('disconnected header keeps existing usage control while blocking secretary changes', () => {
+test('disconnected header keeps existing usage control while blocking project manager changes', () => {
   const f = fixture(), anchor = new Element('button'), control = new Element('button');
   control.click = () => f.calls.push(['existing-usage']);
   Object.assign(f.c, { current: () => f.record, selectionRevision: 1, selected: f.record.id, spaceId: 'shared',
@@ -189,9 +205,9 @@ test('disconnected header keeps existing usage control while blocking secretary 
   vm.runInContext(section('const headerMenuKey =', 'function renderHeaderLayout('), f.c);
   f.c.openHeaderMenu(anchor);
   const menu = f.menus.at(-1);
-  assert.equal(menu.items.find(item => item.id === 'queue-secretary-set').disabled, true);
+  assert.equal(menu.items.find(item => item.id === 'manager-set').disabled, true);
   assert.equal(menu.items.find(item => item.id === 'usage').disabled, false);
-  menu.onSelect('queue-secretary-set');
+  menu.onSelect('manager-set');
   assert.deepEqual(f.calls, []);
   menu.onSelect('usage');
   assert.deepEqual(f.calls, [['existing-usage']]);
@@ -202,7 +218,7 @@ const INTEGRATOR_SET = '设为集成者（把交上来的活合进主线）';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function integratorFixture() {
   const f = fixture();
-  f.c.window = { nativeWorkspaceSpaces: { roomIds: record => record.roomIds || [] } };
+  f.record.roomIds = [];
   f.c.api.integrator = async id => f.calls.push(['integrator', id]);
   // The model's arrays belong to the page's own context: copy them before comparing.
   f.actions = () => Array.from(f.c.sessionMenuModel(f.record.id, {}).items).filter(item => !item.type);
@@ -210,9 +226,9 @@ function integratorFixture() {
 }
 test('the session menu offers the integrator designation only outside every space, and the revoke where it is set', async () => {
   const f = integratorFixture();
-  // After the secretary action and before rename, with its words in both languages.
-  assert.deepEqual(f.actions().slice(0, 3).map(item => item.id), ['queue-secretary-set', 'integrator-set', 'rename']);
-  assert.equal(f.actions()[1].label, INTEGRATOR_SET);
+  // Before rename, with its words in both languages; the project manager is a member's role, so it is not offered here.
+  assert.deepEqual(f.actions().slice(0, 2).map(item => item.id), ['integrator-set', 'rename']);
+  assert.equal(f.actions()[0].label, INTEGRATOR_SET);
   assert.equal(locale.format('en', 'menu.integratorSet'), 'Use as integrator (merges delivered work)');
   f.c.openSessionMenu(f.record.id);
   await f.menus.at(-1).onSelect('integrator-set'); await tick();

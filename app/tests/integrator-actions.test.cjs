@@ -631,8 +631,8 @@ test('the person confirms a merge that was made before its handoff began; "check
 
 test('the entry is wired for the person\'s window, and its words exist in both languages', () => {
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /for \(const name of \['queueSecretary', 'integrator', 'handoff', /);
-  assert.match(source, /const localQueue = name === 'queueSecretary' \|\| name === 'integrator' \|\| name === 'handoff' \|\| /);
+  assert.match(preload, /for \(const name of \['spaceManager', 'integrator', 'handoff', /);
+  assert.match(source, /const localQueue = name === 'spaceManager' \|\| name === 'integrator' \|\| name === 'handoff' \|\| /);
   // The record the entry acts on is the one the engine was built with, and is set nowhere else.
   assert.equal(source.match(/integrationHandoffs = /g).length, 2, 'Its declaration as null and the one assignment');
   assert.match(source, /let integrationHandoffs = null;/);
@@ -649,7 +649,7 @@ test('the entry is wired for the person\'s window, and its words exist in both l
   assert.deepEqual([told(null), told(undefined), told({ integration: null, integrationError: null }), told({ integration: {}, integrationError: null }), told({ integration: null, integrationError: { message: 'Synthetic build fault' } })],
     [{}, {}, {}, { handoffEnabled: true }, { handoffEnabled: true }]);
   assert.ok(!/integrationHandoffs/.test(slice('function displayState(snapshot, context, read = null, toPage = false) {', '\nfunction reportViewStorage(')), 'The state function names nothing new');
-  assert.match(source, /const result = \{ \.\.\.display, queueSecretary: secretary, integrator, \.\.\.handoffEnabled, /);
+  assert.match(source, /const result = \{ \.\.\.display, spaceManagers: managers, integrator, \.\.\.handoffEnabled, /);
   // The task given back names the task, the branch and (when there are any) the integrator's words, in both languages.
   for (const language of ['zh', 'en']) {
     const said = locale.format(language, 'queue.redo.text', { text: 'TASK', branch: 'BRANCH', note: 'NOTE' }), bare = locale.format(language, 'queue.redo.plain', { text: 'TASK', branch: 'BRANCH' });

@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
-const { BackgroundControl } = require('../background-control.cjs'), operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
+const { BackgroundControl } = require('../background-control.cjs'), { SpaceManagers } = require('../space-managers.cjs'), operation = require('../background-operation.cjs'), locale = require('../ui-locale.js');
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
 function part(start, end) { const a = main.indexOf(start), b = main.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a); return main.slice(a, b); }
 const command = (method, args = [], operation_id = randomUUID()) => ({ action: 'invoke', method, arguments: args, operation_id });
@@ -13,7 +13,7 @@ test(`${provider}: pre-consent ${reason} is explicitly not executed and summariz
   const other = f.state.sessions.find(s => s.id === 'other'); let entered = 0;
   const method = reason === 'conversation-access-denied' ? 'terminalSnapshot' : reason === 'space-file-membership-required' ? 'spaceFiles' : 'initial';
   f.config.handlers.set(method, () => { entered++; throw Error('Denied handler must never run'); });
-  if (reason === 'conversation-access-denied') f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  if (reason === 'conversation-access-denied') f.designate();
   if (reason === 'space-file-membership-required') f.state.sessions[0].roomIds = [];
   if (reason === 'conversation-target-unavailable') {
     await f.select('other');
@@ -42,7 +42,7 @@ function fixture(t, provider = 'codex', extra = {}) {
   const state = { sessions: [session(actor.id, actor.nativeId, actor.name, own), session('other', 'native-other', 'Other 中文', secret), session('third', 'native-third', 'Third', third)], rooms: [{ id: 'shared', name: 'Shared', messages: [{ text: 'SHARED_RECORD' }], queue: [{ id: 'queued-task', status: 'queued', assignee: 'agent', text: 'QUEUE_RECORD' }] }] };
   state.sessions[0].roomIds = ['shared'];
   const sandbox = { background: require('../background-control.cjs'), ...require('../shown-sessions.cjs'), backgroundOperation: operation, submissionState: s => s, sessionLabels: { apply: s => s }, roomState: { apply: s => s, value: { sessionArchives: {} }, metadata: () => ({ restoreMembers: [], restorePlacements: {} }) },
-    queueSecretary: { current: () => sandbox.secretary || null }, backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
+    spaceManagers: new SpaceManagers(dir), backgroundControl: null, roomPeerIdentity: () => ({ nativeId: 'metadata' }), endedByMove: () => [], queueDispatcher: null, butlerIngress: null,
     confirmationInbox: require('../confirmation-inbox.cjs'), confirmationProjectionKey: '', windows: new Map(), operationsBlocks: -1, recordsChanged() {}, confirmationSnapshot: (client, snapshot) => snapshot || client.snapshot(),
     localVendorIcons: () => ({ openai: 'PRIVATE_VENDOR_IMAGE' }), stewardWake: null, sessionModelChanges: null,
     viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
@@ -72,6 +72,7 @@ function fixture(t, provider = 'codex', extra = {}) {
   const controller = new BackgroundControl(config); sandbox.backgroundControl = controller;
   const binding = { sender: actor, identity: { callId: randomUUID(), turnId: 'turn' }, valid: () => true };
   return { dir, actor, state, contexts, config, controller, binding, sandbox, audits, notices, secret, own, third,
+    designate: (manager = { sessionId: actor.id, nativeId: actor.nativeId }) => sandbox.spaceManagers.set('shared', manager),
     select: id => controller.call(binding, command('viewState', [{ selected: id, mode: 'chat' }])) };
 }
 for (const provider of ['claude', 'codex']) for (const kind of ['snapshot', 'initial']) test(`${provider} ${kind}: a space or missing selection returns metadata without conversation consent or audit`, async t => {
@@ -283,13 +284,18 @@ test('a native replacement observed during the final read cannot reuse an earlie
   const result = await f.controller.decide('agent', 'native-agent', pending.id, 1);
   assert.equal(result.state, 'unconfirmed'); assert.equal(JSON.stringify(result).includes(f.secret), false);
 });
-test('the secretary designation does not grant foreign conversation access', async t => {
-  const f = fixture(t); f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
-  const own = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(own.state, 'complete'); assert.ok(JSON.stringify(own).includes('queued-task')); assert.equal(JSON.stringify(own).includes('QUEUE_RECORD'), false);
+test("a project manager reads its own space's records and no other session's conversation", async t => {
+  const f = fixture(t); f.designate();
+  const own = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(own.state, 'complete'); assert.ok(JSON.stringify(own).includes('queued-task')); assert.equal(JSON.stringify(own).includes('QUEUE_RECORD'), true);
+  assert.deepEqual(Array.from(own.value.sessions, s => s.id), [f.actor.id], 'no member but itself, and no other session');
   await f.select('other'); const metadata = await f.controller.call(f.binding, { action: 'snapshot' });
-  assert.equal(metadata.state, 'complete'); assert.equal(JSON.stringify(metadata).includes(f.secret), false); assert.ok(JSON.stringify(metadata).includes('queued-task')); assert.equal(JSON.stringify(metadata).includes('SHARED_RECORD'), false);
+  assert.equal(metadata.state, 'complete'); assert.equal(JSON.stringify(metadata).includes(f.secret), false); assert.ok(JSON.stringify(metadata).includes('queued-task'));
   const denied = await f.controller.call(f.binding, command('initial'));
   assert.equal(denied.state, 'not-executed'); assert.equal(denied.reason, 'conversation-access-denied'); assert.equal(JSON.stringify(denied).includes(f.secret), false);
+  // The role counts only in its own space: after leaving, it has no space's records, and still no other conversation.
+  f.state.sessions[0].roomIds = [];
+  const left = await f.controller.call(f.binding, { action: 'snapshot' }); assert.equal(JSON.stringify(left).includes('QUEUE_RECORD'), false);
+  assert.equal((await f.controller.call(f.binding, command('initial'))).reason, 'conversation-access-denied');
 });
 test('private-image preview is a conversation read; shared and own images retain their existing path', async t => {
   const f = fixture(t); let reads = 0;
@@ -299,7 +305,7 @@ test('private-image preview is a conversation read; shared and own images retain
   assert.equal(pending.state, 'confirmation-required'); assert.equal(reads, 0); assert.equal(JSON.stringify(pending).includes(f.secret), false);
   const approved = await f.controller.decide('agent', 'native-agent', pending.id, 1);
   assert.equal(approved.state, 'complete'); assert.equal(approved.readTarget.name, 'Other 中文'); assert.equal(reads, 1);
-  f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
+  f.designate();
   assert.equal(JSON.stringify(await f.controller.call(f.binding, { action: 'receipt', operation_id: args.operation_id })).includes(f.secret), false);
   assert.equal(operation.maintenanceAction('previewImage', [{ ...source, kind: 'room' }], f.actor), null);
   assert.equal(operation.maintenanceAction('previewImage', [{ ...source, sessionId: 'agent' }], f.actor), null);
@@ -311,11 +317,11 @@ test('old unapproved initial receipts and duplicate calls cannot reveal saved fo
   assert.equal(JSON.stringify(receipt).includes(f.secret), false); assert.equal(JSON.stringify(receipt).includes(f.third), false);
   const duplicate = await f.controller.call(f.binding, args); assert.equal(duplicate.duplicate, true); assert.equal(JSON.stringify(duplicate).includes(f.secret), false);
 });
-test('cached image reads recheck the secretary restriction before resolving the private source', async () => {
+test('cached image reads recheck the role before resolving the private source', async () => {
   let calls = 0;
   const actor = { id: 'agent', nativeId: 'native-agent' }, c = { background: true, actor, client: { call: async () => { calls++; return {}; } } };
   const sandbox = { nativeImage: {}, ImagePreviews: class { constructor(options) { this.options = options; } }, roomState: { apply: value => value },
-    conversationReaderAllowed: () => false, conversationAccess: () => ({ secretary: true, roomIds: [] }), uiError: require('../ui-errors.cjs').uiError, context: c };
+    conversationReaderAllowed: () => false, conversationAccess: () => ({ metadataOnly: true, roomIds: [] }), uiError: require('../ui-errors.cjs').uiError, context: c };
   vm.createContext(sandbox); vm.runInContext(part('  const imagesFor =', "  register('previewImage',"), sandbox);
   const previews = vm.runInContext('imagesFor(context)', sandbox);
   await assert.rejects(previews.options.snapshot({ kind: 'session', sessionId: 'other' })); assert.equal(calls, 0);
@@ -394,16 +400,16 @@ test('navigation receipts do not expose native questions, while changed question
   assert.equal(refused.state, 'unconfirmed'); assert.equal(refused.disposition, 'invalidated'); assert.equal(refused.resultNotice.key, 'background.card.reason.partial-operation'); assert.equal(writes, 0);
   assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('CHANGED_NATIVE_QUESTION'), false);
 });
-for (const mode of ['leave', 'secretary', 'native']) test(`a frozen receipt uses current space authority, not saved membership: ${mode}`, async t => {
+for (const mode of ['leave', 'unreadable', 'native']) test(`a frozen receipt uses current space authority, not saved membership: ${mode}`, async t => {
   const f = fixture(t); await f.select('other');
   const pending = await f.controller.call(f.binding, { action: 'snapshot' }); await f.controller.decide('agent', 'native-agent', pending.id, 1);
   if (mode === 'leave') f.state.sessions[0].roomIds = [];
   if (mode === 'native') f.state.sessions[0].nativeId = 'replacement-actor';
-  if (mode === 'secretary') f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
+  if (mode === 'unreadable') f.sandbox.spaceManagers.failed = true;
   const receipt = await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id });
   assert.equal(JSON.stringify(receipt).includes('SHARED_RECORD'), false); assert.equal(JSON.stringify(receipt).includes('QUEUE_RECORD'), false);
   assert.equal(receipt.receipt.value.rooms[0].queue[0].status, 'queued');
-  if (mode === 'secretary') assert.equal(JSON.stringify(receipt).includes(f.secret), false);
+  if (mode === 'unreadable') assert.equal(JSON.stringify(receipt).includes(f.secret), false);
 });
 test('the final actual initial handler filters its view, preflight, build and future fields while human windows stay complete', async t => {
   const f = fixture(t), c = await f.controller.view(f.actor);
@@ -426,8 +432,9 @@ test('published space images require current membership for every source check; 
   for (const kind of ['room', 'space-message']) {
     const source = { kind, roomId: 'shared' }; await previews.options.snapshot(source);
     f.state.sessions[0].roomIds = []; await assert.rejects(previews.options.snapshot(source));
-    f.state.sessions[0].roomIds = ['shared']; f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
-    await assert.rejects(previews.options.snapshot(source)); delete f.sandbox.secretary;
+    f.state.sessions[0].roomIds = ['shared']; f.sandbox.spaceManagers.failed = true;
+    await assert.rejects(previews.options.snapshot(source)); f.sandbox.spaceManagers.failed = false;
+    f.designate(); await previews.options.snapshot(source); f.designate(null);
   }
   f.state.sessions[0].roomIds = [];
   assert.equal(await previews.options.snapshot({ kind: 'space-draft', roomId: 'shared' }), null);
@@ -437,45 +444,44 @@ const terminalReadBodies = {
   observe: { terminal: 'OBSERVE_PRIVATE_SCREEN', progress: { items: [{ text: 'OBSERVE_PRIVATE_PROGRESS' }], revision: 1 } },
   terminal: '\u001b[31mTERMINAL_PRIVATE_SERIALIZED\u001b[0m',
 };
-for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) for (const when of ['before-request', 'before-approval', 'before-pickup']) test(`${provider} ${method}: secretary designated ${when} cannot receive another session's terminal`, async t => {
+for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) for (const when of ['before-request', 'before-approval', 'before-pickup']) test(`${provider} ${method}: a project manager designated ${when} cannot receive another session's terminal`, async t => {
   const f = fixture(t, provider); let reads = 0;
   f.config.handlers.set(method, () => { reads++; return body; });
-  const designate = () => { f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId }; };
-  if (when === 'before-request') designate();
+  if (when === 'before-request') f.designate();
   const pending = await f.controller.call(f.binding, command(method, ['other']));
   if (when === 'before-request') {
     assert.equal(pending.state, 'not-executed'); assert.equal(pending.reason, 'conversation-access-denied'); assert.equal(pending.confirmation, undefined);
     assert.equal(reads, 0); assert.equal(f.notices.length, 0); return;
   }
   assert.equal(pending.state, 'confirmation-required'); assert.equal(f.notices.length, 1);
-  if (when === 'before-approval') designate();
+  if (when === 'before-approval') f.designate();
   const approved = await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
   if (when === 'before-approval') {
     assert.equal(approved.state, 'not-executed'); assert.equal(approved.reason, 'conversation-access-denied'); assert.equal(approved.confirmation, undefined);
     assert.equal(reads, 0); assert.equal(f.notices.length, 1); return;
   }
   assert.equal(approved.state, 'complete'); assert.equal(approved.readState, 'available'); assert.equal(approved.value, undefined);
-  designate();
+  f.designate();
   const pickup = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt;
   assert.equal(pickup.value, undefined); assert.equal(pickup.readState, 'consumed');
   assert.equal(typeof pickup.readConsumedAt, 'number'); assert.equal(reads, 1);
   assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
-  delete f.sandbox.secretary;
+  f.designate(null);
   assert.equal((await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt.value, undefined);
   assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
 });
-for (const [method, body] of Object.entries(terminalReadBodies)) test(`${method}: an unreadable secretary role discards an approved copy on pickup`, async t => {
+for (const [method, body] of Object.entries(terminalReadBodies)) test(`${method}: an unreadable manager role discards an approved copy on pickup`, async t => {
   const f = fixture(t); f.config.handlers.set(method, () => body);
   const pending = await f.controller.call(f.binding, command(method, ['other']));
   await f.controller.decide(f.actor.id, f.actor.nativeId, pending.id, 1);
-  f.sandbox.queueSecretary.current = () => { throw Error('Synthetic role storage unavailable'); };
+  f.sandbox.spaceManagers.failed = true;
   const pickup = (await f.controller.call(f.binding, { action: 'receipt', operation_id: pending.id })).receipt;
   assert.equal(pickup.value, undefined); assert.equal(pickup.readState, 'consumed');
   assert.equal(f.controller.readCopies.size, 0); assert.equal(f.controller.readBytes, 0);
 });
-for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) test(`${provider} secretary keeps own ${method} direct and private`, async t => {
+for (const provider of ['claude', 'codex']) for (const [method, body] of Object.entries(terminalReadBodies)) test(`${provider} project manager keeps own ${method} direct and private`, async t => {
   const f = fixture(t, provider); f.config.handlers.set(method, (_context, id) => { assert.equal(id, f.actor.id); return body; });
-  f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  f.designate();
   const result = await f.controller.call(f.binding, command(method, [f.actor.id]));
   assert.equal(result.state, 'complete'); assert.deepEqual(result.value, body);
   assert.equal(f.notices.length, 0); assert.equal(fs.readFileSync(f.controller.file, 'utf8').includes('_PRIVATE_'), false);
@@ -614,7 +620,7 @@ test('a policy refusal after a resumed handler has had effects retains its origi
   const args = command('terminalSnapshot', ['other']);
   const first = await f.controller.call(f.binding, args), second = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
   assert.equal(second.state, 'confirmation-required'); assert.equal(effects, 1);
-  f.sandbox.secretary = { sessionId: f.actor.id, nativeId: f.actor.nativeId };
+  f.designate();
   const denied = await f.controller.decide(f.actor.id, f.actor.nativeId, first.id, 1);
   assert.equal(denied.state, 'unconfirmed'); assert.ok(denied.guard.sessions); assert.equal(denied.humanDecision, 1);
   assert.equal(f.controller.data.refusals.length, 0); assert.equal((await f.controller.call(f.binding, args)).duplicate, true); assert.equal(effects, 1);
@@ -668,10 +674,10 @@ test('explicit path-based background previews keep their existing human-approved
   assert.equal((await f.controller.decide(f.actor.id, f.actor.nativeId, save.id, 1)).state, 'complete');
   assert.equal(fs.readFileSync(target, 'utf8'), 'SPACE_FILE_PRIVATE_BODY');
 });
-for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonmember', 'secretary']) test(`${provider} space file: ${role} cannot exceed current space authority after confirmation`, async t => {
+for (const provider of ['claude', 'codex']) for (const role of ['member', 'nonmember', 'unreadable']) test(`${provider} space file: ${role} cannot exceed current space authority after confirmation`, async t => {
   const f = spaceFileFixture(t, provider);
   if (role === 'nonmember') f.state.sessions[0].roomIds = [];
-  if (role === 'secretary') f.sandbox.secretary = { sessionId: 'agent', nativeId: 'native-agent' };
+  if (role === 'unreadable') f.sandbox.spaceManagers.failed = true;
   const args = command('spaceFiles', ['shared', 'space-file']), pending = await f.controller.call(f.binding, args);
   assert.equal(f.fileReads, 0);
   if (role !== 'member') {

@@ -11,7 +11,7 @@ function setup(t) {
   return { dir, room: new RoomState(dir) };
 }
 
-function menuFixture(room) {
+function menuFixture(room, extra = {}) {
   const rooms = [room], menus = [], copies = [], notices = [];
   const anchor = {
     disabled: false, isConnected: true,
@@ -31,7 +31,7 @@ function menuFixture(room) {
     attempt: action => action(),
     api: { copy: text => copies.push(text), spaceAction() {}, wakePolicy() {} },
     openSpaceCreate() {}, openSpaceMerge() {}, openMergeRecord() {}, openRename() {}, openNotes() {},
-    selectSpace() {}, openSpaceFiles() {}, showTrust() {}, setOperatorEnabled() {}, operatorGlobalMenuItems: () => [],
+    selectSpace() {}, openSpaceFiles() {}, showTrust() {}, setOperatorEnabled() {}, operatorGlobalMenuItems: () => [], ...extra,
   });
   const start = renderer.indexOf('const roomMenuKey =');
   const end = renderer.indexOf('// Facts refresh in place', start);
@@ -56,6 +56,27 @@ test('the space menu shows the short ID and copies the full ID', async () => {
   assert.deepEqual(f.copies, [room.id]);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.notices, ['已复制']);
+});
+
+test("the space menu starts a project manager where there is none, opens or revokes the one there is, and closes when that changed", () => {
+  const room = { id: '308f55b3-1111-2222-3333-444455556666', name: 'Claude room', archived: false }, calls = [];
+  const state = { wakePolicy: null, operatorPolicy: null, spaceManagers: {}, preflight: { claude: true } };
+  const extra = { state, api: { spaceManager() {} }, chooseManager: (...args) => calls.push(JSON.parse(JSON.stringify(args))), select: (...args) => calls.push(['select', ...args]) };
+  const offered = () => menuFixture(room, extra).menus[0].config;
+  const items = config => Array.from(config.items).filter(item => item.id.startsWith('manager-')).map(item => [item.id, item.label]);
+  const none = offered();
+  assert.deepEqual(items(none), [['manager-create', '新开一个项目经理（Claude）']]);
+  none.onSelect('manager-create');
+  assert.deepEqual(calls.pop(), [room.id, { create: true }]);
+  state.spaceManagers = { [room.id]: { sessionId: 'manager', nativeId: 'native' } };
+  none.onSelect('manager-create');
+  assert.deepEqual(calls, [], 'the menu was opened before there was one');
+  const one = offered();
+  assert.deepEqual(items(one), [['manager-open', '打开项目经理'], ['manager-revoke', '撤销项目经理']]);
+  one.onSelect('manager-open'); one.onSelect('manager-revoke');
+  assert.deepEqual(calls, [['select', 'manager', 'chat'], [room.id, null]]);
+  state.spaceManagers = {}; state.preflight = { claude: false };
+  assert.deepEqual(items(offered()), [], 'Claude is not on this machine');
 });
 
 test('creating or renaming a space to an existing name is rejected', t => {

@@ -1499,6 +1499,12 @@ function planDispatch(input) {
           candidates = [item.assignee];
         }
       }
+      const allowed = candidates.filter(id => managerItemMayGo(item, id, input.managers, input.earlier?.(id)));
+      if (candidates.length && !allowed.length) {
+        waits?.set(item.id, candidates.map(sessionId => ({ sessionId, reason: 'manager-item' })));
+        continue;
+      }
+      candidates = allowed;
       let target = null;
       for (const id of candidates) {
         if (busy.has(id)) {
@@ -1671,10 +1677,23 @@ function notesDue(room, session) {
   return last?.notesSent === version ? null : version;
 }
 
+// What a space's project manager added goes to no project manager and not back to itself: an agent's own item must
+// not start it again, directly or through another manager. `managers`: session id → the space it manages; null, a
+// record that cannot be read, holds such items. `earlier`: the sessions this one continues from.
+function managerItemMayGo(item, sessionId, managers = new Map(), earlier = []) {
+  if (item.creator?.kind !== 'secretary' || item.addedBy === 'steward') {
+    return true;
+  }
+  return managers !== null && [sessionId, ...earlier].every(id => !managers.has(id) && item.creator.sessionId !== id);
+}
+
+// With every item sent to a space's project manager; nothing is sent to it only to say this.
+const MANAGER_NOTE = '你是这个空间的项目经理（人指定的）：只管这个空间的事。要交给成员做的，用 workspace_control 的 spaceAction queueAdd 加到本空间队列（不能加给自己或别的项目经理），NAW 会派给空闲的成员；取消、标记已处理和成员管理归人和大管家。';
+
 const NOTES_HEAD = '附：这个空间的共享笔记（人打开了「派活时附上这份笔记」；这是背景，要做的仍是上面这一件）：';
 const NOTES_CUT = '（笔记太长，这里只附了开头；全文在这个空间的共享笔记里。）';
 
-function dispatchText(roomName, item, notes = '') {
+function dispatchText(roomName, item, notes = '', manager = false) {
   // workspace.cjs cleanText refuses these, and the notes field does not; they are invisible in the dialog.
   notes = notes.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '');
   const text = body => [
@@ -1686,6 +1705,7 @@ function dispatchText(roomName, item, notes = '') {
     '做完这一件就结束本轮：不留后台命令（要等审查或测试，就在本轮里用长等待等到它结束）、不留运行中的队友、不开 goal，也不要自己去任务板认领别的任务，NAW 会接着派下一件。需要人来决定时，本轮最后一条回复的第一行写「需要你决定：」，NAW 会提醒人，并接着给你派下一件；人的答复会直接发到你这里。',
     // How a member reports a delivery (readyLine below reads it). The example is not itself a valid line.
     '这一件交付了提交的，本轮最后一条回复里另起一行（不要放在第一行），只写这三项、各用一个空格隔开：READY <分支名> <分支上最新的提交号，7 到 40 位>。这一行不加引号、反引号、加粗或列表符号，行尾不加句号。NAW 会把这次交付记到空间里；没有提交就不写这一行。',
+    ...(manager ? [MANAGER_NOTE] : []),
   ].join('\n');
   const full = text(notes);
   if (full.length <= SEND_TEXT_LIMIT) {
@@ -2344,7 +2364,7 @@ function migrationReady(session, humanAt, now, quietMs = MIGRATE_QUIET_MS, unpro
 }
 
 // Why NAW does not move this old backend by itself now, or null when it may: one rule for the move NAW chooses
-// (nextBackendMove) and for what version-events.cjs tells the butler and the secretary each backend waits for.
+// (nextBackendMove) and for what version-events.cjs tells the butler and that manager each backend waits for.
 // `waiting`: how many of the sessions it would stop are not quiet long enough yet.
 function moveWait(option, settings, sessions, humanAt, now, failed, quietMs = MIGRATE_QUIET_MS, unprovenQuietMs = MIGRATE_UNPROVEN_QUIET_MS) {
   const plan = option.switch;
@@ -2691,8 +2711,10 @@ class QueueDispatcher {
     // What the person answered on an agent's confirmation cards, owed to that agent (answer-notices.cjs), or null; a
     // pass here finds the agent ready and sends (notifyAnswers).
     this.answerNotices = options.answerNotices || null;
-    // What a restart brought, owed to the queue secretary (version-events.cjs), or null; sent as answers are.
+    // What a restart brought, owed to the former secretary's space's manager (version-events.cjs), or null; sent as answers are.
     this.versionNotices = options.versionNotices || null;
+    // Each space's project manager now: { roomId: { sessionId, nativeId } } (space-managers.cjs). It may throw.
+    this.managers = options.managers || (() => ({}));
     // Migration quiet windows (quiet-windows.cjs), or null: their sessions get no new item or NAW message.
     this.quietWindows = options.quietWindows || null;
     this.logFile = path.join(options.dataDir, 'rotation-log.jsonl');
@@ -2970,6 +2992,27 @@ class QueueDispatcher {
       if (!entry || seen.has(entry.old.id)) return ids;
       seen.add(entry.old.id); ids.push(entry.old.id); at = entry.old.id;
     }
+  }
+
+  // Its successor in this space has its handoff and it is not ended yet.
+  handingOver(id, roomId) {
+    const record = this.rotations[id];
+    return Boolean(record?.handoffConfirmed && !RESTING_PHASES.includes(record.phase) && record.roomIds?.includes(roomId));
+  }
+
+  // What `id` continues from, the sessions whose replacement is not finished included (waitingOld: one of them may wait
+  // behind a successor that was itself replaced meanwhile).
+  earlierSessions(id) {
+    const ids = new Set([id]);
+    // A Set goes on to what is added while it is walked.
+    for (const at of ids) {
+      for (const earlier of this.continuedFrom(at)) ids.add(earlier);
+      for (const [oldId, record] of Object.entries(this.rotations)) {
+        if (record.newId === at && !RESTING_PHASES.includes(record.phase)) ids.add(oldId);
+      }
+    }
+    ids.delete(id);
+    return [...ids];
   }
 
   // `steward` and the native sessions it continued from through done rotations, nearest first. A session whose native
@@ -3492,6 +3535,8 @@ class QueueDispatcher {
       rotationGates,
       openItems,
       unmatched: unmatched ? [unmatched] : [],
+      managers: this.managerRooms(current.snapshot.sessions),
+      earlier: id => this.earlierSessions(id),
       rooms: current.snapshot.rooms,
       sessions: current.snapshot.sessions,
       wakePolicy: current.snapshot.wakePolicy,
@@ -3640,6 +3685,14 @@ class QueueDispatcher {
       idleMs: Number.isFinite(since) ? current.now - since : NaN };
   }
 
+  managerRooms(sessions) {
+    try {
+      return new Map(Object.entries(this.managers(sessions)).map(([roomId, value]) => [value.sessionId, roomId]));
+    } catch {
+      return null;
+    }
+  }
+
   // The person's answers on an agent's confirmation cards, told to that agent (answer-notices.cjs). One message for
   // everything it is owed, once the answers stopped coming for a moment and the agent is ready and settled as a member
   // is before its next queue item, the person has not typed into it for ANSWER_QUIET_MS (not the two minutes queue work
@@ -3648,8 +3701,8 @@ class QueueDispatcher {
   // An agent at work hears it after its turn: it is not ready until then.
   async notifyAnswers(current, holding) {
     if (this.answerNotices) await this.notifyOwed(this.answerNotices, told => noticeText(told), 'answer-notice', Math.min(this.humanQuietMs, ANSWER_QUIET_MS), current, holding);
-    // The version a restart brought and the backends still on an old one, owed to the queue secretary
-    // (version-events.cjs): the same send, after the two minutes queue work waits for the person.
+    // The version a restart brought and the backends still on an old one, owed to the former secretary's
+    // space's manager (version-events.cjs): the same send, after the two minutes queue work waits for the person.
     if (this.versionNotices && !this.closed) await this.notifyOwed(this.versionNotices, told => this.versionNotices.text(told), 'version-notice', this.humanQuietMs, current, holding);
   }
 
@@ -4038,12 +4091,18 @@ class QueueDispatcher {
       waits?.set(item.id, [{ sessionId: session.id, reason: errorKey(error) || (/^[a-z][a-z-]{0,60}$/.test(message) ? message : 'refused') }]);
       return;
     }
+    // As it is now: the person may have made this member the project manager since the plan.
+    const managers = this.managerRooms(current.snapshot.sessions);
+    if (!managerItemMayGo(item, session.id, managers, this.earlierSessions(session.id))) {
+      waits?.set(item.id, [{ sessionId: session.id, reason: 'manager-item' }]);
+      return;
+    }
     const name = this.name(session);
     // Record before sending: a crash after this point is never resent silently.
     const notes = notesDue(room, session);
     this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null, notes);
     try {
-      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : ''), item.id);
+      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : '', managers?.get(session.id) === room.id), item.id);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
       if (errorKey(error) === NATIVE_DRAFT_KEY) {

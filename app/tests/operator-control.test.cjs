@@ -370,6 +370,28 @@ test('visible retained backend metadata is whitelisted; unavailable and duplicat
   result = await f.call('sessions', {}); assert.equal(result.metadataIncomplete, true); assert.ok(result.sessions.some(s => s.id === f.id));
 });
 
+test("a space's project manager is told of its own space's sessions only, here and on other backends", async t => {
+  const f = await fixture(t); f.enable(); f.grant();
+  const ONE = '11111111-1111-1111-1111-111111111111', TWO = '22222222-2222-2222-2222-222222222222', mate = await f.w.create('codex', f.root, 'owner', 'Mate'), other = await f.w.create('codex', f.root, 'owner', 'Other');
+  for (const [id, ...rooms] of [[f.id, ONE], [mate, ONE], [other, TWO]]) Object.assign(f.w.get(id), { roomIds: rooms, roomId: null });
+  const backend = 'backends/aaaaaaaaaaaaaaaaaaaa'; fs.mkdirSync(path.join(f.root, backend), { recursive: true, mode: 0o700 }); fs.chmodSync(path.join(f.root, 'backends'), 0o700);
+  fs.writeFileSync(path.join(f.root, 'services.json'), JSON.stringify({ format: 1, active: '.', entries: ['.', backend] }), { mode: 0o600 });
+  const far = (id, ...rooms) => ({ id, name: id, provider: 'claude', state: 'idle', roomIds: rooms, roomId: null });
+  f.w.peerRunner = { root: () => f.root, connect: async () => ({ close() {}, call: async () => ({ sessions: [far('far-mate', ONE), far('far-other', TWO), far('far-independent')] }) }) };
+  const listed = async () => (await f.call('sessions', {})).sessions.map(s => s.id).sort();
+  const everyone = [f.id, mate, other, 'far-mate', 'far-other', 'far-independent'].sort(), own = [f.id, mate, 'far-mate'].sort();
+  assert.deepEqual(await listed(), everyone, 'a member that manages nothing');
+  const { SpaceManagers } = require('../space-managers.cjs'), managers = new SpaceManagers(f.root);
+  managers.set(ONE, { sessionId: f.id, nativeId: f.s.nativeId });
+  assert.deepEqual(await listed(), own);
+  f.s.roomIds = [TWO];
+  assert.deepEqual(await listed(), everyone, 'the role counts only in its space');
+  f.s.roomIds = [ONE]; managers.set(ONE, null);
+  assert.deepEqual(await listed(), everyone, 'revoked');
+  fs.writeFileSync(managers.file, '{broken', { mode: 0o600 });
+  assert.deepEqual(await listed(), own, 'a record that cannot be read: the sessions it shares a space with');
+});
+
 test('semantically corrupt private journal fails closed without overwriting it or preventing ordinary session snapshots', async t => {
   const f = await fixture(t); const bytes = JSON.stringify({ ...f.w.operator.data, reports: { broken: { id: 'broken', dispatchId: 'missing' } } });
   fs.writeFileSync(f.w.operator.file, bytes, { mode: 0o600 }); f.w.operator = new OperatorControl(f.w);

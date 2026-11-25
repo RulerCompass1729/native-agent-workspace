@@ -1,12 +1,13 @@
-// After the daily GUI changed version or restarted, the butler and the queue secretary (项目经理) are told (the person,
+// After the daily GUI changed version or restarted, the butler and NAW's project manager (项目经理) are told (the person,
 // 2026-11-23: 「装机结束了你和 NAW 的项目经理貌似都呆住了啥都没发出来(这也是 bug)」). main.cjs's own observeVersion,
-// connectionUpdateOptions and boot wiring, a real event record, secretary designation, steward wake and dispatcher.
+// connectionUpdateOptions and boot wiring, a real event record, project manager designation, steward wake and dispatcher.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { ButlerLedger } = require('../butler-ledger.cjs');
 const { ButlerIngress } = require('../butler-ingress.cjs');
 const { QueueSecretary } = require('../queue-secretary.cjs');
+const { SpaceManagers } = require('../space-managers.cjs');
 const { StewardWake } = require('../steward-wake.cjs');
 const { RoomState } = require('../room-state.cjs');
 const { uiError } = require('../ui-errors.cjs');
@@ -26,7 +27,7 @@ function source(name) {
   return main.slice(node.start, node.end);
 }
 const OLD = '0.1.0-alpha.286', NEW = '0.1.0-alpha.287';
-const BUTLER = { sessionId: 'butler', nativeId: 'native-butler' }, SECRETARY = { sessionId: 'secretary', nativeId: 'native-secretary' };
+const BUTLER = { sessionId: 'butler', nativeId: 'native-butler' }, MANAGER = { sessionId: 'manager', nativeId: 'native-manager' };
 const KEY_A = 'backends/e2b6a43aaaaaaaaaaaaa', KEY_B = 'backends/bbbbbbbbbbbbbbbbbbbb';
 const CAPS = ['atomicShutdown', 'resume', 'conditionalMaintenanceStopV1'];
 
@@ -42,18 +43,22 @@ const stoppable = (id, name, quietForMs, extra = {}) => ({ id, nativeId: `native
   messages: [{ role: 'user', text: 'SECRET-CONVERSATION-BODY', time: Date.now() - quietForMs }], ...extra });
 
 // main.cjs's boot lines and observeVersion over a window client holding the given backends.
-function app(t, { dir, entries, settings = { auto: true, migrate: true }, secretary = SECRETARY, steward = BUTLER } = {}) {
+function app(t, { dir, entries, settings = { auto: true, migrate: true }, manager = MANAGER, steward = BUTLER, secretary = null } = {}) {
   dir ||= directory(t);
   const ledger = new ButlerLedger(dir), ingress = new ButlerIngress(dir, { roomState: new RoomState(dir), ledger });
+  // `secretary` is a record an earlier version left, not yet retired; `manager` is of the space it went to.
+  const spaceManagers = new SpaceManagers(dir);
+  if (secretary) fs.writeFileSync(path.join(dir, 'queue-secretary.json'), JSON.stringify({ version: 1, selected: secretary }), { mode: 0o600 });
+  else spaceManagers.save(manager ? new Map([['naw', manager]]) : new Map(), { roomId: 'naw' });
   const queueSecretary = new QueueSecretary(dir);
-  if (secretary) queueSecretary.set(secretary);
   const versionNotices = events ? new events.VersionNotices() : null;
   const control = { maintenance: new Set(), generations: new Map(), revision: 0, manualEpoch: 0, views: new Set() };
   const current = { key: '.', client: {}, state: { runtimeVersion: NEW, capabilities: CAPS, servicePid: 4100, sessions: [], room: { messages: [] } } };
   const client = { entries: [...entries, current], active: current, control, socket: { destroyed: false },
     snapshot() { return { sessions: this.entries.flatMap(e => e.state.sessions) }; }, sessionState: value => value.state };
   const context = { client, view: { owner: 'synthetic-owner' }, win: { isDestroyed: () => false } };
-  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, runMark: events?.RunMark ? new events.RunMark(dir, { version: NEW }) : null, butlerIngress: ingress, queueSecretary,
+  const scope = vm.createContext({ VersionEvents: events?.VersionEvents, versionNotices, versionEvents: null, runMark: events?.RunMark ? new events.RunMark(dir, { version: NEW }) : null, butlerIngress: ingress, queueSecretary, spaceManagers,
+    isStewardActor: actor => actor.id === steward?.sessionId && actor.nativeId === steward?.nativeId,
     stewardRole: { current: () => steward }, app: { getVersion: () => NEW }, dataDir: dir, continuationStatus, uiError,
     roomState: { apply: state => state }, backendSwitch: { ...backendSwitch, readSettings: () => settings }, windows: new Map([[1, context]]),
     backendSwitching: null, autoSwitchFailed: new Set(), queueDispatcher: null, queueRules: rules, runningRelays: () => new Set(),
@@ -64,13 +69,13 @@ function app(t, { dir, entries, settings = { auto: true, migrate: true }, secret
   vm.runInContext(source('connectionUpdateOptions'), scope);
   if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === 'observeVersion')) vm.runInContext(source('observeVersion'), scope);
   const recorded = () => ledger.snapshot().events.filter(e => e.eventId.startsWith('version-change:'));
-  const owed = () => versionNotices ? versionNotices.take(SECRETARY) : [];
+  const owed = () => versionNotices ? versionNotices.take(MANAGER) : [];
   return { dir, ledger, ingress, versionNotices, scope, client, current, entries, recorded, owed, observe: () => scope.observeVersion?.() };
 }
 // Two old backends: the butler's (one session at work) and another whose session is not quiet for 10 minutes yet.
 function backends() {
   const a = { key: KEY_A, client: {}, state: { runtimeVersion: OLD, capabilities: CAPS, servicePid: 4101, room: { messages: [] }, sessions: [
-    stoppable('butler', '大管家', 3600000), stoppable('secretary', '项目经理', 3600000), stoppable('a', 'A', 0, { state: 'working', activeTurnId: 'turn' }), stoppable('b', 'B', 3600000)] } };
+    stoppable('butler', '大管家', 3600000), stoppable('manager', '项目经理', 3600000), stoppable('a', 'A', 0, { state: 'working', activeTurnId: 'turn' }), stoppable('b', 'B', 3600000)] } };
   const b = { key: KEY_B, client: {}, state: { runtimeVersion: OLD, capabilities: CAPS, servicePid: 4102, room: { messages: [] }, sessions: [stoppable('c', 'C', 60000)] } };
   return [a, b];
 }
@@ -80,7 +85,7 @@ function move(f, entry) {
   entry.state.sessions = [];
 }
 
-test('286 to 287: the butler gets one event and the secretary one notice, with versions, time and what each old backend waits for', async t => {
+test('286 to 287: the butler gets one event and the manager one notice, with versions, time and what each old backend waits for', async t => {
   const dir = directory(t); seen(dir, OLD);
   const f = app(t, { dir, entries: backends() });
   f.observe();
@@ -97,7 +102,7 @@ test('286 to 287: the butler gets one event and the secretary one notice, with v
   assert.match(text, /迁完或失败时再发一条。$/u);
   assert.doesNotMatch(text, /SECRET-CONVERSATION-BODY/u, 'nothing of any conversation');
   const owed = f.owed();
-  assert.equal(owed.length, 1, 'one notice owed to the secretary');
+  assert.equal(owed.length, 1, 'one notice owed to the manager');
   assert.equal(owed[0].text, `${text}\nNAW 只通知，不加任务。`);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'version-seen.json'), 'utf8')).version, NEW);
   // Nothing changed: nothing more.
@@ -106,14 +111,14 @@ test('286 to 287: the butler gets one event and the secretary one notice, with v
   assert.equal(f.ledger.snapshot().events.some(e => e.kind === 'request'), false, 'no request, no queue item');
 });
 
-test('the butler is woken for the event and the secretary is sent its notice, both through the dispatcher\'s pass', async t => {
+test('the butler is woken for the event and the manager is sent its notice, both through the dispatcher\'s pass', async t => {
   const dir = directory(t); seen(dir, OLD);
   const f = app(t, { dir, entries: backends() });
   const clock = { now: Date.now() };
   const wake = new StewardWake(dir, { ledger: () => f.ledger, selected: () => BUTLER, now: () => clock.now, record: () => {} });
   wake.set(true);
   f.observe();
-  const client = new FakeClient([agent('butler'), agent('secretary')]);
+  const client = new FakeClient([agent('butler'), agent('manager')]);
   const dispatcher = new rules.QueueDispatcher({ roomState: new RoomState(dir), dataDir: dir, connect: async () => client, now: () => clock.now,
     settleMs: 8000, tickMs: 3000, steward: () => ({ ...BUTLER, duty: '' }), stewardWake: wake, transcriptRoot: path.join(dir, 'none'),
     ...(f.versionNotices ? { versionNotices: f.versionNotices } : {}) });
@@ -123,8 +128,8 @@ test('the butler is woken for the event and the secretary is sent its notice, bo
   const to = id => client.dispatches().filter(call => call[1] === id);
   assert.equal(to('butler').length, 1); assert.match(to('butler')[0][2], /^【NAW 事件】有新事件。用 workspace_control 调 stewardEvents/u);
   assert.match(to('butler')[0][2], /原因含 version-installed。$/u);
-  assert.equal(to('secretary').length, 1); assert.match(to('secretary')[0][4], /^version-notice:/u);
-  assert.match(to('secretary')[0][2], /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 0\.1\.0-alpha\.286）/u);
+  assert.equal(to('manager').length, 1); assert.match(to('manager')[0][4], /^version-notice:/u);
+  assert.match(to('manager')[0][2], /^【NAW 版本】已装 0\.1\.0-alpha\.287（原来是 0\.1\.0-alpha\.286）/u);
   assert.equal(f.versionNotices?.waiting(), false);
   assert.equal(client.calls.some(call => ['send', 'queue', 'claim', 'input', 'steer'].includes(call[0])), false, 'no human send');
 });
@@ -184,7 +189,7 @@ test('a backend that moved gets a follow-up with what is left; one that failed g
   assert.match(rows[3].payload.text, /- e2b6a43 迁完：4 个会话里 4 个已在 0\.1\.0-alpha\.287\n后台都已在 0\.1\.0-alpha\.287。$/u);
   assert.equal(f.scope.versionEvents?.pending(), false);
   f.observe(); assert.equal(f.recorded().length, 4);
-  assert.equal(f.owed().length, 4, 'the secretary is owed each as well');
+  assert.equal(f.owed().length, 4, 'the manager is owed each as well');
 });
 
 test('a backend gone from the list with sessions not on this version is not told as moved', t => {
@@ -259,21 +264,25 @@ test('alpha.290: a backend left with only recoverable sessions is queued to move
   assert.match(text, /- bbbbbbb（0\.1\.0-alpha\.286；O）：NAW 不能自己迁：这个早期后台不支持安全的一步更新。/u);
 });
 
-test('without a designated secretary only the butler\'s event is kept, without an error; a secretary that is the butler is not told twice', t => {
-  const none = app(t, { entries: backends(), secretary: null });
+test('without a manager there only the butler\'s event is kept, without an error; one that is the butler is not told twice', t => {
+  const none = app(t, { entries: backends(), manager: null });
   none.observe();
   assert.equal(none.recorded().length, 1); assert.equal(none.versionNotices?.waiting(), false);
-  const same = app(t, { entries: backends(), secretary: BUTLER });
+  const same = app(t, { entries: backends(), manager: BUTLER });
   same.observe();
   assert.equal(same.recorded().length, 1); assert.equal(same.versionNotices?.waiting(), false);
+  // The start that retires the secretary may bring the version before the spaces are read: it is owed to that session.
+  const before = app(t, { entries: backends(), secretary: MANAGER });
+  before.observe();
+  assert.equal(before.owed().length, 1);
 });
 
-test('a secretary at work is not interrupted: it is told once its turn ended and it settled', async t => {
+test('a manager at work is not interrupted: it is told once its turn ended and it settled', async t => {
   const dir = directory(t); seen(dir, OLD);
   const f = app(t, { dir, entries: backends() });
   f.observe();
   const clock = { now: Date.now() };
-  const client = new FakeClient([agent('secretary', { state: 'working' })]);
+  const client = new FakeClient([agent('manager', { state: 'working' })]);
   const dispatcher = new rules.QueueDispatcher({ roomState: new RoomState(dir), dataDir: dir, connect: async () => client, now: () => clock.now,
     settleMs: 8000, tickMs: 3000, transcriptRoot: path.join(dir, 'none'), ...(f.versionNotices ? { versionNotices: f.versionNotices } : {}) });
   t.after(() => dispatcher.close());
@@ -282,13 +291,13 @@ test('a secretary at work is not interrupted: it is told once its turn ended and
   await elapse(60000);
   assert.deepEqual(client.dispatches(), [], 'at work: nothing yet');
   assert.equal(dispatcher.hasOpenWork(), true, 'the notice keeps the passes going');
-  client.set('secretary', { state: 'idle' }); await dispatcher.schedule();
+  client.set('manager', { state: 'idle' }); await dispatcher.schedule();
   await elapse(6000);
   assert.deepEqual(client.dispatches(), [], 'just idle: not settled yet');
   await elapse(6000);
   assert.equal(client.dispatches().length, 1);
   assert.match(client.dispatches()[0][2], /^【NAW 版本】已装/u);
-  client.set('secretary', { state: 'idle' }); await elapse(60000);
+  client.set('manager', { state: 'idle' }); await elapse(60000);
   assert.equal(client.dispatches().length, 1, 'told once');
 });
 

@@ -230,8 +230,8 @@ async function run() {
   // Both items are for the busy recipient, so the queue does not send them while this runs.
   const sharedRoom = async () => { const value = await page.evaluate(() => workspace.initial()); return (value.rooms || [value.room]).find(r => r.id === 'shared'); };
   const queueItem = async text => (await sharedRoom()).queue.find(item => item.text === text);
-  const ownText = 'Withdrawal check: the secretary\'s item', personsText = 'Withdrawal check: the person\'s item';
-  await page.evaluate(id => workspace.queueSecretary(id), source);
+  const ownText = 'Withdrawal check: the project manager\'s item', personsText = 'Withdrawal check: the person\'s item';
+  await page.evaluate(id => workspace.spaceManager('shared', id), source);
   const added = await control(invoke('spaceAction', ['shared', 'queueAdd', [ownText, recipient]])); assert.equal(added.state, 'complete', JSON.stringify(added));
   await page.evaluate(([text, id]) => workspace.spaceAction('shared', 'queueAdd', [text, id]), [personsText, recipient]);
   const own = await queueItem(ownText), persons = await queueItem(personsText);
@@ -263,12 +263,12 @@ async function run() {
   await recordLine(`Withdrawn from queue: ${ownText} · taken back by Synthetic operator (${source}), who added it`, 'en');
   await page.screenshot({ path: path.join(pictures, 'queue-withdrawn-en.png') });
   assert.equal((await control(invoke('interfaceSettings', ['update', 'locale', { preference: 'zh' }, inEnglish.value.find(s => s.ns === 'locale').revision]))).state, 'complete');
-  // The person cancels their own item and revokes the secretary; nothing was sent.
+  // The person cancels their own item and revokes the project manager; nothing was sent.
   await page.evaluate(id => workspace.spaceAction('shared', 'queueCancel', [id]), persons.id);
-  await page.evaluate(() => workspace.queueSecretary(null));
+  await page.evaluate(() => workspace.spaceManager('shared', null));
   assert.deepEqual([(await queueItem(ownText)).status, (await queueItem(personsText)).status], ['cancelled', 'cancelled']);
   assert.equal((await fixture('stats')).sends.length, 1, 'No queue item was sent');
-  checks.push('Through the real MCP path, the secretary takes back its own queued item without confirmation; another\'s is refused; the record names who took it back in Chinese and English');
+  checks.push('Through the real MCP path, the space\'s project manager takes back its own queued item without confirmation; another\'s is refused; the record names who took it back in Chinese and English');
   // Queue item 6897c6e3, part 1: a member already doing an item queued for it (taken from the board, say) claims it, so
   // that NAW does not send it the same work again; another member's item is refused. The record line says who claimed it.
   // The operator keeps a draft and its turn open, so the queue does not send it anything while this runs.

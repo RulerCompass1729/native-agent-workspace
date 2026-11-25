@@ -1,10 +1,10 @@
 'use strict';
-// After the daily GUI changed version or restarted, the designated butler and the queue secretary (项目经理) are told
-// once: the versions, when it restarted, which backends are still on an old version and what each waits for; then
-// once more each time a backend finished or failed its move (the person, 2026-11-23: 「装机结束了你和 NAW 的项目经理貌似
-// 都呆住了啥都没发出来(这也是 bug)」). Versions, times, counts, session names and reason codes only; nothing of any
+// After the daily GUI changed version or restarted, the designated butler and the project manager (项目经理) of the
+// former queue secretary's space are told once: the versions, when it restarted, which backends are still on an old
+// version and what each waits for; then once more each time a backend finished or failed its move (the person,
+// 2026-11-23: 「装机结束了你和 NAW 的项目经理貌似都呆住了啥都没发出来(这也是 bug)」). Versions, times, counts, session names and reason codes only; nothing of any
 // conversation. The butler gets an event in its record (butler-ingress.cjs), which steward-wake.cjs wakes it for; the
-// secretary a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
+// manager a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
 // switch, like answer-notices.cjs. NAW adds no queue item and opens no other channel.
 // Each start also says how the last run ended (2026-11-24: a crash read as 「重启完成 296->296」): a run leaves
 // main-running.json at its start and renames it to main-exited.json on its own quit path. Normal
@@ -127,7 +127,7 @@ class RunMark {
 }
 
 class VersionEvents {
-  // `record(event)`: into the butler's event record. `owe(text)`: to the secretary; nothing when none is designated.
+  // `record(event)`: into the butler's event record. `owe(text)`: to the project manager; nothing when there is none.
   // `run`: this run's mark (RunMark) with how the last one ended, when main left one.
   constructor(directory, { version, now = Date.now, record, owe, run = null }) {
     this.file = path.join(directory, FILE);
@@ -203,12 +203,12 @@ class VersionEvents {
     try {
       this.record({ eventId, sourceRef: `version-change:${this.version}`, kind: reason === 'backend-move-failed' || reason.endsWith('-after-abnormal-exit') ? 'failure' : 'blocked',
         payload: { reason, outcome, title: iso(at), text } });
-    } catch { /* The secretary may still be told. */ }
-    try { this.owe(`${text}\nNAW 只通知，不加任务。`); } catch { /* No secretary, or its notice could not be kept. */ }
+    } catch { /* The project manager may still be told. */ }
+    try { this.owe(`${text}\nNAW 只通知，不加任务。`); } catch { /* No project manager, or its notice could not be kept. */ }
   }
 }
 
-// What is owed to the secretary, for the queue dispatcher (queue-dispatch.cjs notifyOwed), in the shape of
+// What is owed to the project manager, for the queue dispatcher (queue-dispatch.cjs notifyOwed), in the shape of
 // answer-notices.cjs. Kept in memory: a restart before it was sent makes that start's own notice.
 class VersionNotices {
   constructor({ now = Date.now, retryMs = RETRY_MS, maxAgeMs = MAX_AGE_MS } = {}) {

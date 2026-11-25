@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ButlerRole } = require('../butler-role.cjs');
-const { QueueSecretary, successor } = require('../queue-secretary.cjs');
+const { successor } = require('../queue-secretary.cjs');
+const { SpaceManagers } = require('../space-managers.cjs');
 const person = Symbol('person capability');
 const identity = { sessionId: 'butler-original', nativeId: 'native-original' };
 const next = { sessionId: 'butler-next', nativeId: 'native-next' };
@@ -21,10 +22,10 @@ function setup(t) {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return { directory, role: new ButlerRole(directory, options) };
 }
-test('only the injected person capability designates or revokes a role; secretary remains independent', t => {
-  const { directory, role } = setup(t), secretary = new QueueSecretary(directory);
-  secretary.set({ sessionId: 'queue-secretary', nativeId: 'native-secretary' });
-  const secretaryBefore = fs.readFileSync(secretary.file);
+test('only the injected person capability designates or revokes a role; project managers remain independent', t => {
+  const { directory, role } = setup(t), managers = new SpaceManagers(directory);
+  managers.set('shared', { sessionId: 'manager', nativeId: 'native-manager' });
+  const managersBefore = fs.readFileSync(managers.file);
   assert.deepEqual(role.snapshot(), { version: 1, revision: 0, selected: null });
   for (const actor of [null, { kind: 'person' }, { role: 'person', permission: 'bypass' }, Symbol('person capability')]) {
     assert.throws(() => role.set(actor, designation(), 0), code('ERR_BUTLER_PERSON'));
@@ -38,7 +39,7 @@ test('only the injected person capability designates or revokes a role; secretar
   assert.deepEqual(new ButlerRole(directory, options).snapshot(), first);
   role.revoke(person, 1);
   assert.equal(new ButlerRole(directory, options).current(), null);
-  assert.deepEqual(fs.readFileSync(secretary.file), secretaryBefore);
+  assert.deepEqual(fs.readFileSync(managers.file), managersBefore);
 });
 test('selection revisions invalidate former batches across instances, replacement and revoke', t => {
   const { directory, role } = setup(t);
@@ -72,7 +73,7 @@ test('only a designated, non-member DSH instance with the current native and run
     assert.throws(() => role.authorize(good, bad, [good], []), code('ERR_BUTLER_UNAUTHORIZED'));
   }
 });
-test('rotation reuses all secretary done/kept/branch/loop rules and validates the resolved native record', t => {
+test('rotation reuses all designation done/kept/branch/loop rules and validates the resolved native record', t => {
   const { role } = setup(t); role.set(person, designation(), 0);
   const third = { sessionId: 'third', nativeId: 'native-third' };
   const cases = [[], [edge('requested')], [edge('kept')], [edge()], [edge(), edge('done', next, third)],

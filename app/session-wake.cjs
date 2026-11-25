@@ -276,6 +276,23 @@ async function relocate(w, intent) {
   intent.targetKey = found.key; intent.targetProof = identity(found.session);
   durable(w);
 }
+// A message from another space does not reach a space's project manager (space-managers.cjs).
+function managerRefusal(w, sender, recipient) {
+  try {
+    const { SpaceManagers, refusedSpace } = require('./space-managers.cjs');
+    const roomId = refusedSpace(new SpaceManagers(root(w)), sender, recipient);
+    return roomId ? notSent(uiError('error.wake.managerSpace', { name: recipient.name })) : null;
+  } catch (error) { return notSent(error); }
+}
+// Just before delivery: where the recipient is now, and whether it was made a project manager since this was registered.
+async function place(w, intent, readdress) {
+  try {
+    if (readdress) await relocate(w, intent);
+    const sender = w.sessions.get(intent.senderId);
+    if (!sender || !spaces.roomIds(sender).length || !require('./space-managers.cjs').mayManage(root(w), intent.recipientId)) return null;
+    return managerRefusal(w, sender, (await w.peerRunner.lookupWake(intent.recipientId)).session);
+  } catch (error) { return notSent(error); }
+}
 function validateArgs(args) {
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
     typeof args.recipient_id !== 'string' || !args.recipient_id || args.recipient_id.length > 100 ||
@@ -382,6 +399,8 @@ async function stageOnce(w, s, r, native, args) {
   if (after) throw revokedError(issueCause(w, s, after, intent, since));
   if (native.valid?.() === false || r.turnId !== native.turnId) throw revokedError(controlCause(s, since, 'native-turn'));
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
+  const managed = managerRefusal(w, s, target.session);
+  if (managed) target.readiness = managed;
   const quiet = quietWindow(w, target.key), refused = target.readiness?.status === 'not-sent';
   let full = false, same = false;
   if (quiet && (!refused || QUIET_PASSING.includes(target.readiness.reasonUiMessage?.key))) {
@@ -503,8 +522,7 @@ function transfer(w, row, readdress = false) {
   const intent = row.wake;
   intent.status = 'sending'; delete intent.takeRefused; durable(w);
   // A recipient that cannot be found again was never offered it: not sent.
-  const located = readdress ? relocate(w, intent).then(() => null, error => notSent(error)) : Promise.resolve(null);
-  return located.then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
+  return place(w, intent, readdress).then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
     if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {

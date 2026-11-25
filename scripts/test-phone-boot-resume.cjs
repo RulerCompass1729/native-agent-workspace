@@ -34,7 +34,7 @@ function instance(profile, port) {
     personActions: null, stewardWake: null, usageAlerts: null,
     backgroundControl: new BackgroundControl({ dataDir: profile, handlers: new Map(), context: async () => { throw Error('Sensitive execution is unavailable in the phone fixture'); } }),
     backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    queueSecretary: null, integratorRole: null, stewardRole: { current: () => null }, butlerIngress: null,
+    activeManagers: () => ({}), integratorRole: null, stewardRole: { current: () => null }, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => {}, noteHuman: () => {} },
     submissionState: require('../app/submission-policy.cjs').submissionState,
     roomPeerIdentity: require('../app/peer-handoffs.cjs').identity,

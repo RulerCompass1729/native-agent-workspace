@@ -74,7 +74,7 @@ async function newSpace(name, viaMenu = false) {
   const file = path.join(profile, 'collaboration-spaces.json'), before = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).rooms.map(r => r.id) : [];
   if (viaMenu) { await page.locator('#workspace-toggle').focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menuitem', { name: '新建协作空间…', exact: true }).click(); }
   else await page.locator('#new-space').click();
-  await page.locator('#space-create-name').fill(name); await page.locator('#confirm-space-create').click();
+  await page.locator('#space-create-name').fill(name); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click();
   await until(() => JSON.parse(fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8')).rooms.length > before.length, 'New space stored');
   return JSON.parse(fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8')).rooms.find(r => !before.includes(r.id)).id;
 }

@@ -40,7 +40,7 @@ function fixture(t) {
 function displays(control) {
   const scope = { roomState: { apply: s => ({ ...s, sessions: s.sessions.map(x => ({ ...x })), rooms: s.rooms.map(r => ({ ...r })) }) }, sessionLabels: { apply: s => s }, submissionState: s => s, confirmationInbox,
     confirmationProjectionKeys: new WeakMap(), recordsChanged: () => {}, confirmationSnapshot: (_client, s) => s, leaveRecords: shownSessions.leaveRecords, backgroundControl: control, backgroundUnavailable: false,
-    outboxQuitFailed: false, outboxUnavailable: false, queueSecretary: null, integratorRole: null, stewardRole: null, stewardWake: null, sessionModelChanges: null, queueDispatcher: null, butlerIngress: null, localVendorIcons: () => ({}),
+    outboxQuitFailed: false, outboxUnavailable: false, activeManagers: () => ({}), integratorRole: null, stewardRole: null, stewardWake: null, sessionModelChanges: null, queueDispatcher: null, butlerIngress: null, localVendorIcons: () => ({}),
     roomPeerIdentity: () => null, endedByMove: () => [], viewStorageWarning: '', viewStorageWarningUiMessage: null, backgroundOperation: { conversationSnapshot: v => v }, conversationAccess: () => [] };
   const code = main.slice(main.indexOf('function displayState('), main.indexOf('function reportViewStorage('));
   return new Function(...Object.keys(scope), code + '; return displayState;')(...Object.values(scope));
