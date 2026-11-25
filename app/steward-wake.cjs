@@ -3,7 +3,8 @@
 // 自己的 agent，并通过自带的 agent（aka 大管家）来进行汇报」). Decided on the task board by the butler then designated,
 // 2026-11-13 01:20:41: 「事件来时唤醒大管家，我定了：做，默认关」, on five conditions, each kept here or in the
 // dispatcher's pass that runs it (queue-dispatch.cjs wakeSteward):
-// (1) the message carries only a position: the butler reads stewardEvents from it itself (main.cjs);
+// (1) the message carries only a position: the butler reads stewardEvents from it itself (main.cjs); since 2026-11-25
+//     (3fa05f69 ③, PM brief) also the fixed code of a start recorded since (START_REASONS), nothing else recorded;
 // (2) a butler at work is not called; once it is idle (the same readiness, idle settling and quiet after the person as a
 //     member before its next queue item), one message covers everything recorded since; the person's own act
 //     (R200, 2026-11-24: 「我点了卡为撒你没反应」) is told also inside a migration's quiet window; their answer on one of
@@ -42,6 +43,10 @@ const BLOCK_REASONS = Object.freeze(['identity-unavailable','in-space','not-sett
   'automatic-messages-off','paused','waiting-provider','usage-limit-exceeded','rotation-control-unresolved','native-terminal-dialog','not-idle','busy',
   'unavailable','background-unconfirmed','background-work','person-typing','native-goal-active','team-running','quiet-window','person-recent','trust-unknown','trust-hold',
   'control-refused-limit']);
+// The codes a start's own event carries (version-events.cjs), the only ones a wake names. Another event's reason can be
+// anyone's words, so the event is told by its id too.
+const START_REASONS = Object.freeze(['version-installed', 'version-restarted', 'version-installed-after-abnormal-exit', 'version-restarted-after-abnormal-exit']);
+const startReason = e => e.eventId.startsWith('version-change:') && START_REASONS.includes(e.payload?.reason) ? e.payload.reason : null;
 // A position of the event record (butler-ledger.cjs eventsAfter): `<origin>:<sequence>`.
 const POSITION = /^([0-9a-f]{16}):(0|[1-9][0-9]{0,15})$/u;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -75,9 +80,11 @@ function from(latest, woken) {
   const now = parse(latest), last = parse(woken);
   return now && last && last.origin === now.origin ? woken : null;
 }
-// What the butler is sent: the position and how to read from it, nothing of what was recorded (condition 1).
-function wakeText(position) {
-  return `【NAW 事件】有新事件。用 workspace_control 调 stewardEvents，参数 [${JSON.stringify(position)}]；more 为 true 时从 through 接着读。`;
+// What the butler is sent: the position and how to read from it, and of what was recorded only `reasons` (condition 1).
+// 「含」: a wake covers everything since, so other events may be there too.
+function wakeText(position, reasons = []) {
+  return `【NAW 事件】有新事件。用 workspace_control 调 stewardEvents，参数 [${JSON.stringify(position)}]；more 为 true 时从 through 接着读。${
+    reasons.length ? `原因含 ${reasons.join('、')}。` : ''}`;
 }
 // Counts only: no session, space or item is named.
 function patrolText(minutes, sessions, items) {
@@ -329,6 +336,21 @@ class StewardWake {
       return true;
     } catch { return false; }
   }
+  // The codes of the starts recorded after the position last named, each once; within REFUSAL_PAGES pages. What cannot
+  // be read is left out: it never holds the wake.
+  startReasons(latest) {
+    const found = new Set();
+    try {
+      let position = from(latest, this.state.woken);
+      for (let page = 0; page < REFUSAL_PAGES; page++) {
+        const { events, through, more } = this.ledger().eventsAfter(position, 100, { ids: true });
+        for (const reason of events.map(startReason)) if (reason) found.add(reason);
+        if (!more) break;
+        position = through;
+      }
+    } catch { /* The wake goes out with what was read. */ }
+    return [...found];
+  }
   // Whether the person acted after the position last named; with `holders`, answered a card one of them raised.
   // Unreadable counts as not.
   personActed(holders = null) {
@@ -362,11 +384,13 @@ class StewardWake {
     const latest = this.latest(), held = this.state, position = from(latest, held.woken), id = randomUUID();
     const refusals = this.refusalsOnly(latest);
     if (refusals && this.refusalWakes >= REFUSAL_WAKES) { this.skip('control-refused-limit'); return null; }
+    // Refusals only: no start among them, and each wake reads a bounded number of pages.
+    const reasons = refusals ? [] : this.startReasons(latest);
     try { this.record({ kind: 'wake', id, session: { id: session.id, nativeId: session.nativeId }, position }); }
     catch { throw fault('The butler record cannot be written', 'STEWARD_WAKE_RECORD_UNAVAILABLE'); }
     let tag = null, outcome;
     try {
-      tag = await send(wakeText(position), `steward-wake:${id}`);
+      tag = await send(wakeText(position, reasons), `steward-wake:${id}`);
       outcome = { state: 'sent', error: null };
     } catch (error) {
       // Refused before anything was written, or not known to have arrived: either way the position stays, so a later
