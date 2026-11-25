@@ -61,11 +61,11 @@ async function run() {
   await (await app.browserWindow(page)).evaluate(w => w.setContentSize(1240, 900));
   const ready = await create('Ready one'), working = await create('Working one'), waiting = await create('Waiting one'), unknown = await create('Unknown children'), solo = await create('Solo one'), chat = await create('Chat only');
   for (const id of [ready, working, waiting, unknown]) await page.evaluate(id => workspace.join(id, true), id);
-  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('一个名字很长的协作空间'); await page.locator('#confirm-space-create').click();
+  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('一个名字很长的协作空间'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click();
   await until(async () => (await snapshot()).rooms?.some(r => r.name === '一个名字很长的协作空间'), 'Long space created');
   const long = (await snapshot()).rooms.find(r => r.name === '一个名字很长的协作空间').id;
   await page.evaluate(({ id, space }) => workspace.spaceAction(space, 'join', [id, true]), { id: working, space: long });
-  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Claude 聊天室'); await page.locator('#confirm-space-create').click();
+  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Claude 聊天室'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click();
   await until(async () => (await snapshot()).rooms?.some(r => r.name === 'Claude 聊天室'), 'Chat space created');
   const chatRoom = (await snapshot()).rooms.find(r => r.name === 'Claude 聊天室').id;
   await page.evaluate(({ id, space }) => workspace.spaceAction(space, 'join', [id, true]), { id: chat, space: chatRoom });

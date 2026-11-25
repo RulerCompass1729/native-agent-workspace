@@ -15,7 +15,7 @@ function fixture() {
   const context={ $,uiError:locale.createError,uiText,ui:{display,errorText:error=>locale.errorText('zh',error),showError(element,error){display.unbind(element);element.textContent=error.message;}},state:{sessions:[],defaultWorkspace:'/synthetic/shared',newWorkspaceRoot:'/synthetic/sessions',capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
     document:{querySelector:()=>({value:'codex'})},crypto:{randomUUID},dialogTickets:new Map([[dialog,ticket]]),
     currentDialogTicket:t=>t===ticket&&ticket.valid&&dialog.open,
-    openTransientDialog:()=>{ticket={valid:true};context.dialogTickets.set(dialog,ticket);dialog.open=true;return ticket;},
+    offerManager(){},openTransientDialog:()=>{ticket={valid:true};context.dialogTickets.set(dialog,ticket);dialog.open=true;return ticket;},
     allSpaces:()=>[],spaceRecord:()=>undefined,Option:function(){return get('space-placeholder');},
     setTimeout:fn=>{timers.set(++timer,fn);return timer;},clearTimeout:id=>timers.delete(id),
     api:{gitWorktreePreview:(...args)=>new Promise(resolve=>requests.push({args,resolve})),createDefaults:()=>new Promise((resolve,reject)=>defaults.push({resolve,reject})),create:()=>{context.createCalls++;return Promise.resolve('id');}},createCalls:0};

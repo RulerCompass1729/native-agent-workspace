@@ -67,7 +67,7 @@ function fixture(t, options = {}) {
       ${section('  bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);', '  queueSecretary = new QueueSecretary(')}
       return 'ordinary-startup-continues';
     }
-    ${section("  register('butler',", "  register('queueSecretary',")}
+    ${section("  register('butler',", "  register('spaceManager',")}
     return { initialize, person: () => butlerPerson, role: () => butlerRole, audit: () => butlerReadAudit, verify: isCurrentHumanContext };
   `)(dependencies);
   if (options.initialize !== false) host.initialize();

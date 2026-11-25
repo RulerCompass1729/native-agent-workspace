@@ -125,7 +125,7 @@ async function run() {
   await closeMenus();
   // A new profile has no space yet: create one with an ASCII name, then move both sessions into it.
   await visit('new-space-dialog', async () => { await page.locator('#new-space').click(); await page.locator('#space-create-dialog').waitFor(); });
-  await page.locator('#space-create-name').fill('Gamma'); await page.locator('#confirm-space-create').click();
+  await page.locator('#space-create-name').fill('Gamma'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click();
   await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
   await page.locator('#panorama-nav').click();
   for (const id of [alpha, beta]) { await more(id).first().click(); await item(en('menu.joinSpace', { name: 'Gamma' })).click(); await delay(400); }

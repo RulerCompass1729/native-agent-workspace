@@ -46,7 +46,7 @@ function fixture(t) {
   vm.createContext(sandbox);
   vm.runInContext(section('function isCurrentHumanContext(', '\nfunction showDialog('), sandbox);
   vm.runInContext(section('function register(name, handler)', '\nasync function replaceBackendSockets('), sandbox);
-  vm.runInContext(section("  register('butlerReview',", "  register('queueSecretary',"), sandbox);
+  vm.runInContext(section("  register('butlerReview',", "  register('spaceManager',"), sandbox);
   const call = (action, ...args) => ipc.get('workspace:butlerReview')(person.event, action, ...args);
   return { directory, handlers, ipc, windows, calls, ledger, audit, auditCalls, sandbox, person, agent, makeContext, call };
 }
@@ -164,7 +164,7 @@ test('actual Main and Ledger freeze, confirm and restore the same audit without 
   const open = () => new Function(...Object.keys(environment), 'let butlerIngress = null;\n' +
     section('function isCurrentHumanContext(', '\nfunction showDialog(') + '\n' +
     section('function register(name, handler)', '\nasync function replaceBackendSockets(') + '\n' + boot + '\n' +
-    section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn butlerIngress;')(...Object.values(environment));
+    section("  register('butlerReview',", "  register('spaceManager',") + '\nreturn butlerIngress;')(...Object.values(environment));
   const ingress = open(), ledger = ingress.ledger;
   assert.ok(ledger instanceof ButlerLedger); assert.equal(f.handlers.has('butlerReview'), false);
   assert.deepEqual((await f.call('availability')).value, { available: true, hasData: false, activation: 'off', recordPeriod: 'off' });
@@ -283,7 +283,7 @@ test('the actual Main initializer and handler use the opaque person verifier wit
     section('function isCurrentHumanContext(', '\nfunction showDialog(') + '\n' +
     section('function register(name, handler)', '\nasync function replaceBackendSockets(') + '\n' +
     section('  bindQueueOutcomes(roomState, butlerIngress, notifyQueueOutcome);', '  queueSecretary = new QueueSecretary(') + '\n' +
-    section("  register('butlerReview',", "  register('queueSecretary',") + '\nreturn { audit: butlerReadAudit, role: butlerRole, person: butlerPerson };')(...Object.values(environment));
+    section("  register('butlerReview',", "  register('spaceManager',") + '\nreturn { audit: butlerReadAudit, role: butlerRole, person: butlerPerson };')(...Object.values(environment));
   const initialized = open(), audit = initialized.audit;
   assert.ok(audit instanceof ButlerReadAudit); assert.ok(initialized.role instanceof ButlerRole); assert.ok(initialized.person instanceof ButlerPerson);
   assert.equal(initialized.person.role, initialized.role); assert.equal(initialized.person.ledger, ledger);

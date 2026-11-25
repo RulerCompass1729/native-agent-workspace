@@ -92,7 +92,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   checks.push('With nobody designated the entry is at the top of the sidebar and says so; the built-in butler row stays hidden; the chooser says there is no session to choose');
 
   // The cast: a space with one member, and two sessions of the person's own.
-  await page.locator('#create-first-space').click(); await page.locator('#space-create-name').fill('网站改版'); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#create-first-space').click(); await page.locator('#space-create-name').fill('网站改版'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
   const member = await create('Claude 前端', 'claude'); await joinSpace(page);
   const main = await create('Claude 主会话', 'claude');
   await fixture('history', main, [

@@ -632,7 +632,7 @@ class RoomState {
     if (revision !== value.revision) throw uiError("error.room.fileListChanged");
     if (value.files.some(f => f.id === fileId)) this.update({ files: value.files.filter(f => f.id !== fileId) }, { kind: 'files', ...uiNotice('notice.room.fileRemoved') }, id);
   }
-  // Task queue (queue-dispatch.cjs). The person or designated secretary adds; NAW sends.
+  // Task queue (queue-dispatch.cjs). The person, the space's project manager or the butler adds; NAW sends.
   // These compact sources live with the durable space event. Recovery does not
   // depend on a notification callback, a retained queue item or native history.
   butlerSources() {
@@ -641,6 +641,10 @@ class RoomState {
     return structuredClone([{ id: DEFAULT_ROOM_ID, events: this.value.events }, ...this.spaces.rooms].flatMap(room => room.events
       .filter(event => Object.hasOwn(event, 'butlerSource') || Object.hasOwn(event, 'butlerDoneSource') || Object.hasOwn(event, 'butlerNoReplySource'))
       .map(event => storedQueueSource(room.id, event))));
+  }
+  // Who the person made this space's project manager, or that they revoked it.
+  noteManager(id, key, params, sessionId) {
+    this.update({}, { kind: 'manager', ...(sessionId ? { sessionId } : {}), ...uiNotice(key, params) }, id);
   }
   queueItems(id) {
     const value = this.metadata(id);

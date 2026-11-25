@@ -41,7 +41,7 @@ function fixture(member = 0) {
     spaceId: 'shared', pairRevision: record => require('../collaboration-spaces.cjs').membershipRevision(record), selectionRevision: 1, selected: 'room', disconnected: false, state: { room: { archived: false }, members: records }, roomSurface: 'overview', roomSession: '', sessionMenu: null, roomMenu: null,
     members: () => context.state.members, orderedMembers: () => context.state.members, $: id => elements.get(id),
     activeSessionId: () => 'naw-alpha', current: () => records[0], terminals: new Map(), sessionComposers: new Map(), owner: 'fixture-owner',
-    toast: text => notices.push(text), toastMessage: (key, params) => notices.push(require('../ui-locale.js').format('zh', key, params)), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null,
+    toast: text => notices.push(text), toastMessage: (key, params) => notices.push(require('../ui-locale.js').format('zh', key, params)), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null, managerAction: () => [],
     captureReadingViews() {}, restoreOverviewReading() {}, moveRoomMember: (...args) => changed.push(args),
     api: { copy: id => copies.push(id) }, ui: { menu: config => { const entry = { config, closed: false }; const close = () => { if (entry.closed) return; entry.closed = true; config.onClose(); }; entry.close = close; menus.push(entry); return close; } },
     header, name, heading, next, record: records[member], button,

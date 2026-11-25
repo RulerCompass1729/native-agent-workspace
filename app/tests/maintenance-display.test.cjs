@@ -10,7 +10,7 @@ function productionConfirmation() {
   const sandbox = vm.createContext({
     backgroundOperation: operation, displayText: (key, params) => locale.format('zh', key, params),
     roomState: { apply: value => value, value: {} }, sessionLabels: { apply: value => value },
-    queueSecretary: { current: () => null }, roomIds: session => session.roomIds || [], uiError: require('../ui-errors.cjs').uiError,
+    spaceManagers: null, roomIds: session => session.roomIds || [], uiError: require('../ui-errors.cjs').uiError,
   });
   vm.runInContext(main.slice(main.indexOf('function conversationReaderAllowed('), main.indexOf('function projectBackgroundRecord(')), sandbox);
   return vm.runInContext('(' + main.slice(start + '    confirmation: '.length, end).trim().replace(/,$/, '') + ')', sandbox);

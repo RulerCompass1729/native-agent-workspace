@@ -28,7 +28,8 @@ const { createLocalPages } = require('./local-pages.cjs');
 const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
-const { QueueSecretary, follow: followRotation } = require('./queue-secretary.cjs');
+const { QueueSecretary, follow: followRotation, usableRecord, author: queueAuthor } = require('./queue-secretary.cjs');
+const { SpaceManagers } = require('./space-managers.cjs');
 const { IntegratorRole } = require('./integrator-role.cjs');
 const { StewardRole, validDuty } = require('./steward-role.cjs');
 const { StewardStanding } = require('./steward-standing.cjs');
@@ -50,7 +51,7 @@ const { createDedicatedBackend } = require('./butler-backend-host.cjs');
 const { CreationDefaults } = require('./creation-defaults.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
-const { roomId: validRoomId, roomIds, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
+const { roomId: validRoomId, roomIds, isMember, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { PersonActions } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
@@ -177,7 +178,7 @@ let pendingReveal = null, backgroundNotifications = null, notificationScreen = n
 const confirmationProjectionKeys = new WeakMap();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, queueSecretary, integratorRole, stewardRole, landingOwner = null, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, queueSecretary, spaceManagers, integratorRole, stewardRole, landingOwner = null, butlerIngress, butlerReadAudit = null, butlerBackend = null, creationDefaults, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let localPages = null;
 let butlerRole = null, butlerPerson = null;
 let startupWindow, starting = false, wired = false;
@@ -848,10 +849,9 @@ async function stewardCaller(c) {
   return { id: record.id, name: sessionLabels.labels.get(record.id) || record.name };
 }
 function conversationReaderAllowed(actor) {
-  // The butler reads as any session may, also when it is the secretary too (checklist item 9 merges the two).
   if (isStewardActor(actor)) return true;
-  const secretary = queueSecretary?.current();
-  return !secretary || secretary.sessionId !== actor.id || secretary.nativeId !== actor.nativeId;
+  // A space's project manager works from its space's records, never from another session's conversation.
+  return !spaceManagers?.designated(actor);
 }
 // The designated butler, as the designation names it now (steward step 2, batch 4), for gates that judge a call with
 // the state already in hand. A designation that cannot be read is nobody.
@@ -870,12 +870,79 @@ function stewardReadsUnasked(actor, snapshot) {
   if (!record || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) return false;
   try { return roomIds(record).length === 0; } catch { return false; }
 }
+// In the queue every join runs in: the session cannot leave the space while it becomes its manager.
+function designateManager(c, roomId, id, { vacant = false } = {}) {
+  return roomState.serial(async () => {
+    roomState.writable(roomId);
+    const room = roomState.metadata(roomId);
+    if (id === null) {
+      if (!spaceManagers.failed && !spaceManagers.current(roomId)) return;
+      spaceManagers.set(roomId, null);
+      roomState.noteManager(roomId, 'notice.room.managerCleared');
+      return;
+    }
+    if (room.archived) throw uiError('error.queue.archived');
+    // The backend's own list does not say which sessions the person archived; the desktop's record does.
+    const sessions = roomState.apply(await c.client.call('initial')).sessions;
+    const record = sessions.find(s => s.id === id);
+    if (!record?.nativeId || !usableRecord(record, sessions) || !isMember(record, roomId) || midRotation(id) || isStewardActor(record)) throw uiError('error.manager.invalid');
+    if (vacant && activeManagers(sessions)[roomId]) throw uiError('error.manager.changed');
+    spaceManagers.set(roomId, { sessionId: record.id, nativeId: record.nativeId });
+    roomState.noteManager(roomId, 'notice.room.managerSet', { name: sessionLabels.labels.get(record.id) || record.name }, record.id);
+  });
+}
+// With the native defaults every Claude session the person opens has; no task, no input. One at a time for a space.
+const creatingManagers = new Set();
+async function createManager(c, roomId) {
+  if (creatingManagers.has(roomId)) throw uiError('error.manager.changed');
+  creatingManagers.add(roomId);
+  try { return await openManager(c, roomId); } finally { creatingManagers.delete(roomId); }
+}
+async function openManager(c, roomId) {
+  const room = roomState.metadata(roomId);
+  if (room.archived) throw uiError('error.queue.archived');
+  const state = await c.client.call('initial');
+  assertNativeCreation(state);
+  if (activeManagers(roomState.apply(state).sessions)[roomId]) throw uiError('error.manager.changed');
+  const defaults = creationDefaults.get(state.sessions), cwd = defaults.repository || defaults.directory;
+  const name = displayText('manager.sessionName', { space: room.name }).slice(0, 60);
+  const id = await c.client.call('create', { provider: 'claude', view: 'chat', name,
+    ...(cwd ? { cwd } : { cwd: path.join(state.newWorkspaceRoot, randomUUID()), newDirectory: true }) });
+  try {
+    await roomState.membership(c.client, id, true, sessionLabels.labels.get(id), roomId);
+    await designateManager(c, roomId, id, { vacant: true });
+  } catch (error) {
+    throw uiError('error.manager.partial', { reason: error.message, name }, { cause: error, param: 'reason' });
+  }
+  return id;
+}
+// Once, when its session is listed: the former secretary manages the one space it is in, or nothing (space-managers.cjs).
+async function retireSecretary(snapshot) {
+  if (!spaceManagers || spaceManagers.failed || spaceManagers.secretaryRetired) return;
+  await roomState.serial(async () => {
+    const state = roomState.apply(snapshot);
+    const result = spaceManagers.retireSecretary(queueSecretary.current(), state.sessions, state.rooms);
+    if (result.roomId) roomState.noteManager(result.roomId, 'notice.room.managerFromSecretary', { name: sessionLabels.labels.get(result.sessionId) || result.name }, result.sessionId);
+    if (result.status === 'retired') await broadcastRoom();
+  });
+}
+// Where the role counts now: { roomId: { sessionId, nativeId } }, members of their own space only.
+function activeManagers(sessions) {
+  const result = {};
+  if (!spaceManagers) return result;
+  for (const [roomId, value] of spaceManagers.all()) {
+    const session = sessions.find(s => s.id === value.sessionId);
+    if (session && spaceManagers.roomOf(session) === roomId) result[roomId] = value;
+  }
+  return result;
+}
 function conversationAccess(actor, snapshot) {
-  const access = { roomIds: [], secretary: true };
-  try { access.secretary = !conversationReaderAllowed(actor); } catch { /* Unknown roles get metadata only. */ }
+  const access = { roomIds: [], metadataOnly: true, managedRoom: null };
   const current = snapshot?.sessions?.find(s => s.id === actor.id && s.nativeId === actor.nativeId);
+  // Unknown roles get metadata only, and a project manager its own space only.
+  try { access.managedRoom = spaceManagers?.roomOf(current) || null; access.metadataOnly = false; } catch { /* Metadata only. */ }
   if (current && !current.archived && !current.nativeContextPending && !roomState.value.archivedSessions?.includes(actor.id)) {
-    try { access.roomIds = roomIds(current); } catch { /* Invalid membership grants nothing. */ }
+    try { access.roomIds = roomIds(current).filter(id => !access.managedRoom || id === access.managedRoom); } catch { /* Invalid membership grants nothing. */ }
     // The butler sees every space as a member does (the person, 2026-11-11: 「大管家权限最高,应该啥都可以看到和操作」,
     // 「都能看,」; checklist 2026-11-12). Only while it is in no space, as its designation requires; what it reads through
     // NAW is a step in its record.
@@ -883,7 +950,7 @@ function conversationAccess(actor, snapshot) {
     if (outside && isStewardActor(actor)) {
       // The backend's rooms and the desktop's own list of spaces (a space nobody has joined yet has no backend room).
       access.roomIds = [...new Set([snapshot?.room?.id, ...(snapshot?.rooms || []).map(room => room?.id), 'shared', ...(roomState?.spaces?.rooms || []).map(room => room?.id)].filter(id => typeof id === 'string' && id))];
-      access.secretary = false;
+      access.metadataOnly = false;
     }
   }
   return access;
@@ -912,12 +979,12 @@ function projectBackgroundRecord(record, context = null) {
   }
   const access = conversationAccess(record.actor, context?.client.snapshot?.());
   if (record.command.method === 'spaceFiles' && record.command.arguments[1] !== undefined &&
-      (record.readAuthorization?.roomId !== record.command.arguments[0] || access.secretary || !access.roomIds.includes(record.command.arguments[0]))) {
+      (record.readAuthorization?.roomId !== record.command.arguments[0] || access.metadataOnly || !access.roomIds.includes(record.command.arguments[0]))) {
     const { value: _privateValue, ...publicRecord } = record; return publicRecord;
   }
   const source = record.command.arguments[0];
   if (record.command.method === 'previewImage' && ['room', 'space-message'].includes(source?.kind) &&
-      (access.secretary || !access.roomIds.includes(source.roomId || 'shared'))) {
+      (access.metadataOnly || !access.roomIds.includes(source.roomId || 'shared'))) {
     const { value: _privateValue, ...publicRecord } = record; return publicRecord;
   }
   if (record.command.method !== 'initial') return record;
@@ -927,7 +994,7 @@ async function assertSpaceFileReader(context, roomId) {
   if (!context.background) return;
   await context.refresh?.();
   const access = conversationAccess(context.actor, context.client.snapshot());
-  if (access.secretary || !access.roomIds.includes(roomId)) throw uiError('error.background.spaceFileMembership');
+  if (access.metadataOnly || !access.roomIds.includes(roomId)) throw uiError('error.background.spaceFileMembership');
 }
 // A background window owns an agent's connection and dialogs but never loads a document. Nothing can
 // receive what is sent to it, and the browser keeps every such message in memory for as long as the window
@@ -1044,6 +1111,7 @@ function bindClient(context) {
     if (wrote.some(Boolean)) broadcastRoom().catch(() => {});
     if (!context.background) placeOpened(client, data).catch(() => {});
     if (!context.background) carryGrants(client, data).catch(() => {});
+    if (!context.background) retireSecretary(data).catch(() => {});
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -1071,17 +1139,18 @@ function displayState(snapshot, context, read = null) {
   }
   const outboxWarning = backgroundUnavailable ? 'Background control is unavailable; existing native sessions and ordinary controls remain available.' : outboxQuitFailed ? 'Outbox cleanup could not be confirmed. Quit again to close the app; native sessions keep running.'
     : outboxUnavailable ? 'The independent space outbox is unavailable; new delivery cannot be confirmed.' : '';
-  let secretary = null, secretaryWarning = '';
-  try { secretary = queueSecretary?.current() || null; } catch { secretaryWarning = displayText('error.queue.secretaryState'); }
+  // Each space's project manager, where the role counts now. A record that cannot be read is a warning, never "nobody".
+  let managers = {}, managerWarning = '';
+  try { managers = activeManagers(display.sessions); } catch { managerWarning = displayText('error.manager.state'); }
   let integrator = null, integratorWarning = '';
   try { integrator = integratorRole?.current() || null; } catch { integratorWarning = displayText('error.integrator.state'); }
   // The session the person talks to as the butler. A record that cannot be read is a warning, never "nobody".
   let steward = null, stewardDuty = null, stewardWarning = '';
   try { stewardDuty = stewardRole?.duty ?? null; steward = stewardRole?.current() || null; } catch { stewardWarning = displayText('error.steward.state'); }
-  const warning = [outboxWarning, secretaryWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
+  const warning = [outboxWarning, managerWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, queueSecretary: secretary, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const result = { ...display, spaceManagers: managers, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view().blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     butler: butlerIngress?.status() || { intake: 'blocked', errorCode: 'source-unavailable', activation: 'off', recordPeriod: 'off' } };
@@ -1159,8 +1228,10 @@ async function startQueueDispatcher() {
       stewardWake: stewardWake || undefined,
       // The agent that asked, told what the person answered on its confirmation cards (answer-notices.cjs).
       answerNotices,
-      // What this start brought, owed to the queue secretary (version-events.cjs).
+      // What this start brought, owed to the manager that took over from the secretary (version-events.cjs).
       versionNotices,
+      // Each space's project manager now (space-managers.cjs): what planning keeps from it.
+      managers: sessions => activeManagers(sessions),
       // Sessions on a backend in a migration's quiet window get no new item or NAW message (quiet-windows.cjs).
       quietWindows: quietWindows || undefined,
       // A member whose own conversation was compacted COMPACT_LIMIT times continues in a new session.
@@ -1498,8 +1569,8 @@ function register(name, handler) {
       const local = new Set(['interfaceSettings', 'initial', 'uiReady', 'viewState', 'readingState', 'draft', 'retainDraftRecovery', 'discardDraftRecovery', 'rename', 'sidebar', 'roomRename', 'roomNotes', 'roomMemberOrder', 'spaceCreate', 'spaceFiles', 'openLocalFile', 'openLocalPage', 'closeLocalFile', 'saveLocalFile', 'chooseFolder', 'copy', 'landing', 'pasteText', 'copyImage', 'previewImage', 'expandImage', 'releaseImage', 'newWindow', 'openExternal', 'openMessageFile', 'dataDirectory', 'preflight', 'runtimeLocation', 'connectionUpdates', 'retrySave', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'stewardEvents', 'stewardWake', 'stewardPatrol', 'backgroundWithdraw']);
       // Queue metadata lives in this desktop profile, not a retained backend.
       // Its first argument is task text, never a target native session. The
-      // handler below still authenticates the secretary and person-only actions.
-      const localQueue = name === 'queueSecretary' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim', 'releaseRotation'].includes(args[1]);
+      // handler below still authenticates the space's manager and person-only actions.
+      const localQueue = name === 'spaceManager' || name === 'integrator' || name === 'handoff' || name === 'steward' || name === 'spaceAction' && ['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim', 'releaseRotation'].includes(args[1]);
       if (!local.has(name) && !localQueue) {
         const targetIds = (name === 'spaceAction' ? [args[2]?.[0]].flat() : [args[0]].flat()).filter(id => typeof id === 'string');
         const targets = c.client.entries.filter(e => !targetIds.length || e.state.sessions.some(s => targetIds.includes(s.id)));
@@ -1852,6 +1923,8 @@ async function boot() {
     else { butlerPerson.ledger = butlerIngress?.ledger; butlerPerson.backend = butlerBackend; }
   } catch { butlerPerson = null; } // Keep B1 and ordinary sessions independent.
   queueSecretary = new QueueSecretary(dataDir);
+  // Each space's project manager, the person's choice alone; what it lets a session do is listed in space-managers.cjs.
+  spaceManagers = new SpaceManagers(dataDir);
   // Who the person designated as integrator. A record only: nothing is sent to it from here.
   integratorRole = new IntegratorRole(dataDir);
   // Who the person designated as the butler they talk to; what it lets that session do is listed in steward-role.cjs.
@@ -1871,7 +1944,7 @@ async function boot() {
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
-  // The version this start brought, told to the butler and the queue secretary (version-events.cjs): one per app run.
+  // The version this start brought, told to the butler and that manager (version-events.cjs): one per app run.
   try {
     versionEvents ||= new VersionEvents(dataDir, { version: app.getVersion(),
       record: event => {
@@ -1879,10 +1952,9 @@ async function boot() {
         butlerIngress.record(event);
       },
       owe: text => {
-        const secretary = queueSecretary.current(), steward = stewardRole.current();
-        // A secretary that is also the butler reads it in its event record.
-        if (!secretary || steward && steward.sessionId === secretary.sessionId) return false;
-        return versionNotices.add(secretary, text);
+        // The person's words name 「NAW 的项目经理」: the manager of the space the former secretary went to.
+        const manager = spaceManagers.secretaryRetired ? spaceManagers.versionReceiver() : queueSecretary.current();
+        return Boolean(manager) && !isStewardActor({ id: manager.sessionId, nativeId: manager.nativeId }) && versionNotices.add(manager, text);
       } });
   } catch { versionEvents = null; }
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
@@ -1905,10 +1977,10 @@ async function boot() {
       if (onePath && command.paths?.length !== 1) throw new background.PreconditionRefused(uiError('error.background.oneFilePathRequired'), 'invalid-file-path-count');
       if (command.method === 'spaceFiles' && command.arguments[1] === undefined && !command.paths?.length) throw new background.PreconditionRefused(uiError('error.background.importPathsRequired'), 'invalid-file-path-count');
       if ((action === 'readConversation' || ['terminalSnapshot', 'observe', 'terminal'].includes(command.method) && command.arguments[0] !== actor.id) &&
-          !conversationReaderAllowed(actor)) throw new background.PreconditionRefused(uiError('error.background.secretaryConversation'), 'conversation-access-denied');
+          !conversationReaderAllowed(actor)) throw new background.PreconditionRefused(uiError('error.background.managerConversation'), 'conversation-access-denied');
       if (command.method === 'spaceFiles' && command.arguments[1] !== undefined) {
         const access = conversationAccess(actor, context.client.snapshot());
-        if (access.secretary || !access.roomIds.includes(command.arguments[0])) throw new background.PreconditionRefused(uiError('error.background.spaceFileMembership'), 'space-file-membership-required');
+        if (access.metadataOnly || !access.roomIds.includes(command.arguments[0])) throw new background.PreconditionRefused(uiError('error.background.spaceFileMembership'), 'space-file-membership-required');
       }
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
       const firstMessage = command.method === 'create' && backgroundOperation.creationMessage(command.arguments[0]);
@@ -2098,7 +2170,7 @@ async function boot() {
       await broadcastRoom(); return result;
     }
     else if (['queueAdd', 'queueCancel', 'queueResolve', 'queueClaim'].includes(action)) {
-      // Besides the person: the secretary adds; the butler adds, cancels and marks handled, each under its own name;
+      // Besides the person: the space's project manager adds; the butler adds, cancels and marks handled, each under its own name;
       // a session takes back what it queued itself while it is still queued (the person, 11-12 21:1x: 「可以」);
       // a session claims an item queued for it that it is already doing, so that NAW does not send it again (6897c6e3).
       const steward = c.background ? await stewardCaller(c) : null;
@@ -2117,7 +2189,7 @@ async function boot() {
         }
         // The butler's items keep the creator form older builds read (a session that added it); `addedBy` says who.
         const creator = steward ? { kind: 'secretary', name: steward.name, sessionId: steward.id } : c.background
-          ? queueSecretary.creator(backgroundOperation.current(), await sessions(), sessionLabels.labels)
+          ? spaceManagers.creator(backgroundOperation.current(), roomId, args[1] ?? null, await sessions(), sessionLabels.labels)
           : { kind: 'person', name: 'You', sessionId: null };
         const itemId = roomState.queueAdd(args[0], args[1] ?? null, roomId, creator, by);
         await broadcastRoom();
@@ -2128,7 +2200,7 @@ async function boot() {
         // Only a session claims, and only for itself: the person's window has no session of its own here.
         if (!c.background) throw uiError("error.queue.claimOwnOnly");
         const list = await sessions();
-        const member = queueSecretary.author(backgroundOperation.current(), list, sessionLabels.labels, 'error.queue.claimOwnOnly');
+        const member = queueAuthor(backgroundOperation.current(), list, sessionLabels.labels, 'error.queue.claimOwnOnly');
         const record = list.find(session => session.id === member.sessionId);
         // As for an item NAW sends: its reply is what follows the input this turn began with, and a change of control since counts.
         const input = (record.messages || []).findLast(message => message?.role === 'user');
@@ -2137,7 +2209,7 @@ async function boot() {
           nativeId: record.nativeId, claimEpoch: require('./submission-policy.cjs').rotationEpoch(record) });
         queueDispatcher?.schedule();
       }
-      else if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueSecretary.author(backgroundOperation.current(), await sessions(), sessionLabels.labels));
+      else if (action === 'queueCancel' && c.background && !steward) roomState.queueWithdraw(args[0], roomId, queueAuthor(backgroundOperation.current(), await sessions(), sessionLabels.labels));
       else if (action === 'queueCancel') roomState.queueCancel(args[0], roomId, by);
       else {
         // The answer sent from the person's own window (search-view.js queueAnswerResolve); no agent records one.
@@ -2426,16 +2498,17 @@ async function boot() {
     return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf, wake, limit });
   });
   applicationHandlers.delete('stewardRecord');
-  register('queueSecretary', async (c, id) => {
-    if (c.background) throw uiError('error.queue.personOnly');
-    if (id === null) queueSecretary.set(null);
-    else {
-      // As above: "archived" is read from the desktop's record, not from the backend's list.
-      const record = roomState.apply(await c.client.call('initial')).sessions.find(record => record.id === id);
-      if (!record || !record.nativeId || record.archived || record.nativeContextPending || ['ended', 'background'].includes(record.state)) throw uiError('error.queue.secretaryInvalid');
-      queueSecretary.set({ sessionId: record.id, nativeId: record.nativeId });
-    }
-    await broadcastRoom();
+  // Designating, changing or revoking a space's project manager is the person's alone: a member of that space, or
+  // `{ create: true }`, a Claude session opened for it (nothing is sent to it). The background-operation gate is a fixed
+  // method table that does not know this method, so the refusal is made here.
+  register('spaceManager', async (c, roomId, choice) => {
+    if (!isCurrentHumanContext(c)) throw uiError('error.manager.personOnly');
+    if (!validRoomId(roomId)) throw uiError('error.main.invalidSpace');
+    try {
+      if (choice !== null && typeof choice === 'object' && choice.create === true) return await createManager(c, roomId);
+      if (choice !== null && typeof choice !== 'string') throw uiError('error.manager.invalid');
+      await designateManager(c, roomId, choice);
+    } finally { await broadcastRoom(); }
   });
   // Designating or revoking the integrator is the person's alone. The background-operation gate
   // is a fixed method table that does not know this method, so the refusal is made here.
@@ -3050,12 +3123,12 @@ async function boot() {
   });
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
     snapshot: async source => {
-      if (c.background && source?.kind === 'session' && source.sessionId !== c.actor.id && !conversationReaderAllowed(c.actor)) throw uiError('error.background.secretaryConversation');
+      if (c.background && source?.kind === 'session' && source.sessionId !== c.actor.id && !conversationReaderAllowed(c.actor)) throw uiError('error.background.managerConversation');
       if (source?.kind === 'space-draft') return null; // This view's own draft, not a published space record.
       const snapshot = roomState.apply(await c.client.call('initial'));
       if (c.background && ['room', 'space-message'].includes(source?.kind)) {
         const access = conversationAccess(c.actor, snapshot);
-        if (access.secretary || !access.roomIds.includes(source.roomId || 'shared')) throw uiError('error.background.spaceContent');
+        if (access.metadataOnly || !access.roomIds.includes(source.roomId || 'shared')) throw uiError('error.background.spaceContent');
       }
       return snapshot;
     },

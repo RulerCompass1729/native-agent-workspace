@@ -394,16 +394,16 @@ class OperatorControl {
     return sessionMetadata({ ...s, transportDisconnected: !observed,
       operatorAvailable: Boolean(observed && !r.retainedReader && !r.rootEnding && r.operatorAvailable === true) });
   }
-  list(s) {
+  list(s, shown = () => true) {
     this.initiator(s);
     const domains = Object.values(this.data.domains).filter(d => d.initiators.some(i => i.id === s.id && i.nativeId === s.nativeId));
     const ids = new Set(domains.map(d => d.id));
-    return { status: 'ok', sessions: [...this.w.sessions.values()].filter(x => !x.archived).map(x => this.localMetadata(x)),
+    return { status: 'ok', sessions: [...this.w.sessions.values()].filter(x => !x.archived && shown(x)).map(x => this.localMetadata(x)),
       domains: domains.map(d => ({ id: d.id, providers: d.providers, directories: d.directories, permission: d.permission, model: d.model, daily: d.daily, concurrent: d.concurrent, expiresAt: d.expiresAt, revoked: Boolean(d.revokedAt) })),
       requests: Object.values(this.data.requests).filter(r => ids.has(r.domainId)).map(r => ({ ...this.view(r), task: r.task,
         latestReport: (() => { const report = this.data.reports[this.view(r).latestReportId]; return report ? { id: report.id, state: report.state, body: report.body.slice(0, 8000), at: report.at, turnAbnormal: report.turnAbnormal === true } : null; })() })) };
   }
-  async visibleSessions(fallback) {
+  async visibleSessions(fallback, shown = () => true) {
     const peer = this.w.peerRunner;
     if (!peer?.root || !peer.connect) return { sessions: fallback, metadataIncomplete: false };
     // The same authenticated local registry/initial channel already used by
@@ -424,7 +424,7 @@ class OperatorControl {
         })();
         const state = await Promise.race([read, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Metadata deadline')), remaining); })]);
         if (!Array.isArray(state?.sessions)) throw Error('Session metadata unavailable');
-        for (const session of state.sessions) if (!session.archived && typeof session.id === 'string') {
+        for (const session of state.sessions) if (!session.archived && typeof session.id === 'string' && shown(session)) {
           if (sessions.has(session.id)) duplicates.add(session.id);
           sessions.set(session.id, sessionMetadata(session));
         }
@@ -580,7 +580,9 @@ class OperatorControl {
     if (name === names[2]) return this.report(s, identity, args);
     if (name === names[1]) return this.open(s, identity, args);
     if (name === names[0]) {
-      const result = this.list(s), visible = await this.visibleSessions(result.sessions);
+      // A space's project manager is told of its own space's sessions only (space-managers.cjs).
+      const root = this.w.peerRunner?.root?.() || this.w.dataDir, shown = require('./space-managers.cjs').visibleTo(root, s);
+      const result = this.list(s, shown), visible = await this.visibleSessions(result.sessions, shown);
       this.actor(s, r, identity); this.initiator(s);
       this.commit(data => this.audit(data, s, identity, name, 'read')); return { ...result, ...visible };
     }

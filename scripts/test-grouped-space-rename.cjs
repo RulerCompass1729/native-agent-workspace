@@ -68,7 +68,7 @@ async function run() {
   const a = await create('Rename A', 'claude'), b = await create('Rename B', 'codex');
   await sidebar().locator('[data-session-row="' + a + '"]').first().locator('.session-link').click(); await page.locator('#message-input').fill('UNSENT rename private draft');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).liveDraft === 'UNSENT rename private draft', 'Private draft saved');
-  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Other untouched space'); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Other untouched space'); await page.locator('#space-create-manager').uncheck(); await page.locator('#confirm-space-create').click(); await page.locator('#space-create-dialog').waitFor({ state: 'hidden' });
   const other = (await snapshot()).rooms.find(r => r.name === 'Other untouched space').id;
   await page.locator('#sessions-flat').click(); await page.locator('#room-nav').click(); await page.locator('#shared-input').fill('UNSENT rename shared draft');
   await until(async () => stable(await snapshot()).shared === 'UNSENT rename shared draft', 'Shared draft saved');

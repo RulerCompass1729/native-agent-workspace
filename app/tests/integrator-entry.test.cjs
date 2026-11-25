@@ -117,11 +117,11 @@ test('a designation that cannot be saved is reported and nothing is announced', 
 
 test('the entry is wired: the role is built from the data folder, shown in the state, and reachable from the window', () => {
   assert.ok(source.includes("const { IntegratorRole } = require('./integrator-role.cjs');"));
-  assert.match(source, /queueSecretary = new QueueSecretary\(dataDir\);\n[^\n]*\n  integratorRole = new IntegratorRole\(dataDir\);/);
+  assert.match(source, /spaceManagers = new SpaceManagers\(dataDir\);\n[^\n]*\n  integratorRole = new IntegratorRole\(dataDir\);/);
   assert.match(source, /try \{ integrator = integratorRole\?\.current\(\) \|\| null; \} catch \{ integratorWarning = displayText\('error\.integrator\.state'\); \}/);
-  assert.match(source, /const result = \{ \.\.\.display, queueSecretary: secretary, integrator, /);
+  assert.match(source, /const result = \{ \.\.\.display, spaceManagers: managers, integrator, /);
   const preload = fs.readFileSync(path.join(__dirname, '../preload.cjs'), 'utf8');
-  assert.match(preload, /for \(const name of \['queueSecretary', 'integrator', /);
+  assert.match(preload, /for \(const name of \['spaceManager', 'integrator', /);
   // Nothing but this entry writes the designation.
   assert.equal(source.match(/integratorRole\.set\(/g).length, 2);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'integrator-role.cjs'].includes(name))) {

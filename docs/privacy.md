@@ -126,6 +126,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   after the notes change. Turning it off stops further attachments; text
   already sent stays in the members' native sessions.
   Clearing a current note does not delete its older timeline versions.
+- space-managers.json names each space's project manager (session and native
+  IDs, no text) and whether the former secretary was retired. It is owner-only;
+  queue-secretary.json is read once for that and never written.
 - services.json records relative backend directories. After an update, retained
   backends keep their own workspace/connection files under this same private
   application data directory. The UI combines their records in memory; it does

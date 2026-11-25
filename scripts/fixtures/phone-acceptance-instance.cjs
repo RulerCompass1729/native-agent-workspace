@@ -12,7 +12,7 @@ function mainMobile(root, profile, roomState, labels, background, steward) {
     tempSummary: require('../app/temp-reminders.cjs').tempSummary, readTempSummary: require('../app/temp-reminders.cjs').readSummary,
     personActions: null, stewardWake: null, usageAlerts: null,
     backgroundControl: background, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    queueSecretary: null, integratorRole: null, stewardRole: { current: () => steward }, butlerIngress: null,
+    activeManagers: () => ({}), integratorRole: null, stewardRole: { current: () => steward }, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => scheduled.push(true), noteHuman: id => human.set(id, Date.now()) },
     submissionState: require('../app/submission-policy.cjs').submissionState,
     roomPeerIdentity: require('../app/peer-handoffs.cjs').identity,

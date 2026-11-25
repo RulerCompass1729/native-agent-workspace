@@ -33,7 +33,7 @@ function mainMobile(profile, roomState, labels, background) {
     tempSummary: require('../app/temp-reminders.cjs').tempSummary, readTempSummary: require('../app/temp-reminders.cjs').readSummary,
     personActions: null, stewardWake: null, usageAlerts: null,
     backgroundControl: background, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    queueSecretary: null, integratorRole: null, stewardRole: null, butlerIngress: null,
+    activeManagers: () => ({}), integratorRole: null, stewardRole: null, butlerIngress: null,
     queueDispatcher: { integration: null, integrationError: null, rotationChains: () => [], schedule: () => scheduled.push(true), noteHuman: id => human.set(id, Date.now()) },
     submissionState: require('../app/submission-policy.cjs').submissionState,
     roomPeerIdentity: require('../app/peer-handoffs.cjs').identity,

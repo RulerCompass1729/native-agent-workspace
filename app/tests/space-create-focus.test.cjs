@@ -24,7 +24,7 @@ function fixture() {
   document.body = new Element('body'); document.activeElement = document.body;
   document.querySelectorAll = selector => { assert.equal(selector, 'dialog'); return [dialog, other]; };
   document.querySelector = selector => { assert.equal(selector, 'dialog[open]'); return [dialog, other].find(item => item.open) || null; };
-  const context = vm.createContext({ $, document });
+  const context = vm.createContext({ $, document, offerManager() {} });
   const tickets = source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope ='));
   const openStart = source.indexOf('function openSpaceCreate()'), openEnd = source.indexOf('\nlet mergeDialog;', openStart);
   const closeStart = source.indexOf("for (const dialog of document.querySelectorAll('dialog'))"), closeEnd = source.indexOf("$('setup-button').onclick", closeStart);

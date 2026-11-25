@@ -7,7 +7,7 @@ const { uiError } = require('../ui-errors.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
 const { StewardRole, DUTY_MAX, validDuty } = require('../steward-role.cjs');
 const { IntegratorRole } = require('../integrator-role.cjs');
-const { QueueSecretary } = require('../queue-secretary.cjs');
+const { SpaceManagers } = require('../space-managers.cjs');
 const { RoomState } = require('../room-state.cjs');
 const backgroundOperation = require('../background-operation.cjs');
 const messages = require('../ui-messages.js'), locale = require('../ui-locale.js');
@@ -94,16 +94,16 @@ test('nobody is the butler until the person designates one session; the record s
   for (const bad of [{}, { sessionId: 'a' }, { sessionId: 'a', nativeId: 'b', extra: 1 }, { sessionId: '', nativeId: 'b' }, 'session-1', ['session-1', 'native-1']]) assert.throws(() => f.role.set(bad));
 });
 
-test('the three designations keep three records: setting the butler never touches the secretary or the integrator', t => {
-  const f = fixture(t), secretary = new QueueSecretary(f.directory), integrator = new IntegratorRole(f.directory);
-  secretary.set({ sessionId: 'sec', nativeId: 'native-sec' }); integrator.set({ sessionId: 'int', nativeId: 'native-int' });
-  const others = () => ['queue-secretary.json', 'integrator.json'].map(name => fs.readFileSync(path.join(f.directory, name), 'utf8'));
+test('the three designations keep three records: setting the butler never touches a project manager or the integrator', t => {
+  const f = fixture(t), managers = new SpaceManagers(f.directory), integrator = new IntegratorRole(f.directory);
+  managers.set('shared', { sessionId: 'man', nativeId: 'native-man' }); integrator.set({ sessionId: 'int', nativeId: 'native-int' });
+  const others = () => ['space-managers.json', 'integrator.json'].map(name => fs.readFileSync(path.join(f.directory, name), 'utf8'));
   const before = others();
   f.role.set(ONE); f.role.set(null); f.role.set(ONE);
   assert.deepEqual(others(), before);
-  assert.deepEqual([new QueueSecretary(f.directory).current().sessionId, new IntegratorRole(f.directory).current().sessionId, new StewardRole(f.directory).current().sessionId], ['sec', 'int', 'session-1']);
+  assert.deepEqual([new SpaceManagers(f.directory).current('shared').sessionId, new IntegratorRole(f.directory).current().sessionId, new StewardRole(f.directory).current().sessionId], ['man', 'int', 'session-1']);
   // And the reverse: the other two leave the butler's record as it is.
-  const mine = fs.readFileSync(f.file, 'utf8'); secretary.set(null); integrator.set(null);
+  const mine = fs.readFileSync(f.file, 'utf8'); managers.set('shared', null); integrator.set(null);
   assert.equal(fs.readFileSync(f.file, 'utf8'), mine);
 });
 
@@ -297,8 +297,8 @@ test('the entry is wired: the record is built from the data folder, shown in the
   assert.ok(source.includes("const { StewardRole, validDuty } = require('./steward-role.cjs');"));
   assert.match(source, /integratorRole = new IntegratorRole\(dataDir\);\n[^\n]*\n  stewardRole = new StewardRole\(dataDir\);/);
   assert.match(source, /try \{ stewardDuty = stewardRole\?\.duty \?\? null; steward = stewardRole\?\.current\(\) \|\| null; \} catch \{ stewardWarning = displayText\('error\.steward\.state'\); \}/);
-  assert.match(source, /const warning = \[outboxWarning, secretaryWarning, integratorWarning, stewardWarning\]/);
-  assert.match(source, /queueSecretary: secretary, integrator, \.\.\.handoffEnabled, steward, /);
+  assert.match(source, /const warning = \[outboxWarning, managerWarning, integratorWarning, stewardWarning\]/);
+  assert.match(source, /spaceManagers: managers, integrator, \.\.\.handoffEnabled, steward, /);
   // The duty statement the person chose is shown to the person's windows only, never in an agent's view.
   assert.ok(source.includes("steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), "));
   // The start of the app names the window that lands: the first one restored, or the one opened when none is.
@@ -328,10 +328,10 @@ test('the entry is wired: the record is built from the data folder, shown in the
   assert.equal(/stewardRole|steward\.json|\.set\(/.test(wake.replace(/\b(inputChanges|causes)\.set\(/g, '(')), false);
   // The record module shares nothing writable with the other two roles.
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
-  assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
+  assert.equal(/integrator\.json|queue-secretary\.json|space-managers\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
   // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
   const handler = cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {");
-  assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
+  assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|spaceManagers|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
 test('every sentence exists in both languages, and the words say what the designation does and does not do', () => {

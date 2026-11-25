@@ -252,6 +252,7 @@ async function build() {
       'shared-replies.cjs',
       'shown-sessions.cjs',
       'space-images.cjs',
+      'space-managers.cjs',
       'space-merge.cjs',
       'startup.html',
       'startup.js',

@@ -1,10 +1,10 @@
 'use strict';
-// After the daily GUI changed version or restarted, the designated butler and the queue secretary (项目经理) are told
-// once: the versions, when it restarted, which backends are still on an old version and what each waits for; then
-// once more each time a backend finished or failed its move (the person, 2026-11-23: 「装机结束了你和 NAW 的项目经理貌似
-// 都呆住了啥都没发出来(这也是 bug)」). Versions, times, counts, session names and reason codes only; nothing of any
+// After the daily GUI changed version or restarted, the designated butler and the project manager (项目经理) of the
+// former queue secretary's space are told once: the versions, when it restarted, which backends are still on an old
+// version and what each waits for; then once more each time a backend finished or failed its move (the person,
+// 2026-11-23: 「装机结束了你和 NAW 的项目经理貌似都呆住了啥都没发出来(这也是 bug)」). Versions, times, counts, session names and reason codes only; nothing of any
 // conversation. The butler gets an event in its record (butler-ingress.cjs), which steward-wake.cjs wakes it for; the
-// secretary a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
+// manager a NAW message the queue dispatcher sends once it is idle and settled, under the person's automatic-message
 // switch, like answer-notices.cjs. NAW adds no queue item and opens no other channel.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -86,7 +86,7 @@ function writeSeen(file, version, at) {
 }
 
 class VersionEvents {
-  // `record(event)`: into the butler's event record. `owe(text)`: to the secretary; nothing when none is designated.
+  // `record(event)`: into the butler's event record. `owe(text)`: to the project manager; nothing when there is none.
   constructor(directory, { version, now = Date.now, record, owe }) {
     this.file = path.join(directory, FILE);
     Object.assign(this, { version, now, record, owe });
@@ -156,12 +156,12 @@ class VersionEvents {
     try {
       this.record({ eventId, sourceRef: `version-change:${this.version}`, kind: reason === 'backend-move-failed' ? 'failure' : 'blocked',
         payload: { reason, outcome, title: iso(at), text } });
-    } catch { /* The secretary may still be told. */ }
-    try { this.owe(`${text}\nNAW 只通知，不加任务。`); } catch { /* No secretary, or its notice could not be kept. */ }
+    } catch { /* The project manager may still be told. */ }
+    try { this.owe(`${text}\nNAW 只通知，不加任务。`); } catch { /* No project manager, or its notice could not be kept. */ }
   }
 }
 
-// What is owed to the secretary, for the queue dispatcher (queue-dispatch.cjs notifyOwed), in the shape of
+// What is owed to the project manager, for the queue dispatcher (queue-dispatch.cjs notifyOwed), in the shape of
 // answer-notices.cjs. Kept in memory: a restart before it was sent makes that start's own notice.
 class VersionNotices {
   constructor({ now = Date.now, retryMs = RETRY_MS, maxAgeMs = MAX_AGE_MS } = {}) {

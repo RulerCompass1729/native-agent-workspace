@@ -14,17 +14,19 @@ function setup(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return { dir, role: new QueueSecretary(dir) };
 }
-test('one persisted secretary replaces the former and can be revoked after reopen', t => {
+// The file an earlier version wrote when the person chose the secretary; this version only reads it.
+function chosen(dir, value) {
+  fs.writeFileSync(path.join(dir, 'queue-secretary.json'), JSON.stringify({ version: 1, selected: value }), { mode: 0o600 });
+  return new QueueSecretary(dir);
+}
+test('the secretary an earlier version recorded is read and never written', t => {
   const { dir, role } = setup(t);
   assert.equal(role.current(), null);
-  role.set(selected);
-  assert.deepEqual(new QueueSecretary(dir).current(), selected);
-  role.set(next);
-  assert.deepEqual(role.current(), next);
-  role.set(null);
-  assert.equal(new QueueSecretary(dir).current(), null);
-  assert.equal(fs.statSync(role.file).mode & 0o777, 0o600);
-  assert.throws(() => role.set({ ...selected, extra: true }), /Invalid/);
+  const read = chosen(dir, selected), before = fs.readFileSync(read.file);
+  assert.deepEqual(read.current(), selected);
+  assert.deepEqual(fs.readFileSync(read.file), before);
+  assert.equal(chosen(dir, null).current(), null);
+  assert.equal(['set', 'creator', 'author'].some(name => name in read), false);
 });
 test('only done follows a unique successor chain; kept, branches and native mismatches stay put', () => {
   assert.deepEqual(successor(selected, [entry('requested')]), selected);
@@ -42,8 +44,7 @@ test('only done follows a unique successor chain; kept, branches and native mism
   assert.deepEqual(successor(selected, [entry('done'), entry('done', { sessionId: 'another-parent', nativeId: 'n-parent' }, next)]), selected);
 });
 test('actual written log moves authorization after done and keeps it at the source for a branch', t => {
-  const { role } = setup(t);
-  role.set(selected);
+  const role = chosen(setup(t).dir, selected);
   const write = entries => fs.writeFileSync(role.logFile, entries.map(value => JSON.stringify(value)).join('\n') + '\n', { mode: 0o600 });
   write([entry('kept')]);
   assert.deepEqual(role.current(), selected);
@@ -52,31 +53,15 @@ test('actual written log moves authorization after done and keeps it at the sour
   write([entry('done'), entry('done', selected, { sessionId: 'other', nativeId: 'n-other' })]);
   assert.deepEqual(role.current(), selected);
 });
-test('authorization uses native identity and trusted labels, never a caller supplied name', t => {
-  const { role } = setup(t); role.set(selected);
-  const record = { id: selected.sessionId, nativeId: selected.nativeId, name: 'Native title', state: 'idle' };
-  const actor = { id: record.id, nativeId: record.nativeId, name: 'forged display name' };
-  assert.deepEqual(role.creator(actor, [record], new Map([[record.id, 'Secretary label']])), { kind: 'secretary', name: 'Secretary label', sessionId: record.id });
-  for (const bad of [null, { ...actor, id: 'other' }, { ...actor, nativeId: 'other' }]) {
-    assert.throws(() => role.creator(bad, [record], new Map()), error => error.uiMessage.key === 'error.queue.secretaryOnly');
-  }
-  for (const changes of [{ archived: true }, { nativeContextPending: true }, { state: 'ended' }, { state: 'background' }]) {
-    assert.throws(() => role.creator(actor, [{ ...record, ...changes }], new Map()), error => error.uiMessage.key === 'error.queue.secretaryOnly');
-  }
-});
-test('unreadable authorization or rotation records fail closed; a user can revoke a damaged designation', t => {
-  const { dir, role } = setup(t); role.set(selected);
+test('unreadable selection or rotation records fail closed', t => {
+  const { dir } = setup(t), role = chosen(dir, selected);
   fs.writeFileSync(role.logFile, '{broken\n', { mode: 0o600 });
   assert.throws(() => role.current(), error => error.uiMessage.key === 'error.queue.secretaryState');
   fs.writeFileSync(role.file, '{broken');
-  const reopened = new QueueSecretary(dir);
-  assert.throws(() => reopened.current(), error => error.uiMessage.key === 'error.queue.secretaryState');
-  reopened.set(null);
-  assert.equal(reopened.current(), null);
+  assert.throws(() => new QueueSecretary(dir).current(), error => error.uiMessage.key === 'error.queue.secretaryState');
 });
 test('review note 5: a rotation log past 32 MB still names the successor, for the butler, the secretary and the integrator', t => {
-  const { dir, role } = setup(t);
-  role.set(selected);
+  const { dir } = setup(t), role = chosen(dir, selected);
   const steward = new StewardRole(dir);
   steward.set(selected);
   const integrator = new IntegratorRole(dir);

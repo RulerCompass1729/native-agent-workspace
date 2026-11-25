@@ -1313,7 +1313,7 @@ const sessionTimes = s => uiText('time.session', { created: sessionTime(s.create
 const hierBase = folder => String(folder).replace(/\/+$/, '').split('/').pop() || String(folder);
 const hierText = () => ({
   folderView: uiText('sidebar.hierarchy.folderView'), made: uiText('sidebar.hierarchy.made'), madeOne: uiText('sidebar.hierarchy.madeOne'), main: uiText('sidebar.hierarchy.main'), unknown: uiText('sidebar.hierarchy.unknown'),
-  steward: uiText('butler.name'), integrator: uiText('sidebar.hierarchy.integrator'), secretary: uiText('sidebar.hierarchy.secretary'), independent: uiText('sidebar.independent'),
+  steward: uiText('butler.name'), integrator: uiText('sidebar.hierarchy.integrator'), manager: uiText('sidebar.hierarchy.manager'), independent: uiText('sidebar.independent'),
   worktree: id => uiText('sidebar.hierarchy.worktree', { id }), parts: count => uiText('sidebar.hierarchy.parts', { count }), part: (index, count) => uiText('sidebar.hierarchy.part', { index, count }),
   partsTitle: count => uiText('sidebar.hierarchy.partsTitle', { count }), added: count => uiText('sidebar.hierarchy.added', { count }), addedTitle: list => uiText('sidebar.hierarchy.addedTitle', { list }),
   doingTitle: text => uiText('sidebar.hierarchy.doingTitle', { text }), folder: (path, branch) => uiText('sidebar.hierarchy.folderPath', { path }) + (branch ? '\n' + uiText('sidebar.hierarchy.folderBranch', { branch }) : ''),
@@ -1355,9 +1355,13 @@ function hierQueueFacts(record) {
   }
   return { doing, added };
 }
+// The space this session is the project manager of, or ''.
+function managedSpace(id) {
+  return Object.keys(state.spaceManagers || {}).find(roomId => state.spaceManagers[roomId].sessionId === id) || '';
+}
 function hierRole(record) {
   const text = hierText();
-  return state.steward?.sessionId === record.id ? text.steward : state.integrator?.sessionId === record.id ? text.integrator : state.queueSecretary?.sessionId === record.id ? text.secretary : '';
+  return state.steward?.sessionId === record.id ? text.steward : state.integrator?.sessionId === record.id ? text.integrator : managedSpace(record.id) ? text.manager : '';
 }
 function hierPlace(folder) {
   return folder.kind === 'worktree' || folder.kind === 'main' ? `${folder.name} › ${folder.leaf}` : folder.kind === 'folder' ? folder.name : '';
@@ -1927,6 +1931,7 @@ function renderSpaceNavigation() {
 function openSpaceCreate() {
   const opener = document.activeElement;
   $('space-create-name').value = ''; $('space-create-error').hidden = true; $('confirm-space-create').disabled = false;
+  offerManager({ option: 'space-create-manager-option', input: 'space-create-manager', help: 'space-create-manager-help' });
   const ticket = openTransientDialog('space-create-dialog'); ticket.spaceCreateOpener = opener;
   $('space-create-name').focus();
 }
@@ -2430,6 +2435,7 @@ function openCreate(provider = 'claude') {
   if (agyDefault) $('skip-permissions').setAttribute('data-agy-auto-skip', 'true'); else $('skip-permissions').removeAttribute('data-agy-auto-skip');
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = agyDefault; $('create-profile').replaceChildren();
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
+  offerManager({ option: 'create-space-manager-option', input: 'create-space-manager', help: 'create-space-manager-help' });
   resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = '';
   const ticket = openTransientDialog('create-dialog'); ticket.directoryDefaults = {}; createReadiness();
   return loadCreateDirectory(ticket);
@@ -2451,7 +2457,7 @@ function createSpaceChoice() {
   if (!name) throw uiError('error.newSpaceName');
   if (name.length > 60) throw uiError('error.spaceNameLength');
   if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) throw uiError('error.spaceNameControls');
-  return { kind, name };
+  return { kind, name, manager: $('create-space-manager').checked };
 }
 function renderCreateSpaces() {
   if (!$('create-dialog').open) return;
@@ -2467,7 +2473,7 @@ function renderCreateSpaces() {
   }
   $('create-space-existing-wrap').hidden = kind !== 'existing'; $('create-space-new-wrap').hidden = kind !== 'new';
   const ticket = dialogTickets.get($('create-dialog')), locked = creatingSession || Boolean(ticket?.creation || ticket?.created);
-  for (const id of ['create-space-kind', 'create-space-existing', 'create-space-name']) $(id).disabled = locked;
+  for (const id of ['create-space-kind', 'create-space-existing', 'create-space-name', 'create-space-manager']) $(id).disabled = locked;
 }
 async function finishCreateSpace(ticket, revision) {
   const creation = ticket.creation, fresh = () => currentDialogTicket(ticket) && revision === selectionRevision;
@@ -2513,6 +2519,7 @@ async function finishCreateSpace(ticket, revision) {
     if (fresh()) { $('create-dialog').close(); await select(record.id, creation.view); }
     else if (currentDialogTicket(ticket)) $('create-dialog').close();
     toastMessage('toast.createdSessionJoined', { name: spaceName(room) });
+    if (creation.choice?.manager) arrangeManager(room.id);
   } catch (error) {
     if (error.final) creation.blocked = true;
     // Whether the dialog is still open decides where the message goes and which retry it offers (a moved selection keeps
@@ -3648,7 +3655,14 @@ function renderOperatorControls(entry, message, context = {}) {
   }
 
 }
-const roomMenuKey = (id = spaceId) => JSON.stringify([id, selectionRevision, disconnected, spaceRecord(id)?.name, spaceRecord(id)?.archived]);
+const roomMenuKey = (id = spaceId) => JSON.stringify([id, selectionRevision, disconnected, spaceRecord(id)?.name, spaceRecord(id)?.archived, state.spaceManagers?.[id]]);
+// Choosing an existing member is in that member's own menu.
+function roomManagerItems(room) {
+  if (typeof api.spaceManager !== 'function') return [];
+  const item = (id, labelKey) => ({ id, label: uiText(labelKey), labelKey });
+  if (!state.spaceManagers?.[room.id]) return state.preflight?.claude === false ? [] : [item('manager-create', 'menu.managerCreate')];
+  return [item('manager-open', 'menu.managerOpen'), item('manager-revoke', 'menu.managerRevoke')];
+}
 function openRoomMenu(point, anchor, id = spaceId) {
   const room = spaceRecord(id); anchor ||= spaceRows.get(id)?.more || $('room-more');
   contentMenu?.close(); if (!room || room.archived || disconnected || anchor.disabled) return;
@@ -3656,13 +3670,16 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const key = roomMenuKey(id);
   roomMenu = ui.menu({
-    items: [{ type: 'label', id: 'space-id', text: uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }), labelRead: () => uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }) }, { type: 'separator', id: 'space-id-separator' }, { id: 'copy-id', label: uiText('menu.copySpaceId'), labelKey: 'menu.copySpaceId' }, { id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), ...operatorGlobalMenuItems(), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
+    items: [{ type: 'label', id: 'space-id', text: uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }), labelRead: () => uiText('menu.spaceIdLabel', { id: room.id.slice(0, 8) }) }, { type: 'separator', id: 'space-id-separator' }, { id: 'copy-id', label: uiText('menu.copySpaceId'), labelKey: 'menu.copySpaceId' }, { id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), ...roomManagerItems(room), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), ...operatorGlobalMenuItems(), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
     onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey(id) && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
     onSelect: action => {
       if (key !== roomMenuKey(id)) return;
       if (action === 'create') openSpaceCreate();
       else if (action === 'copy-id') attempt(async () => { await api.copy(id); toastMessage('toast.copied'); });
+      else if (action === 'manager-create') attempt(() => chooseManager(id, { create: true }));
+      else if (action === 'manager-open') attempt(() => select(state.spaceManagers[id].sessionId, 'chat'));
+      else if (action === 'manager-revoke') attempt(() => chooseManager(id, null));
       else if (action === 'merge') openSpaceMerge(id);
       else if (action === 'merge-record') attempt(() => openMergeRecord(id));
       else if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled));
@@ -3786,17 +3803,31 @@ function sessionMenuModel(id, row) {
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
   const chain = sessionChainModel(id);
   if (chain) update.push({ id: 'session-chain', label: uiText('chain.menu', { count: chain.sessions.length }), labelKey: 'chain.menu', labelParams: { count: chain.sessions.length } });
-  const secretaryKey = state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
-  const secretary = typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === id || record.nativeId && !record.archived)
-    ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey }] : [];
-  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...secretary, ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...managerAction(record), ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
-async function chooseQueueSecretary(id) {
-  await api.queueSecretary(id);
-  updateState(await api.initial());
-  render();
+// A space's project manager is one of its members, and the person's choice alone.
+function managerAction(record) {
+  if (typeof api.spaceManager !== 'function' || !record) return [];
+  const managed = managedSpace(record.id), rooms = window.nativeWorkspaceSpaces.roomIds(record).map(spaceRecord).filter(room => room && !room.archived);
+  const room = managed ? spaceRecord(managed) : rooms.length === 1 && record.nativeId && !record.archived ? rooms[0] : null;
+  if (!room) return [];
+  const labelKey = managed ? 'menu.managerRevoke' : 'menu.managerSet', labelParams = { space: spaceName(room) };
+  return [{ id: managed ? 'manager-revoke' : 'manager-set', label: uiText(labelKey, labelParams), labelKey, labelParams, roomId: room.id }];
+}
+async function chooseManager(roomId, choice) {
+  try { await api.spaceManager(roomId, choice); }
+  finally { updateState(await api.initial()); render(); }
+}
+// The space already exists by now: what went wrong here leaves it as it is.
+async function arrangeManager(roomId) {
+  try { await chooseManager(roomId, { create: true }); }
+  catch (error) { toastError(uiError('error.manager.notArranged', { reason: ui.errorText(error) })); }
+}
+function offerManager(ids) {
+  const offered = typeof api.spaceManager === 'function' && state.preflight?.claude !== false;
+  $(ids.option).hidden = $(ids.help).hidden = !offered; $(ids.input).checked = offered;
 }
 // The butler the person talks to is one session outside every space. Designating is offered where it can be done;
 // changing and revoking are offered on the session that holds the designation, wherever it is now.
@@ -3919,7 +3950,7 @@ function openSessionMenu(id, point, rowKey = id) {
       if (action.startsWith('membership:')) {
         const destination = action.slice(11), person = state.sessions.find(s => s.id === id);
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
-      } else if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : id));
+      } else if (action === 'manager-set' || action === 'manager-revoke') attempt(() => chooseManager(managerAction(record)[0]?.roomId, action === 'manager-revoke' ? null : id));
       else if (action === 'integrator-set' || action === 'integrator-revoke') attempt(() => chooseIntegrator(id, action === 'integrator-revoke'));
       else if (action === 'rotation-release') attempt(() => releaseSessionRotation(record));
       else if (action === 'steward-set') openStewardChooser(id);
@@ -3948,7 +3979,7 @@ function openSessionMenu(id, point, rowKey = id) {
 function memberMenuKey(id) {
   const record = members().find(s => s.id === id);
   return selected === 'room' && !disconnected && !state.room.archived && record
-    ? JSON.stringify([selectionRevision, roomSurface, roomSession, id, spaceId, pairRevision(record), record.nativeId, record.archived, state.queueSecretary]) : null;
+    ? JSON.stringify([selectionRevision, roomSurface, roomSession, id, spaceId, pairRevision(record), record.nativeId, record.archived, state.spaceManagers]) : null;
 }
 function focusMemberAction(anchor) {
   const visible = element => element?.isConnected && !element.disabled && element.getClientRects().length;
@@ -3965,7 +3996,7 @@ function openMemberMenu(id, anchor) {
   const close = ui.menu({
     contextElement: anchor,
     items: [{ id: 'detach', label: uiText('menu.detach'), labelKey: 'menu.detach' }, { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' },
-      ...(typeof api.queueSecretary === 'function' && members().find(s => s.id === id)?.nativeId ? [{ id: state.queueSecretary?.sessionId === id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet'), labelKey: state.queueSecretary?.sessionId === id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet' }] : []),
+      ...managerAction(members().find(s => s.id === id)),
       ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: uiText('menu.terminalHeightAll'), labelKey: 'menu.terminalHeightAll' }] : []),
       ...(reorder && index > 0 ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
       ...(reorder && index < people.length - 1 ? [{ id: 'later', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : [])],
@@ -3981,7 +4012,7 @@ function openMemberMenu(id, anchor) {
     onSelect: action => {
       if (key !== memberMenuKey(id)) return toastMessage("toast.memberChanged");
       if (action === 'copy-id') attempt(() => api.copy(id));
-      else if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : id));
+      else if (action === 'manager-set' || action === 'manager-revoke') attempt(() => chooseManager(managerAction(members().find(s => s.id === id))[0]?.roomId, action === 'manager-revoke' ? null : id));
       else if (action === 'terminal-height-all') {
         const source = columnTerminalBinding(id); if (!source) return toastMessage('toast.terminalHidden');
         const height = source.terminalHeight ?? columnTerminalHeight(id), lower = [];
@@ -5284,7 +5315,7 @@ function documentSelectionChanged() {
 }
 document.addEventListener('selectionchange', documentSelectionChanged);
 document.addEventListener('toggle', updateSelectedSharing, true);
-const headerMenuKey = () => JSON.stringify([selectionRevision, selected, current()?.id, current()?.nativeId, spaceId, current() ? pairRevision(current()) : null, current()?.archived, current()?.owner, state.queueSecretary, state.integrator, state.steward, disconnected]);
+const headerMenuKey = () => JSON.stringify([selectionRevision, selected, current()?.id, current()?.nativeId, spaceId, current() ? pairRevision(current()) : null, current()?.archived, current()?.owner, state.spaceManagers, state.integrator, state.steward, disconnected]);
 function openHeaderMenu(anchor, terminal = false) {
   if (!current()) return;
   if (sessionMenu?.anchor === anchor) return sessionMenu.close();
@@ -5292,20 +5323,16 @@ function openHeaderMenu(anchor, terminal = false) {
   const key = headerMenuKey(), h = headerControls, rotationTarget = current();
   const actions = terminal ? [{ id: 'display', label: uiText('header.display'), labelKey: 'header.display', control: $('terminal-display') }]
     : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
-  // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
+  // A role's item (`role`) is kept on an archived session, and disabled while disconnected.
   if (rotationTarget.rotationEpisode) actions.push(...rotationReleaseAction(rotationTarget));
-  if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, secretary: true })));
-  const secretaryKey = state.queueSecretary?.sessionId === current().id ? 'menu.queueSecretaryRevoke' : 'menu.queueSecretarySet';
-  if (typeof api.queueSecretary === 'function' && (state.queueSecretary?.sessionId === current().id || current().nativeId && !current().archived)) actions.push({
-    id: state.queueSecretary?.sessionId === current().id ? 'queue-secretary-revoke' : 'queue-secretary-set', label: uiText(secretaryKey), labelKey: secretaryKey, secretary: true,
-  });
-  // The same flag as the secretary item: kept on an archived session, and disabled while disconnected.
-  if (!terminal) actions.push(...integratorAction(current()).map(item => ({ ...item, secretary: true })));
+  if (!terminal) actions.push(...stewardAction(current()).map(item => ({ ...item, role: true })));
+  actions.push(...managerAction(current()).map(item => ({ ...item, role: true })));
+  if (!terminal) actions.push(...integratorAction(current()).map(item => ({ ...item, role: true })));
   // The butler is not offered a space to join.
-  const items = actions.filter(item => (terminal || !current().archived || item.id === 'usage' || item.secretary) && !(item.id === 'membership' && item.control.hidden));
+  const items = actions.filter(item => (terminal || !current().archived || item.id === 'usage' || item.role) && !(item.id === 'membership' && item.control.hidden));
   anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
-    items: items.map(({ control, secretary, ...item }) => ({ ...item, disabled: Boolean(control?.disabled) || Boolean(disconnected && (secretary || item.id === 'rotation-release')) })),
+    items: items.map(({ control, role, ...item }) => ({ ...item, disabled: Boolean(control?.disabled) || Boolean(disconnected && (role || item.id === 'rotation-release')) })),
     getAnchorRect: () => anchor.getBoundingClientRect(),
     onClose: () => {
       if (sessionMenu?.close === close) sessionMenu = null;
@@ -5314,7 +5341,7 @@ function openHeaderMenu(anchor, terminal = false) {
     },
     onSelect: action => {
       if (key !== headerMenuKey()) return;
-      if (action === 'queue-secretary-set' || action === 'queue-secretary-revoke') { if (!disconnected) attempt(() => chooseQueueSecretary(action === 'queue-secretary-revoke' ? null : current().id)); }
+      if (action === 'manager-set' || action === 'manager-revoke') { if (!disconnected) attempt(() => chooseManager(items.find(item => item.id === action).roomId, action === 'manager-revoke' ? null : current().id)); }
       else if (action === 'integrator-set' || action === 'integrator-revoke') { if (!disconnected) attempt(() => chooseIntegrator(current().id, action === 'integrator-revoke')); }
       else if (action === 'rotation-release') { if (!disconnected) attempt(() => releaseSessionRotation(rotationTarget)); }
       else if (action === 'steward-set') openStewardChooser(current().id);
@@ -6782,12 +6809,13 @@ $('open-space-merge-target').onclick = () => attempt(async () => {
 $('cancel-space-create').onclick = () => $('space-create-dialog').close();
 $('space-create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   const ticket = dialogTickets.get($('space-create-dialog')); if (!currentDialogTicket(ticket) || $('confirm-space-create').disabled) return;
-  const submittedName = $('space-create-name').value;
+  const submittedName = $('space-create-name').value, manager = $('space-create-manager').checked;
   $('confirm-space-create').disabled = true; $('space-create-error').hidden = true;
   try {
     const id = await api.spaceCreate(submittedName); updateState(await api.initial()); render();
     if (currentDialogTicket(ticket) && $('space-create-name').value === submittedName) { $('space-create-dialog').close(); await selectSpace(id); }
     else toastMessage("toast.createdSpaceRetained");
+    if (manager) arrangeManager(id);
   } catch (error) { if (currentDialogTicket(ticket)) { ui.showError($('space-create-error'), error); $('space-create-error').hidden = false; } else toastError(error); }
   finally { if (currentDialogTicket(ticket)) $('confirm-space-create').disabled = false; }
 }); };

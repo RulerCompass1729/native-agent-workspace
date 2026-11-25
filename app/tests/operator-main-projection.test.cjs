@@ -8,7 +8,7 @@ function display(background = false) {
   const message = { id: 'pending', kind: 'operator-open', operator: { creation: 'pending-authorization', actionable: true, initiatorId: 's', actionKey: 'key', args: { task: 'Synthetic original task' } } };
   const scope = { structuredClone, confirmationSnapshot: (_client, value) => value, roomState: { apply: value => structuredClone(value) }, sessionLabels: { apply: value => value }, submissionState: value => value,
     backgroundControl: null, backgroundUnavailable: false, outboxQuitFailed: false, outboxUnavailable: false,
-    queueSecretary: null, integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null,
+    activeManagers: () => ({}), integratorRole: null, stewardRole: null, queueDispatcher: null, butlerIngress: null,
     stewardWake: { view: () => { reads.push('view'); return { blocked }; } },
     localVendorIcons: () => ({}), viewStorageWarning: '', viewStorageWarningUiMessage: null, endedByMove: () => [], roomPeerIdentity: () => null,
     backgroundOperation: { conversationSnapshot: value => value }, conversationAccess: () => [],

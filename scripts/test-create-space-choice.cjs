@@ -89,7 +89,7 @@ async function run() {
   const before = await calls();
   await open('取消的会话'); await page.locator('#create-space-kind').selectOption('existing');
   assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.match(await page.locator('#create-readiness').innerText(), /选择一个还在的协作空间/);
-  await page.locator('#create-space-kind').selectOption('new');
+  await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-manager').uncheck();
   assert.equal(await page.locator('#create-space-name').inputValue(), '取消的会话', 'A new space is prefilled with the session name');
   await page.locator('#create-space-name').fill('   ');
   assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.match(await page.locator('#create-readiness').innerText(), /新空间的名称/);
@@ -113,6 +113,9 @@ async function run() {
 
   // 4. Create a new space and join (Codex entry).
   await open('周末计划'); await page.locator('#create-space-kind').selectOption('new');
+  const managerBox = await page.locator('#create-space-manager').boundingBox(), managerText = await page.locator('#create-space-manager + span').boundingBox();
+  assert.ok(managerBox.width < 24 && Math.abs(managerBox.y + managerBox.height / 2 - managerText.y - managerText.height / 2) < 3, 'The box is beside its words');
+  assert.equal(await page.locator('#create-space-manager').isChecked(), true); await page.locator('#create-space-manager').uncheck();
   await page.locator('#create-space-name').fill('周末小组');
   await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
   const [weekend] = await named('周末计划'), [weekendRoom] = await roomsNamed('周末小组');
@@ -147,7 +150,7 @@ async function run() {
   const [createRetry] = await named('会话失败'); assert.deepEqual(await spacesOf(createRetry.id), [studyId]);
   let nowCreate = await calls(); assert.deepEqual([nowCreate.create - markCreate.create, nowCreate.spaceCreate - markCreate.spaceCreate, nowCreate.join - markCreate.join], [2, 0, 1]);
   markCreate = nowCreate; await fault('create', 'after');
-  await open('会话回复丢失'); await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-name').fill('回复丢失小组');
+  await open('会话回复丢失'); await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-manager').uncheck(); await page.locator('#create-space-name').fill('回复丢失小组');
   await page.locator('#confirm-create').click();
   await until(async () => (await page.locator('#create-error').innerText()).includes('不会重建会话'), 'Kept session adopted');
   assert.equal((await named('会话回复丢失')).length, 1); assert.equal(await page.locator('#confirm-create').innerText(), '仅继续加入');
@@ -342,7 +345,7 @@ async function run() {
 
   // 5. The space write happened but its reply was lost: the one new space is kept, not created again.
   let mark = await calls(); await fault('spaceCreate', 'after');
-  await open('丢失回复'); await page.locator('#create-space-kind').selectOption('new');
+  await open('丢失回复'); await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-manager').uncheck();
   await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
   const [lost] = await named('丢失回复'), lostRooms = await roomsNamed('丢失回复');
   assert.equal(lostRooms.length, 1, 'Exactly one space exists'); assert.deepEqual(await spacesOf(lost.id), [lostRooms[0].id]);
@@ -351,7 +354,7 @@ async function run() {
 
   // 6. Creating the space fails: the session is kept, everything but retry is locked, retry creates only the space.
   mark = await calls(); await fault('spaceCreate', 'before');
-  await open('空间失败'); await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-name').fill('重试小组');
+  await open('空间失败'); await page.locator('#create-space-kind').selectOption('new'); await page.locator('#create-space-manager').uncheck(); await page.locator('#create-space-name').fill('重试小组');
   await page.locator('#confirm-create').click();
   await until(async () => (await page.locator('#create-error').innerText()).includes('还没加入空间'), 'Space failure shown in the dialog');
   const [spaceFail] = await named('空间失败'); assert.ok(spaceFail, 'The created session is kept'); assert.deepEqual(await roomsNamed('重试小组'), []);
