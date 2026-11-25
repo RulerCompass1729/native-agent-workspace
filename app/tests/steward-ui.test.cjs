@@ -18,22 +18,25 @@ class Element {
   setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
   getAttribute(name) { return this.attributes?.[name] ?? null; }
   focus() { this.focused = true; }
+  closest() { return this; }
+  scrollIntoView() { this.shown = true; }
   close() { this.open = false; }
   showModal() { this.open = true; }
 }
 const S = (id, extra = {}) => ({ id, nativeId: 'native-' + id, name: id.toUpperCase(), provider: 'claude', state: 'idle', ...extra });
 function fixture({ sessions, steward = null, order = [], disconnected = false, refuse = null, duty = undefined, standing = undefined } = {}) {
-  const elements = new Map(), calls = [], selected = [], shown = [], duties = [], toasts = [], standings = [];
+  const elements = new Map(), calls = [], selected = [], shown = [], duties = [], toasts = [], standings = [], handoffs = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element(id === 'steward-dialog' ? 'dialog' : 'div')); return elements.get(id); };
   const state = { sessions, steward, sidebar: { order }, rooms: [{ id: 'shared', name: '网站改版' }] };
   const context = vm.createContext({ state, $, disconnected, document: { activeElement: null }, window: { nativeWorkspaceSpaces: spaces },
-    api: { ...(standing === undefined ? {} : { stewardStanding: async () => { if (standing instanceof Error) throw standing; return standing; } }), steward: async (id, text, keep) => { calls.push(id); duties.push(text); standings.push(keep); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; return duty === undefined ? (id === null ? null : { duty: { state: 'sent' } }) : duty; }, initial: async () => state },
+    api: { ...(standing === undefined ? {} : { stewardStanding: async () => { if (standing instanceof Error) throw standing; return standing; } }), steward: async (id, text, keep, said) => { calls.push(id); duties.push(text); standings.push(keep); handoffs.push(said); if (refuse) throw refuse; state.steward = id === null ? null : { sessionId: id, nativeId: 'native-' + id }; return duty === undefined ? (id === null ? null : { duty: { state: 'sent' } }) : duty; }, initial: async () => state },
     toast: () => {}, toastMessage: (key, params) => toasts.push(locale.format('zh', key, params?.())),
     uiText: (key, params) => locale.format('zh', key, params), updateState: next => { calls.push('state'); return next; }, render: () => calls.push('render'), select: async id => { selected.push(id); },
     ui: { display: { text: (el, key) => { el.textContent = locale.format('zh', key); }, computed: (el, slot, read) => { if (slot === 'text') { el.textContent = read(); if (el === $('toast-text')) toasts.push(el.textContent); } else el.setAttribute(slot, read()); } }, showError: (el, error) => { shown.push(error); el.textContent = 'shown'; },
       errorText: error => error.uiMessage ? locale.format('zh', error.uiMessage.key, error.uiMessage.params) : error.message },
     node: (tag, text, cls) => { const el = new Element(tag, text); if (cls) el.className = cls; return el; }, icon: provider => new Element('span', provider),
     spaceRecord: id => state.rooms.find(room => room.id === id), spaceName: room => room.name, sidebarPresentation: record => ({ compact: record.state === 'working' ? '正在工作' : '会话就绪' }),
+    uiError: (key, params) => Object.assign(Error(key), { uiMessage: { key, params } }), crypto: { randomUUID: () => 'folder-1' }, setTimeout, Date, TextEncoder,
     contentMenu: null, sessionMenu: null, roomMenu: null, dialogTickets: new Map() });
   vendorMarks(renderer, context);
   vm.runInContext(cut('function sidebarSessions() {', 'function sameNameSessions('), context);
@@ -42,7 +45,7 @@ function fixture({ sessions, steward = null, order = [], disconnected = false, r
   // Values made inside the renderer's context are copied out, so they compare as plain values here.
   const run = code => { const value = vm.runInContext(code, context); return value && typeof value === 'object' && typeof value.then !== 'function' ? JSON.parse(JSON.stringify(value)) : value; };
   const rows = () => $('steward-list').children.map(row => { const [radio, , text] = row.children; return [text.children[0].textContent, text.children[1].textContent, radio.disabled, radio.checked]; });
-  return { state, context, calls, selected, shown, duties, toasts, standings, $, run, rows, pick: id => $('steward-list').children.map(row => row.children[0]).find(radio => radio.value === id).onchange() };
+  return { state, context, calls, selected, shown, duties, toasts, standings, handoffs, $, run, rows, pick: id => $('steward-list').children.map(row => row.children[0]).find(radio => radio.value === id).onchange() };
 }
 const zh = (key, params) => locale.format('zh', key, params);
 
@@ -144,6 +147,218 @@ test('the chooser lists the butler first, says why a session cannot be chosen, d
   const off = fixture({ sessions: [S('a')], disconnected: true }); off.run('openStewardChooser()'); assert.equal(off.$('steward-dialog').open, false);
 });
 
+test('a text that cannot be sent is said before there is a session, by the same rule the main process has', async () => {
+  const { DUTY_MAX, validDuty } = require('../steward-role.cjs');
+  for (const [id, key] of [['steward-duty', 'error.steward.dutyInvalid'], ['steward-handoff', 'error.steward.handoffInvalid']]) for (const bad of ['x'.repeat(DUTY_MAX), '说'.repeat(Math.ceil(DUTY_MAX / 3)), 'a\u0000b', ...(id === 'steward-duty' ? ['  '] : [])]) {
+    const f = making(); f.open(); f.$(id).value = bad; await f.run('confirmSteward()');
+    assert.deepEqual([f.created, f.shown.map(error => error.uiMessage.key), f.handoffs, f.$('steward-dialog').open, f.$('steward-confirm').disabled], [[], [key], [], true, false], JSON.stringify([id, bad.slice(0, 5)]));
+  }
+  const f = making(); for (const text of ['', ' ', 'a', '说\n做', 'x'.repeat(DUTY_MAX - 2), 'x'.repeat(DUTY_MAX - 1), '"'.repeat(DUTY_MAX / 2 - 1), '"'.repeat(DUTY_MAX / 2), 'a\u0007', 'a\tb', 'a\u007f']) {
+    f.context.text = text; assert.equal(f.run('stewardTextValid(text)'), validDuty(text), JSON.stringify(text.slice(0, 6)));
+  }
+});
+
+// M82 (the person, 2026-11-21): the butler changed for a session opened there and then, from the same dialog.
+const CAN = ['createSettingsV1', 'createSkipPermissions'];
+function making(options = {}, { ready = 0, record = {}, capabilities = CAN, refuseCreate = null } = {}) {
+  const f = fixture({ sessions: [S('butler', { name: '大管家 7', cwd: '/synthetic/butler' }), S('a')], steward: { sessionId: 'butler', nativeId: 'native-butler' }, ...options }), created = [];
+  let reads = 0; f.state.capabilities = capabilities; f.created = created;
+  f.context.api.create = async value => {
+    created.push(JSON.parse(JSON.stringify(value))); if (refuseCreate) throw refuseCreate;
+    f.state.sessions.push(S('made', { name: value.name, state: 'starting', nativeId: null })); reads = 0; f.due = ready; return 'made';
+  };
+  f.context.api.createDefaults = async () => ({ directory: '' });
+  // The session is there at once and can take a message only a little later, as a native start does.
+  const settle = () => { const made = f.state.sessions.find(s => s.id === 'made'); if (made && made.state === 'starting' && ++reads > f.due) Object.assign(made, { state: 'idle', nativeId: 'native-made' }, record); };
+  f.context.updateState = value => { f.calls.push('state'); settle(); return value; };
+  // The renderer polls its own state: each pause is one step of the session's start.
+  f.context.setTimeout = (done, ms) => setImmediate(() => { settle(); f.paused?.(ms); done(); });
+  f.open = chosen => { f.run('openStewardChooser()'); f.pick(chosen ?? 'new'); };
+  return f;
+}
+const boxes = f => Object.fromEntries(['steward-new', 'steward-handoff', 'steward-handoff-label', 'steward-new-note', 'steward-new-permission', 'steward-none', 'steward-duty'].map(id => [id, !f.$(id).hidden]));
+const HIDDEN = { 'steward-new': false, 'steward-handoff': false, 'steward-handoff-label': false, 'steward-new-note': false, 'steward-new-permission': false, 'steward-none': false, 'steward-duty': true };
+
+test('the chooser\'s last row opens a new session as the butler; its box is there only while that row is chosen, and skipping permission checks is not ticked', () => {
+  // A backend that cannot open a session with a model and an effort is not offered it, and the chooser is as it was.
+  for (const capabilities of [undefined, [], ['createSettingsV1'], ['createSkipPermissions']]) {
+    const f = making({}, {}); f.state.capabilities = capabilities; f.run('openStewardChooser()');
+    assert.deepEqual([f.rows().length, boxes(f)], [2, HIDDEN], JSON.stringify(capabilities));
+  }
+  const without = making(); delete without.context.api.create; without.run('openStewardChooser()'); assert.equal(without.rows().length, 2);
+
+  const f = making(); f.$('steward-new-model').value = 'claude-haiku-5-5'; f.$('steward-new-skip').checked = true;
+  f.run('openStewardChooser()');
+  assert.deepEqual(f.rows().at(-1), [zh('steward.new.title'), zh('steward.new.folder', { folder: '/synthetic/butler' }), false, false]);
+  assert.deepEqual([f.rows().length, f.rows()[0][3], boxes(f)], [3, true, HIDDEN], 'The butler there is stays chosen');
+  f.pick('new');
+  assert.deepEqual(boxes(f), { ...HIDDEN, 'steward-new': true, 'steward-handoff': true, 'steward-handoff-label': true, 'steward-new-note': true });
+  assert.deepEqual([f.$('steward-new-model').value, f.$('steward-new-effort').value, f.$('steward-new-skip').checked], ['claude-opus-5-5', 'xhigh', false], 'Whatever was chosen the last time');
+  assert.deepEqual([f.$('steward-handoff').value, f.$('steward-duty').value], [zh('steward.new.handoffDefault', { name: '大管家 7' }), zh('steward.duty.default')]);
+  assert.deepEqual([f.$('steward-confirm').textContent, f.$('steward-confirm').disabled, f.$('steward-duty-label').textContent], [zh('steward.new.confirm'), false, zh('steward.new.duty')]);
+  // A butler whose own session skips permission checks: the new one is asked for it, not given it.
+  for (const extra of [{ skipPermissions: true }, { nativePermissionMode: 'bypassPermissions' }]) {
+    const g = making({ sessions: [S('butler', { name: '大管家 7', cwd: '/synthetic/butler', ...extra })] }); g.open(); assert.equal(g.$('steward-new-skip').checked, false);
+  }
+  f.$('steward-new-skip').checked = true; f.run('renderStewardChooser()'); assert.equal(boxes(f)['steward-new-permission'], true);
+  f.pick('a'); assert.deepEqual([boxes(f), f.$('steward-confirm').textContent, f.$('steward-duty-label').textContent], [{ ...HIDDEN, 'steward-new-permission': true }, zh('steward.choose.confirm'), zh('steward.duty.label')], 'inside the hidden box');
+
+  // Nobody is the butler: it is the one thing to choose, with nobody to take over from.
+  const first = making({ sessions: [], steward: null }); first.run('openStewardChooser()');
+  assert.deepEqual([first.rows(), boxes(first), first.$('steward-confirm').disabled], [[[zh('steward.new.title'), zh('steward.new.outside'), false, false]], HIDDEN, true]);
+  first.pick('new'); assert.deepEqual([boxes(first), first.$('steward-confirm').disabled, first.$('steward-handoff').value], [{ ...HIDDEN, 'steward-new': true }, false, '']);
+  // While disconnected it cannot be chosen; a choice the backend no longer offers is dropped, not sent.
+  const g = making(); g.open(); g.context.disconnected = true; g.run('renderStewardChooser()'); assert.deepEqual([g.rows().at(-1)[2], g.$('steward-confirm').disabled], [true, true]);
+  g.context.disconnected = false; g.state.capabilities = []; g.run('renderStewardChooser()'); assert.deepEqual([g.rows().length, g.$('steward-confirm').disabled, boxes(g)], [2, true, HIDDEN]);
+});
+
+test('opening it makes one Claude session outside every space and designates it only once it can take a message, the handoff with it', async () => {
+  const f = making({}, { ready: 3 }), seen = []; f.open();
+  f.paused = () => seen.push([f.state.steward.sessionId, f.$('steward-confirm').disabled, f.$('steward-confirm').textContent, f.rows().every(row => row[2])]);
+  await f.run('confirmSteward()');
+  assert.equal(f.created.length, 1); const { name, ...rest } = f.created[0];
+  assert.deepEqual(rest, { provider: 'claude', cwd: '/synthetic/butler', view: 'chat', settings: { model: 'claude-opus-5-5', effort: 'xhigh' } });
+  assert.match(name, /^大管家 \d\d-\d\d \d\d:\d\d$/);
+  assert.ok(seen.length >= 2, 'it waited'); for (const step of seen.slice(0, -1)) assert.deepEqual(step, ['butler', true, zh('steward.new.making'), true], 'The butler has not changed and nothing can be clicked meanwhile');
+  assert.deepEqual([f.calls.filter(c => c === 'made'), f.handoffs, f.duties, f.standings], [['made'], [zh('steward.new.handoffDefault', { name: '大管家 7' })], [null], [null]]);
+  assert.deepEqual([f.state.steward.sessionId, f.selected, f.$('steward-dialog').open, f.toasts], ['made', ['made'], false, []]);
+
+  // What the person changed is what is used; cleared fields are left to the native defaults, a cleared handoff is not sent.
+  const own = making(); own.open(); own.$('steward-new-model').value = 'claude-sonnet-5-5'; own.$('steward-new-effort').value = ''; own.$('steward-new-skip').checked = true; own.$('steward-handoff').value = '  \n'; own.$('steward-duty').value = '只管派活。';
+  await own.run('confirmSteward()'); assert.deepEqual([own.created[0].settings, own.created[0].skipPermissions, own.handoffs, own.duties], [{ model: 'claude-sonnet-5-5' }, true, [null], ['只管派活。']]);
+  const native = making(); native.open(); native.$('steward-new-model').value = native.$('steward-new-effort').value = ''; await native.run('confirmSteward()'); assert.equal(Object.hasOwn(native.created[0], 'settings'), false);
+  // Choosing an ordinary session is as it was: nothing made, nothing handed over.
+  const plain = making(); plain.open('a'); await plain.run('confirmSteward()'); assert.deepEqual([plain.created, plain.handoffs, plain.state.steward.sessionId], [[], [null], 'a']);
+
+  // With nobody to replace: the person's own default folder, else the ordinary new folder, else the workspace.
+  for (const [defaults, state, place] of [[{ directory: '/synthetic/chosen' }, {}, { cwd: '/synthetic/chosen' }],
+    [{ directory: '' }, { capabilities: [...CAN, 'newSessionDirectory'], newWorkspaceRoot: '/synthetic/new' }, { cwd: '/synthetic/new/folder-1', newDirectory: true }],
+    [null, { defaultWorkspace: '/synthetic/workspace' }, { cwd: '/synthetic/workspace' }]]) {
+    const first = making({ sessions: [], steward: null }); Object.assign(first.state, state); first.context.api.createDefaults = async () => defaults; first.open();
+    await first.run('confirmSteward()'); const { cwd, newDirectory } = first.created[0];
+    assert.deepEqual([{ cwd, ...(newDirectory ? { newDirectory } : {}) }, first.handoffs, first.state.steward.sessionId], [place, [null], 'made']);
+  }
+});
+
+test('a new session that cannot be opened, cannot start or does not get ready leaves the butler as it is, and the dialog says why', async () => {
+  // Refused before there is a session.
+  const refusal = Object.assign(Error('refused'), { uiMessage: { key: 'error.steward.inSpace' } }), refused = making({}, { refuseCreate: refusal }); refused.$('steward-dialog').scrollHeight = 900; refused.open(); await refused.run('confirmSteward()');
+  assert.deepEqual([refused.shown.map(error => ({ key: error.uiMessage.key, params: { ...error.uiMessage.params } })), refused.$('steward-error').hidden, refused.$('steward-dialog').open, refused.handoffs, refused.state.steward.sessionId, refused.$('steward-dialog').scrollTop], [[{ key: 'error.steward.newRefused', params: { reason: zh('error.steward.inSpace') } }], false, true, [], 'butler', 900]);
+  assert.deepEqual([refused.rows().at(-1)[3], refused.$('steward-confirm').disabled, refused.$('steward-confirm').textContent], [true, false, zh('steward.new.confirm')], 'It can be tried again');
+  // The row that comes in above it afterwards does not push it away; a person who has scrolled up is left there.
+  Object.assign(refused.$('steward-dialog'), { clientHeight: 400, scrollTop: 500 }); const grow = { get: () => 600 + refused.rows().length * 100, configurable: true };
+  Object.defineProperty(refused.$('steward-dialog'), 'scrollHeight', grow); assert.equal(refused.rows().length, 3);
+  refused.state.sessions.push(S('failed', { state: 'error' })); refused.run('renderStewardChooser()'); assert.equal(refused.$('steward-dialog').scrollTop, 1000);
+  refused.$('steward-dialog').scrollTop = 100; refused.state.sessions.push(S('c')); refused.run('renderStewardChooser()'); assert.equal(refused.$('steward-dialog').scrollTop, 100);
+  refused.$('steward-error').hidden = true; refused.$('steward-dialog').scrollTop = 700; refused.state.sessions.push(S('d')); refused.run('renderStewardChooser()'); assert.equal(refused.$('steward-dialog').scrollTop, 700);
+  // Made, but it ended, went to the background, or was archived meanwhile.
+  for (const record of [{ state: 'ended' }, { state: 'error' }, { state: 'recoverable' }, { state: 'background' }, { archived: true }]) {
+    const f = making({}, { record }); f.open(); await f.run('confirmSteward()');
+    assert.deepEqual([f.shown.map(error => error.uiMessage.key), f.handoffs, f.state.steward.sessionId, f.$('steward-dialog').open], [['error.steward.newFailed'], [], 'butler', true], JSON.stringify(record));
+    // It is not left chosen: one more click opens another and does not make the butler of the one that failed.
+    assert.deepEqual([f.run('[stewardChoice, stewardMade]'), f.$('steward-confirm').textContent, f.$('steward-confirm').disabled], [['new', ''], zh('steward.new.confirm'), false], JSON.stringify(record));
+  }
+  const vanished = making({}, { ready: 99 }); vanished.open(); vanished.paused = () => { vanished.state.sessions = vanished.state.sessions.filter(s => s.id !== 'made'); }; await vanished.run('confirmSteward()');
+  assert.deepEqual([vanished.shown.map(error => error.uiMessage.key), vanished.state.steward.sessionId], [['error.steward.newFailed'], 'butler']);
+  // Not ready in time (signing in, trusting the folder, a native start screen): the butler stays, and the session is in the list.
+  for (const record of [{ state: 'working' }, { state: 'idle', nativeId: null }, { state: 'idle', nativeStartupPrompt: true }, { state: 'idle', nativeContextPending: true }]) {
+    const f = making({}, { record }); let now = 0; f.context.Date = class extends Date { static now() { return now += 1000; } };
+    f.open(); await f.run('confirmSteward()');
+    assert.deepEqual([f.shown.map(error => error.uiMessage.key), f.handoffs, f.state.steward.sessionId, f.$('steward-dialog').open, f.created.length], [['error.steward.newNotReady'], [], 'butler', true, 1], JSON.stringify(record));
+    // It stays chosen, and cannot be made the butler before it is ready, whoever clicks.
+    assert.deepEqual([f.run('stewardChoice'), f.$('steward-confirm').textContent, f.$('steward-confirm').disabled], ['made', zh('steward.choose.confirm'), true], JSON.stringify(record));
+    await f.run('confirmSteward()'); assert.deepEqual([f.handoffs, f.created.length, f.state.steward.sessionId], [[], 1, 'butler'], JSON.stringify(record));
+  }
+  const off = making({}, { ready: 99 }); off.open(); off.paused = () => { off.context.disconnected = true; }; await off.run('confirmSteward()');
+  assert.deepEqual([off.shown.map(error => error.uiMessage.key), off.state.steward.sessionId, off.$('steward-confirm').disabled], [['error.steward.newDisconnected'], 'butler', true]);
+
+  // Ready later: the same session is chosen, with the handoff still in the box, and no second one is made.
+  const late = making({}, { record: { state: 'working' } }); let clock = 0; late.context.Date = class extends Date { static now() { return clock += 1000; } };
+  late.open(); await late.run('confirmSteward()');
+  late.pick('a'); assert.deepEqual([late.$('steward-confirm').disabled, late.$('steward-confirm').textContent], [false, zh('steward.choose.confirm')], 'Another session can be chosen instead');
+  late.pick('made'); assert.equal(late.$('steward-confirm').disabled, true); late.state.sessions.find(s => s.id === 'made').state = 'idle'; late.run('renderStewardChooser()'); assert.equal(late.$('steward-confirm').disabled, false);
+  assert.deepEqual([late.run('stewardChoice'), late.$('steward-confirm').textContent, boxes(late)],
+    ['made', zh('steward.choose.confirm'), { ...HIDDEN, 'steward-handoff': true, 'steward-handoff-label': true, 'steward-new-note': true }]);
+  await late.run('confirmSteward()');
+  assert.deepEqual([late.created.length, late.handoffs, late.state.steward.sessionId], [1, [zh('steward.new.handoffDefault', { name: '大管家 7' })], 'made']);
+
+  // Designated, but nothing could be sent: the dialog stays, says why, and sends both again.
+  const busy = { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } } };
+  const silent = making({ duty: busy }); silent.$('steward-dialog').scrollHeight = 700; silent.open(); await silent.run('confirmSteward()'); assert.equal(silent.$('steward-dialog').scrollTop, 700);
+  assert.deepEqual([silent.$('steward-dialog').open, silent.$('steward-error').textContent, silent.state.steward.sessionId, silent.$('steward-confirm').textContent], [true, zh('steward.duty.notSent', { reason: zh('error.steward.dutyBusy') }), 'made', zh('steward.choose.resend')]);
+  assert.deepEqual(boxes(silent), { ...HIDDEN, 'steward-handoff': true, 'steward-handoff-label': true }, 'the note is about a change that has been made');
+  // A made session that is put into a space, or is the butler and has ended, is dropped as any other choice.
+  const joined = making({}, { record: { state: 'working' } }); let tick = 0; joined.context.Date = class extends Date { static now() { return tick += 1000; } };
+  joined.open(); await joined.run('confirmSteward()'); joined.state.sessions.find(s => s.id === 'made').roomIds = ['shared']; joined.run('renderStewardChooser()'); assert.equal(joined.run('stewardChoice'), '');
+  const gone = making({ duty: { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } } } }); gone.open(); await gone.run('confirmSteward()');
+  gone.state.sessions.find(s => s.id === 'made').state = 'ended'; gone.run('renderStewardChooser()'); assert.deepEqual([gone.run('stewardChoice'), gone.$('steward-confirm').disabled], ['', true]);
+  // It is the butler now: sent again also while it is in a turn, as to any butler.
+  silent.state.sessions.find(s => s.id === 'made').state = 'working'; silent.run('renderStewardChooser()'); assert.equal(silent.$('steward-confirm').disabled, false);
+  await silent.run('confirmSteward()'); assert.deepEqual([silent.created.length, silent.handoffs.length, silent.handoffs[1]], [1, 2, silent.handoffs[0]]);
+  // Opened again for another change, what was made before is an ordinary row.
+  silent.$('steward-dialog').close(); silent.run('openStewardChooser()'); assert.deepEqual(boxes(silent), HIDDEN);
+});
+
+test('each opening starts at the heading with the chosen row in sight, wherever the last one was scrolled', () => {
+  const f = making(), tops = ['steward-dialog', 'steward-list', 'steward-duty', 'steward-handoff']; for (const id of tops) f.$(id).scrollTop = 120;
+  f.run("openStewardChooser('a')"); assert.deepEqual(tops.map(id => f.$(id).scrollTop), [0, 0, 0, 0]);
+  assert.deepEqual(f.$('steward-list').querySelectorAll('input').filter(input => input.shown).map(input => input.value), ['a']);
+});
+
+test('the person closing the dialog while a new session is being opened designates nobody', async () => {
+  const f = making({}, { ready: 99 }); f.open(); let steps = 0;
+  f.paused = () => { if (++steps === 2) f.$('steward-dialog').close(); };
+  await f.run('confirmSteward()');
+  assert.deepEqual([f.created.length, f.handoffs, f.state.steward.sessionId, f.selected, f.toasts], [1, [], 'butler', [], [zh('steward.new.closed')]]);
+  // Closed before there is a session: none is made. Closed and opened again: the new dialog is not designated from the old click.
+  const early = making({ sessions: [], steward: null }); let answer; early.context.api.createDefaults = () => new Promise(resolve => { answer = resolve; });
+  early.open(); const waiting = early.run('confirmSteward()'); early.$('steward-dialog').close(); answer({ directory: '/synthetic/chosen' }); await waiting;
+  assert.deepEqual([early.created, early.handoffs, early.toasts], [[], [], []]);
+  const again = making({}, { ready: 99 }); again.open(); let reopened = false;
+  again.paused = () => { if (reopened) return; reopened = true; again.$('steward-dialog').close(); again.run('openStewardChooser()'); again.pick('a'); };
+  await again.run('confirmSteward()');
+  assert.deepEqual([again.handoffs, again.state.steward.sessionId, again.toasts, again.$('steward-dialog').open, again.rows().find(row => row[0] === 'A')[3], again.$('steward-confirm').disabled], [[], 'butler', [zh('steward.new.closed')], true, true, false]);
+  // The same while the session itself is still being made: the choice in the new dialog is the person's.
+  const during = making(); during.open(); const create = during.context.api.create; let finish; during.context.api.create = value => new Promise(resolve => { finish = async () => resolve(await create(value)); });
+  const clicked = during.run('confirmSteward()'); await new Promise(resolve => setImmediate(resolve)); during.$('steward-dialog').close(); during.run('openStewardChooser()'); during.pick('a'); await finish(); await clicked;
+  assert.deepEqual([during.run('stewardChoice'), boxes(during), during.handoffs, during.state.steward.sessionId], ['a', HIDDEN, [], 'butler']);
+  // While the designation itself is on its way the button stays off and the fields with it, also over a state update; a
+  // second click designates nothing more. The same for a session chosen from the list.
+  for (const chosen of ['new', 'a']) {
+    const going = making(); going.open(chosen); const designate = going.context.api.steward; let arrive; going.context.api.steward = (...args) => new Promise(resolve => { arrive = () => resolve(designate(...args)); });
+    going.$('steward-error').hidden = false; const first = going.run('confirmSteward()'); for (let i = 0; i < 20 && !arrive; i++) await new Promise(resolve => setImmediate(resolve));
+    const FIELDS = ['steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep'], off = () => FIELDS.map(id => going.$(id).disabled);
+    going.run('renderStewardChooser()'); assert.equal(going.$('steward-error').hidden, true, 'an earlier reason is gone');
+    assert.deepEqual([going.$('steward-confirm').disabled, going.$('steward-confirm').textContent, off().every(Boolean), going.rows().every(row => row[2])], [true, zh(chosen === 'new' ? 'steward.new.making' : 'steward.choose.confirm'), true, true], chosen);
+    await going.run('confirmSteward()'); arrive(); await first; assert.deepEqual([going.handoffs.length, going.state.steward.sessionId], [1, chosen === 'new' ? 'made' : 'a']);
+    going.run('openStewardChooser()'); assert.deepEqual([off().some(Boolean), going.$('steward-confirm').disabled], [false, false], 'nothing is left off');
+  }
+  // Closed while it is on its way, a new opening is the person's to use.
+  const hung = making(); hung.open('a'); hung.context.api.steward = () => new Promise(() => {}); hung.run('confirmSteward()'); hung.$('steward-dialog').close(); hung.run('openStewardChooser()'); hung.pick('a');
+  assert.equal(hung.$('steward-confirm').disabled, false);
+  // A second click while one is being opened makes nothing more.
+  const twice = making({}, { ready: 3 }); twice.open(); const one = twice.run('confirmSteward()'); await twice.run('confirmSteward()'); await one;
+  assert.deepEqual([twice.created.length, twice.state.steward.sessionId], [1, 'made']);
+});
+
+test('with the permission to organize on, the line is there for the new session too and what the person left goes with it', async () => {
+  const settle = () => new Promise(resolve => setImmediate(resolve)), standing = { on: true, limit: 30, unavailable: false };
+  const f = making({ standing }); f.run('openStewardChooser()'); await settle(); f.pick('new'); assert.deepEqual([f.$('steward-standing').hidden, f.$('steward-standing-keep').checked], [false, true]);
+  f.$('steward-standing-keep').checked = false; await f.run('confirmSteward()'); assert.deepEqual([f.standings, f.state.steward.sessionId], [[false], 'made']);
+});
+
+test('the new session\'s box is in the chooser: Claude only, Codex there with the reason it cannot be chosen, named fields, the handoff before the duty statement', () => {
+  const dialog = html.match(/<dialog closedby="any" id="steward-dialog".*/)[0];
+  assert.match(dialog, /<p id="steward-none"[^>]*><\/p><div id="steward-new" class="steward-new" hidden>/);
+  assert.match(dialog, /<input type="radio" name="steward-new-provider" value="claude" checked> Claude<\/label><label><input type="radio" name="steward-new-provider" value="codex" disabled aria-describedby="steward-new-codex"> Codex<\/label><small id="steward-new-codex" data-naw-text="steward\.new\.codex"><\/small>/);
+  for (const id of ['steward-new-model', 'steward-new-effort', 'steward-handoff']) assert.match(dialog, new RegExp(`<label[^>]* for="${id}"`), id);
+  assert.match(dialog, /<input id="steward-new-skip" type="checkbox" aria-describedby="steward-new-permission"><span data-naw-text="create\.skipPermissions"><\/span><\/label><small id="steward-new-permission" data-naw-text="create\.permissionsSkipped" hidden>/);
+  assert.equal(dialog.includes('id="steward-new-skip" type="checkbox" checked'), false);
+  assert.ok(dialog.indexOf('id="steward-handoff"') < dialog.indexOf('id="steward-duty"'));
+  assert.deepEqual([...dialog.matchAll(/<select id="steward-new-effort">(.*?)<\/select>/g)][0][1].match(/value="([^"]*)"/g).map(v => v.slice(7, -1)), ['low', 'medium', 'high', 'xhigh', 'max', '']);
+  assert.match(locale.format('zh', 'steward.new.codex'), /还不能选/); assert.match(locale.format('zh', 'steward.new.note'), /变回普通会话。.*自动叫醒先关着/);
+});
+
 // R220: the permission to organize goes with the new butler, in the same confirmation.
 test('choosing another butler shows one line for the permission that is on, checked, and sends what the person left', async () => {
   const sessions = [S('butler'), S('a'), S('b')], steward = { sessionId: 'butler', nativeId: 'native-butler' }, settle = () => new Promise(resolve => setImmediate(resolve));
@@ -197,7 +412,7 @@ test('choosing another butler shows one line for the permission that is on, chec
   const back = fixture({ sessions, steward: { ...steward }, standing: on, duty: { duty: { state: 'not-sent', error: { message: 'x', uiMessage: { key: 'error.steward.dutyBusy' } } } } });
   back.run('openStewardChooser()'); await settle(); back.pick('a'); back.$('steward-standing-keep').checked = false; await back.run('confirmSteward()'); back.pick('b');
   assert.equal(back.$('steward-standing').hidden, true);
-  assert.match(html, /<\/textarea><label id="steward-standing" class="steward-standing" hidden><input id="steward-standing-keep" type="checkbox"><span data-naw-text="standing\.keep"><\/span><\/label><p id="steward-error"/);
+  assert.match(html, /<\/textarea><label id="steward-standing" class="steward-standing" hidden><input id="steward-standing-keep" type="checkbox"><span data-naw-text="standing\.keep"><\/span><\/label><p id="steward-new-note" class="quiet" data-naw-text="steward\.new\.note" hidden><\/p><p id="steward-error"/);
   for (const language of ['zh', 'en']) for (const key of ['standing.keep', 'standing.notKept', 'standing.notOff']) assert.notEqual(locale.format(language, key), key);
   assert.equal(locale.format('zh', 'standing.keep'), '也允许新大管家直接整理本机工作');
 });

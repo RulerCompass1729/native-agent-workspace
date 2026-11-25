@@ -2465,10 +2465,12 @@ async function boot() {
   // (stewardCaller). Designating also sends the duty statement (`duty`: the person's own text, or null for the
   // default of their language) into the session as the person's message (the activation checklist, item 6).
   // `standing`: whether the person left the permission to organize (steward-standing.cjs) on for the new butler, asked
-  // only while it is on for the one they have; null when they were not asked.
-  register('steward', async (c, id, duty = null, standing = null) => {
+  // only while it is on for the one they have; null when they were not asked. `handoff`: what the person says to a
+  // session taking over, sent in front of the duty statement this once; it is not part of the statement that is kept.
+  register('steward', async (c, id, duty = null, standing = null, handoff = null) => {
     if (c.background) throw uiError('error.steward.personOnly');
     if (id !== null && duty !== null && !validDuty(duty)) throw uiError('error.steward.dutyInvalid');
+    if (id !== null && handoff !== null && !validDuty(handoff)) throw uiError('error.steward.handoffInvalid');
     let record = null, standingLost = false, reached = null;
     if (id === null) stewardRole.set(null);
     // In the queue every join runs in: no join can be half done while the session becomes the butler.
@@ -2502,7 +2504,7 @@ async function boot() {
     // The same input the person's composer gives: to an idle session, or queued after a Claude session's running
     // turn. It is a prompt, not a permission, and handed over is not received: the message keeps its own state in the
     // butler's conversation. A refusal leaves the designation as it is and says why.
-    const text = stewardDutyText();
+    const text = (handoff === null ? '' : handoff.trim() + '\n\n') + stewardDutyText();
     try {
       const method = record.state === 'working' && record.provider === 'claude' ? 'queue' : record.state === 'idle' ? 'send' : null;
       if (!method) throw uiError('error.steward.dutyBusy');

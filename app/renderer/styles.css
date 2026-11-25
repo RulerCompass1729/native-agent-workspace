@@ -1237,7 +1237,7 @@ main.settings-panel-open{margin-inline-end:340px}
 .steward-row .agent-icon.vendor-mark{box-shadow:none;font-size:13px}
 .steward-badge{flex:none;display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 9px;margin-right:8px;border:1px solid var(--border);border-radius:999px;white-space:nowrap}
 dialog.steward-dialog{max-height:calc(100vh - 32px);overflow:auto}
-.steward-list{border-top:1px solid var(--border);margin:0 0 4px}
+.steward-list{border-top:1px solid var(--border);margin:0 0 4px;max-height:46vh;overflow:auto;scroll-padding-bottom:72px}
 .steward-list:empty{display:none}
 dialog.steward-dialog label.steward-pick{display:grid;grid-template-columns:18px 32px minmax(0,1fr);align-items:center;gap:10px;padding:7px 2px;margin:0;border-bottom:1px solid var(--border);font-size:13px;font-weight:400}
 dialog.steward-dialog label.steward-pick>*{margin:0}
@@ -1250,6 +1250,21 @@ dialog.steward-dialog .steward-pick .agent-icon{position:static;display:inline-f
 dialog.steward-dialog label.steward-duty{display:block;margin:12px 0 4px;font-size:13px;font-weight:400;color:var(--muted);line-height:1.45}
 dialog.steward-dialog textarea.steward-duty{display:block;box-sizing:border-box;width:100%;min-height:96px;max-height:40vh;resize:vertical;font:inherit;font-size:13px;line-height:1.5}
 dialog.steward-dialog .steward-duty[hidden]{display:none}
+dialog.steward-dialog textarea.steward-handoff{min-height:64px}
+dialog.steward-dialog label.steward-new-pick{position:sticky;bottom:0;background:var(--surface,#fff);box-shadow:0 -1px 0 var(--border)}
+dialog.steward-dialog .steward-new-mark{width:30px;text-align:center;font-size:18px;color:var(--muted)}
+.steward-new{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:8px 10px;margin:10px 0 0 28px;font-size:13px}
+.steward-new[hidden]{display:none}
+dialog.steward-dialog .steward-new label{margin:0;font-size:13px;font-weight:400}
+dialog.steward-dialog .steward-new select{margin:0;width:100%}
+.steward-new small{color:var(--muted);line-height:1.45}
+.steward-new small[hidden]{display:none}
+.steward-new-provider,dialog.steward-dialog .steward-new label.steward-new-skip{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px}
+dialog.steward-dialog .steward-new label.steward-new-skip{gap:8px}
+.steward-new>small{grid-column:1/-1;padding-left:23px}
+dialog.steward-dialog .steward-new input{all:revert;flex:none;margin:0;width:15px;height:15px}
+dialog.steward-dialog .steward-new-provider label{display:inline-flex;align-items:center;gap:8px}
+.steward-new-provider label:has(input:disabled){color:var(--muted)}
 dialog.steward-dialog label.steward-standing{display:flex;align-items:center;gap:8px;margin:12px 0 0;font-size:13px;font-weight:400}
 dialog.steward-dialog label.steward-standing[hidden]{display:none}
 dialog.steward-dialog .steward-standing input{all:revert;flex:none;margin:0;width:15px;height:15px}
