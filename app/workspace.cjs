@@ -909,6 +909,11 @@ class Workspace extends EventEmitter {
       s.modelProvider = value; this.changed(); this.persist();
     });
     on('model', (model, uiMessage) => { s.model = model; const message = displayMessage(uiMessage, 'notice.', model); if (message) s.modelUiMessage = message; else delete s.modelUiMessage; this.changed(); });
+    // Resume asks for the requested model over the last report, which native may have changed itself (adapters.cjs).
+    on('modelSelected', model => {
+      if (!MODEL_PATTERN.test(model)) return;
+      s.requestedSettings = { ...s.requestedSettings, model }; this.changed();
+    });
     on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.
     on('nativeTitle', title => { const clean = String(title).replace(/[\x00-\x1f\x7f]/g, ' ').trim(); const name = clean && `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${clean}`.slice(0, 60); if (s.autoName && name && (name !== s.name || s.nameSource !== 'native')) { s.name = name; s.nameSource = 'native'; this.changed(); } });
