@@ -231,21 +231,21 @@ test('once held, it waits out the recipient\'s other passing states too; the min
   assert.ok(f.to(f.b)[1].at - first >= MIN);
 });
 
-test('every other refusal ends it: the limit of three in a row, the recipient switched off, gone', async t => {
+test('every other refusal ends it: the limit of eight in a row, the recipient switched off, gone', async t => {
   const f = await fixture(t);
-  for (let i = 0; i < 3; i++) { if (i) f.advance(MIN + 1); await f.turn('t' + i, `Task ${i}.`); f.reply(); }
+  for (let i = 0; i < 8; i++) { if (i) f.advance(MIN + 1); await f.turn('t' + i, `Task ${i}.`); f.reply(); }
   busy(f); f.advance(MIN + 1);
-  const fourth = await f.turn('four', 'Fourth.');
-  assert.equal(fourth.status, 'not-sent'); assert.match(fourth.message, /连续 3 次/);
-  // Two held before the limit: the first goes, the second is the fourth in a row.
+  const ninth = await f.turn('nine', 'Ninth.');
+  assert.equal(ninth.status, 'not-sent'); assert.match(ninth.message, /连续 8 次/);
+  // Two held before the limit: the first goes, the second is the ninth in a row.
   const g = await fixture(t);
-  for (let i = 0; i < 2; i++) { if (i) g.advance(MIN + 1); await g.turn('t' + i, `Task ${i}.`); g.reply(); }
+  for (let i = 0; i < 7; i++) { if (i) g.advance(MIN + 1); await g.turn('t' + i, `Task ${i}.`); g.reply(); }
   busy(g); g.advance(MIN + 1);
-  await g.turn('three', 'Third.'); await g.turn('four', 'Fourth.');
-  assert.deepEqual(g.rows().slice(2).map(r => r.wake.status), ['held', 'held']);
+  await g.turn('eight', 'Eighth.'); await g.turn('nine', 'Ninth.');
+  assert.deepEqual(g.rows().slice(7).map(r => r.wake.status), ['held', 'held']);
   idle(g); await g.look(); g.reply(); await g.look();
-  assert.deepEqual(g.rows().slice(2).map(r => r.wake.status), ['submitted', 'not-sent']); assert.equal(g.to(g.b).length, 3);
-  assert.match(g.rows().at(-1).text, /连续 3 次/);
+  assert.deepEqual(g.rows().slice(7).map(r => r.wake.status), ['submitted', 'not-sent']); assert.equal(g.to(g.b).length, 8);
+  assert.match(g.rows().at(-1).text, /连续 8 次/);
   // Off without a new boundary (an older backend's record): refused, not held.
   const h = await held(t); h.target.get(h.b).wakeDisabled = true; idle(h); await h.look();
   assert.deepEqual([h.row.wake.status, h.to(h.b).length], ['not-sent', 0]);
@@ -303,7 +303,7 @@ test('a recipient that asks to hold for any other reason is not followed', async
     assert.deepEqual([f.rows().at(-1).wake.status, f.source.wakeHoldTimer ?? null], ['not-sent', null], key);
   }
 });
-test('once held, the recipient switched off, changed or past its three in a row ends it, also when its backend asks to hold', async t => {
+test('once held, the recipient switched off, changed or past its eight in a row ends it, also when its backend asks to hold', async t => {
   for (const key of ['error.wake.recipientDisabled', 'error.wake.recipientIdentityChanged', 'error.wake.consecutiveLimit', 'error.wake.recipientBoundaryChanged', null]) {
     const f = await held(t);
     f.source.peerRunner.transferWake = async () => ({ status: 'not-sent', reason: 'Synthetic refusal.', reasonUiMessage: key && { version: 1, key, params: {} }, hold: true, retryAt: Date.now() + 1000 });
@@ -344,7 +344,7 @@ const beforeHeld = {
   'the sender is taken over': async f => { f.source.claim(f.a, 'another-window'); await f.end(); f.source.claim(f.a, 'source-owner'); },
   'the person types into the recipient': async f => { f.rb.emit('nativeInput', 'The person types.', { id: 'recipient-input' }); await f.end(); },
   'handoffs are paused': async f => { f.source.pauseAll('你暂停了后续交接'); await f.end(); },
-  'three in a row': async f => { f.target.get(f.b).wakeBudget = { version: 2, lastAt: 0, humanRevision: f.target.get(f.b).wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 3 } } }; await f.end(); },
+  'eight in a row': async f => { f.target.get(f.b).wakeBudget = { version: 2, lastAt: 0, humanRevision: f.target.get(f.b).wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 8 } } }; await f.end(); },
   'its turn outlasts the two hours': async f => { f.advance(120 * MIN); await f.end(); },
 };
 for (const [name, act] of Object.entries(beforeHeld)) test(`answered as held, ended before its turn did, and said so with the next message: ${name}`, async t => {

@@ -8,7 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const backgroundOperation = require('./background-operation.cjs');
-const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', COOLDOWN = 60000, MAX_STREAK = 3;
+const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', QUEUE_DONE = 'agentWakeQueueDoneV1', COOLDOWN = 60000, MAX_STREAK = 8;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
 function safeFile(file) {
@@ -197,7 +197,7 @@ function notSent(error, hold) {
 }
 // Option A (board 11-12 21:2x, the person 「按你推荐的来」): 「被拒的自动消息先存着、每分钟补送一条，限制本身不变（不放宽）」.
 // A message the designated butler refuses only for its 60-second limit is kept by its sender's backend and offered
-// again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (three in
+// again when the limit allows: one a minute to the butler, as the limit already has it. Every other refusal (eight in
 // a row, waiting, switched off, a changed identity), and the limit of every other recipient, stay as before: not sent,
 // not retried. Each offer is a full delivery attempt again, so the person acting on the recipient, stopping or taking over
 // the sender, or pausing all handoffs still ends it. The recipient's backend says so, with the time its limit opens.
@@ -673,6 +673,29 @@ function answeredButler(w, intent) {
   const s = w.sessions.get(intent.senderId);
   if (s && stillButler(w, intent)) clearSenderStreak(s, intent.recipientId, intent.targetProof.nativeId);
 }
+// R232 (2026-11-25, the person: 「每件最多 8 条消息」): main tells the backends once of an item it recorded as done
+// (queue-dispatch.cjs settle), whoever queued it. The member's own clears every sender's run to it; the butler's clears
+// the member's run to the butler. The receiver-wide minute and every other run stay.
+function queueDone(w, spec) {
+  const { sessionId, nativeId } = spec || {};
+  if (typeof sessionId !== 'string' || !sessionId || typeof nativeId !== 'string' || !nativeId) return false;
+  const member = w.sessions.get(sessionId);
+  if (member && member.nativeId !== nativeId) return false;
+  let steward = null;
+  try { steward = stewardNow(w); } catch { /* A designation that cannot be read names nobody. */ }
+  let butler = steward && w.sessions.get(steward.sessionId);
+  if (butler?.nativeId !== steward?.nativeId) butler = null;
+  const before = [member, butler].filter(Boolean).map(s => [s, s.wakeBudget]);
+  let cleared = false;
+  if (member) for (const key of Object.keys(budgetView(member).senders)) cleared = clearSenderStreak(member, key) || cleared;
+  if (butler) cleared = clearSenderStreak(butler, sessionId, nativeId) || cleared;
+  if (!cleared) return false;
+  try { durable(w); } catch (error) {
+    for (const [s, budget] of before) { s.wakeBudget = budget; w.edited?.(s); }
+    throw error;
+  }
+  return true;
+}
 function goalAllows(status) { return status === null || status === 'active' || status === 'complete'; }
 async function nativeGoalStatus(s, r, valid, rpc = r.host?.rpc) {
   if (s.provider !== 'codex') return null;
@@ -796,4 +819,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, QUEUE_DONE, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, queueDone, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

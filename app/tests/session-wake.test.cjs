@@ -214,7 +214,7 @@ test('a refused wake says why: waiting, turned off, or just sent one (wake propo
     ['waiting', f => { f.rb.nativeInputRequired = true; }, '收件方在等批准或等原生输入。', 'The recipient is waiting for an approval or native input.'],
     ['off', f => { f.target.get(f.b).wakeDisabled = true; }, '收件方或全部会话关了自动消息。', 'Automatic messages are turned off for the recipient or for all sessions.'],
     ['queued', f => { f.rb.pendingQueue = 'tag'; }, '收件方已有一条输入在投递或排队。', 'The recipient already has input being delivered or queued.'],
-    ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 1 } } }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 3 in a row.'],
+    ['cooldown', f => { const s = f.target.get(f.b); s.wakeBudget = { version: 2, lastAt: Date.now(), humanRevision: s.wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 1 } } }; }, '收件方刚收过自动消息：两条至少隔 60 秒，连续最多 8 条。', 'The recipient just received an automatic message: at least 60 seconds apart, at most 8 in a row.'],
   ];
   for (const [label, set, zh, en] of cases) {
     for (const when of ['registering', 'delivering']) {
@@ -361,16 +361,16 @@ test('concurrent calls from the same native turn cannot stage two messages', asy
   assert.equal(source.get(a).messages.filter(m => m.wake).length, 1);
   await finish(); assert.equal(writes.length, 1);
 });
-test('receiver cooldown and three-wake budget survive ordinary replies, and only human control resets the streak', async t => {
+test('receiver cooldown and eight-wake budget survive ordinary replies, and only human control resets the streak', async t => {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
   const f = await fixture(t);
   const reply = () => { const tag = f.writes.at(-1).tag; f.rb.emit('state', 'idle'); f.rb.emit('complete', { tag, text: 'An ordinary reply.', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); };
   await f.call(); await f.finish(); assert.equal(f.writes.length, 1); reply();
   f.start('turn-two'); await f.call('Too soon.', 'two'); await f.finish(); assert.equal(f.writes.length, 1);
-  for (const n of [3, 4]) { now += 60001; f.start('turn-' + n); await f.call('Next task.', 'call-' + n); await f.finish(); assert.equal(f.writes.length, n - 1); reply(); }
-  now += 60001; f.start('turn-five'); await f.call('Budget exhausted.', 'five'); await f.finish(); assert.equal(f.writes.length, 3);
-  assert.match(f.source.get(f.a).messages.findLast(m => m.wake).text, /连续 3 次/);
-  f.target.claim(f.b, 'human-new-owner'); now += 60001; f.start('turn-six'); await f.call('After human control.', 'six'); await f.finish(); assert.equal(f.writes.length, 4);
+  for (const n of [3, 4, 5, 6, 7, 8, 9]) { now += 60001; f.start('turn-' + n); await f.call('Next task.', 'call-' + n); await f.finish(); assert.equal(f.writes.length, n - 1); reply(); }
+  now += 60001; f.start('turn-ten'); await f.call('Budget exhausted.', 'ten'); await f.finish(); assert.equal(f.writes.length, 8);
+  assert.match(f.source.get(f.a).messages.findLast(m => m.wake).text, /连续 8 次/);
+  f.target.claim(f.b, 'human-new-owner'); now += 60001; f.start('turn-eleven'); await f.call('After human control.', 'eleven'); await f.finish(); assert.equal(f.writes.length, 9);
   assert.equal(f.target.get(f.b).owner, 'human-new-owner');
 });
 test('the same receiver budget is per sender, so unrelated senders do not exhaust it', async t => {
@@ -388,11 +388,11 @@ test('the same receiver budget is per sender, so unrelated senders do not exhaus
   assert.equal(budget.version, 2);
   assert.deepEqual(senders.map(id => budget.senders[f.source.get(id).nativeId].streak), [1, 1, 1, 1]);
 });
-test('a three-agent ring still stops each directed edge after three rounds', async t => {
+test('a three-agent ring still stops each directed edge after eight rounds', async t => {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
   const f = await fixture(t), c = await f.source.create('codex', f.root, 'source-owner', 'Sender three'), cycle = [[f.a, f.b], [f.b, c], [c, f.a]];
   let sent = 0;
-  for (let round = 0; round < 3; round++) for (const [from, to] of cycle) {
+  for (let round = 0; round < 8; round++) for (const [from, to] of cycle) {
     if (sent++) now += 60001;
     assert.equal((await runTurn(f, from, to, `ring-${round}-${sent}`, `Round ${round + 1}.`)).status, 'staged');
     await settle();
@@ -400,15 +400,15 @@ test('a three-agent ring still stops each directed edge after three rounds', asy
     replyTo(f, to);
   }
   now += 60001;
-  const refused = await runTurn(f, f.a, f.b, 'ring-fourth', 'Too many.');
+  const refused = await runTurn(f, f.a, f.b, 'ring-ninth', 'Too many.');
   assert.equal(refused.status, 'not-sent');
-  assert.equal(f.writes.length, 9);
-  assert.equal(f.target.get(f.b).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 3);
+  assert.equal(f.writes.length, 24);
+  assert.equal(f.target.get(f.b).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 8);
 });
 test('legacy flat wake budget ignores its streak but keeps the receiver cooldown', async t => {
   const oldNow = Date.now; let now = oldNow(); Date.now = () => now; t.after(() => { Date.now = oldNow; });
   const wake = require('../session-wake.cjs'), f = await fixture(t), s = f.target.get(f.b);
-  s.wakeBudget = { id: 'legacy', lastAt: now, streak: 3, humanRevision: s.wakeHumanRevision || 0 };
+  s.wakeBudget = { id: 'legacy', lastAt: now, streak: 8, humanRevision: s.wakeHumanRevision || 0 };
   const oldPreflight = await wake.check(f.target, { id: 'legacy-check', recipientId: f.b, boundary: wake.boundary(f.target), targetProof: require('../peer-handoffs.cjs').identity(s) });
   assert.equal(oldPreflight.status, 'not-sent');
   assert.notEqual(oldPreflight.reasonUiMessage?.key, 'error.wake.sourceInvalid');
@@ -490,7 +490,7 @@ test('observation failure cancels a staged intent before any later completion', 
 });
 test('automatic owner restoration does not reset the receiving wake budget', async t => {
   const f = await fixture(t), s = f.target.get(f.b); s.wakeHumanRevision = 4;
-  s.wakeBudget = { version: 2, lastAt: 1, humanRevision: 4, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 3 } } }; s.owner = null;
+  s.wakeBudget = { version: 2, lastAt: 1, humanRevision: 4, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 8 } } }; s.owner = null;
   f.target.claim(f.b, 'restored-view-owner'); assert.equal(s.wakeHumanRevision, 4);
 });
 test('failed revocation storage disables automatic messages without blocking the human send', async t => {
@@ -1189,14 +1189,14 @@ test('a message the butler refuses only for its 60-second limit is held and sent
   assert.equal(f.source.wakeHoldTimer, null, 'no timer once nothing is held');
   assert.equal(f.target.get(f.b).wakeBudget.senders[f.source.get(f.a).nativeId].streak, 2);
 });
-test('the limit itself stays: three in a row still ends it, and other recipients are refused as before (option A)', async t => {
+test('the limit itself stays: eight in a row still ends it, and other recipients are refused as before (option A)', async t => {
   const wake = require('../session-wake.cjs');
   const f = await toButler(t);
-  for (const [i, id] of ['one', 'two', 'three'].entries()) { if (i) f.advance(60001); f.ra.emit('state', 'idle'); await f.turn(id, `Task ${id}.`); f.reply(); }
-  assert.equal(f.writes.length, 3);
-  f.advance(10000); await f.turn('four', 'Task four.');
+  for (const [i, id] of ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'].entries()) { if (i) f.advance(60001); f.ra.emit('state', 'idle'); await f.turn(id, `Task ${id}.`); f.reply(); }
+  assert.equal(f.writes.length, 8);
+  f.advance(10000); await f.turn('nine', 'Task nine.');
   const row = f.rows().at(-1);
-  assert.equal(row.wake.status, 'not-sent', 'three in a row: refused, not held'); assert.match(row.text, /连续 3 次/);
+  assert.equal(row.wake.status, 'not-sent', 'eight in a row: refused, not held'); assert.match(row.text, /连续 8 次/);
   assert.equal(f.source.wakeHoldTimer, null);
   // Not the butler: refused for the limit and not retried, as before.
   const g = await toButler(t, { designate: false });
@@ -1210,8 +1210,8 @@ test('the limit itself stays: three in a row still ends it, and other recipients
   const plain = await ask(g);
   assert.deepEqual([plain.status, plain.hold, plain.retryAt], ['not-sent', undefined, undefined], 'not the butler: no hold');
   const limited = await ask(f);
-  assert.deepEqual([limited.status, limited.hold], ['not-sent', undefined], 'three in a row: no hold');
-  assert.equal(g.rows().at(-1).text, '自动消息没有发出；不会自动重发。\n收件方刚收过自动消息：两条至少隔 60 秒，连续最多 3 条。\nSecond.');
+  assert.deepEqual([limited.status, limited.hold], ['not-sent', undefined], 'eight in a row: no hold');
+  assert.equal(g.rows().at(-1).text, '自动消息没有发出；不会自动重发。\n收件方刚收过自动消息：两条至少隔 60 秒，连续最多 8 条。\nSecond.');
   g.advance(60000); wake.retryHeld(g.source); await g.settle();
   assert.equal(g.writes.length, 1); assert.equal(g.source.wakeHoldTimer, null);
   // The sender's: a recipient backend that asks to hold a message to anyone but the designated butler is not followed,
@@ -1479,7 +1479,7 @@ test('a message the turn registered before the person spoke into it is held for 
 });
 
 // The person, 2026-11-23 (「可以,按你推荐的来」): a member's automatic message that the designated butler actually took
-// clears the butler's three-in-a-row to that member. The 3, the 60 seconds and every other edge stay as they were.
+// clears the butler's run to that member. The limit, the 60 seconds and every other edge stay as they were.
 async function butlerAndMember(t, options) {
   const f = await toButler(t, options), member = f.a, butler = f.b;
   f.ra.emit('state', 'idle');
@@ -1494,29 +1494,30 @@ async function butlerAndMember(t, options) {
   const streak = key => f.source.get(member).wakeBudget?.senders?.[key]?.streak;
   return { ...f, member, butler, send, streak, butlerKey: f.target.get(butler).nativeId };
 }
-test('the butler\'s fourth message to a member goes once the member\'s message to the butler was delivered; other senders keep their count', async t => {
+const eight = async (f, from = f.butler, to = f.member) => { for (let i = 0; i < 8; i++) assert.equal((await f.send(from, to)).sent, true, `message ${i + 1}`); };
+test('the butler\'s ninth message to a member goes once the member\'s message to the butler was delivered; other senders keep their count', async t => {
   const f = await butlerAndMember(t), other = await f.source.create('codex', f.root, 'source-owner', 'Other member');
-  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
+  await eight(f);
   assert.equal((await f.send(other, f.member)).sent, true);
   const otherKey = f.source.get(other).nativeId, lastAt = f.source.get(f.member).wakeBudget.lastAt;
-  assert.deepEqual([f.streak(f.butlerKey), f.streak(otherKey)], [3, 1]);
+  assert.deepEqual([f.streak(f.butlerKey), f.streak(otherKey)], [8, 1]);
   const reply = await f.send(f.member, f.butler);
   assert.deepEqual([reply.sent, reply.row.wake.status], [true, 'submitted']);
   assert.deepEqual([f.streak(f.butlerKey), f.streak(otherKey)], [0, 1], 'only the butler\'s run to this member is cleared');
   assert.equal(f.source.get(f.member).wakeBudget.lastAt, lastAt, 'the 60-second limit keeps its time');
   const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json'))).sessions.find(s => s.id === f.member);
   assert.equal(saved.wakeBudget.senders[f.butlerKey].streak, 0, 'saved with the delivery');
-  const fourth = await f.send(f.butler, f.member);
-  assert.deepEqual([fourth.result.status, fourth.sent], ['staged', true]);
+  const ninth = await f.send(f.butler, f.member);
+  assert.deepEqual([ninth.result.status, ninth.sent], ['staged', true]);
   assert.equal(f.streak(f.butlerKey), 1);
 });
-test('without a delivered message from the member, the butler\'s fourth is refused as before', async t => {
+test('without a delivered message from the member, the butler\'s ninth is refused as before', async t => {
   const f = await butlerAndMember(t);
-  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
-  const fourth = await f.send(f.butler, f.member);
-  assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false]);
-  assert.match(fourth.result.message, /连续 3 次/);
-  assert.equal(f.streak(f.butlerKey), 3);
+  await eight(f);
+  const ninth = await f.send(f.butler, f.member);
+  assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false]);
+  assert.match(ninth.result.message, /连续 8 次/);
+  assert.equal(f.streak(f.butlerKey), 8);
 });
 test('a member\'s message to the butler that was not sent, cancelled or unconfirmed clears nothing', async t => {
   const outcomes = {
@@ -1526,22 +1527,215 @@ test('a member\'s message to the butler that was not sent, cancelled or unconfir
   };
   for (const [status, [before, after, turnEnd]] of Object.entries(outcomes)) {
     const f = await butlerAndMember(t);
-    for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true, status);
+    await eight(f);
     before(f); const reply = await f.send(f.member, f.butler, turnEnd); after(f);
     assert.deepEqual([reply.sent, reply.row.wake.status], [false, status], status);
-    assert.equal(f.streak(f.butlerKey), 3, status);
-    const fourth = await f.send(f.butler, f.member);
-    assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false], status);
+    assert.equal(f.streak(f.butlerKey), 8, status);
+    const ninth = await f.send(f.butler, f.member);
+    assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false], status);
   }
 });
 test('between ordinary sessions, a delivered answer still clears nothing', async t => {
   const f = await butlerAndMember(t, { designate: false });
-  for (let i = 0; i < 3; i++) assert.equal((await f.send(f.butler, f.member)).sent, true);
+  await eight(f);
   const reply = await f.send(f.member, f.butler);
   assert.deepEqual([reply.sent, reply.row.wake.status], [true, 'submitted']);
-  assert.equal(f.streak(f.butlerKey), 3);
-  const fourth = await f.send(f.butler, f.member);
-  assert.deepEqual([fourth.result.status, fourth.sent], ['not-sent', false]);
+  assert.equal(f.streak(f.butlerKey), 8);
+  const ninth = await f.send(f.butler, f.member);
+  assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false]);
+});
+
+// R232 (2026-11-25, the person: 「消息放开到每件最多 8 条消息」): an item NAW records as done, whoever queued it, clears every
+// sender's run to the member that did it and the member's run to the butler, once an item.
+const QUEUE_DONE = 'agentWakeQueueDoneV1';
+async function queueOf(t, { sourceOffers = true, targetOffers = true, ...options } = {}) {
+  const f = await butlerAndMember(t, options), rules = require('../queue-dispatch.cjs'), { RoomState } = require('../room-state.cjs'), { StewardRole } = require('../steward-role.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-queue-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const room = new RoomState(directory), calls = [];
+  const dispatcher = new rules.QueueDispatcher({ roomState: room, dataDir: directory, connect: async () => { throw Error('unused'); }, tickMs: 3600000,
+    steward: () => new StewardRole(f.root).current() });
+  t.after(() => dispatcher.close());
+  const entry = (name, w, offers) => ({ w, state: { capabilities: ['agentWakeV1', ...(offers ? [QUEUE_DONE] : [])] }, client: { async call(method, spec) {
+    calls.push([name, method, spec]);
+    if (method !== 'wakeQueueDone') throw Error('Unexpected method ' + method);
+    return require('../session-wake.cjs').queueDone(w, spec);
+  } } });
+  const entries = [entry('source', f.source, sourceOffers), entry('target', f.target, targetOffers)];
+  const snapshot = () => ({ sessions: [...f.source.sessions.values(), ...f.target.sessions.values()].map(s => ({ ...s })) });
+  dispatcher.client = { snapshot, close() {}, route: id => entries.find(e => e.w.sessions.has(id)) || (() => { throw Error('Not one backend'); })() };
+  const CREATORS = { steward: { kind: 'secretary', name: 'Butler', sessionId: f.butler }, secretary: { kind: 'secretary', name: 'Secretary', sessionId: 'secretary' }, person: { kind: 'person', name: 'You', sessionId: null } };
+  const item = (by = 'steward') => { const id = room.queueAdd('Bounded task.', f.member, 'shared', CREATORS[by], by === 'steward' ? by : null); room.queueMarkSent('shared', id, f.member, 'Member', Date.now()); return id; };
+  const close = async (itemId, status = 'done', reason, extra = {}) => {
+    dispatcher.settle({ kind: 'settle', roomId: 'shared', itemId, status, sessionId: f.member, ...(reason ? { reason } : {}), ...extra }, snapshot());
+    await settle();
+    return room.queueFind('shared', itemId).status;
+  };
+  const record = id => (f.source.sessions.get(id) || f.target.sessions.get(id));
+  const run = (from, to) => record(to).wakeBudget?.senders?.[record(from).nativeId]?.streak;
+  const other = await f.source.create('codex', f.root, 'source-owner', 'Other member');
+  return { ...f, room, dispatcher, calls, item, close, snapshot, run, record, other };
+}
+const runs = f => [f.run(f.butler, f.member), f.run(f.other, f.member), f.run(f.member, f.butler)];
+// Each run is filled without the one that clears another: a delivered message from the member clears the butler's.
+async function full(f) {
+  await eight(f, f.member, f.butler); await eight(f); await eight(f, f.other, f.member);
+  assert.deepEqual(runs(f), [8, 8, 8]);
+  for (const [from, to] of [[f.butler, f.member], [f.other, f.member], [f.member, f.butler]]) {
+    const ninth = await f.send(from, to);
+    assert.deepEqual([ninth.result.status, ninth.sent], ['not-sent', false], 'the ninth without an item done');
+    assert.match(ninth.result.message, /连续 8 次/);
+  }
+}
+for (const by of ['steward', 'secretary', 'person']) test(`an item done (queued by: ${by}) lets every sender write to its member again, and the member to the butler; nothing else changes`, async t => {
+  const f = await queueOf(t), id = f.item(by);
+  await f.send(f.other, f.butler); await f.send(f.member, f.other); await f.send(f.butler, f.other);
+  await full(f);
+  const member = structuredClone(f.record(f.member).wakeBudget), butler = structuredClone(f.record(f.butler).wakeBudget), other = structuredClone(f.record(f.other).wakeBudget);
+  assert.equal(await f.close(id), 'done');
+  const cleared = (budget, ...from) => ({ ...budget, senders: { ...budget.senders, ...Object.fromEntries(from.map(s => [f.record(s).nativeId, { ...budget.senders[f.record(s).nativeId], streak: 0 }])) } });
+  assert.deepEqual(f.record(f.member).wakeBudget, cleared(member, f.butler, f.other), 'every sender to the member; the minute and the message ids stay');
+  assert.deepEqual(f.record(f.butler).wakeBudget, cleared(butler, f.member), 'the member to the butler; another member to the butler stays');
+  assert.deepEqual(f.record(f.other).wakeBudget, other, 'the member and the butler to another member stay');
+  assert.deepEqual(runs(f), [0, 0, 0]);
+  const saved = (dir, sessionId) => JSON.parse(fs.readFileSync(path.join(dir, 'workspace.json'))).sessions.find(s => s.id === sessionId).wakeBudget;
+  assert.deepEqual([saved(f.source.dataDir, f.member), saved(f.target.dataDir, f.butler)], [f.record(f.member).wakeBudget, f.record(f.butler).wakeBudget], 'both saved');
+  assert.deepEqual(f.calls.map(([name, method, spec]) => [name, method, spec]), ['source', 'target'].map(name => [name, 'wakeQueueDone', { sessionId: f.member, nativeId: f.record(f.member).nativeId }]));
+  await full(f);
+});
+test('with the item done, a message within the same minute is still refused, both ways', async t => {
+  const f = await queueOf(t), id = f.item();
+  await f.send(f.member, f.butler); f.advance(-60001); await f.send(f.butler, f.member);
+  await f.close(id);
+  const wake = require('../session-wake.cjs');
+  for (const [from, to] of [[f.butler, f.member], [f.other, f.member], [f.member, f.butler]]) {
+    const s = f.record(to), key = f.record(from).nativeId;
+    f.advance(s.wakeBudget.lastAt + 59999 - f.now());
+    assert.equal(wake.budgetAllows(s, 'next', from, key), false, '60 seconds since the last one');
+    f.advance(1);
+    assert.equal(wake.budgetAllows(s, 'next', from, key), true);
+  }
+});
+test('a delivery with a READY line clears them too', async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  assert.equal(await f.close(id, 'done', undefined, { ready: { branch: 'lane/x', commit: '0123abcd' } }), 'done');
+  assert.deepEqual(runs(f), [0, 0, 0]);
+});
+for (const [name, status, reason] of [
+  ['a question for the person', 'waiting'],
+  ['a turn the person stepped into', 'waiting', 'person-intervened'],
+  ['an empty reply', 'waiting', 'no-reply'],
+  ['a failed item', 'failed', 'record-missing'],
+]) test(`no run is cleared after ${name}`, async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  assert.equal(await f.close(id, status, reason), status);
+  assert.deepEqual([runs(f), f.calls], [[8, 8, 8], []]);
+});
+test('no run is cleared by an item marked handled or cancelled by hand', async t => {
+  const f = await queueOf(t);
+  await full(f);
+  for (const by of ['steward', null]) f.room.queueResolve(f.item(), 'shared', by);
+  f.room.queueCancel(f.room.queueAdd('Never sent.', f.member, 'shared', { kind: 'person', name: 'You', sessionId: null }), 'shared');
+  await settle();
+  assert.deepEqual([runs(f), f.calls], [[8, 8, 8], []]);
+});
+test('once the butler moved on, the member\'s run to the former one stays; to the successor it is cleared', async t => {
+  const f = await queueOf(t), id = f.item(), next = await f.target.create('codex', f.root, 'target-owner', 'Next butler');
+  await full(f);
+  const wake = require('../session-wake.cjs'), member = f.record(f.member);
+  wake.reserveBudget(f.record(next), 'one', f.member, member.nativeId);
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: next, nativeId: f.record(next).nativeId } }), { mode: 0o600 });
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([...runs(f), f.run(f.member, next)], [0, 0, 8, 0]);
+});
+test('the butler and the member on one backend: one call clears both', async t => {
+  const f = await queueOf(t, { designate: false }), id = f.item(), wake = require('../session-wake.cjs');
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.other, nativeId: f.record(f.other).nativeId } }), { mode: 0o600 });
+  wake.reserveBudget(f.record(f.other), 'one', f.member, f.record(f.member).nativeId);
+  wake.reserveBudget(f.record(f.member), 'two', f.other, f.record(f.other).nativeId);
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([f.run(f.member, f.other), f.run(f.other, f.member), f.calls.map(call => call[0])], [0, 0, ['source']]);
+});
+for (const [name, record] of [['no butler', JSON.stringify({ version: 1, selected: null })], ['an unreadable designation', '{']]) test(`${name}: only the runs to the member are cleared, and the item is done`, async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  fs.writeFileSync(path.join(f.root, 'steward.json'), record, { mode: 0o600 });
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([runs(f), f.calls.map(call => call[0])], [[0, 0, 8], ['source']]);
+});
+for (const [name, options, after, told] of [
+  ['the member\'s', { sourceOffers: false }, [8, 8, 0], ['target']],
+  ['the butler\'s', { targetOffers: false }, [0, 0, 8], ['source']],
+  ['neither', { sourceOffers: false, targetOffers: false }, [8, 8, 8], []],
+]) test(`a backend that does not offer it keeps its limit, and nothing fails: ${name}`, async t => {
+  const f = await queueOf(t, options), id = f.item();
+  await full(f);
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([runs(f), f.calls.map(call => call[0])], [after, told]);
+});
+test('one item clears once: its settlement seen again asks nothing', async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  assert.equal(await f.close(id), 'done');
+  await full(f);
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([runs(f), f.calls.length], [[8, 8, 8], 2]);
+});
+test('an item whose settlement was not saved clears nothing', async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  f.room.write = () => { throw Error('Synthetic disk failure'); };
+  await assert.rejects(f.close(id), /Synthetic disk failure/);
+  await settle();
+  assert.deepEqual([f.room.queueFind('shared', id).status, runs(f), f.calls], ['sent', [8, 8, 8], []]);
+});
+test('a clear a backend cannot save is taken back there, also from what it saves next, and is not tried again', async t => {
+  const f = await queueOf(t), id = f.item();
+  await full(f);
+  const real = fs.renameSync, file = path.join(f.source.dataDir, 'workspace.json');
+  t.mock.method(fs, 'renameSync', (from, to) => { if (to === file) throw Object.assign(Error('Synthetic disk full'), { code: 'ENOSPC' }); return real(from, to); });
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual(runs(f), [8, 8, 0], 'the member\'s backend could not save; the butler\'s did');
+  t.mock.restoreAll(); f.source.storageWarning = null; assert.equal(f.source.persist(), true);
+  const saved = JSON.parse(fs.readFileSync(file)).sessions.find(s => s.id === f.member).wakeBudget.senders;
+  assert.deepEqual([saved[f.butlerKey].streak, saved[f.record(f.other).nativeId].streak], [8, 8]);
+  assert.equal(await f.close(id), 'done');
+  assert.deepEqual([runs(f), f.calls.length], [[8, 8, 0], 2]);
+});
+test('the backends clear only for the very native session they were told of, and the butler\'s only as designated', async t => {
+  const f = await queueOf(t), { queueDone } = require('../session-wake.cjs'), nativeId = f.record(f.member).nativeId;
+  await full(f);
+  for (const w of [f.source, f.target]) for (const spec of [undefined, {}, { sessionId: f.member }, { sessionId: f.member, nativeId: '' }, { sessionId: '', nativeId }, { sessionId: 'nobody', nativeId: 'native-nobody' }])
+    assert.equal(queueDone(w, spec), false);
+  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId: 'native-other' }), false);
+  const native = f.record(f.butler).nativeId;
+  f.record(f.butler).nativeId = 'native-elsewhere';
+  assert.equal(queueDone(f.target, { sessionId: f.member, nativeId }), false, 'the designated session is another native one now');
+  f.record(f.butler).nativeId = native;
+  assert.deepEqual(runs(f), [8, 8, 8]);
+  for (const w of [f.source, f.target]) {
+    assert.equal(queueDone(w, { sessionId: f.member, nativeId }), true);
+    assert.equal(queueDone(w, { sessionId: f.member, nativeId }), false, 'nothing left to clear');
+  }
+  assert.deepEqual(runs(f), [0, 0, 0]);
+});
+test('a member that took another native context since is not cleared, nor is its run to a butler on its backend', async t => {
+  const f = await queueOf(t, { designate: false }), { queueDone, reserveBudget } = require('../session-wake.cjs');
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.other, nativeId: f.record(f.other).nativeId } }), { mode: 0o600 });
+  reserveBudget(f.record(f.other), 'one', f.member, 'native-former');
+  assert.equal(queueDone(f.source, { sessionId: f.member, nativeId: 'native-former' }), false);
+  assert.equal(f.record(f.other).wakeBudget.senders['native-former'].streak, 1);
+});
+test('once the item is done a message refused for the limit goes when sent again; one within its minute is held, as before', async t => {
+  const f = await queueOf(t), id = f.item();
+  await eight(f, f.member, f.butler);
+  assert.equal((await f.send(f.member, f.butler)).result.status, 'not-sent', 'refused, not held');
+  await f.close(id);
+  const again = await f.send(f.member, f.butler);
+  assert.deepEqual([again.sent, again.row.wake.status], [true, 'submitted']);
+  f.advance(10000 - 60001); const soon = await f.send(f.member, f.butler);
+  assert.equal(soon.row.wake.status, 'held');
 });
 
 // The person, 11-24 (W3 follow-up ②, 「按你推荐的来」): three changes nobody made to stop anything leave a turn's messages

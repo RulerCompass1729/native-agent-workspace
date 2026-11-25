@@ -407,7 +407,7 @@ test('managed native goal is checked again after prepare and human changes durin
 test('managed native outbox preserves cooldown and consecutive wake limits', async t => {
   for (const wakeBudget of [
     { version: 2, lastAt: Date.now(), humanRevision: 0, senders: { sender: { id: 'earlier', streak: 1 } } },
-    { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 3 } } },
+    { version: 2, lastAt: 1, humanRevision: 0, senders: { sender: { id: 'earlier', streak: 8 } } },
   ]) {
     const f = await fixture(t); f.backends[1].nativeRecord.wakeBudget = wakeBudget; f.start();
     await assert.rejects(f.bind()); assert.equal(f.nativeCalls.length, 0); assert.equal(f.goalReads.length, 0);
@@ -420,7 +420,7 @@ test('managed successful input durably reserves exactly one existing wake budget
   await binding.close();
 });
 
-test('native wake and managed outbox share one recipient budget; the fourth mixed automatic input is refused', async t => {
+test('native wake and managed outbox share one recipient budget; the ninth mixed automatic input is refused', async t => {
   const wake = require('../session-wake.cjs'), { identity: inputIdentity } = require('../peer-handoffs.cjs');
   const f = await fixture(t), b = f.backends[1], w = b.workspace, s = b.nativeRecord;
   // Trusted source transport is synthetic here; receive/send/accounting and
@@ -437,11 +437,13 @@ test('native wake and managed outbox share one recipient budget; the fourth mixe
   assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 1); settle();
   f.start(); const binding = await f.bind(); await binding.forwardOnce(); await binding.close();
   assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 2); settle();
-  await wake.receive(w, { sourceKey, id: randomUUID(), senderId: 'sender', recipientId: s.id });
-  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 3); settle();
-  f.identity.callId = 'fourth-mixed-call'; f.start();
+  for (let n = 3; n <= 8; n++) {
+    await wake.receive(w, { sourceKey, id: randomUUID(), senderId: 'sender', recipientId: s.id });
+    assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, n); settle();
+  }
+  f.identity.callId = 'ninth-mixed-call'; f.start();
   await assert.rejects(f.bind());
-  assert.equal(f.nativeCalls.filter(c => c.method === 'turn/start').length, 3);
-  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 3); assert.equal(f.bridge.records.length, 1);
-  w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(b.root, 'workspace.json'))).sessions.find(r => r.id === s.id).wakeBudget.senders[f.records[0].nativeId].streak, 3);
+  assert.equal(f.nativeCalls.filter(c => c.method === 'turn/start').length, 8);
+  assert.equal(s.wakeBudget.senders[f.records[0].nativeId].streak, 8); assert.equal(f.bridge.records.length, 1);
+  w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(b.root, 'workspace.json'))).sessions.find(r => r.id === s.id).wakeBudget.senders[f.records[0].nativeId].streak, 8);
 });
