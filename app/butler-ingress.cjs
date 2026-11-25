@@ -314,7 +314,7 @@ class ButlerIngress {
   // backend; a refusal before its row existed only from a backend that keeps `wakeUndelivered` (session-wake.cjs).
   // Only failures since this intake started: the history before it is not announced again.
   // `formerly(id)`: the sessions the butler continued from (done rotations); one to those is the current butler's too.
-  // Of the butler's own messages, only one held after its call was answered (session-wake.cjs): memberId is its recipient.
+  // Of the butler's own messages, only one its call was told is held, or held since (session-wake.cjs): memberId is its recipient.
   observeWakeUndelivered(sessions = [], { steward, formerly } = {}) {
     let current = null; try { current = steward?.(); } catch { return; }
     if (typeof current?.sessionId !== 'string' || !current.sessionId) return;
@@ -326,7 +326,7 @@ class ButlerIngress {
       for (const row of Array.isArray(s.messages) ? s.messages : []) {
         const failed = undeliveredRow(row);
         if (!failed || row.wake.senderId !== s.id) continue;
-        if (own ? Number.isSafeInteger(row.wake.heldAt) : butler.has(row.wake.recipientId)) this.undeliveredWake(s.id, row.id, failed, own ? row.wake.recipientId : undefined);
+        if (own ? Number.isSafeInteger(row.wake.heldAt) || row.wake.busyHold : butler.has(row.wake.recipientId)) this.undeliveredWake(s.id, row.id, failed, own ? row.wake.recipientId : undefined);
       }
       if (!own) for (const entry of Array.isArray(s.wakeUndelivered) ? s.wakeUndelivered : []) {
         if (!butler.has(entry?.recipientId)) continue;

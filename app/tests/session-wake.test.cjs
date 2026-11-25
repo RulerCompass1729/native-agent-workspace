@@ -1443,7 +1443,7 @@ test('a message held from an earlier turn still goes after the person speaks int
   const held = f.rows().at(-1);
   assert.equal(held.wake.status, 'held');
   f.begin('third');
-  f.read(await f.say('Also look at the plan.'));
+  f.read(await f.say('Do not send that one.'));
   f.advance(60000); wake.retryHeld(f.source); await f.settle();
   assert.deepEqual([f.writes.length, held.wake.status], [2, 'submitted']);
   await f.finish();

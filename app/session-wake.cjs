@@ -379,12 +379,13 @@ async function stageOnce(w, s, r, native, args) {
   if (same) refusedNotice(row, quietSame());
   else if (full) refusedNotice(row, quietFull());
   else if (!intent.quietWindow && refused && !waits) refusedNotice(row, target.readiness);
-  const missed = untold(s, native.nativeId);
+  const lost = untold(s, native.nativeId), missed = lost.map(lostNotice).join('');
   s.messages.push(row);
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; delete intent.busyHold; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
+  for (const { wake: told } of lost) told.senderTold = true;
   if (intent.status === 'not-sent') return { status: 'not-sent', id: intent.id, recipient_id: intent.recipientId, message: row.text + missed };
   if (intent.quietWindow) {
     const minutes = Math.max(1, Math.ceil((quiet.deadline - Date.now()) / 60000));
@@ -404,17 +405,15 @@ async function stageOnce(w, s, r, native, args) {
   const once = stillButler(w, intent) ? '当前原生回合正常结束后尝试投递；那时收件方若 60 秒内刚收过一条自动消息，NAW 先存着，限制过了再送一次；若正在干活、接不了，也先存着，空下来后再送一次（收件方的后台是旧版本时不存）；' : '当前原生回合正常结束后尝试投递；那时收件方若正在干活、接不了，NAW 先存着，空下来后再送一次（收件方的后台是旧版本时不存，只试一次）；';
   return { status: 'staged', id: intent.id, readiness, message: `已保存，尚未投递。${once}不要等待或重试。真人可随时撤销。` + (readiness === 'deferred' ? ' 收件后台不支持即时就绪检查，尚未确认它能接收。' : '') + missed };
 }
-// Held messages of this native session that did not go out, each said once with its next call's answer: nothing else
-// tells an agent of it without starting a turn (the butler is also woken, butler-ingress.cjs).
+// Messages this native session was told are held, that did not go out or may not have, each said once with its next
+// call's answer: nothing else tells an agent of it without starting a turn (the butler is also woken, butler-ingress.cjs).
 function untold(s, nativeId) {
-  let text = '';
-  for (const { wake: intent, text: shown } of s.messages || []) {
-    if (!intent?.heldAt || intent.senderTold || intent.nativeId !== nativeId || !['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status)) continue;
-    intent.senderTold = true;
-    const reason = String(shown).endsWith(intent.body) ? String(shown).slice(0, -intent.body.length) : String(shown);
-    text += `\n你之前存着等送的一条没有送到：发给 ${intent.recipientId}，「${intent.body.slice(0, 80)}」：${reason.trim().replace(/\n/g, ' ')}`;
-  }
-  return text;
+  return (s.messages || []).filter(({ wake: intent }) => (intent?.heldAt || intent?.busyHold) && !intent.senderTold && intent.nativeId === nativeId && ['not-sent', 'cancelled', 'unconfirmed'].includes(intent.status));
+}
+function lostNotice({ wake: intent, text }) {
+  const shown = String(text), reason = shown.endsWith(intent.body) ? shown.slice(0, -intent.body.length) : shown;
+  const outcome = intent.status === 'unconfirmed' ? '没能确认是否送到，可能已经送到，先别重发' : '没有送到';
+  return `\n你之前存着等送的一条${outcome}：发给 ${intent.recipientId}，「${intent.body.slice(0, 80)}」：${reason.trim().replace(/\n/g, ' ')}`;
 }
 // Why a wake staged in a turn was withdrawn when that turn's end was reported. T-141: `boundary` is a turn whose
 // authority an input or permission boundary took mid-turn; steward step 2, batch 0: `incomplete`, one that ended
@@ -473,7 +472,7 @@ function transfer(w, row, readdress = false) {
   // A recipient that cannot be found again was never offered it: not sent.
   const located = readdress ? relocate(w, intent).then(() => null, error => notSent(error)) : Promise.resolve(null);
   return located.then(refused => refused || w.peerRunner.transferWake(intent)).then(result => {
-    if (holdable(w, intent, result)) hold(w, row, result);
+    if (holdable(w, intent, result)) { if (intent.withdrawn) dropHeld(w, row, { code: 'source-control-boundary' }); else hold(w, row, result); }
     else if (result.status === 'not-sent') refusedNotice(row, result);
     else {
       intent.status = result.status; row.text = `发给原会话的自动消息：${result.status === 'submitted' ? '原生已接收' : '接收结果未确认'}。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: result.status === 'submitted' ? 'notice.wake.submitted' : 'notice.wake.unconfirmed', params: { body: intent.body } }, 'notice.', row.text) || undefined;
@@ -562,7 +561,9 @@ function retryHeld(w) {
 function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
-  for (const row of w.sessions.get(id)?.messages || []) if (['staged', 'held'].includes(row.wake?.status)) {
+  // One being offered can still be taken, but is not held again.
+  for (const row of w.sessions.get(id)?.messages || []) if (['sending', 'consumed'].includes(row.wake?.status)) row.wake.withdrawn = true;
+  else if (['staged', 'held'].includes(row.wake?.status)) {
     w.edited?.(w.sessions.get(id)); row.wake.status = 'cancelled'; row.wake.settledAt = Date.now(); row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
     const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
     const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);

@@ -289,6 +289,8 @@ test('a recipient\'s backend that does not ask to hold keeps the old answer: not
   const f = await fixture(t, { old: true }); busy(f);
   const result = await f.turn('one', 'To an old backend.');
   assert.deepEqual([result.status, f.rows().at(-1).text], ['not-sent', '自动消息没有发出；不会自动重发。\nReceiver 正在干活。\nTo an old backend.']);
+  const row = f.rows().at(-1);
+  assert.match(locale.displayText('en', row.text, row.uiMessage), /\nReceiver is working\.\n/);
   const g = await fixture(t, { old: true });
   g.begin('one'); await g.call('Free when called.', 'call-one'); busy(g); await g.end();
   assert.equal(g.rows().at(-1).wake.status, 'not-sent'); assert.equal(g.source.wakeHoldTimer, null);
@@ -334,6 +336,65 @@ test('the sender is told of a held message that did not go out, once, with its n
   const k = await held(t); k.source.claim(k.a, 'source-owner-2'); await k.look();
   k.source.get(k.a).nativeId = 'native-fresh'; k.begin('two');
   assert.doesNotMatch((await k.call('Next.', 'call-two')).message, /没有送到/);
+});
+
+// Answered as held, then ended before its turn did (the reviewer, 11-24): the promise to say so covers these too.
+const beforeHeld = {
+  'the sender\'s turn is interrupted': f => f.end(f.source, f.a, 'interrupted'),
+  'the sender is taken over': async f => { f.source.claim(f.a, 'another-window'); await f.end(); f.source.claim(f.a, 'source-owner'); },
+  'the person types into the recipient': async f => { f.rb.emit('nativeInput', 'The person types.', { id: 'recipient-input' }); await f.end(); },
+  'handoffs are paused': async f => { f.source.pauseAll('你暂停了后续交接'); await f.end(); },
+  'three in a row': async f => { f.target.get(f.b).wakeBudget = { version: 2, lastAt: 0, humanRevision: f.target.get(f.b).wakeHumanRevision || 0, senders: { [f.source.get(f.a).nativeId]: { id: 'earlier', streak: 3 } } }; await f.end(); },
+  'its turn outlasts the two hours': async f => { f.advance(120 * MIN); await f.end(); },
+};
+for (const [name, act] of Object.entries(beforeHeld)) test(`answered as held, ended before its turn did, and said so with the next message: ${name}`, async t => {
+  const f = await fixture(t); busy(f);
+  f.begin('one');
+  assert.equal((await f.call('While it works.', 'call-one')).readiness, 'held');
+  await act(f);
+  const row = f.rows().at(-1);
+  assert.ok(['not-sent', 'cancelled'].includes(row.wake.status), `${name}: ${row.wake.status}`);
+  assert.equal(f.writes.length, 0, name);
+  f.advance(MIN); f.begin('two');
+  const told = (await f.call('Next.', 'call-two')).message;
+  assert.match(told, new RegExp(`\\n你之前存着等送的一条没有送到：发给 ${f.b}，「While it works\\.」：.`), name);
+  await f.end(); f.advance(MIN); f.begin('three');
+  assert.ok(!(await f.call('Third.', 'call-three')).message.includes('While it works.'), 'once');
+});
+test('one whose outcome is unknown is not said to have failed', async t => {
+  const f = await held(t);
+  f.source.peerRunner.transferWake = async () => { throw Error('The connection closed.'); };
+  await f.look();
+  assert.equal(f.row.wake.status, 'unconfirmed');
+  f.begin('two');
+  const told = (await f.call('Next.', 'call-two')).message;
+  assert.match(told, new RegExp(`\\n你之前存着等送的一条没能确认是否送到，可能已经送到，先别重发：发给 ${f.b}，「While it works\\.」`));
+  assert.ok(!told.includes('没有送到'));
+});
+test('a notice that could not be saved with its answer is given with the next one', async t => {
+  const f = await held(t);
+  f.source.claim(f.a, 'another-window'); await f.look(); f.source.claim(f.a, 'source-owner');
+  assert.equal(f.row.wake.status, 'cancelled');
+  f.begin('two');
+  const persist = f.source.persist; f.source.persist = function () { this.storageWarning = { key: 'x' }; };
+  await assert.rejects(f.call('Not saved.', 'call-two'));
+  f.source.persist = persist; f.source.storageWarning = null;
+  await f.end(); f.advance(MIN); f.begin('three');
+  const told = (await f.call('Next.', 'call-three')).message;
+  assert.match(told, /「While it works\.」/);
+  assert.ok(!told.includes('Not saved.'), 'a message that could not be saved was never answered as held');
+});
+test('the person writing to the sender through a space during an offer withdraws it: not held again', async t => {
+  const f = await fixture(t); f.source.join(f.a, true); busy(f);
+  await f.turn('one', 'While it works.');
+  const row = f.rows().at(-1); assert.equal(row.wake.status, 'held');
+  const run = f.source.peerRunner.transferWake.bind(f.source.peerRunner);
+  f.source.peerRunner.transferWake = async intent => { const result = await run(intent); await f.source.send(f.a, 'Through the space.', 'source-owner', null, { roomId: 'shared' }); return result; };
+  await f.look();
+  f.source.peerRunner.transferWake = run;
+  assert.equal(row.wake.status, 'cancelled');
+  f.ra.emit('state', 'idle'); idle(f); await f.look();
+  assert.equal(f.to(f.b).length, 0);
 });
 
 test('held for the butler\'s minute, then at work: it keeps waiting, for any sender', async t => {

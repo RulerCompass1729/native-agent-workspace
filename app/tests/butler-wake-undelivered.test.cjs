@@ -284,3 +284,14 @@ test('the butler\'s own held message that did not go out is one event, naming th
   later.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: 'butler-next', nativeId: 'native-butler-next' }), formerly: id => id === 'butler-next' ? [f.a] : [] });
   assert.deepEqual(f.events(later).map(e => e.payload.outcome), ['not-sent:busy-hold-expired', 'cancelled:source-identity-changed']);
 });
+test('the butler\'s own message answered as held, then ended before its turn did, is one event too', async t => {
+  const f = await fixture(t, { designate: false });
+  fs.writeFileSync(path.join(f.root, 'steward.json'), JSON.stringify({ version: 1, selected: { sessionId: f.a, nativeId: f.source.get(f.a).nativeId } }), { mode: 0o600 });
+  f.ra.emit('state', 'idle'); f.rb.emit('state', 'working');
+  f.start('one'); assert.equal((await f.call('Secret held task.', 'call-one')).readiness, 'held');
+  f.source.pauseAll('你暂停了后续交接');
+  assert.equal(f.rows().at(-1).wake.status, 'cancelled');
+  f.main.ingress.observeWakeUndelivered(f.source.snapshot().sessions, { steward: () => ({ sessionId: f.a, nativeId: f.source.get(f.a).nativeId }) });
+  assert.deepEqual(f.events().map(e => [e.payload.memberId, e.payload.reason]), [[f.b, 'own-message-undelivered']]);
+  assert.ok(!/Secret/.test(JSON.stringify(f.main.ledger.snapshot())));
+});
