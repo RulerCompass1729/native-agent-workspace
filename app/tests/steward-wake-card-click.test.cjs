@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events');
 const { RoomState } = require('../room-state.cjs');
 const rules = require('../queue-dispatch.cjs'), { QueueDispatcher, CAPABILITY } = rules;
 const { ButlerLedger } = require('../butler-ledger.cjs'), { ButlerIngress } = require('../butler-ingress.cjs');
-const { PersonActions, answers } = require('../person-actions.cjs');
+const { PersonActions, asker } = require('../person-actions.cjs');
 const { StewardWake } = require('../steward-wake.cjs');
 const { QuietWindows } = require('../quiet-windows.cjs');
 const { healthSummary } = require('../mobile-workspace.cjs');
@@ -42,7 +42,7 @@ function fixture(t, { butler = {}, windows = [], compactions = {}, log = [], ste
     } });
   let shown = 0;
   const wake = new StewardWake(dir, { ledger: () => ledger, selected: () => BUTLER, now: () => clock.now, record: line => lines.push(line), changed: () => { shown++; },
-    asker: event => f.rows.find(r => r.actor.id === event.payload.memberId && answers(r, event))?.actor.nativeId ?? null });
+    asker: event => asker(f.rows, event) });
   fs.writeFileSync(path.join(dir, 'quiet-windows.json'), JSON.stringify({ format: 1, windows, history: [] }), { mode: 0o600 });
   const quiet = new QuietWindows(dir, { now: () => clock.now, moveWait: rules.moveWait });
   const dispatcher = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now: () => clock.now, settleMs: 8000, tickMs: 3000,

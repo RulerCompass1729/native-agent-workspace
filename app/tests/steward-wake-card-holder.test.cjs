@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events');
 const { RoomState } = require('../room-state.cjs');
 const rules = require('../queue-dispatch.cjs'), { QueueDispatcher, CAPABILITY } = rules;
 const { ButlerLedger } = require('../butler-ledger.cjs'), { ButlerIngress } = require('../butler-ingress.cjs');
-const { PersonActions } = require('../person-actions.cjs'), { BackgroundControl, dialog } = require('../background-control.cjs');
+const { PersonActions, asker } = require('../person-actions.cjs'), { BackgroundControl, dialog } = require('../background-control.cjs');
 const { StewardWake } = require('../steward-wake.cjs'), { StewardRole } = require('../steward-role.cjs');
 
 const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN, START = 1_800_000_000_000;
@@ -39,7 +39,8 @@ function fixture(t, sessions) {
       handlers: new Map([['stop', async c => { await dialog(c, 'message', { message: 'Stop?', buttons: ['Cancel', 'Stop'], cancelId: 0 }); return null; }]]),
       context: async (actor, saved) => ({ background: true, view: saved || { selected: actor.id, draft: '' }, confirmationActors: () => [actor], checkActor: async () => {}, client: { close() {} }, win: { destroy() {} } }) });
     actions.observe({}, f.control.data.records);
-    f.wake = new StewardWake(dir, { ledger: () => ledger, selected: () => f.role.selected, now, record() {}, changed() {}, asker: event => f.control.asker(event) });
+    f.asker = event => asker(f.control.recordsOf(event.payload.memberId), event);
+    f.wake = new StewardWake(dir, { ledger: () => ledger, selected: () => f.role.selected, now, record() {}, changed() {}, asker: event => f.asker(event) });
     f.dispatcher = new QueueDispatcher({ roomState: room, dataDir: dir, connect: async () => client, now, settleMs: 8000, tickMs: 3000,
       steward: () => { const current = f.role.current(); return current && { ...current, duty: '' }; }, stewardWake: f.wake, transcriptRoot: path.join(dir, 'none'),
       sampleProcesses: async () => '', samplePressure: async () => '', compactions: { async sample() { return new Map(); } } });
@@ -133,7 +134,7 @@ test('a record that goes round ends at the holder already listed, and an entry w
 
 test('whatever its operation id, also one used before by another native session', async t => {
   const one = as('butler', 'native-1'), two = as('butler', 'native-2'), changed = sessions => async f => { sessions[0].nativeId = 'native-2'; f.designate(two); };
-  // An id the event cannot carry: not plain, or too long for it.
+  // Ids the event does not carry.
   for (const operation of ['派活 1', 'lane/x-1', 'a b', '😀'.repeat(50)]) {
     told(await kept(t, { asker: one, sessions: [session('butler', 'native-1', working)], card: f => f.card(one, 1, operation), then: () => {} }));
     const sessions = [session('butler', 'native-1', working)];
@@ -156,24 +157,24 @@ test('an answer whose record is gone or cannot be read is no click and is not lo
     await ordinary(await kept(t, { asker: as('butler', 'native-1'), sessions: [session('butler', 'native-1', working)], then: () => {}, opened: f => { f.wake.asker = asker; } }));
 });
 
-test('background control tells the native session that asked: each answer its own, after a restart and after they moved to the history', async t => {
+test('the records tell the native session that asked: each answer its own, after a restart and after they moved to the history', async t => {
   const f = fixture(t, [session('butler', 'native-1')]), one = as('butler', 'native-1'), two = as('butler', 'native-2'), other = as('other', 'native-other');
   await f.card(one, 1, 'op-yes'); await f.card(one, 0, 'op-no'); await f.card(two, 1, 'op-yes'); await f.card(other, 1, 'op-yes'); await f.card(two, 0, '派活 1'); await f.card(one, 1, '派活 1');
-  const read = () => f.ledger.eventsAfter(null, 100, { ids: true }).events, asked = () => read().map(e => f.control.asker(e));
+  const read = () => f.ledger.eventsAfter(null, 100, { ids: true }).events, asked = () => read().map(e => f.asker(e));
   const expected = ['native-1', 'native-1', 'native-2', 'native-other', 'native-2', 'native-1'];
   assert.deepEqual(asked(), expected); await f.restart(); assert.deepEqual(asked(), expected);
   const [event] = read();
   for (const changed of [{ ...event, eventId: undefined }, { ...event, eventId: read()[2].eventId.replace(/.$/u, c => c === '0' ? '1' : '0') },
     { ...event, payload: { ...event.payload, memberId: 'other' } }, { ...event, payload: { ...event.payload, itemId: 'op-no' } }, { ...event, payload: { ...event.payload, reason: 'person-action:confirmation:reject' } }])
-    assert.equal(f.control.asker(changed), null);
+    assert.equal(f.asker(changed), null);
   f.clock.now += 48 * HOUR; await f.card(two, 1, 'op-later'); await f.card(two, 1, 'op-again');
   assert.ok(f.control.archivedBySession.get('butler')?.some(r => r.id === 'op-yes'), 'moved to the history');
   assert.deepEqual(asked(), [...expected, 'native-2', 'native-2']); await f.restart(); assert.deepEqual(asked(), [...expected, 'native-2', 'native-2']);
   assert.ok(f.ledger.eventsAfter(null, 100).events.every(e => Object.keys(e).sort().join() === 'kind,payload,sequence,time'), 'the butler reads what it read before');
 });
 
-test('main.cjs gives the wake background control\'s own answer', () => {
+test('main.cjs gives the wake background control\'s own records', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.cjs'), 'utf8');
   const wired = main.slice(main.indexOf('stewardWake ||= new StewardWake('), main.indexOf('} catch { stewardWake = null; }'));
-  assert.match(wired, /asker: event => backgroundControl\?\.asker\(event\) \?\? null,/u);
+  assert.match(wired, /asker: event => asker\(backgroundControl\?\.recordsOf\(event\.payload\.memberId\) \|\| \[\], event\),/u);
 });

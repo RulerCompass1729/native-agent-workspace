@@ -73,4 +73,6 @@ class PersonActions {
     this.flush();
   }
 }
-module.exports = { PersonActions, answers };
+// The native session whose card the person answered in `event`, by its session's operation records, or null.
+const asker = (records, event) => records.find(row => answers(row, event))?.actor.nativeId ?? null;
+module.exports = { PersonActions, asker };

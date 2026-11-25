@@ -12,6 +12,8 @@ On the unchanged code 8 of the 10 new tests fail, among them the case the review
 
 A non-author review of the first version found one blocking item: it looked the record up by the operation id the event carries, and an id that is not plain (a space, a slash, Chinese) is not carried, so the holder's own answer waited like any other event. It also noted that an id used by two native sessions made the later holder's answer ordinary. The record is now matched by the event's own id, which tells both apart; tests for those ids fail on the first version.
 
+Its second round found that the module which matches the record was then loaded by the background control module, which a backend loads from its own copied files without it: a new backend would not have started. The two existing tests of those files that fail on that version had been left out of the related run. The match is now made by the main process only, and they pass.
+
 ## Known limits
 
 - A person who deletes the history of an operation makes a click still waiting for it an ordinary event.

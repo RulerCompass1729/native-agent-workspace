@@ -52,7 +52,7 @@ const { readingState } = require('./reading-state.cjs');
 const { ViewStore, validViews, dropRetiredViewFields } = require('./view-store.cjs');
 const { roomId: validRoomId, roomIds, untouchedDefault, placementRevision } = require('./collaboration-spaces.cjs');
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
-const { PersonActions } = require('./person-actions.cjs');
+const { PersonActions, asker } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
@@ -1867,7 +1867,7 @@ async function boot() {
   // person's designation, which a rotation keeps.
   try {
     stewardWake ||= new StewardWake(dataDir, { ledger: () => butlerIngress?.ledger || null, selected: () => stewardRole.selected,
-      changed: stewardWakeChanged, asker: event => backgroundControl?.asker(event) ?? null,
+      changed: stewardWakeChanged, asker: event => asker(backgroundControl?.recordsOf(event.payload.memberId) || [], event),
       record: line => { if (!stewardRecord) throw Error('The butler record is unavailable'); stewardRecord.append(line); } });
   } catch { stewardWake = null; }
   try { quietWindows ||= new QuietWindows(dataDir, { moveWait: queueRules.moveWait }); } catch { quietWindows = null; }
