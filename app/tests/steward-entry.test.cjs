@@ -53,7 +53,7 @@ function fixture(t, { landingOwner = null } = {}) {
     } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
-  vm.runInContext(cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
+  vm.runInContext(cut("  register('steward', async (c, id, duty = null, standing = null, handoff = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
   vm.runInContext(cut("  register('join', async (c, id, join) => {", "  register('roomRename',"), context);
   // The space action's own join branch, as written, in a handler of its own.
   vm.runInContext("register('spaceJoin', async (c, roomId, action, args = []) => {\n" + cut("    if (action === 'join') {\n      keepStewardOutside(", "    if (['stageImages', 'removeImage'].includes(action)) {") + '});', context);
@@ -213,6 +213,26 @@ test('designating sends the duty statement into the session as the person\'s mes
   await assert.rejects(f.agent('outside')('steward', ['outside', 'text']), key('error.steward.personOnly')); assert.equal(f.submitted.length, 3);
 });
 
+test('a handoff goes in front of the duty statement this once; it is not kept, and one that cannot be sent designates nobody (M82)', async t => {
+  const f = fixture(t), header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
+  const handoff = locale.format('zh', 'steward.new.handoffDefault', { name: '大管家 7' });
+  assert.equal((await f.call('outside', null, null, '  ' + handoff + '\n')).duty.state, 'sent');
+  assert.deepEqual(f.submitted, [[true, 'send', 'outside', handoff + '\n\n' + header + '\n' + standard, 'native-outside']]);
+  // What is kept, and goes to its successors at every rotation, is the duty statement alone.
+  assert.equal(f.role.duty, null); assert.equal(fs.readFileSync(f.file, 'utf8').includes('接替'), false);
+  await f.call('outside', '只管派活。', null, handoff);
+  assert.equal(f.submitted[1][3], handoff + '\n\n' + header + '\n只管派活。'); assert.equal(f.role.duty, '只管派活。'); assert.equal(fs.readFileSync(f.file, 'utf8').includes('接替'), false);
+  // Sent again without one: the duty statement alone, as before.
+  await f.call('outside'); assert.equal(f.submitted[2][3], header + '\n' + standard);
+  // The longest of both is one message, and nothing is written for one that is refused.
+  const before = fs.readFileSync(f.file, 'utf8'), off = f.wakeOff.length;
+  for (const bad of ['', '   ', 'x'.repeat(DUTY_MAX), 'a\u0000b', 7, {}]) await assert.rejects(f.call('other', null, null, bad), key('error.steward.handoffInvalid'), JSON.stringify(bad));
+  assert.deepEqual([fs.readFileSync(f.file, 'utf8'), f.submitted.length, f.wakeOff.length], [before, 3, off]);
+  // Revoking sends nothing, whatever it is given; an agent cannot send one.
+  await f.call(null, null, null, handoff); assert.equal(f.submitted.length, 3);
+  await assert.rejects(f.agent('other')('steward', ['outside', null, null, handoff]), key('error.steward.personOnly')); assert.equal(f.submitted.length, 3);
+});
+
 test('the duty statement is bounded so that the record stays readable by every build, and a damaged one is an error', t => {
   // The longest ids with the longest statement still fit the 4096 bytes every build reads.
   const f = fixture(t), long = { sessionId: '会'.repeat(100), nativeId: '話'.repeat(100) };
@@ -335,7 +355,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
   // Designating writes the record (and, when the person was asked, the permission's), and tells the windows; no more.
-  const handler = cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {");
+  const handler = cut("  register('steward', async (c, id, duty = null, standing = null, handoff = null) => {", "  register('stewardEvents', async (c, position = null) => {");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
@@ -344,6 +364,9 @@ test('every sentence exists in both languages, and the words say what the design
     'steward.rowLabel', 'steward.rowStatus', 'steward.choose.title', 'steward.choose.intro', 'steward.choose.current', 'steward.choose.inSpace', 'steward.choose.unusable', 'steward.choose.none', 'steward.choose.confirm',
     // Batch 4: the duty statement designating sends (the activation checklist, item 6).
     'steward.choose.resend', 'steward.duty.label', 'steward.duty.default', 'steward.duty.header', 'steward.duty.notSent', 'error.steward.dutyInvalid', 'error.steward.dutyBusy',
+    // A new session as the butler (M82), made from the chooser.
+    'steward.new.title', 'steward.new.name', 'steward.new.folder', 'steward.new.outside', 'steward.new.codex', 'steward.new.model', 'steward.new.effort', 'steward.new.handoff', 'steward.new.handoffDefault', 'steward.new.duty',
+    'steward.new.note', 'steward.new.confirm', 'steward.new.making', 'steward.new.closed', 'error.steward.newFailed', 'error.steward.newNotReady', 'error.steward.handoffInvalid',
     // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
     // Batch 4: what the butler does to a queue says so.
     'notice.queue.addedBySteward', 'notice.queue.cancelledBySteward', 'notice.queue.resolvedBySteward', 'queue.creator.steward', 'queue.status.cancelledBySteward', 'queue.status.doneBySteward',
