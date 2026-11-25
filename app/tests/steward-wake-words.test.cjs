@@ -72,7 +72,8 @@ test('one wake over several starts and other events names each code once and not
 
 test('a wake with no start in it reads as before, whatever another event gives as its reason', async t => {
   const env = profile(t);
-  env.first.events.quietWindowTimedOut({ scope: 'backend:synthetic', waited: 'busy', deadline: env.clock.now });
+  env.first.events.emit('backend-moved', 'Synthetic move', 'moved:1');
+  env.first.events.emit('backend-move-failed', 'Synthetic failed move', 'failed:1');
   env.ledger.ingest(failure(1));
   env.ledger.ingest(failure(2, 'version-restarted-after-abnormal-exit'));
   const before = env.wake.state.woken;
