@@ -101,6 +101,22 @@ test('the fallback code: only the current butler, only a covered local action, o
   assert.equal(f.policy.fallback(NEW, order('f'), f.state, 'shared'), null, 'unreadable: no claim');
 });
 
+test('carried to the next designation only by the person, only while it is on, and once', t => {
+  const f = fixture(t);
+  assert.equal(f.policy.carry(f.human), null, 'on for an earlier designation is not on');
+  f.policy.set(f.human, true);
+  assert.equal(f.policy.carry({}), null, 'not the person');
+  const carry = f.policy.carry(f.human), used = [{ at: 1, id: 'slot' }];
+  f.policy.write({ ...f.policy.read(), used });
+  f.role.set(as(OLD));
+  carry(true);
+  assert.deepEqual([f.policy.read().designation, f.policy.view().on, f.policy.read().used], [as(OLD), true, used], 'the hourly limit goes with it');
+  const revision = f.policy.read().revision; carry(true); assert.equal(f.policy.read().revision, revision);
+  // Turned off in another window meanwhile: not turned on again.
+  const stale = f.policy.carry(f.human); f.policy.set(f.human, false); f.role.set(as(NEW)); stale(true);
+  assert.equal(f.policy.view().on, false); assert.equal(f.policy.read().on, false);
+});
+
 function control(t, f, standingFallback) {
   const rooms = new RoomState(f.dir), effects = [], handlers = new Map([['join', () => { effects.push('join'); return 'target'; }]]);
   const context = { background: true, view: {}, fingerprint: () => ({ sessions: [NEW], auditRooms: ['shared'] }), checkActor: async () => {},
@@ -169,11 +185,14 @@ test('the switch stays the person\'s: a background or member call cannot turn it
   const source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   const start = source.indexOf("  register('stewardStanding'"), end = source.indexOf("  applicationHandlers.delete('stewardStanding');", start);
   assert.ok(start > 0 && end > start, 'the handler is followed by its removal from background calls');
-  let registered, calls = 0;
+  let registered, calls = 0, told = 0;
   vm.runInContext(source.slice(start, end), vm.createContext({ register: (_name, fn) => { registered = fn; },
-    isCurrentHumanContext: c => !c.background, uiError, broadcastRoom: async () => {}, stewardStanding: { view: () => ({}), set: () => { calls++; } } }));
+    isCurrentHumanContext: c => !c.background, uiError, broadcastRoom: async () => { told++; }, stewardStanding: { view: () => ({}), set: () => { calls++; } } }));
   await assert.rejects(registered({ background: true }, true), error => error?.uiMessage?.key === 'error.steward.personOnly');
   assert.equal(calls, 0);
+  // Reading it (the designation dialog does, each time it opens) tells no window; setting it tells every one.
+  await registered({}); assert.deepEqual([calls, told], [0, 0]);
+  await registered({}, false); assert.deepEqual([calls, told], [1, 1]);
 });
 
 test('main passes the fallback hook; the card and the switch have their words in both languages', () => {

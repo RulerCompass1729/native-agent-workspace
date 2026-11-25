@@ -6,6 +6,7 @@ const { EventEmitter } = require('node:events');
 const { uiError } = require('../ui-errors.cjs');
 const { roomIds } = require('../collaboration-spaces.cjs');
 const { StewardRole, DUTY_MAX, validDuty } = require('../steward-role.cjs');
+const { StewardStanding } = require('../steward-standing.cjs');
 const { IntegratorRole } = require('../integrator-role.cjs');
 const { QueueSecretary } = require('../queue-secretary.cjs');
 const { RoomState } = require('../room-state.cjs');
@@ -32,6 +33,8 @@ function fixture(t, { landingOwner = null } = {}) {
     queueDispatcher: null, sessionLabels: { labels: new Map() }, ipcMain: { handle() {} }, broadcastRoom: async () => { broadcasts.push(role.selected); },
     // Waking the butler on events (steward-wake.cjs): only whether the designation turns it off, and when.
     stewardWake: { set: on => { wakeOff.push([on, role.selected]); } },
+    // The person's permission to organize, real over the same directory: which designation it is for.
+    stewardStanding: new StewardStanding(directory, { role, person: c => c === person }),
     // What designating sends: the person's own input, as the composer gives it, in the person's language.
     validDuty, displayText: key => locale.format('zh', key), uiLocale: locale, refuseSubmit: null,
     submit: async (c, method, ...args) => {
@@ -48,7 +51,7 @@ function fixture(t, { landingOwner = null } = {}) {
     } });
   vm.runInContext(cut('function register(name, handler) {', 'async function replaceBackendSockets'), context);
   vm.runInContext(cut('function keepStewardOutside(id, join) {', 'function conversationReaderAllowed(actor) {'), context);
-  vm.runInContext(cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
+  vm.runInContext(cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {"), context);
   vm.runInContext(cut("  register('join', async (c, id, join) => {", "  register('roomRename',"), context);
   // The space action's own join branch, as written, in a handler of its own.
   vm.runInContext("register('spaceJoin', async (c, roomId, action, args = []) => {\n" + cut("    if (action === 'join') {\n      keepStewardOutside(", "    if (['stageImages', 'removeImage'].includes(action)) {") + '});', context);
@@ -315,7 +318,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   // Step 2, batch 2: every join meets one guard (a session NAW opened for a space, a rotation's successor included),
   // and the designation is made in the same queue the joins run in.
   assert.match(source, /roomState = new RoomState\(dataDir\);\n[^\n]*\n  roomState\.joinGuard = id => keepStewardOutside\(id, true\);/);
-  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n    \}\);/);
+  assert.match(source, /else await roomState\.serial\(async \(\) => \{\n[^]*?stewardRole\.set\(\{ sessionId: record\.id, nativeId: record\.nativeId \}, duty\);\n[^\n]*\n[^\n]*carry\(keep\)[^\n]*\n    \}\);/);
   for (const file of fs.readdirSync(path.join(__dirname, '..')).filter(name => /\.c?js$/.test(name) && !['main.cjs', 'steward-role.cjs', 'session-wake.cjs'].includes(name))) {
     assert.ok(!/stewardRole|StewardRole|steward\.json/.test(fs.readFileSync(path.join(__dirname, '..', file), 'utf8')), file);
   }
@@ -330,7 +333,7 @@ test('the entry is wired: the record is built from the data folder, shown in the
   const own = fs.readFileSync(path.join(__dirname, '../steward-role.cjs'), 'utf8');
   assert.equal(/integrator\.json|queue-secretary\.json|butler\.json/.test(own), false); assert.ok(own.includes("path.join(directory, 'steward.json')"));
   // Designating only writes the record: the entry's handler touches the record and tells the windows, and no more.
-  const handler = cut("  register('steward', async (c, id, duty = null) => {", "  register('stewardEvents', async (c, position = null) => {");
+  const handler = cut("  register('steward', async (c, id, duty = null, standing = null) => {", "  register('stewardEvents', async (c, position = null) => {");
   assert.deepEqual([...new Set(handler.match(/\b(queueSecretary|integratorRole|operator[A-Z]\w*|butler[A-Z]\w*|backgroundControl|queueDispatcher)\b/g) || [])], []);
 });
 
@@ -373,4 +376,84 @@ test('every sentence exists in both languages, and the words say what the design
   assert.equal(locale.format('zh', 'menu.stewardSet'), '设为大管家（我主要和它说话）'); assert.equal(locale.format('zh', 'error.steward.joinSpace'), '大管家不能加入协作空间。先撤销大管家，再把这个会话加入空间。');
   assert.equal(locale.format('zh', 'steward.choose.inSpace', { space: '网站改版' }), '在协作空间「网站改版」里，先移出才能当大管家');
   assert.equal(locale.format('zh', 'steward.rowStatus', { name: 'A', status: '会话就绪' }), 'A · 会话就绪');
+});
+
+// R220 (the person, 2026-11-24): 「要跟着新大管家走啊,否则大管家干啥」. The permission to organize was on for a butler whose
+// replacement was kept (no done edge), the person designated the next one by hand, and it stayed with the old one.
+const OUTSIDE = { sessionId: 'outside', nativeId: 'native-outside' }, OTHER = { sessionId: 'other', nativeId: 'native-other' };
+function standing(f) {
+  const value = f.context.stewardStanding, read = () => JSON.parse(fs.readFileSync(path.join(f.directory, 'steward-standing.json'), 'utf8'));
+  return { value, read, on: () => value.view().on, turn: on => value.set(f.person, on) };
+}
+
+test('designating another butler by hand: the permission goes to it when the person leaves it on, and to nobody when they were not asked', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); assert.equal(s.on(), true);
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('kept', OUTSIDE, OTHER) + '\n', { mode: 0o600 });
+  const result = await f.call('other', null, true);
+  assert.equal(Object.hasOwn(result, 'standingLost'), false);
+  assert.deepEqual(s.read().designation, OTHER); assert.deepEqual(s.value.view(), { on: true, limit: 30, unavailable: false });
+  // The person's way back: the previous one does not have it.
+  assert.equal(s.value.take({ id: 'outside', nativeId: 'native-outside' }, { method: 'archiveRoom', arguments: ['shared'], operation_id: 'old' }, { sessions: f.sessions, rooms: [] }, 'shared'), null);
+  // A caller that does not ask leaves it where it was, as before.
+  const g = fixture(t), kept = standing(g);
+  await g.call('outside'); kept.turn(true); await g.call('other');
+  assert.deepEqual([kept.read().designation, kept.read().on, kept.on(), kept.value.view().reason], [OUTSIDE, true, false, 'other-designation']);
+  for (const odd of ['true', 1, {}]) { await g.call('outside'); await g.call('other', null, odd); assert.deepEqual(kept.read().designation, OUTSIDE, String(odd)); }
+});
+
+test('the person takes it back while designating: it is off, for the previous butler too', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); const before = s.read().revision;
+  await f.call('other', null, false);
+  assert.deepEqual([s.read().on, s.on(), s.value.view().reason, s.read().revision], [false, false, undefined, before + 1]);
+  await f.call('outside'); assert.equal(s.on(), false, 'designated again, it is not on by itself');
+});
+
+test('not on for the butler being replaced: leaving the line on turns nothing on', async t => {
+  // Never turned on; on only for an earlier designation; turned off; nobody designated; unreadable.
+  const never = fixture(t); await never.call('outside'); await never.call('other', null, true);
+  assert.equal(fs.existsSync(path.join(never.directory, 'steward-standing.json')), false);
+  const earlier = fixture(t), e = standing(earlier); await earlier.call('outside'); e.turn(true); await earlier.call('other'); await earlier.call('busy-codex', null, true);
+  assert.deepEqual([e.read().designation, e.on()], [OUTSIDE, false]);
+  const off = fixture(t), o = standing(off); await off.call('outside'); o.turn(true); o.turn(false); await off.call('other', null, true); assert.equal(o.on(), false);
+  const revoked = fixture(t), r = standing(revoked); await revoked.call('outside'); r.turn(true); await revoked.call(null); await revoked.call('other', null, true); assert.equal(r.on(), false);
+  const broken = fixture(t), b = standing(broken); await broken.call('outside'); b.turn(true); fs.writeFileSync(path.join(broken.directory, 'steward-standing.json'), '{', { mode: 0o600 });
+  await broken.call('other', null, true); assert.equal(b.value.view().unavailable, true); assert.equal(fs.readFileSync(path.join(broken.directory, 'steward-standing.json'), 'utf8'), '{');
+});
+
+test('the same butler again keeps it, also when the rotation log had made it the butler; a refused designation moves nothing', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true); const same = s.read().revision;
+  await f.call('outside'); assert.deepEqual([s.on(), s.read().revision], [true, same], 'nothing written');
+  fs.writeFileSync(path.join(f.directory, 'rotation-log.jsonl'), edge('done', OUTSIDE, OTHER) + '\n', { mode: 0o600 });
+  assert.equal(s.on(), true, 'the successor has it');
+  await f.call('other'); assert.deepEqual([s.read().designation, s.on()], [OTHER, true], 'the duty statement sent again does not take it away');
+  for (const id of ['member', 'ended', 'missing']) await assert.rejects(f.call(id, null, true));
+  assert.deepEqual([s.read().designation, s.on()], [OTHER, true]);
+  // Only the session the log named, native session included, is the same one.
+  for (const odd of [{ nativeId: 'native-elsewhere' }, { sessionId: 'elsewhere' }]) {
+    const g = fixture(t), other = standing(g); await g.call('outside'); other.turn(true);
+    fs.writeFileSync(path.join(g.directory, 'rotation-log.jsonl'), edge('done', OUTSIDE, { ...OTHER, ...odd }) + '\n', { mode: 0o600 });
+    await g.call('other'); assert.deepEqual([other.read().designation, other.on()], [OUTSIDE, false], JSON.stringify(odd));
+  }
+});
+
+test('an agent cannot carry it, and a permission that cannot be saved is said while the designation stands', async t => {
+  const f = fixture(t), s = standing(f);
+  await f.call('outside'); s.turn(true);
+  await assert.rejects(f.agent('other')('steward', ['other', null, true]));
+  assert.deepEqual([f.role.selected, s.read().designation], [OUTSIDE, OUTSIDE]);
+  // The window the call came from is no longer the person's: the designation is as it was before this change, nothing is carried.
+  f.context.stewardStanding.person = () => false;
+  await f.call('other', null, true); assert.deepEqual([f.role.selected, s.read().designation], [OTHER, OUTSIDE]);
+  f.context.stewardStanding.person = c => c === f.person;
+  await f.call('outside'); assert.equal(s.on(), true);
+  f.context.stewardStanding.write = () => { throw Error('synthetic'); };
+  const lost = await f.call('other', null, true);
+  assert.deepEqual([lost.standingLost, lost.duty.state, f.role.selected, s.on()], [true, 'queued', OTHER, false]);
+  await f.call('outside');
+  f.context.refuseSubmit = Object.assign(Error('x'), { uiMessage: { key: 'error.steward.dutyBusy' } });
+  const both = await f.call('other', null, true); assert.deepEqual([both.standingLost, both.duty.state], [true, 'not-sent']);
+  await f.call('outside'); assert.equal(Object.hasOwn(await f.call('other', null, false), 'standingLost'), false, 'taken back: the new one does not have it either way');
 });
