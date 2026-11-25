@@ -363,7 +363,7 @@ test('the person sees whether NAW wakes the butler and when it last tried, and c
     const d = wakeDialog({ ...base, current, wake }, calls); await d.open();
     const [box] = find(d.dialog, n => n.className === 'steward-record-wake'); if (!box) return null;
     const [input] = find(box, n => n.type === 'checkbox'), [status] = find(box, n => n.className === 'steward-record-wake-status');
-    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次，它在忙时不唤醒。').length];
+    return [input.checked, status.textContent, find(box, n => n.tag === 'span' && n.textContent === 'NAW 记下新事件时唤醒它').length, find(box, n => n.textContent === '每次唤醒它会跑一轮，算进下面的用量；最多每分钟一次（你点它发的卡会马上唤醒），它在忙时不唤醒。').length];
   };
   assert.deepEqual(await states({ on: false, at: null, failed: false }), [false, '关着', 1, 1]);
   assert.deepEqual(await states({ on: true, at: null, failed: false }), [true, '开着 · 还没唤醒过', 1, 1]);

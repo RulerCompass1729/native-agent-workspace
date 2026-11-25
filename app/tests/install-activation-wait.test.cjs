@@ -1,12 +1,12 @@
 'use strict';
-// Startup copies the DSH runtime before the new backend becomes active, so the installer must outwait a slow copy.
+// Startup waits a while for the DSH runtime copy before the new backend becomes active; the installer must outwait that.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createInspector } = require('../../scripts/install-runtime.cjs');
-const { STALL_MS, COPY_LIMIT_MS } = require('../dsh-tui.cjs');
+const { WAIT_MS } = require('../dsh-copy.cjs');
 
 const OLD = 'backends/aaaaaaaaaaaaaaaaaaaa', NEXT = 'backends/bbbbbbbbbbbbbbbbbbbb', VERSION = '0.1.0-alpha.999';
 
@@ -44,9 +44,9 @@ async function verify(t, readyAt) {
   return inspector.verifyUpgrade({ state: { sessions: [], services: [] }, restarting: [], expectedActive: null, views: [] });
 }
 
-test('a backend activated after the longest allowed runtime copy is still verified', async t => {
-  // Clearing an interrupted copy has its own STALL_MS before the copy; starting the backend comes after.
-  assert.equal((await verify(t, STALL_MS + COPY_LIMIT_MS + 30000)).active, NEXT);
+test('a backend activated after the longest wait for a runtime copy is still verified', async t => {
+  // Starting the backend comes after the wait, and the installer allows it 60 seconds.
+  assert.equal((await verify(t, WAIT_MS + 60000)).active, NEXT);
 });
 test('a backend that never becomes active is still refused', async t => {
   await assert.rejects(verify(t, Infinity), /New backend did not become active/);

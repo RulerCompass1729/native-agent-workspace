@@ -127,24 +127,44 @@ function setPolicy(w, id, value) {
 }
 function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailure ? { warning: w.wakeGuardFailure, warningUiMessage: w.wakeGuardFailureUiMessage || null } : {}) }; } catch { const fallback = uiError('error.warning.wakeGuardUnavailable'); return { enabled: false, unavailable: true, warning: w.wakeGuardFailure || fallback.message, warningUiMessage: w.wakeGuardFailure ? w.wakeGuardFailureUiMessage || null : fallback.uiMessage }; } }
 // The sender's human-control state when its turn started. Ordinary input into the session (the person typing, queueing
-// or steering, another agent's message, a background notice) neither withdraws nor renews what the turn may send: every
-// session has the input policy the designated butler has had since 2026-11-14 (the person, 2026-11-23). Count the
-// exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover, stop, connection, membership
-// or permission changes. Runtime-only: reopening never replays a wake.
+// or steering, another agent's message, its queue or steer through background control, a background notice) neither
+// withdraws nor renews what the turn may send: every session has the input policy the designated butler has had since
+// 2026-11-14 (the person, 2026-11-23 and 24). Count the exact control/peer changes made by that input, without hiding Esc, Ctrl-C, takeover,
+// stop, membership or permission changes. Runtime-only: reopening never replays a wake.
 const inputChanges = new WeakMap();
-function messageInput(w, s, { control = 0, peer = 0 }) {
-  const prior = inputChanges.get(s) || { control: 0, peer: 0 };
-  inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer });
+// byAgent is said by the caller: an event's ambient background operation may be an older one its connection was opened in.
+function messageInput(w, s, { control = 0, peer = 0, connection = 0, byAgent = false }) {
+  const prior = inputChanges.get(s) || { control: 0, peer: 0, connection: 0, agentControl: 0 };
+  inputChanges.set(s, { control: prior.control + control, peer: prior.peer + peer, connection: prior.connection + connection,
+    agentControl: prior.agentControl + (byAgent ? control : 0) });
+}
+// The same window reconnected to the same turn, still running (workspace.cjs resume): its own two changes are counted.
+function reconnected(w, s) {
+  messageInput(w, s, { control: 1, connection: 1 });
+  const list = causes.get(s) || [], at = list.findLastIndex(e => e.code === labelled('reconnect'));
+  if (at >= 0) causes.set(s, list.toSpliced(at, 1));
 }
 function sourceIdentity(w, s) {
   const proof = identity(s), input = inputChanges.get(s);
+  proof.connectionRevision ||= 0;
   if (input) {
     if (input.control) proof.controlRevision -= input.control;
     if (input.peer) proof.peerRevision -= input.peer;
+    proof.connectionRevision -= input.connection;
   }
   return proof;
 }
-const humanProof = (w, s) => s ? JSON.stringify([s.owner ?? null, sourceIdentity(w, s).controlRevision || 0, s.connectionRevision || 0]) : null;
+// What a control call of the session rests on (scoped-outbox-runtime.cjs): another agent's background queue or steer still ends it.
+function callerIdentity(w, s) {
+  const proof = { ...sourceIdentity(w, s), connectionRevision: s.connectionRevision ?? null }, input = inputChanges.get(s);
+  if (input) proof.controlRevision += input.agentControl;
+  return proof;
+}
+function humanProof(w, s) {
+  if (!s) return null;
+  const proof = sourceIdentity(w, s);
+  return JSON.stringify([s.owner ?? null, proof.controlRevision || 0, proof.connectionRevision || 0]);
+}
 function nativeStart(w, r, info, s) {
   // A wake still staged from an earlier turn of this native session: that turn's end never reached NAW (a failed turn
   // with no capacity report, a lost end row), so "after its turn ends normally" can no longer happen. Withdrawn now,
@@ -776,4 +796,4 @@ async function receive(w, spec) {
   const row = s.messages.find(m => m.id === tag);
   return { status: row?.status === 'submitted' ? 'submitted' : 'unconfirmed', tag };
 }
-module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, sourceIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };
+module.exports = { CAPABILITY, PREFLIGHT, COOLDOWN, MAX_STREAK, routeFor, snapshot, enabled, boundary, budgetAllows, reserveBudget, clearSenderStreak, nativeGoalStatus, goalAllows, revoke, cause, initialize, human, cancelParticipant, setPolicy, nativeStart, messageInput, reconnected, sourceIdentity, callerIdentity, isSteward, stage, complete, take, receive, check, validateArgs, root, retryHeld, unbound };

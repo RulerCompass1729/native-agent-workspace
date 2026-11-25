@@ -4,6 +4,13 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(value) ? value : undefined;
 const ref = value => typeof value === 'string' && value.length > 0 ? hash(value) : null;
 const OUTCOMES = new Set(['complete', 'cancelled', 'running', 'failed', 'not-executed', 'unknown']);
+const eventKey = (surface, action, identity) => `person-action:${hash([surface, action, identity])}`;
+const card = row => [ref(row.id), ref(row.actor.id), ref(row.actor.nativeId)];
+const answer = row => [...card(row), row.humanDecision, row.humanDecisionAt ?? row.finishedAt];
+// Whether `event` records the person's answer on the card of operation record `row`. Its id is of the whole answer, the
+// native session that asked included; its itemId leaves out an operation id that is not plain.
+const answers = (row, { eventId, payload }) => id(row.id) === payload.itemId && ['confirm', 'reject']
+  .some(action => payload.reason === `person-action:confirmation:${action}` && eventId === eventKey('confirmation', action, answer(row)));
 const METHODS = new Set(['operatorAction', 'spaceAction', 'approve', 'answer']);
 
 class PersonActions {
@@ -11,7 +18,7 @@ class PersonActions {
     this.ingress = ingress; this.now = now; this.pending = new Map(); this.seen = new Set(); this.overflow = false;
   }
   event(surface, action, identity, outcome = action, metadata = {}) {
-    const key = `person-action:${hash([surface, action, identity])}`;
+    const key = eventKey(surface, action, identity);
     if (this.seen.has(key) || this.pending.has(key)) return;
     if (this.pending.size >= 512) {
       this.overflow = true; this.ingress.errors.set('person-actions', 'source-unavailable');
@@ -54,16 +61,18 @@ class PersonActions {
     }
     for (const row of records) {
       if (!ref(row.id) || !ref(row.actor?.id)) continue;
-      const identity = [ref(row.id), ref(row.actor.id), ref(row.actor.nativeId)], metadata = { ...(id(row.id) ? { itemId: id(row.id) } : {}), ...(id(row.actor.id) ? { memberId: id(row.actor.id) } : {}) };
+      const metadata = { ...(id(row.id) ? { itemId: id(row.id) } : {}), ...(id(row.actor.id) ? { memberId: id(row.actor.id) } : {}) };
       if (Number.isSafeInteger(row.humanDecision) && Number.isFinite(row.humanDecisionAt ?? row.finishedAt)) {
         const action = row.humanDecision === (row.confirmation?.options?.cancelId ?? 0) ? 'reject' : 'confirm';
         // A permit is not an execution receipt; never copy command arguments or card text.
-        this.event('confirmation', action, [...identity, row.humanDecision, row.humanDecisionAt ?? row.finishedAt], action, metadata);
+        this.event('confirmation', action, answer(row), action, metadata);
       }
       if (row.disposition === 'expired' && Number.isFinite(row.finishedAt))
-        this.event('confirmation', 'expire', [...identity, row.finishedAt], OUTCOMES.has(row.state) ? row.state : 'unknown', metadata);
+        this.event('confirmation', 'expire', [...card(row), row.finishedAt], OUTCOMES.has(row.state) ? row.state : 'unknown', metadata);
     }
     this.flush();
   }
 }
-module.exports = { PersonActions };
+// The native session whose card the person answered in `event`, by its session's operation records, or null.
+const asker = (records, event) => records.find(row => answers(row, event))?.actor.nativeId ?? null;
+module.exports = { PersonActions, asker };

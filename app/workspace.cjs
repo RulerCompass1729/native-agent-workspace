@@ -78,10 +78,11 @@ const RECOVERY_REASONS = Object.freeze({
 });
 const { OperatorControl } = require('./operator-control.cjs');
 const { GoalContinuation } = require('./goal-continuation-runner.cjs');
-// Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
-// is hover, not a human instruction; presses, drags and releases still are.
-const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
-const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
+// Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude) and the wheel (64 up,
+// 65 down) are not a human instruction, nor are focus reports; presses, drags and releases still are.
+const pointerOnly = button => (button & 35) === 35 || button === 64 || button === 65;
+const isPointerOnly = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => pointerOnly(Number(m[1])));
+const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[\??\d+;[0-4]\$y$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || /^\x1b\[[IO]$/.test(data) || isPointerOnly(data);
 
 // Settings a new session starts with instead of the provider defaults; NAW's session rotation
 // carries the old session's. Absent fields keep the native defaults. queue-dispatch.cjs decides
@@ -965,12 +966,15 @@ class Workspace extends EventEmitter {
     // Background task IDs this session started or last reported in flight. Kept across turn ends: a task listed once
     // may finish during a later turn, whose report no longer lists it. Used up when the task's notification says it
     // ended; a new native process starts with none.
-    const rememberTasks = ids => {
-      const known = runtime.backgroundTaskIds ||= new Set();
+    const rememberTasks = (ids, kept = 'backgroundTaskIds') => {
+      const known = runtime[kept] ||= new Set();
       for (const id of ids) { known.delete(id); known.add(id); }
       while (known.size > 200) known.delete(known.values().next().value);
     };
     on('backgroundStarted', id => rememberTasks([id]));
+    // Apart: an agent that sends no notification keeps its ID here, and must not push out a task still running.
+    on('agentStarted', id => rememberTasks([id], 'agentTaskIds'));
+    const taskKept = id => [runtime.backgroundTaskIds, runtime.agentTaskIds].some(known => known?.has(id));
     on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
       rememberTasks(Array.isArray(info.ids) ? info.ids : []);
@@ -1018,7 +1022,7 @@ class Workspace extends EventEmitter {
       // Not the person: no wake.human, pause or controlRevision. Its submission still sends the mod's
       // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
       const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
-      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
+      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && taskKept(id));
       return {blocks,onlyBlocks,taskIds,reported,machine:sourced||reported,inputSource:sourced?item.source:reported?'task-notification':null};
     };
     on('nativeInputOrigin', (text, item, reply) => {
@@ -1033,7 +1037,7 @@ class Workspace extends EventEmitter {
       // A monitor notifies once per event and once when it ends, with the same ID; only a block with a status ends the task
       // (real 2.1.322: an event carries task-id, summary and event; an end, like a finished Bash, a status). What a watched
       // command printed into an event or a summary is not the block's own status.
-      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) runtime.backgroundTaskIds.delete(taskIds[i]); });
+      if (reported) blocks.forEach((block, i) => { if (/<status>/.test(block.replace(/<(event|summary)>[\s\S]*?<\/\1>/g, ''))) for (const known of [runtime.backgroundTaskIds, runtime.agentTaskIds]) known?.delete(taskIds[i]); });
       // Missing source is not proof of human authorship for report questions.
       if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);
@@ -1717,8 +1721,8 @@ class Workspace extends EventEmitter {
       if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
       // Private input still ends the old public reply scope; the session's wake permission survives.
       if (!shared) s.controlRevision++;
-      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1, peer: 1 });
-      else wake.cause(s, 'input', shared);
+      if (!shared) wake.messageInput(this, s, { control: 1, peer: 1, byAgent: Boolean(backgroundOperation.current()) });
+      else wake.cause(s, 'input', true);
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
     const sameControl = !shared && !mobile && !backgroundOperation.current() ? this.ownControl(s) : () => s.controlRevision === control;
@@ -1803,7 +1807,7 @@ class Workspace extends EventEmitter {
     if (mobile) { mobile.human(); wake.messageInput(this, s, { control: 1, peer: 1 }); }
     else {
       if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
-      if (!shared && !backgroundOperation.current()) wake.messageInput(this, s, { control: 1 });
+      if (!shared) wake.messageInput(this, s, { control: 1, byAgent: Boolean(backgroundOperation.current()) });
       else wake.cause(s, 'input');
     }
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
@@ -2374,10 +2378,14 @@ class Workspace extends EventEmitter {
       }
       s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; wake.cause(s, 'reconnect');
-      const generation = s.connectionRevision;
+      const generation = s.connectionRevision, turn = s.owner === owner && !backgroundOperation.current() ? retained.turnId : null;
       s.owner = owner; s.recovering = true; s.state = 'starting'; setActivity(s, ...uiActivity("notice.activity.connectingHistory"));
       this.pause('重新连接原会话；之前的交接不会自动继续。', undefined, false, uiActivity('notice.run.reconnecting')[1]); this.changed();
-      try { await retained.reconnect(); }
+      try {
+        await retained.reconnect({ keepTurn: Boolean(turn) });
+        // The same window, native session and running turn: only the connection was replaced, so the turn keeps its messages.
+        if (turn && retained.turnId === turn && s.owner === owner && generation === s.connectionRevision) wake.reconnected(this, s);
+      }
       catch (error) {
         if (generation === s.connectionRevision && !['ended', 'recoverable'].includes(s.state) && this.runtimes.get(id) === retained && !this.stops.has(id)) { s.state = retained.transportDisconnected ? 'error' : 'disconnected'; setActivity(s, error.message, error.uiMessage); }
         throw error;

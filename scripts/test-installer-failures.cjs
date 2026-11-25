@@ -16,6 +16,8 @@ assert.ok(!options.scratch.startsWith('/Applications')); assert.ok(!options.scra
 const version = options['new-version'], oldVersion = options['old-version'], release = options.release;
 const commit = run('/usr/bin/git', ['-C', release, 'rev-parse', 'HEAD']).trim();
 const token = crypto.randomUUID(), results = [];
+// A session that has not ended keeps the old backend, so the update makes a new one.
+const keepsOld = mode => ['bundled-backend', 'dsh-slow'].includes(mode);
 const rollbackPath = c => path.join(c.resultDir, 'rollback.noindex/previous.app'); let lease = false, cleanupVerified = true;
 const pin = file => ({ path: file, sha256: digest(file) });
 const safeEnv = home => ({ PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home, TMPDIR: '/tmp', GIT_OPTIONAL_LOCKS: '0' });
@@ -57,9 +59,15 @@ function build(mode, binary) {
   const cold = path.join(root, 'cold.json'); fs.writeFileSync(cold, JSON.stringify({ pass: true, commit, cdhash: c.newSignature.cdhash, fixtureOnly: true })); c.coldLaunch = pin(cold);
   for (const [app, name] of [[c.app, 'old.zip'], [c.candidate, 'new.zip']]) run('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, path.join(root, name)]);
   c.previousArchive = pin(path.join(root, 'old.zip')); c.archive = pin(path.join(root, 'new.zip'));
-  fs.writeFileSync(path.join(c.data, 'workspace.json'), JSON.stringify({ sessions: [{ id: 'retained', nativeId: 'synthetic-native', provider: 'claude', state: mode === 'bundled-backend' ? 'background' : 'ended', model: 'synthetic-model', name: 'Synthetic', roomId: 'shared', messages: [{ id: 'm1', role: 'user', text: 'Synthetic history', status: 'complete' }] }], room: { messages: [{ id: 'r1', role: 'system', text: 'Synthetic shared record', status: 'complete' }] }, drafts: { retained: 'DRAFT_BEFORE_UPGRADE' } }), { mode: 0o600 });
+  fs.writeFileSync(path.join(c.data, 'workspace.json'), JSON.stringify({ sessions: [{ id: 'retained', nativeId: 'synthetic-native', provider: 'claude', state: keepsOld(mode) ? 'background' : 'ended', model: 'synthetic-model', name: 'Synthetic', roomId: 'shared', messages: [{ id: 'm1', role: 'user', text: 'Synthetic history', status: 'complete' }] }], room: { messages: [{ id: 'r1', role: 'system', text: 'Synthetic shared record', status: 'complete' }] }, drafts: { retained: 'DRAFT_BEFORE_UPGRADE' } }), { mode: 0o600 });
   fs.writeFileSync(path.join(c.data, 'backend-switch-settings.json'), JSON.stringify({ auto: false, migrate: false }), { mode: 0o600 });
   fs.writeFileSync(path.join(c.data, 'views.json'), JSON.stringify([{ owner: 'fixture-view', draft: 'UNSENT_SYNTHETIC_UI_DRAFT' }]), { mode: 0o600 });
+  if (mode === 'dsh-slow') {
+    const helper = require(path.join(release, 'app/tests/helpers/dsh-runtime.cjs'));
+    helper.qualification({ mock: { method(object, key, value) { object[key] = value; } } });
+    const donor = helper.runtime(c.data);
+    for (let i = 0; i < 400; i++) helper.write(path.join(donor.root, 'padding-' + i), 'synthetic ' + i);
+  }
   const stat = fs.statSync(c.executable, { bigint: true });
   fs.writeFileSync(path.join(c.data, 'installation.json'), JSON.stringify({ version: oldVersion, commit, installedAt: '2026-01-01T00:00:00.000Z', executable: { dev: stat.dev.toString(), ino: stat.ino.toString() } }) + '\n', { mode: 0o600 });
   fs.writeFileSync(path.join(root, 'approval.json'), JSON.stringify(c), { mode: 0o600 });
@@ -89,7 +97,7 @@ async function cleanup(c) {
   for (const key of readLayout(c.data).entries) {
     const client = await connectService(path.join(c.data, key), 'installer-fixture-cleanup');
     try {
-      const s = await client.call('initial'); assert.ok(s.sessions.every(x => x.state === 'ended' || c.testFault === 'bundled-backend' && x.id === 'retained' && x.state === 'background' && !x.pid)); assert.equal(s.diagnostics.shellModelCalls, 0);
+      const s = await client.call('initial'); assert.ok(s.sessions.every(x => x.state === 'ended' || keepsOld(c.testFault) && x.id === 'retained' && x.state === 'background' && !x.pid)); assert.equal(s.diagnostics.shellModelCalls, 0);
       await client.call('shutdown'); let gone = false;
       for (let i = 0; i < 100; i++) { try { process.kill(s.servicePid, 0); } catch (e) { if (e.code !== 'ESRCH') throw e; gone = true; break; } await wait(50); }
       assert.ok(gone, 'Owned backend exited'); exited.push(s.servicePid);
@@ -112,7 +120,7 @@ async function cleanup(c) {
   for (let i = 0; i < 120 && !lease; i++) { try { fs.mkdirSync(options.slot); lease = true; } catch (e) { if (e.code !== 'EEXIST') throw e; if (!i) console.log('Waiting for canonical GUI slot'); await wait(5000); } }
   assert.ok(lease, 'Canonical GUI slot occupied; nothing launched');
   fs.writeFileSync(path.join(options.slot, 'owner.json'), JSON.stringify({ token, pid: process.pid, owner: 'installer-real-faults' }), { mode: 0o600 });
-  for (const mode of (options.modes || 'changed-draft,active-timeout,new-crash,pre-launch,old-reopen-fails,success,bundled-backend,quit-refused').split(',')) {
+  for (const mode of (options.modes || 'changed-draft,active-timeout,new-crash,pre-launch,old-reopen-fails,success,bundled-backend,quit-refused,dsh-slow').split(',')) {
     const c = build(mode, binary); cleanupVerified = false; console.log('BEGIN ' + mode);
     try {
       run('/usr/bin/open', ['-g', '-j', '-a', c.app, ...(mode === 'profile-args' ? ['--args', '--synthetic-profile'] : [])]);
@@ -129,7 +137,7 @@ async function cleanup(c) {
       assert.equal(exit.signal, null, 'Operator deadline was not exceeded');
       const r = JSON.parse(fs.readFileSync(path.join(c.resultDir, 'result.json'))), after = await state(c);
       assert.equal(after.diagnostics.shellModelCalls, 0); assert.equal(after.diagnostics.dispatches, 0);
-      const expected = mode === 'quit-refused' ? 'unchanged' : mode === 'bundled-backend' ? 'installed-cleanup-pending' : mode === 'success' ? 'installed' : mode === 'pre-launch' ? 'rolled-back' : mode === 'profile-args' ? 'unchanged' : 'recovery-required';
+      const expected = mode === 'quit-refused' ? 'unchanged' : mode === 'bundled-backend' ? 'installed-cleanup-pending' : ['success', 'dsh-slow'].includes(mode) ? 'installed' : mode === 'pre-launch' ? 'rolled-back' : mode === 'profile-args' ? 'unchanged' : 'recovery-required';
       if (mode === 'bundled-backend') {
         const location = fs.existsSync(rollbackPath(c)) ? rollbackPath(c) : path.join(c.resultDir, 'previous.app');
         fs.copyFileSync(path.join(c.resultDir, 'result.json'), path.join(options.evidence, mode + '.result.json'));
@@ -138,7 +146,7 @@ async function cleanup(c) {
         if (fs.existsSync(path.join(c.testRoot, 'bundle-use.json'))) fs.copyFileSync(path.join(c.testRoot, 'bundle-use.json'), path.join(options.evidence, mode + '.bundle-use.json'));
         assert.ok(mapped.stdout.includes(location + '/Contents/MacOS/backend-node'), 'Old daemon must still map the displaced binary');
       }
-      assert.equal(r.status, expected, output); assert.equal(exit.code, ['success', 'bundled-backend'].includes(mode) ? 0 : 1);
+      assert.equal(r.status, expected, output); assert.equal(exit.code, ['success', 'bundled-backend', 'dsh-slow'].includes(mode) ? 0 : 1);
       const failure = r.errors.map(e => e.message).join('\n');
       if (mode === 'archive-fails') assert.match(failure, /ditto/);
       if (['pre-launch', 'old-reopen-fails'].includes(mode)) assert.match(failure, /codesign/);
@@ -169,7 +177,17 @@ async function cleanup(c) {
         // The raw PID-scoped receipt was saved before checking the installation status.
         mappedBackend = { pid: oldPid, version: kept.version, location };
       }
-      const row = { mode, mappedBackend, buildInfo, result: path.join(c.resultDir, 'result.json'), status: r.status, backend: after.runtimeVersion, modelCalls: 0, dispatches: 0, exit };
+      let dsh;
+      if (mode === 'dsh-slow') {
+        const file = path.join(c.data, 'fixture-dsh.json'), tui = require(path.join(release, 'app/dsh-tui.cjs')), { readLayout } = require(path.join(release, 'app/service-layout.cjs'));
+        for (let i = 0; i < 600 && !fs.existsSync(file); i++) await wait(1000);
+        dsh = JSON.parse(fs.readFileSync(file)); assert.equal(dsh.atStart, false, 'The window opened before the copy ended');
+        const layout = readLayout(c.data), target = path.join(c.data, layout.active);
+        tui.verifyRuntime(target); assert.equal(layout.dshInheritance, undefined); assert.equal(fs.existsSync(path.join(c.data, 'services.lock')), false);
+        assert.deepEqual(fs.readdirSync(target).filter(name => name.startsWith('.dsh-tui-inherit-') || name === 'dsh-copy.lock'), []);
+        const last = await state(c); assert.equal(last.diagnostics.shellModelCalls, 0); assert.equal(last.diagnostics.dispatches, 0);
+      }
+      const row = { mode, dsh, mappedBackend, buildInfo, result: path.join(c.resultDir, 'result.json'), status: r.status, backend: after.runtimeVersion, modelCalls: 0, dispatches: 0, exit };
       results.push(row); console.log(JSON.stringify(row));
       fs.copyFileSync(path.join(c.resultDir, 'result.json'), path.join(options.evidence, mode + '.result.json'));
     } finally { await cleanup(c); cleanupVerified = true; }

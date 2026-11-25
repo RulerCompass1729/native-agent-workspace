@@ -23,7 +23,7 @@ class ScopedOutboxRuntime {
         (s.provider === 'codex' && (!token(runtime.nativeSessionId) || !runtime.host?.rpc)) || !control && (!isMember(s, 'shared') || !wake.enabled(w))) throw outboxError(reason, 'binding');
     return { s, runtime, nativeId: s.nativeId, pid: s.pid, owner: s.owner, control: s.controlRevision,
       connection: s.connectionRevision, peer: s.peerRevision, member: membershipRevision(s, 'shared'), hostRpc: runtime.host.rpc,
-      sessionId: runtime.nativeSessionId, lifecycle: runtime.lifecycleRevision, inputIdentity: control ? wake.sourceIdentity(w, s) : sharedInputIdentity(s), steward: control && wake.isSteward(w, s), wakeBoundary: wake.boundary(w) };
+      sessionId: runtime.nativeSessionId, lifecycle: runtime.lifecycleRevision, inputIdentity: control ? wake.callerIdentity(w, s) : sharedInputIdentity(s), steward: control && wake.isSteward(w, s), wakeBoundary: wake.boundary(w) };
   }
   stable(scope) {
     return this.stabilityFailure(scope) === null;
@@ -45,7 +45,7 @@ class ScopedOutboxRuntime {
     // One opened as the butler loses that allowance once the role is withdrawn, as before.
     // Destination edits, other senders, takeover, stop and identity changes still revoke.
     const roleEnded = a.steward && !wake.isSteward(w, s);
-    const input = scope.control && !roleEnded ? wake.sourceIdentity(w, s) : sharedInputIdentity(s);
+    const input = scope.control && !roleEnded ? wake.callerIdentity(w, s) : sharedInputIdentity(s);
     if ((scope.control ? input.controlRevision !== a.inputIdentity.controlRevision : s.controlRevision !== a.control)) return 'scope-control-revision';
     if (s.connectionRevision !== a.connection) return 'scope-connection';
     if ((scope.control ? input.peerRevision !== a.inputIdentity.peerRevision : s.peerRevision !== a.peer)) return 'scope-peer-revision';

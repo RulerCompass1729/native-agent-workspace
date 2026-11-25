@@ -1352,6 +1352,10 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
       nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
+    // An agent that ends in the turn that started or resumed it is in no turn-end report, and its notification has
+    // no source (real 2.1.332, 11-25): its start is what makes it known.
+    if (event.hook_event_name === 'SubagentStart' && event.session_id === this.record.nativeId &&
+      typeof event.agent_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(event.agent_id)) this.emit('agentStarted', event.agent_id);
     if (isChild) return;
     const compact = event.hook_event_name === 'SessionStart' && event.source === 'compact';
     if (compact && this.observeCompactNotice(event.naw_compaction)) return;
@@ -3045,7 +3049,7 @@ class Codex extends EventEmitter {
     if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', '-c', 'notice.hide_rate_limit_model_nudge=true', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
-  async reconnect() {
+  async reconnect({ keepTurn = false } = {}) {
     const transportOnly = Boolean(this.transportDisconnected);
     if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw uiError("error.nativeConnectionStateChanged");
     const lifecycle = ++this.lifecycleRevision;
@@ -3055,6 +3059,7 @@ class Codex extends EventEmitter {
     // Re-subscribe to the owned thread. Omit every configuration override except a profile's
     // model catalog (codexResumeParams): thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
+    const running = keepTurn ? this.turnId : null;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
     this.rememberHistoryWatermarks();
@@ -3101,6 +3106,20 @@ class Codex extends EventEmitter {
       try { await this.openTerminal(); }
       catch { this.emit('activity', ...uiActivity("notice.activity.connectedTerminalOpenFailed")); }
     }
+    await this.keepRunningTurn(running, rpc, current);
+  }
+  // For the window that kept control (keepTurn): the turn that ran when the connection dropped is this connection's too
+  // only when native says that it is the thread's latest turn and still in progress; otherwise unknown, as before.
+  async keepRunningTurn(turnId, rpc, current) {
+    if (!turnId || !verifiedCodexProtocol(rpc) || !current()) return;
+    let page, timer;
+    try {
+      page = await Promise.race([new Promise(resolve => { timer = setTimeout(resolve, 3000); }),
+        rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' })]);
+    } catch { return; } finally { clearTimeout(timer); }
+    const latest = page?.data?.[0];
+    if (!current() || this.turnId || this.textEndedTurns.has(turnId) || latest?.id !== turnId || latest.status !== 'inProgress') return;
+    this.turnId = turnId; this.turn(turnId).liveStarted = true;
   }
   transportClosed() {
     if (this.closed || this.backendExitConfirmed) return;
