@@ -327,7 +327,7 @@ test('the person closing the dialog while a new session is being opened designat
   for (const chosen of ['new', 'a']) {
     const going = making(); going.open(chosen); const designate = going.context.api.steward; let arrive; going.context.api.steward = (...args) => new Promise(resolve => { arrive = () => resolve(designate(...args)); });
     going.$('steward-error').hidden = false; const first = going.run('confirmSteward()'); for (let i = 0; i < 20 && !arrive; i++) await new Promise(resolve => setImmediate(resolve));
-    const FIELDS = ['steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep'], off = () => FIELDS.map(id => going.$(id).disabled);
+    const FIELDS = ['steward-new-provider-claude', 'steward-new-provider-codex', 'steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep'], off = () => FIELDS.map(id => going.$(id).disabled);
     going.run('renderStewardChooser()'); assert.equal(going.$('steward-error').hidden, true, 'an earlier reason is gone');
     assert.deepEqual([going.$('steward-confirm').disabled, going.$('steward-confirm').textContent, off().every(Boolean), going.rows().every(row => row[2])], [true, zh(chosen === 'new' ? 'steward.new.making' : 'steward.choose.confirm'), true, true], chosen);
     await going.run('confirmSteward()'); arrive(); await first; assert.deepEqual([going.handoffs.length, going.state.steward.sessionId], [1, chosen === 'new' ? 'made' : 'a']);
@@ -347,16 +347,53 @@ test('with the permission to organize on, the line is there for the new session 
   f.$('steward-standing-keep').checked = false; await f.run('confirmSteward()'); assert.deepEqual([f.standings, f.state.steward.sessionId], [[false], 'made']);
 });
 
-test('the new session\'s box is in the chooser: Claude only, Codex there with the reason it cannot be chosen, named fields, the handoff before the duty statement', () => {
+test('the new session\'s box is in the chooser: Claude or Codex, what a Codex butler lacks said under it, named fields, the handoff before the duty statement', () => {
   const dialog = html.match(/<dialog closedby="any" id="steward-dialog".*/)[0];
   assert.match(dialog, /<p id="steward-none"[^>]*><\/p><div id="steward-new" class="steward-new" hidden>/);
-  assert.match(dialog, /<input type="radio" name="steward-new-provider" value="claude" checked> Claude<\/label><label><input type="radio" name="steward-new-provider" value="codex" disabled aria-describedby="steward-new-codex"> Codex<\/label><small id="steward-new-codex" data-naw-text="steward\.new\.codex"><\/small>/);
+  assert.match(dialog, /<input id="steward-new-provider-claude" type="radio" name="steward-new-provider" value="claude" checked> Claude<\/label><label><input id="steward-new-provider-codex" type="radio" name="steward-new-provider" value="codex" aria-describedby="steward-new-codex"> Codex<\/label><small id="steward-new-codex" data-naw-text="steward\.new\.codex" hidden><\/small>/);
   for (const id of ['steward-new-model', 'steward-new-effort', 'steward-handoff']) assert.match(dialog, new RegExp(`<label[^>]* for="${id}"`), id);
   assert.match(dialog, /<input id="steward-new-skip" type="checkbox" aria-describedby="steward-new-permission"><span data-naw-text="create\.skipPermissions"><\/span><\/label><small id="steward-new-permission" data-naw-text="create\.permissionsSkipped" hidden>/);
   assert.equal(dialog.includes('id="steward-new-skip" type="checkbox" checked'), false);
   assert.ok(dialog.indexOf('id="steward-handoff"') < dialog.indexOf('id="steward-duty"'));
   assert.deepEqual([...dialog.matchAll(/<select id="steward-new-effort">(.*?)<\/select>/g)][0][1].match(/value="([^"]*)"/g).map(v => v.slice(7, -1)), ['low', 'medium', 'high', 'xhigh', 'max', '']);
-  assert.match(locale.format('zh', 'steward.new.codex'), /还不能选/); assert.match(locale.format('zh', 'steward.new.note'), /变回普通会话。.*自动叫醒先关着/);
+  // M82 (the person, 11-21: 「我怎么把你换成 codex,没地方改模型」): Codex can be chosen; what it lacks is said, not hidden.
+  assert.equal(/还不能选|Not available yet/.test(locale.format('zh', 'steward.new.codex') + locale.format('en', 'steward.new.codex')), false);
+  for (const language of ['zh', 'en']) assert.match(locale.format(language, 'steward.new.codex'), language === 'zh' ? /后台.*查会话、开会话、登记结果.*只给 Claude/ : /background control.*look up sessions, open one and record results.*Claude-only/, language);
+  assert.match(locale.format('zh', 'steward.new.note'), /变回普通会话。.*自动叫醒先关着/);
+});
+
+// M82 (the person, 2026-11-21: 「我怎么把你换成 codex,没地方改模型」): from the butler's own menu, a new session of the
+// other provider as the butler. The running session's provider is not changed, and only the person designates.
+test('the butler\'s own menu offers a new butler of the other provider, only where such a session can be opened', () => {
+  const ids = (f, id) => f.run(`stewardAction(state.sessions.find(s => s.id === '${id}')).map(item => [item.id, item.label])`);
+  const f = making(); f.state.sessions.push(S('codex', { provider: 'codex' }));
+  assert.deepEqual(ids(f, 'butler'), [['steward-to-codex', zh('menu.stewardToCodex')], ['steward-change', zh('menu.stewardChange')], ['steward-revoke', zh('menu.stewardRevoke')]]);
+  for (const id of ['a', 'codex']) assert.deepEqual(ids(f, id), [['steward-set', zh('menu.stewardSet')]], id);
+  f.state.sessions[0].provider = 'codex'; assert.deepEqual(ids(f, 'butler')[0], ['steward-to-claude', zh('menu.stewardToClaude')]);
+  for (const provider of ['dsh', 'agy', undefined]) { f.state.sessions[0].provider = provider; assert.equal(ids(f, 'butler')[0][0], 'steward-change', String(provider)); }
+  f.state.sessions[0].provider = 'claude';
+  for (const capabilities of [undefined, [], ['createSettingsV1'], ['createSkipPermissions']]) { f.state.capabilities = capabilities; assert.equal(ids(f, 'butler')[0][0], 'steward-change', JSON.stringify(capabilities)); }
+  f.state.capabilities = CAN; delete f.context.api.create; assert.equal(ids(f, 'butler')[0][0], 'steward-change');
+  // Both menus that show the butler's items open the chooser for it.
+  assert.equal(renderer.match(/action === 'steward-to-codex' \|\| action === 'steward-to-claude'\) openStewardChooser\(STEWARD_NEW, action === 'steward-to-codex' \? 'codex' : 'claude'\)/g)?.length, 2);
+});
+
+test('from there the chooser opens on a new Codex session with the native default model and effort and the handoff, and Codex is what is made', async () => {
+  const f = making(); f.run("openStewardChooser(STEWARD_NEW, 'codex')");
+  const box = g => [g.run('stewardChoice'), g.$('steward-new-provider-claude').checked, g.$('steward-new-provider-codex').checked, g.$('steward-new-model').value, g.$('steward-new-effort').value,
+    g.$('steward-new-model').disabled, g.$('steward-new-effort').disabled, g.$('steward-new-codex').hidden];
+  assert.deepEqual(box(f), ['new', false, true, '', '', true, true, false]);
+  assert.deepEqual([boxes(f), f.$('steward-handoff').value, f.rows().at(-1)[3]], [{ ...HIDDEN, 'steward-new': true, 'steward-handoff': true, 'steward-handoff-label': true, 'steward-new-note': true }, zh('steward.new.handoffDefault', { name: '大管家 7' }), true]);
+  await f.run('confirmSteward()');
+  const { name, ...rest } = f.created[0]; assert.deepEqual(rest, { provider: 'codex', cwd: '/synthetic/butler', view: 'chat' }); assert.match(name, /^大管家 \d\d-\d\d \d\d:\d\d$/);
+  assert.deepEqual([f.handoffs, f.state.steward.sessionId, f.selected], [[zh('steward.new.handoffDefault', { name: '大管家 7' })], 'made', ['made']]);
+  // Chosen in the box: each provider starts at its own defaults; every other opening starts at Claude.
+  const g = making(); g.open(); assert.deepEqual(box(g), ['new', true, false, 'claude-opus-5-5', 'xhigh', false, false, true]);
+  g.run("chooseStewardProvider('codex')"); assert.deepEqual(box(g), ['new', false, true, '', '', true, true, false]);
+  g.run("chooseStewardProvider('claude')"); assert.deepEqual(box(g), ['new', true, false, 'claude-opus-5-5', 'xhigh', false, false, true]);
+  g.run("chooseStewardProvider('codex')"); g.$('steward-dialog').close(); g.run('openStewardChooser()'); g.pick('new'); assert.deepEqual(box(g).slice(1), [true, false, 'claude-opus-5-5', 'xhigh', false, false, true]);
+  await g.run('confirmSteward()'); assert.deepEqual([g.created[0].provider, g.created[0].settings], ['claude', { model: 'claude-opus-5-5', effort: 'xhigh' }]);
+  assert.match(renderer, /\$\('steward-new-provider-claude'\)\.onchange = \(\) => chooseStewardProvider\('claude'\); \$\('steward-new-provider-codex'\)\.onchange = \(\) => chooseStewardProvider\('codex'\);/);
 });
 
 // R220: the permission to organize goes with the new butler, in the same confirmation.
