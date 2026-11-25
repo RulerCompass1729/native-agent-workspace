@@ -36,7 +36,7 @@ async function fixture(t, provider = 'codex') {
     } });
   const f = { dir, w, s, runtime, writes, notices, client, clock: Date.now() };
   f.make = () => new rules.QueueDispatcher({ dataDir: dir, roomState: f.room, clients: () => client, now: () => f.clock, settleMs: 0, tickMs: 3600000,
-    notify: kind => notices.push(kind), steward: () => f.butler ? { sessionId: 'a', nativeId: 'native-a', duty: 'D' } : null });
+    sampleProcesses: async () => '', samplePressure: async () => '1\n', notify: kind => notices.push(kind), steward: () => f.butler ? { sessionId: 'a', nativeId: 'native-a', duty: 'D' } : null });
   f.room = new RoomState(dir);
   f.dispatcher = f.make();
   t.after(() => { f.dispatcher.close(); w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
