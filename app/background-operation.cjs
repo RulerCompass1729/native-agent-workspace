@@ -44,6 +44,9 @@ function conversationTarget(method, args = [], actor) {
 }
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value && Object.hasOwn(value, key)).map(key => [key, value[key]]));
 const scalars = (value, keys) => Object.fromEntries(Object.entries(pick(value, keys)).filter(([_key, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v)));
+// An agent is told each space's newest events: all of them were most of its answer, which Claude Code drops above
+// 4 MiB. The person's windows hold them all.
+const AGENT_EVENTS = 50;
 const queueMetadata = ['id', 'status', 'assignee', 'sentTo', 'tag', 'control', 'attempts', 'createdAt', 'sentAt', 'finishedAt'];
 function conversationSnapshot(value, actor, read = null, selected = value?.viewState?.selected, access = null) {
   if (!value || !Array.isArray(value.sessions)) return {};
@@ -68,6 +71,10 @@ function conversationSnapshot(value, actor, read = null, selected = value?.viewS
     const member = !metadataOnly && rooms?.includes(room.id);
     const projected = { ...pick(room, ['id', 'name', 'archived', 'unavailable', 'revision', 'metadataRevision', 'queueRevision', 'memberOrder']),
       ...(member ? pick(room, ['notes', 'messages', 'events', 'files', 'run', 'snapshotBatches', 'merge']) : {}) };
+    if (projected.events?.length > AGENT_EVENTS) {
+      projected.eventsOmitted = projected.events.length - AGENT_EVENTS;
+      projected.events = projected.events.slice(-AGENT_EVENTS);
+    }
     if (Array.isArray(room.queue)) projected.queue = room.queue.map(item => ({ ...scalars(item, member ? [...queueMetadata, 'text', 'reply', 'reason'] : queueMetadata),
       ...(item.creator ? { creator: scalars(item.creator, ['kind', 'name', 'sessionId']) } : {}), ...(member ? pick(item, ['reasonUiMessage']) : {}),
       // Why NAW has not sent it yet, member by member: reason keys only, shown as the item's reason is.

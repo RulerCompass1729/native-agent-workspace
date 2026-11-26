@@ -163,7 +163,8 @@ test('an unconfirmed local stage is not replayed by scheduled metadata/reconnect
   const f = await fixture(t);
   await f.prompt(); await f.start('original-turn');
   f.state.failStage = true;
-  assert.ok((await f.call()).deny);
+  const lost = await f.call();
+  assert.equal(lost.isError, true); assert.deepEqual(JSON.parse(lost.result).retry, false); assert.equal(JSON.parse(lost.result).status, 'unconfirmed');
   assert.equal(f.staged().length, 1);
   // Run each already scheduled callback once; never drain the recurring poll.
   for (const item of f.clock.splice(0)) if (item.active) await item.callback();

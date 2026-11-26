@@ -10,17 +10,23 @@ const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = req
 
 const dshCopy = require('./dsh-copy.cjs');
 const serviceBinding = require('./service-binding.cjs');
-const { ServiceClient, connectService } = require('./service-connection.cjs');
+const { ServiceClient, connectService, eachBackend } = require('./service-connection.cjs');
 async function connect(dataDir, owner, options) {
   const layout = readLayout(dataDir);
-  const entries = [];
+  const opening = [];
   try {
-    for (const key of layout.entries) {
-      const client = await connectService(path.join(dataDir, key), owner, options);
-      const entry = { key, client }; entries.push(entry); entry.state = await client.call('initial'); serviceBinding.assertBinding(entry.state.serviceBinding);
-    }
+    const entries = await eachBackend(layout.entries, async key => {
+      const opened = connectService(path.join(dataDir, key), owner, options); opening.push(opened);
+      const client = await opened, entry = { key, client, state: await client.call('initial') };
+      serviceBinding.assertBinding(entry.state.serviceBinding);
+      return entry;
+    });
     const client = new WorkspaceClient(entries, layout.active, dataDir); client.snapshot(); return client;
-  } catch (error) { for (const e of entries) e.client.close(); throw error; }
+  } catch (error) {
+    // Those still connecting too (2.5 s at most): nothing of a failed connection comes up once its caller knows.
+    for (const opened of await Promise.allSettled(opening)) opened.value?.close();
+    throw error;
+  }
 }
 async function waitForShutdown(client, dataDir, identity) {
   const lock = path.join(dataDir, 'service.lock');
