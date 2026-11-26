@@ -134,7 +134,8 @@ test("actual background entry accepts only the space's project manager, stores p
   assert.equal(f.room.queueItems()[0].status, 'cancelled');
   await assert.rejects(f.invoke('spaceAction', ['shared', 'queueAdd', ['other', null]], { ...f.sender, id: 'other' }), error => error.uiMessage?.key === 'error.queue.managerOnly');
   f.designate(null);
-  await assert.rejects(f.invoke('spaceAction', ['shared', 'queueAdd', ['revoked', null]]), error => error.uiMessage?.key === 'error.queue.managerOnly');
+  // The seat was revoked: the space has nobody designated, which is its own answer (R220.2).
+  await assert.rejects(f.invoke('spaceAction', ['shared', 'queueAdd', ['revoked', null]]), error => error.uiMessage?.key === 'error.queue.managerVacant');
   await assert.rejects(f.handlers.get('spaceAction')(f.c, 'shared', 'queueAdd', ['no native proof', null]), /originating operation/);
   assert.equal(f.room.queueItems().length, 1);
 });
@@ -160,15 +161,17 @@ test('only the person designates/revokes, and a member of that space; unrelated 
   assert.equal(f.managers.current('shared'), null);
 });
 test('a project manager adds to its own space only, and not while it is out of it', async t => {
-  const f = fixture(t), add = roomId => f.invoke('spaceAction', [roomId, 'queueAdd', ['task', null]]), refused = error => error.uiMessage?.key === 'error.queue.managerOnly';
+  const f = fixture(t), add = roomId => f.invoke('spaceAction', [roomId, 'queueAdd', ['task', null]]), refused = error => error.uiMessage?.key === 'error.queue.managerOnly',
+    vacant = error => error.uiMessage?.key === 'error.queue.managerVacant';
   const other = f.room.create('Another space');
   f.designate();
-  await assert.rejects(add(other), refused);
+  // This session manages another space; the one it adds to has no manager at all, which is what it is told.
+  await assert.rejects(add(other), vacant);
   assert.equal(f.room.queueItems(other).length, 0);
   await add('shared');
   f.record.roomIds = [other];
   await assert.rejects(add('shared'), refused);
-  await assert.rejects(add(other), refused);
+  await assert.rejects(add(other), vacant);
   assert.equal(f.room.queueItems('shared').length, 1);
 });
 test("a project manager's item cannot be for itself or for another space's project manager", async t => {
