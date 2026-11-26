@@ -38,6 +38,7 @@ const BLOCKED_TARGET = 'example.com:443';
 // pty_host.py sends SIGKILL only once this long has passed since its SIGTERM.
 const PTY_TERM_GRACE_MS = 5000;
 const ATTEMPTS = 3;
+const REQUEST_FIELDS = new Set(['max_tokens', 'messages', 'model', 'output_config', 'stream', 'system', 'thinking', 'tools']);
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -138,7 +139,8 @@ function streamedReply(text) {
 }
 
 // A loopback stand-in for api.deepseek.com. It records method, path, header
-// names, the model and whether the key arrived; never header values or bodies.
+// names, the body's top-level field names, the model and whether the key arrived;
+// never header values or body values.
 function startFakeDeepSeek(certificate) {
   const requests = [];
   const options = { key: fs.readFileSync(certificate.key), cert: fs.readFileSync(certificate.cert) };
@@ -148,9 +150,12 @@ function startFakeDeepSeek(certificate) {
       body += chunk;
     });
     request.on('end', () => {
-      let model = null;
+      let model = null, fields = [], parsed = false;
       try {
-        model = JSON.parse(body).model || null;
+        const json = JSON.parse(body);
+        model = json.model || null;
+        fields = Object.keys(json).sort();
+        parsed = true;
       } catch {
         model = null;
       }
@@ -161,6 +166,8 @@ function startFakeDeepSeek(certificate) {
         path: request.url,
         headers: Object.keys(request.headers).sort(),
         model,
+        fields,
+        parsed,
         fakeKeyArrived: headerKey === FAKE_KEY || bearer === `Bearer ${FAKE_KEY}`,
       });
       if (request.method === 'POST' && /\/v1\/messages$/.test(request.url)) {
@@ -337,6 +344,14 @@ async function checkChat(options, where) {
   check('chat: the fake key arrived as the credential', turns.length > 0 && turns.every(request => request.fakeKeyArrived === true));
   const identifying = options.fake.requests.flatMap(request => request.headers.filter(name => name.startsWith('x-deepseek-harness')));
   check('chat: no x-deepseek-harness-* identifiers', identifying.length === 0, identifying.join(',') || 'none');
+  // Upstream sends these by default inside model requests, which the egress proxy cannot see.
+  const uploads = [...new Set(options.fake.requests.flatMap(request => request.fields.filter(name => name.startsWith('dsh_'))))];
+  check('chat: no dsh_session_log or dsh_plugin_packages field', uploads.length === 0, uploads.join(',') || 'none');
+  // A renamed or new upload shows up as a field outside this list; an unreadable body is not a pass.
+  const extra = [...new Set(turns.flatMap(request => request.fields.filter(name => !REQUEST_FIELDS.has(name))))];
+  const unread = turns.filter(request => !request.parsed).length;
+  check('chat: model requests carry only the expected fields', turns.length > 0 && unread === 0 && extra.length === 0,
+    `unexpected: ${extra.join(',') || 'none'}; unreadable: ${unread}; seen: ${[...new Set(turns.flatMap(request => request.fields))].join(',')}`);
   const targets = session.proxy.records().map(item => `${item.target}:${item.verdict}`);
   check('chat: egress saw only api.deepseek.com:443', targets.length > 0 && targets.every(item => item === 'api.deepseek.com:443:allowed'), [...new Set(targets)].join(','));
   await session.stop();
