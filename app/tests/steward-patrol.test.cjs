@@ -37,13 +37,14 @@ class FakeClient extends EventEmitter {
     this.calls.push([method, ...args]);
     if (method === 'initial') return this.snapshot();
     if (method === 'dispatch') {
-      this.order.push(['send', args[3]]);
+      this.order.push(['send', args[3]?.itemId ?? args[3]]);
       this.state.sessions.find(s => s.id === args[0]).state = 'working';
       return `tag-${this.calls.length}`;
     }
     throw Error(`unexpected ${method}`);
   }
-  dispatches() { return this.calls.filter(call => call[0] === 'dispatch'); }
+  // The item id of a send beside a checked input (queue-dispatch.cjs send).
+  dispatches() { return this.calls.filter(call => call[0] === 'dispatch').map(call => [...call.slice(0, 4), call[4]?.itemId ?? call[4], ...call.slice(5)]); }
 }
 const base = { provider: 'claude', model: 'claude-test-model', state: 'idle', createdAt: NOW - 3600000, background: 0, scheduled: 0, backgroundStale: false,
   chatAvailable: true, liveDraft: '', serviceCapabilities: [rules.CAPABILITY], fleet: [], messages: [] };
@@ -221,7 +222,7 @@ test('patrol off, wake off, a butler on DeepSeek, in a space or rotating: no pat
     ['rotating', [butler()], env => { env.dispatcher.rotations = { butler: { phase: 'requested' } }; }],
     ['held by the integration engine', [butler()], env => { env.holding = ['butler']; }],
     ['automatic messages off', [butler()], env => { env.client.state.wakePolicy = { enabled: false }; }],
-    ['the person typing to it', [butler({ liveDraft: 'SECRET half a sentence' })], () => {}],
+    ['the person typing to it on a backend before the checked input', [butler({ liveDraft: 'SECRET half a sentence', serviceCapabilities: ['queueDispatchV1'] })], () => {}],
   ];
   for (const [name, sessions, arrange] of cases) {
     const env = fixture(t, [...sessions, member('m1', { state: 'working' })]);
@@ -234,6 +235,15 @@ test('patrol off, wake off, a butler on DeepSeek, in a space or rotating: no pat
     if (rotating(name)) assert.equal(env.wake.view().blocked?.reason, 'engaged', `${name}: held, shown with the existing banner`);
   }
   function rotating(name) { return name === 'rotating' || name === 'held by the integration engine'; }
+});
+
+test('a draft the person left does not hold a patrol: it goes beside it, the draft unchanged', async t => {
+  const env = fixture(t, [butler({ liveDraft: 'SECRET half a sentence' }), member('m1', { state: 'working' })]);
+  on(env); env.queue();
+  env.idleFrom(NOW - 240 * MIN); await env.pass();
+  env.clock.now += 10 * MIN; await env.pass();
+  assert.equal(env.patrols().length, 1);
+  assert.equal(env.client.state.sessions.find(s => s.id === 'butler').liveDraft, 'SECRET half a sentence');
 });
 
 test('a held patrol is shown with the existing banner after ten minutes, and clears once it goes out', async t => {

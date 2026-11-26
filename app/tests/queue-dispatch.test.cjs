@@ -242,6 +242,14 @@ test('a reply that asks for a decision is left for the person; its member takes 
   assert.deepEqual(plan(looked, [member('a', { messages })]), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
 });
 
+test('R207 with R42: a member due for rotation that holds a draft takes its next item and is not rotated', () => {
+  const old = member('a', { createdAt: NOW - 25 * HOUR, messages: heavyMessages(), liveDraft: 'half typed' });
+  const rooms = [{ id: 'shared', name: 'Team', queue: [item('2')] }], gates = new Map();
+  assert.deepEqual(plan(rooms, [old], { rotationGates: gates }), [{ kind: 'dispatch', roomId: 'shared', itemId: '2', sessionId: 'a' }]);
+  assert.deepEqual(gates.get('a'), { gate: 'person-typing', reason: 'content' }, 'the draft is what keeps it, and is said');
+  assert.deepEqual(plan(rooms, [{ ...old, liveDraft: '' }]), [{ kind: 'rotate', sessionId: 'a', reason: 'content' }]);
+});
+
 test('an item sent while its member\'s decision is open keeps its own reply and READY line when the person answers that decision', t => {
   // Independent review, 11-13: the person answering item 1 while the member works on item 2 made the answer's
   // reply and READY line item 2's, or lost item 2's own. Item 2 is still left for the person to look at.
@@ -769,12 +777,13 @@ class FakeClient extends EventEmitter {
         retireRotation: prototype.retireRotation }, ...args);
     }
     if (method === 'dispatch') {
+      const itemId = typeof args[3] === 'object' ? args[3].itemId : args[3];
       this.sequence += 1;
       const tag = `tag-${this.sequence}`;
       if (args[4]) session.rotationEpisode = { nativeId: session.nativeId, epoch: args[4].epoch, state: 'open', tag };
-      session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted', dispatchItem: args[3],
-        dispatchPurpose: { kind: args[4]?.kind || (args[3]?.startsWith('rotation-handoff:') ? 'rotation-handoff' : 'queue'),
-          itemId: args[3], nativeId: session.nativeId, epoch: session.rotationEpisode?.nativeId === session.nativeId ? session.rotationEpisode.epoch : null } });
+      session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted', dispatchItem: itemId,
+        dispatchPurpose: { kind: args[4]?.kind || (itemId?.startsWith('rotation-handoff:') ? 'rotation-handoff' : 'queue'),
+          itemId, nativeId: session.nativeId, epoch: session.rotationEpisode?.nativeId === session.nativeId ? session.rotationEpisode.epoch : null } });
       session.state = 'working';
       // Older journeys model a successful handoff; submission alone no longer proves it.
       if (args[3]?.startsWith('rotation-handoff:')) {
@@ -933,7 +942,8 @@ test('the dispatcher sends through the backend dispatch input, waits for the rep
   const sends = client.sends();
   assert.equal(sends.length, 1);
   assert.match(sends[0][2], /【NAW 派活】[\s\S]*first task/);
-  assert.equal(sends[0][4], room.value.queue[0].id, 'the backend learns which queue item this is');
+  assert.equal(sends[0][4].itemId, room.value.queue[0].id, 'the backend learns which queue item this is');
+  assert.deepEqual(sends[0][4].expectedInput, { nativeId: 'native-a', draftRevision: 0, controlRevision: 0, connectionRevision: 0 });
   assert.equal(client.calls.some(call => call[0] === 'claim' || call[0] === 'send'), false, 'no takeover and no human send');
   assert.equal(room.value.queue[0].status, 'sent');
   assert.equal(room.value.queue[0].tag, 'tag-1');
@@ -1048,7 +1058,7 @@ test('a claimed item is never sent; the member\'s reply at the end of its turn s
   await dispatcher.schedule();
   const item = room.queueFind('shared', claimed);
   assert.deepEqual([item.status, item.reply, item.ready], ['done', 'Done: the board task. READY lane/board-task 0123abcd', { branch: 'lane/board-task', commit: '0123abcd' }]);
-  assert.deepEqual(client.sends().map(call => call[4]), [next], 'only the next item was sent, once');
+  assert.deepEqual(client.sends().map(call => call[4].itemId), [next], 'only the next item was sent, once');
   assert.equal(room.queueFind('shared', next).status, 'sent');
 });
 test('a claimed item is left for the person when the person stepped in or took control during the turn', async t => {
@@ -1065,7 +1075,7 @@ test('a claimed item is left for the person when the person stepped in or took c
     const item = room.queueFind('shared', claimed);
     assert.deepEqual([item.status, item.reason], ['waiting', 'person-intervened'], change);
     // As for an item NAW sent, the member is held for that pass only; the claimed item itself is never sent.
-    assert.equal(client.sends().some(call => call[4] === claimed), false, change);
+    assert.equal(client.sends().some(call => call[4].itemId === claimed), false, change);
     await dispatcher.close();
   }
 });
@@ -5508,8 +5518,7 @@ test('794d3cd7: a counter that fails or answers in another shape changes nothing
 });
 
 // Queue item 5614a65c (11-15): an idle member never got the item assigned to it, and the item it had been sent before
-// stayed unsettled for 26 minutes; nothing said why (its composer held a single "/"). The person-typing gate stays as it
-// is; each pass now records, member by member, why every queued item was not sent.
+// stayed unsettled for 26 minutes; each pass records why every queued item was not sent. Saved drafts no longer hold it.
 test('the planner records why each queued item was not sent, member by member, and returns the same actions', () => {
   const rooms = [{ id: 'shared', queue: [
     item('sent-before', { assignee: 'b', status: 'sent', sentTo: 'b', tag: 'tag-1', sentAt: NOW - 600000 }),
@@ -5524,14 +5533,14 @@ test('the planner records why each queued item was not sent, member by member, a
   assert.deepEqual(actions, [], 'nothing is settled or sent: the gate itself is unchanged');
   assert.deepEqual(plan(rooms, sessions, { idleSince: new Map() }), actions, 'the same actions without a waits map');
   assert.deepEqual(Object.fromEntries(waits), {
-    'for-b': [{ sessionId: 'b', reason: 'sent-item-open', readiness: 'person-typing' }],
-    'for-anyone': [{ sessionId: 'b', reason: 'sent-item-open', readiness: 'person-typing' }, { sessionId: 'c', reason: 'not-idle' }],
+    'for-b': [{ sessionId: 'b', reason: 'sent-item-open' }],
+    'for-anyone': [{ sessionId: 'b', reason: 'sent-item-open' }, { sessionId: 'c', reason: 'not-idle' }],
     'for-stranger': [{ sessionId: 'x', reason: 'not-member' }],
     'in-archive': [{ reason: 'space-archived' }],
   });
   const alone = new Map();
   plan([{ id: 'shared', queue: [item('for-b', { assignee: 'b' })] }], [member('b', { liveDraft: '/' })], { waits: alone, idleSince: new Map() });
-  assert.deepEqual(Object.fromEntries(alone), { 'for-b': [{ sessionId: 'b', reason: 'person-typing' }] });
+  assert.deepEqual(Object.fromEntries(alone), { 'for-b': [{ sessionId: 'b', reason: 'settling' }] });
   const sent = new Map();
   assert.deepEqual(plan([{ id: 'shared', queue: [item('for-b', { assignee: 'b' })] }], [member('b')], { waits: sent }).map(action => action.kind), ['dispatch']);
   assert.equal(sent.size, 0, 'an item sent on this pass has no wait');
@@ -5540,19 +5549,20 @@ test('the planner records why each queued item was not sent, member by member, a
 test('the dispatcher shows why a queued item waits, in memory only, and drops it once the item is sent', async t => {
   const { room, client, dispatcher, dir } = dispatcherSetup(t, [member('b', { liveDraft: '/' })]);
   room.queueAdd('assigned task', 'b');
+  dispatcher.noteHuman('b');
   await dispatcher.start();
   await dispatcher.schedule();
-  assert.equal(client.sends().length, 0, 'the person-typing gate still holds');
+  assert.equal(client.sends().length, 0, 'recent human input still holds the item');
   const waiting = () => room.apply(client.snapshot()).rooms.find(r => r.id === 'shared').queue[0];
-  assert.deepEqual(waiting().wait, [{ sessionId: 'b', reason: 'person-typing' }]);
+  assert.deepEqual(waiting().wait, [{ sessionId: 'b', reason: 'person-recent' }]);
   for (const name of fs.readdirSync(dir)) {
-    if (name.endsWith('.json')) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8').includes('person-typing'), false, `${name} keeps no wait`);
+    if (name.endsWith('.json')) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8').includes('person-recent'), false, `${name} keeps no wait`);
   }
-  client.state.sessions[0].liveDraft = '';
+  dispatcher.humanAt.set('b', NOW - rules.HUMAN_QUIET_MS);
   client.emit('state');
   await dispatcher.schedule();
   await dispatcher.schedule();
-  assert.equal(client.sends().length, 1, 'sent once the draft is gone');
+  assert.equal(client.sends().length, 1, 'sent after the quiet period with the static slash preserved');
   assert.equal(waiting().status, 'sent');
   assert.equal(waiting().wait, undefined);
 });

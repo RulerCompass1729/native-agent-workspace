@@ -167,7 +167,6 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
   assert.deepEqual(queueVacancies(vacancyInput()), [{ roomId: 'shared', name: 'Synthetic team', active: true, availableIds: ['agent-a'], candidateIds: ['agent-a'] }]);
   const cases = [
     { sessions: [ready({ state: 'working' })] },
-    { sessions: [ready({ liveDraft: 'Synthetic private draft' })] },
     { sessions: [ready({ nativeContextPending: true })] },
     { sessions: [ready({ backgroundStale: true })] },
     { sessions: [ready({ nativeGoal: { status: 'active' } })] },
@@ -188,6 +187,8 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
     { modelChanges: ['agent-a'] },
   ];
   for (const changes of cases) assert.equal(queueVacancies(vacancyInput(changes))[0].active, false);
+  assert.equal(queueVacancies(vacancyInput({ sessions: [ready({ liveDraft: 'Synthetic private draft' })] }))[0].active, true);
+  assert.equal(queueVacancies(vacancyInput({ sessions: [ready({ liveDraft: '/' })], humanAt: new Map([['agent-a', NOW - 1]]) }))[0].active, false);
   assert.equal(queueVacancies(vacancyInput({ rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'done' }] }] }))[0].active, true);
   // An item left for the person to look at, the person having stepped in or no reply having come back,
   // asks nothing of its member, here or in another space: the space is empty (11-12). Nor does a decision

@@ -36,7 +36,7 @@ function fixture(t, { butler = {}, windows = [], compactions = {}, log = [], ste
       if (method === 'initial') return client.snapshot();
       if (method !== 'dispatch') return undefined;
       if (f.refuse) throw Object.assign(Error('SYNTHETIC not sent'), f.refuse);
-      sent.push({ id: args[0], text: args[1], kind: (args[3] || '').split(':')[0], at: clock.now });
+      sent.push({ id: args[0], text: args[1], kind: String(args[3]?.itemId ?? args[3] ?? '').split(':')[0], at: clock.now });
       const s = sessions.find(x => x.id === args[0]); s.state = 'working'; s.lastActivityAt = clock.now;
       return `tag-${sent.length}`;
     } });
@@ -168,30 +168,43 @@ test('every click is told once: several before a wake in one, one after it in th
   assert.equal(f.wakes().length, 2);
 });
 
-test('a draft is not interrupted: the hold is shown and recorded at once, and the wake follows the draft', async t => {
+// The person's default (2026-11-25): a draft no longer holds the wake; its two quiet minutes do, also for a click.
+test('a draft typed just now holds a click for its two quiet minutes, shown at once; then the wake goes beside it', async t => {
   const f = fixture(t);
-  f.push({ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }); await f.run(MIN);
+  f.push({ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }); f.dispatcher.noteHuman('butler', 'draft'); const typed = f.clock.now;
+  await f.run(30 * SEC);
   f.click(); await f.run(6 * SEC);
   assert.deepEqual(f.sent, []);
-  assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['person-typing', true]);
-  assert.deepEqual(f.blockedLines(), ['person-typing']); assert.ok(f.shown() > 0);
+  assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['person-recent', true]);
+  assert.deepEqual(f.blockedLines(), ['person-recent']); assert.ok(f.shown() > 0);
   assert.doesNotMatch(JSON.stringify([f.lines, f.desk()]), /SYNTHETIC PRIVATE/u);
-  const told = f.shown();
-  await f.run(5 * MIN);
-  assert.deepEqual(f.blockedLines(), ['person-typing'], 'one line for one reason'); assert.deepEqual(f.sent, []);
-  assert.ok(f.shown() - told <= 6, 'the page is told once a minute, not each pass');
-  const before = f.shown();
-  f.push({ liveDraft: '' }); const at = f.clock.now;
-  await f.run(30 * SEC);
-  soon(f, at, 12 * SEC); assert.equal(f.desk(), null); assert.ok(f.shown() > before, 'the page is told it is over');
+  await f.run(2 * MIN);
+  soon(f, typed + 2 * MIN, 12 * SEC); assert.equal(f.desk(), null);
+  assert.equal(f.butler.liveDraft, 'SYNTHETIC PRIVATE DRAFT', 'the draft stays as it was');
 });
 
-test('an ordinary event held by a draft is still said after ten minutes, not at once', async t => {
-  const f = fixture(t, { butler: { liveDraft: 'x' } });
+test('a draft left for two minutes does not hold a click: woken at once beside it', async t => {
+  const f = fixture(t);
+  f.push({ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }); f.dispatcher.noteHuman('butler', 'draft'); await f.run(3 * MIN);
+  f.click(); const at = f.clock.now; await f.run(30 * SEC);
+  soon(f, at); assert.equal(f.desk(), null); assert.deepEqual(f.blockedLines(), []);
+  assert.equal(f.butler.liveDraft, 'SYNTHETIC PRIVATE DRAFT');
+});
+
+test('an ordinary event goes beside a draft once the person has been quiet two minutes', async t => {
+  const d = fixture(t, { butler: { liveDraft: 'x' } });
+  d.dispatcher.noteHuman('butler', 'draft'); const used = d.clock.now;
+  d.event(); await d.run(5 * MIN);
+  assert.equal(d.wakes().length, 1); assert.ok(d.wakes()[0].at - used >= 2 * MIN);
+  assert.equal(d.desk(), null); assert.deepEqual(d.blockedLines(), []); assert.equal(d.butler.liveDraft, 'x');
+});
+
+test('an ordinary event held by a native dialog is still said after ten minutes, not at once', async t => {
+  const f = fixture(t, { butler: { nativeTerminalDialog: { kind: 'synthetic' } } });
   f.event(); await f.run(9 * MIN);
   assert.equal(f.desk(), null); assert.deepEqual(f.blockedLines(), []);
   await f.run(2 * MIN);
-  assert.equal(f.desk()?.reason, 'person-typing'); assert.equal(f.desk().card, undefined);
+  assert.equal(f.desk()?.reason, 'native-terminal-dialog'); assert.equal(f.desk().card, undefined);
   // A click now is named at once, in a hold already shown.
   await f.run(3 * SEC); const told = f.shown();
   f.click(); await f.run(3 * SEC);
@@ -199,29 +212,29 @@ test('an ordinary event held by a draft is still said after ten minutes, not at 
 });
 
 test('its own handoff left unresolved takes over from a click held by something else', async t => {
-  const f = fixture(t, { butler: { liveDraft: 'x' } });
+  const f = fixture(t, { butler: { nativeTerminalDialog: { kind: 'synthetic' } } });
   f.click(); await f.run(6 * SEC); assert.equal(f.desk()?.card, true);
   f.dispatcher.ownHandoffStep = () => 'release'; f.push(); await f.run(6 * SEC);
   assert.deepEqual([f.desk()?.step, f.desk()?.card], ['release', undefined]);
 });
 
 test('the phone is not alarmed before ten minutes, and its alarm keeps its form after', async t => {
-  const f = fixture(t, { butler: { liveDraft: 'x' } });
+  const f = fixture(t, { butler: { nativeTerminalDialog: { kind: 'synthetic' } } });
   f.click(); await f.run(9 * MIN);
   assert.equal(f.phone(), null); assert.ok(f.desk());
   await f.run(2 * MIN);
-  assert.equal(f.phone()?.reason, 'person-typing'); assert.equal(f.phone().card, undefined); assert.equal(f.wake.view({ held: true }).blocked.card, undefined);
+  assert.equal(f.phone()?.reason, 'native-terminal-dialog'); assert.equal(f.phone().card, undefined); assert.equal(f.wake.view({ held: true }).blocked.card, undefined);
   const health = healthSummary(f.wake.view(), require('../steward-wake.cjs').BLOCK_REASONS);
   assert.equal(health.available, true); assert.equal(health.alerts.length, 1);
   assert.doesNotMatch(JSON.stringify(health), /card/u);
 });
 
 test('a click that comes while an event is already held is shown at once, and work hides it again', async t => {
-  const f = fixture(t, { butler: { liveDraft: 'x' } });
+  const f = fixture(t, { butler: { nativeTerminalDialog: { kind: 'synthetic' } } });
   f.event(); await f.run(3 * MIN); assert.equal(f.desk(), null);
   f.click(); await f.run(6 * SEC); assert.equal(f.desk()?.card, true);
   const before = f.shown();
-  f.push({ state: 'working', liveDraft: '' }); await f.run(6 * SEC);
+  f.push({ state: 'working', nativeTerminalDialog: null }); await f.run(6 * SEC);
   assert.equal(f.desk(), null); assert.ok(f.shown() > before);
   f.push({ state: 'idle', lastActivityAt: f.clock.now }); const ended = f.clock.now; await f.run(30 * SEC);
   soon(f, ended, 14 * SEC);
@@ -399,7 +412,7 @@ test('where no idle clock runs, the eight seconds after its turn end with the ne
 
 test('a held click does not make the dispatcher pass every three seconds', async t => {
   for (const [name, set] of [
-    ['a draft', f => { f.butler.liveDraft = 'x'; }], ['a DeepSeek model', f => { f.butler.model = 'deepseek-flash'; }], ['a send that fails', f => { f.refuse = { notSent: true }; }],
+    ['a native dialog', f => { f.butler.nativeTerminalDialog = { kind: 'synthetic' }; }], ['a DeepSeek model', f => { f.butler.model = 'deepseek-flash'; }], ['a send that fails', f => { f.refuse = { notSent: true }; }],
     ['its own handoff', f => { f.dispatcher.ownHandoffStep = () => 'release'; }], ['a record that cannot be written', f => { f.wake.record = () => { throw Error('SYNTHETIC'); }; }],
   ]) {
     const f = fixture(t);

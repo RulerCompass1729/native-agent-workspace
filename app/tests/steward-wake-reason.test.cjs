@@ -84,8 +84,10 @@ test('a turn with another busy flag, or a session not in a turn, reads as it did
 
 test('what really holds it after the turn is still said at work, in the same order as before', async t => {
   for (const [extra, reason] of [
-    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }, 'person-typing'],
-    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT', pendingTag: 'tag-of-this-turn' }, 'person-typing'],
+    // A draft holds the wake only on a backend before the checked input.
+    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }, 'quiet-window'],
+    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT', serviceCapabilities: ['queueDispatchV1'] }, 'person-typing'],
+    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT', pendingTag: 'tag-of-this-turn', serviceCapabilities: ['queueDispatchV1'] }, 'person-typing'],
     [{ fleet: [{ event: 'SubagentStart', id: 'child', stale: false, time: START }] }, 'team-running'],
     [{ backgroundStale: false, background: 1 }, 'background-work'],
     [{ backgroundStale: false, scheduled: 1 }, 'background-work'],
