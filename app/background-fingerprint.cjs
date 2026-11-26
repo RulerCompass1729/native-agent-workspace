@@ -124,6 +124,13 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
         restoreMembers: roomState.metadata(r.id).restoreMembers, restorePlacements: roomState.metadata(r.id).restorePlacements })),
       sessionArchives: targets ? Object.fromEntries(Object.entries(roomState.value.sessionArchives).filter(([id]) => targets.has(id))) : roomState.value.sessionArchives };
   }
+  // Stopping names the session, not who holds it meanwhile: a takeover, another pid or a running turn does
+  // not change what the person confirmed, and voiding the other merged card for it made "Confirm all" dead
+  // (R186.1). A replaced native session or an archived one still voids it.
+  if (command.method === 'stop') {
+    const target = roomState.apply(state).sessions.find(s => s.id === command.arguments[0]);
+    return { sessions: target ? [{ id: target.id, nativeId: target.nativeId, archived: target.archived === true }] : [], rooms: [] };
+  }
   const global = ['quitService', 'clearSharedHistory', 'archiveRoom', 'switchBackend', 'continueConnection'].includes(command.method);
   return { sessions: roomState.apply(state).sessions.filter(s => global || strings.has(s.id)).map(s => ({ id: s.id, nativeId: s.nativeId, pid: s.pid, owner: s.owner, state: s.state, activeTurnId: s.activeTurnId, pendingTag: s.pendingTag, controlRevision: s.controlRevision,
     connectionRevision: s.connectionRevision, archived: s.archived, approval: s.approval, nativeApproval: s.nativeApproval })),
