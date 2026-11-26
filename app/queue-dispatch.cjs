@@ -579,6 +579,7 @@ function trimQueue(queue) {
 }
 
 // allowDraft: a queue item or butler wake, sent beside an unchanged composer draft (workspace.cjs expectedInput).
+// An old-only backend cannot check the input, so it keeps alpha.307's rules: sent unchecked, and a draft holds it.
 function sessionReady(session, wakePolicy, allowDraft = false) {
   if (!session) {
     return { ready: false, reason: 'missing' };
@@ -587,9 +588,10 @@ function sessionReady(session, wakePolicy, allowDraft = false) {
     return { ready: false, reason: 'archived' };
   }
   if (!Array.isArray(session.serviceCapabilities) || !(session.serviceCapabilities.includes(CAPABILITY) ||
-      !allowDraft && session.serviceCapabilities.includes(LEGACY_CAPABILITY))) {
+      session.serviceCapabilities.includes(LEGACY_CAPABILITY))) {
     return { ready: false, reason: 'backend-update-needed' };
   }
+  const beside = allowDraft && session.serviceCapabilities.includes(CAPABILITY);
   if (!wakePolicy || wakePolicy.enabled !== true) {
     return { ready: false, reason: 'automatic-messages-off' };
   }
@@ -623,7 +625,7 @@ function sessionReady(session, wakePolicy, allowDraft = false) {
       return { ready: false, reason: 'background-work' };
     }
   }
-  if (!allowDraft && typeof session.liveDraft === 'string' && session.liveDraft.trim()) {
+  if (!beside && typeof session.liveDraft === 'string' && session.liveDraft.trim()) {
     return { ready: false, reason: 'person-typing' };
   }
   if (session.provider === 'codex' && session.nativeGoal && session.nativeGoal.status === 'active') {
@@ -4306,9 +4308,15 @@ class QueueDispatcher {
     if (!room || !item || item.status !== 'queued') {
       return;
     }
+    // Checked only where the backend reads the packet; unchecked never goes beside a draft.
+    let checked = false;
     try {
       this.roomState.assertAvailable(session.id, true, room.id);
-      this.preflight(session, true);
+      checked = Boolean(this.client.route(session.id).state.capabilities?.includes(CAPABILITY));
+      if (!checked && typeof session.liveDraft === 'string' && session.liveDraft.trim()) {
+        throw Object.assign(Error('person-typing'), { notSent: true });
+      }
+      this.preflight(session, checked);
     } catch (error) {
       // Nothing was recorded or sent; the next pass looks again. The refusal's key, never its text.
       const message = typeof error?.message === 'string' ? error.message : '';
@@ -4326,7 +4334,7 @@ class QueueDispatcher {
     const notes = notesDue(room, session);
     this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null, notes);
     try {
-      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : '', managers?.get(session.id) === room.id), item.id, true);
+      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : '', managers?.get(session.id) === room.id), item.id, checked);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
       const personInput = [NATIVE_DRAFT_KEY, PERSON_TYPING_KEY].includes(errorKey(error));

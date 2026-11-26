@@ -23,20 +23,20 @@ const quietWindow = () => ({ id: '00000000-0000-4000-8000-000000000001', scope: 
 const done = (from, to, event = 'done') => ({ time: START - HOUR, event, spaces: [], old: { id: from, nativeId: `native-${from}`, name: from }, new: { id: to, nativeId: `native-${to}`, name: to } });
 
 // The real dispatcher, wake, window record and person-action intake over one synthetic backend.
-function fixture(t, { butler = {}, windows = [], compactions = {}, log = [], steward = () => ({ ...BUTLER, duty: '' }), others = [] } = {}) {
+function fixture(t, { butler = {}, windows = [], compactions = {}, log = [], steward = () => ({ ...BUTLER, duty: '' }), others = [], capabilities = CAPABILITIES } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-card-click-')); fs.chmodSync(dir, 0o700);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   if (log.length) fs.writeFileSync(path.join(dir, 'rotation-log.jsonl'), `${log.map(e => JSON.stringify(e)).join('\n')}\n`, { mode: 0o600 });
   const clock = { now: START + MIN }, lines = [], sent = [], room = new RoomState(dir), ledger = new ButlerLedger(dir, { now: () => clock.now });
   const ingress = new ButlerIngress(dir, { roomState: room, ledger, now: () => clock.now }), actions = new PersonActions({ ingress, now: () => clock.now });
   const sessions = [session('butler', butler), ...others];
-  const client = Object.assign(new EventEmitter(), { state: { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: { enabled: true }, operatorPolicy: { domains: [] }, capabilities: CAPABILITIES },
-    close() {}, snapshot: () => structuredClone(client.state), refresh: async () => client.snapshot(), route: () => ({ client, state: { capabilities: CAPABILITIES } }),
+  const client = Object.assign(new EventEmitter(), { state: { sessions, rooms: [{ id: 'shared', revision: 0, run: null, messages: [] }], wakePolicy: { enabled: true }, operatorPolicy: { domains: [] }, capabilities },
+    close() {}, snapshot: () => structuredClone(client.state), refresh: async () => client.snapshot(), route: () => ({ client, state: { capabilities } }),
     call: async (method, ...args) => {
       if (method === 'initial') return client.snapshot();
       if (method !== 'dispatch') return undefined;
       if (f.refuse) throw Object.assign(Error('SYNTHETIC not sent'), f.refuse);
-      sent.push({ id: args[0], text: args[1], kind: String(args[3]?.itemId ?? args[3] ?? '').split(':')[0], at: clock.now });
+      sent.push({ id: args[0], text: args[1], kind: String(args[3]?.itemId ?? args[3] ?? '').split(':')[0], checked: typeof args[3] === 'object', at: clock.now });
       const s = sessions.find(x => x.id === args[0]); s.state = 'working'; s.lastActivityAt = clock.now;
       return `tag-${sent.length}`;
     } });
@@ -206,6 +206,19 @@ test('a click held by a native dialog is said once, the page told once a minute,
   f.push({ nativeTerminalDialog: null }); const at = f.clock.now;
   await f.run(30 * SEC);
   soon(f, at, 12 * SEC); assert.equal(f.desk(), null); assert.ok(f.shown() > before, 'the page is told it is over');
+});
+
+// alpha.308 hotfix: an old-only backend (queueDispatchV1) is woken as in alpha.307, unchecked, and a draft holds it.
+const OLD = ['queueDispatchV1', rules.ROTATION_CAPABILITY, rules.CREATE_SETTINGS_CAPABILITY];
+test('a butler on an old-only backend with an empty composer is woken by an event through the unchecked send', async t => {
+  const f = fixture(t, { butler: { serviceCapabilities: OLD }, capabilities: OLD });
+  f.event(); const at = f.clock.now; await f.run(MIN);
+  soon(f, at, 30 * SEC); assert.equal(f.wakes()[0].checked, false, 'the old daemon takes a bare item id');
+});
+test('a butler on an old-only backend with a draft is held as in alpha.307, and the draft stays', async t => {
+  const f = fixture(t, { butler: { serviceCapabilities: OLD, liveDraft: 'SYNTHETIC PRIVATE DRAFT' }, capabilities: OLD });
+  f.event(); await f.run(5 * MIN);
+  assert.equal(f.wakes().length, 0); assert.equal(f.butler.liveDraft, 'SYNTHETIC PRIVATE DRAFT');
 });
 
 test('an ordinary event goes beside a draft once the person has been quiet two minutes', async t => {

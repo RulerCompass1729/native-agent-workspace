@@ -5,15 +5,15 @@ const { fork } = require('node:child_process'), { once } = require('node:events'
 const { connectService } = require('../service-connection.cjs');
 const NOW = 1800000000000;
 const proof = (w, id) => { const s = w.snapshot().sessions.find(s => s.id === id); return Object.fromEntries(['nativeId','draftRevision','controlRevision','connectionRevision'].map(k => [k,s[k] ?? 0])); };
-async function fixture(t) {
+async function fixture(t, caps = [rules.CAPABILITY], routeCaps = caps) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'naw-b-draft-input-')), calls=[];
   const host={binaries:{},close(){},create(s){s.nativeId='native-'+s.id;const r=new EventEmitter();r.chatAvailable=true;r.terminal={alive:true,input(){}};r.start=async()=>r.emit('state','idle');r.send=async(text,tag,guard)=>{assert.ok(guard());calls.push({text,tag,own:guard.ownInput});r.emit('submitted',tag);};return r;}};
   const w=new Workspace(host,root),id=await w.create('claude',root,'person','Synthetic member');w.join(id,true);w.get(id).createdAt=NOW;
   let dispatcher; t.after(()=>{dispatcher?.close();w.close();fs.rmSync(root,{recursive:true});});
   const send=expectedInput=>w.send(id,'Synthetic task','naw-dispatcher',null,null,null,null,null,null,null,{itemId:'task',expectedInput});
-  const room=new RoomState(root), client=new EventEmitter();client.snapshot=()=>({...w.snapshot(),sessions:w.snapshot().sessions.map(s=>({...s,serviceCapabilities:[rules.CAPABILITY]})),capabilities:[rules.CAPABILITY]});client.refresh=async()=>client.snapshot();client.close=()=>{};
-  client.route=()=>({client,state:{capabilities:[rules.CAPABILITY]}});let intercept=async()=>{};
-  client.call=async(method,...args)=>{assert.equal(method,'dispatch');const packet=args[3];await intercept();return w.send(args[0],args[1],'naw-dispatcher',null,null,null,null,null,null,null,typeof packet==='string'?{itemId:packet}:{...packet});};
+  const room=new RoomState(root), client=new EventEmitter();client.snapshot=()=>({...w.snapshot(),sessions:w.snapshot().sessions.map(s=>({...s,serviceCapabilities:caps})),capabilities:caps});client.refresh=async()=>client.snapshot();client.close=()=>{};
+  client.route=()=>({client,state:{capabilities:routeCaps}});let intercept=async()=>{};
+  client.call=async(method,...args)=>{assert.equal(method,'dispatch');const packet=args[3];calls.packets=[...(calls.packets||[]),packet];await intercept();return w.send(args[0],args[1],'naw-dispatcher',null,null,null,null,null,null,null,typeof packet==='string'?{itemId:packet}:{...packet});};
   let now=NOW;dispatcher=new rules.QueueDispatcher({roomState:room,dataDir:root,clients:()=>client,now:()=>now,settleMs:0,tickMs:3600000,sampleProcesses:async()=>'',samplePressure:async()=>'0'});
   return {w,id,calls,send,room,client,dispatcher,hook:fn=>{intercept=fn;},advance:ms=>{now+=ms;dispatcher.dirty=true;},snapshot:()=>room.apply(client.snapshot())};
 }
@@ -56,11 +56,29 @@ test('a proven refusal after Workspace entry also requeues with the full human q
  f.advance(rules.HUMAN_QUIET_MS-1);await f.dispatcher.schedule();assert.equal(attempts,1);
  f.advance(1);await f.dispatcher.schedule();assert.equal(attempts,2);assert.equal(f.calls.length,1);assert.equal(f.w.drafts.get(f.id),'  Later draft \n');
 });
-test('legacy lifecycle calls still refuse a draft and old-only backends cannot accept ordinary queued work',async t=>{
+// alpha.308 hotfix: 21 of 25 daily backends are old-only (queueDispatchV1); they take queued work as in alpha.307.
+test('an old-only backend with an empty composer takes its queued item through the unchecked send, as in alpha.307',async t=>{
+ const f=await fixture(t,['queueDispatchV1']);const item=f.room.queueAdd('Synthetic task',f.id);await f.dispatcher.start();
+ assert.equal(f.room.queueFind('shared',item).status,'sent');assert.equal(f.calls.length,1);
+ assert.deepEqual(f.calls.packets,[item],'the old daemon decodes a bare item id, never the checked packet');
+});
+test('an old-only backend with a draft holds its queued item as in alpha.307, and the draft stays',async t=>{
+ const f=await fixture(t,['queueDispatchV1']);f.w.setDraft(f.id,'/','person');const item=f.room.queueAdd('Synthetic task',f.id);
+ await f.dispatcher.start();await f.dispatcher.schedule();
+ assert.equal(f.room.queueFind('shared',item).status,'queued');assert.equal(f.calls.length,0);assert.equal(f.calls.packets,undefined);
+ assert.equal(f.w.drafts.get(f.id),'/');assert.deepEqual(f.snapshot().rooms[0].queue[0].wait,[{sessionId:f.id,reason:'person-typing'}]);
+});
+test('a session listed as current on a connection that is old-only is never sent unchecked beside its draft',async t=>{
+ const f=await fixture(t,[rules.CAPABILITY,'queueDispatchV1'],['queueDispatchV1']);f.w.setDraft(f.id,'/','person');const item=f.room.queueAdd('Synthetic task',f.id);
+ await f.dispatcher.start();await f.dispatcher.schedule();
+ assert.equal(f.room.queueFind('shared',item).status,'queued');assert.equal(f.calls.packets,undefined,'nothing reached the backend');assert.equal(f.w.drafts.get(f.id),'/');
+ assert.deepEqual(f.snapshot().rooms[0].queue[0].wait,[{sessionId:f.id,reason:'person-typing'}]);
+});
+test('legacy lifecycle calls still refuse a draft, and an old-only backend with no draft is planned its queued work',async t=>{
  const f=await fixture(t);f.w.setDraft(f.id,'/','person');await assert.rejects(f.w.send(f.id,'handoff','naw-dispatcher',null,null,null,null,null,null,null,{itemId:'legacy'}));
  const snap=f.client.snapshot();snap.sessions[0].liveDraft='';snap.sessions[0].serviceCapabilities=['queueDispatchV1'];const waits=new Map();
  const actions=rules.planDispatch({...snap,rooms:[{id:'shared',queue:[{id:'task',text:'Synthetic',status:'queued',assignee:f.id}]}],now:NOW,settleMs:0,idleSince:new Map([[f.id,NOW-10000]]),waits});
- assert.deepEqual(actions.filter(a=>a.kind==='dispatch'),[]);assert.deepEqual(waits.get('task'),[{sessionId:f.id,reason:'backend-update-needed'}]);
+ assert.deepEqual(actions.filter(a=>a.kind==='dispatch').map(a=>a.itemId),['task']);assert.equal(waits.get('task'),undefined);
  assert.equal(rules.sessionReady(snap.sessions[0],{enabled:true}).ready,true,'unchanged lifecycle contract still accepts an old backend with no draft');
 });
 test('changed input after an uncertain native write cannot become a proven refusal or an automatic retry',async t=>{

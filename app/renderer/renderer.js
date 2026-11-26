@@ -7601,7 +7601,8 @@ function renderQueue() {
     if (inSpace(record, queueSpace) && !record.archived) {
       members.push({ id: record.id, name: record.name, nativeTerminalDialog: record.nativeTerminalDialog || null });
       memberIds.add(record.id);
-      if (!(record.serviceCapabilities || []).includes('queueDispatchInputV1')) {
+      const capabilities = record.serviceCapabilities || [];
+      if (!capabilities.includes('queueDispatchInputV1') && !capabilities.includes('queueDispatchV1')) {
         needUpdate.push(record.name);
       }
     }
