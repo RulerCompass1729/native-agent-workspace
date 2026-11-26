@@ -94,9 +94,14 @@ or start paid model runs as a side effect of editing documents.
   the assignee and lets NAW select an idle member, never itself or another project
   manager. If a request is unclear or belongs to another space, it asks the person
   in its own conversation before adding it. It does not route new work from another
-  agent. The role follows a single unambiguous handoff only when
-  its rotation log says `event=done`; `kept` and branching successors do not
-  transfer it. No automatic heartbeat or routing model is added.
+  agent. The role follows a single unambiguous handoff from the moment its
+  successor confirms it (rotation log `event=handed`, `kept` or `done`), even
+  while the old session stays for the person; a session that held the role is
+  then refused queue additions with the current manager's name. A handoff that
+  fails afterwards gives the role back, and branching successors do not
+  transfer it. The session the person designates holds the role at once: a
+  handoff logged before that designation moves it only once that old session
+  is ended (`done`). No automatic heartbeat or routing model is added.
 - NAW-owned collaboration tools and provider-native execution tools remain
   separate. Task ownership does not grant native session control, permission,
   model/budget changes, publication, spending or access to another user's draft.

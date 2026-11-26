@@ -115,11 +115,112 @@ function fixture(t) {
   const record = { id: sender.id, nativeId: sender.nativeId, name: 'Manager', state: 'idle', roomIds: ['shared'] };
   const client = { call: async () => ({ sessions: [record] }), entries: [{ state: { sessions: [{ id: 'old' }], capabilities: [] } }], refresh: async () => {}, close() {}, snapshot: () => ({ wakePolicy: { enabled: true }, sessions: [{ id: 'old' }] }) };
   const c = { background: true, actor: sender, client, view: { selected: sender.id }, win: { destroy() {} }, checkActor: async () => {} };
-  const { handlers, ipc } = registered({ roomState: room, spaceManagers: managers, sessionLabels: { labels: new Map() } });
+  const { handlers, ipc, context } = registered({ roomState: room, spaceManagers: managers, sessionLabels: { labels: new Map() } });
   const designate = (value = { sessionId: sender.id, nativeId: sender.nativeId }) => managers.set('shared', value);
   const invoke = (name, args, actor = sender, context = c) => backgroundOperation.run(actor, () => handlers.get(name)(context, ...args), { context, valid: async () => {} });
-  return { dir, managers, designate, room, sender, record, c, handlers, ipc, invoke };
+  return { dir, managers, designate, room, sender, record, c, handlers, ipc, invoke, context };
 }
+// R254 (the person, 2026-11-25 21:48: 「感觉没地方改,这个 bug 很关键,一定要修」): after a manager's rotation the label
+// named the successor while the stored record still named the archived session, and nothing in the space said the role
+// had moved. The rotation lines as the dispatcher writes them (queue-dispatch.cjs appendLog), through main.cjs's own
+// settleManagers, activeManagers (the label) and spaceAction (the permission).
+test('R254: a manager\'s finished rotation is written into the record, the label and the permission agree, and the successor\'s queueAdd lands', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'space-managers.json');
+  f.designate();
+  const next = { id: 'next', nativeId: 'native-next', name: 'Manager 续2', state: 'idle', roomIds: ['shared'] };
+  const sessions = [f.record, next];
+  f.c.client.call = async () => ({ sessions });
+  const line = event => fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), JSON.stringify({ time: Date.now(), event, spaces: ['shared'],
+    old: { id: 'manager', nativeId: 'native-manager', name: 'Manager' }, new: { id: 'next', nativeId: 'native-next', name: 'Manager 续2' } }) + '\n', { mode: 0o600 });
+  const stored = () => JSON.parse(fs.readFileSync(file, 'utf8')).managers.shared.sessionId;
+  const label = () => f.context.activeManagers(sessions).shared?.sessionId;
+  const settle = async () => { vm.runInContext('settleManagersAt = 0', f.context); await f.context.settleManagers({ sessions }); };
+  const add = (text, actor) => f.invoke('spaceAction', ['shared', 'queueAdd', [text, null]], actor);
+  const nextActor = { ...f.sender, id: 'next', nativeId: 'native-next', name: 'Manager 续2' };
+  const handedOver = error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes('Manager 续2');
+  const events = () => f.room.value.events.filter(event => event.kind === 'manager').map(event => [event.uiMessage.key, event.sessionId]);
+
+  // Confirmed: the label and the permission move at once; the record waits, since a failure could still give it back.
+  line('handed');
+  await settle();
+  assert.deepEqual([label(), stored()], ['next', 'manager']);
+  await assert.rejects(add('from the old one', f.sender), handedOver);
+  assert.equal(f.room.queueItems().length, 0);
+
+  // Finished: the record names the successor, the space says so once, and the old session is still told who has it.
+  line('done');
+  await settle();
+  assert.deepEqual([label(), stored()], ['next', 'next']);
+  assert.deepEqual(events(), [['notice.room.managerHanded', 'next']]);
+  assert.match(f.room.value.events.at(-1).text || require('../ui-locale.js').format('zh', 'notice.room.managerHanded', f.room.value.events.at(-1).uiMessage.params), /Manager 续2 接任这个空间的项目经理/);
+  await settle();
+  assert.equal(events().length, 1, 'written once');
+  const id = await add('from the successor', nextActor);
+  assert.deepEqual(f.room.queueItems().map(item => [item.id, item.creator.sessionId]), [[id, 'next']]);
+  await assert.rejects(add('from the old one again', f.sender), handedOver);
+  // What a fresh reader (another process, an older build) finds is the same.
+  assert.deepEqual(new SpaceManagers(f.dir).current('shared'), { sessionId: 'next', nativeId: 'native-next' });
+});
+// R254 rework 1 (review B1; PM 续2, 2026-11-25: 「人手动设的那一位立刻生效，一直算数」): through the person's own menu
+// handler, the old session chosen again after its handoff is what the notice, the label, the permission and the record
+// say, also after NAW restarts; its successor is told who has the role; a new handoff of it is followed.
+test('R254 B1: the old session the person designates again after a handed or kept handoff is the manager everywhere', async t => {
+  for (const event of ['handed', 'kept']) {
+    const f = fixture(t), file = path.join(f.dir, 'space-managers.json');
+    f.designate();
+    const next = { id: 'next', nativeId: 'native-next', name: 'Manager 续2', state: 'idle', roomIds: ['shared'] };
+    const third = { id: 'third', nativeId: 'native-third', name: 'Manager 续3', state: 'idle', roomIds: ['shared'] };
+    const sessions = [f.record, next, third];
+    f.c.client.call = async () => ({ sessions });
+    const line = (to, kind) => fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), JSON.stringify({ time: Date.now(), event: kind, spaces: ['shared'],
+      old: { id: 'manager', nativeId: 'native-manager', name: 'Manager' }, new: { id: to.id, nativeId: to.nativeId, name: to.name } }) + '\n', { mode: 0o600 });
+    const stored = () => JSON.parse(fs.readFileSync(file, 'utf8')).managers.shared.sessionId;
+    const label = () => f.context.activeManagers(sessions).shared?.sessionId;
+    const settle = async () => { vm.runInContext('settleManagersAt = 0', f.context); await f.context.settleManagers({ sessions }); };
+    const add = (text, actor) => f.invoke('spaceAction', ['shared', 'queueAdd', [text, null]], actor);
+    const nextActor = { ...f.sender, id: 'next', nativeId: 'native-next', name: 'Manager 续2' };
+    const handedOver = name => error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes(`交给 ${name}，`);
+
+    line(next, event);
+    await settle();
+    assert.equal(label(), 'next', event);
+    await f.handlers.get('spaceManager')({ client: f.c.client }, 'shared', 'manager');
+    assert.deepEqual(f.room.value.events.filter(item => item.kind === 'manager').at(-1).uiMessage.key, 'notice.room.managerSet');
+    for (const restart of [false, true]) {
+      if (restart) f.context.spaceManagers = new SpaceManagers(f.dir);
+      await settle();
+      assert.deepEqual([label(), stored()], ['manager', 'manager'], `${event}, restarted ${restart}`);
+      const id = await add(`from the old one, restarted ${restart}`, f.sender);
+      assert.equal(f.room.queueItems().find(item => item.id === id).creator.sessionId, 'manager');
+      await assert.rejects(add('from the successor', nextActor), handedOver('Manager'), `${event}: the successor is told who has it`);
+    }
+    line(third, 'handed');
+    await settle();
+    assert.deepEqual([label(), stored()], ['third', 'manager'], `${event}: a new handoff is followed`);
+    await assert.rejects(add('from the old one after its next handoff', f.sender), handedOver('Manager 续3'));
+  }
+});
+
+// Review N3: 「X 接任」 named the last finished step while a later, still confirmed one already held the role.
+test('R254 N3: the space is told the session that holds the role, once nothing can give it back', async t => {
+  const f = fixture(t), file = path.join(f.dir, 'space-managers.json');
+  f.designate();
+  const next = { id: 'next', nativeId: 'native-next', name: 'Manager 续2', state: 'idle', roomIds: ['shared'] };
+  const third = { id: 'third', nativeId: 'native-third', name: 'Manager 续3', state: 'idle', roomIds: ['shared'] };
+  const sessions = [f.record, next, third];
+  const line = (from, to, event) => fs.appendFileSync(path.join(f.dir, 'rotation-log.jsonl'), JSON.stringify({ time: Date.now(), event, spaces: ['shared'],
+    old: { id: from.id, nativeId: from.nativeId, name: from.name }, new: { id: to.id, nativeId: to.nativeId, name: to.name } }) + '\n', { mode: 0o600 });
+  const stored = () => JSON.parse(fs.readFileSync(file, 'utf8')).managers.shared.sessionId;
+  const settle = async () => { vm.runInContext('settleManagersAt = 0', f.context); await f.context.settleManagers({ sessions }); };
+  const told = () => f.room.value.events.filter(event => event.uiMessage?.key === 'notice.room.managerHanded').map(event => event.uiMessage.params.name);
+  line(f.record, next, 'kept');
+  line(next, third, 'handed');
+  await settle();
+  assert.deepEqual([f.context.activeManagers(sessions).shared?.sessionId, stored(), told()], ['third', 'manager', []]);
+  line(next, third, 'kept');
+  await settle();
+  assert.deepEqual([stored(), told()], ['third', ['Manager 续3']]);
+});
 test("actual background entry accepts only the space's project manager, stores provenance, and lets the person cancel", async t => {
   const f = fixture(t);
   f.designate();

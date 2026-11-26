@@ -55,30 +55,231 @@ test('one session manages one space: choosing it for another ends the former, al
 test('the role follows a finished rotation and stays put on a branch, per space', t => {
   const { role, log } = setup(t);
   role.set(ROOM_A, manager);
-  log([done(manager, next, 'kept')]);
-  assert.deepEqual(role.current(ROOM_A), manager);
   log([done(manager, next)]);
   assert.deepEqual(role.current(ROOM_A), next);
   log([done(manager, next), done(manager, { sessionId: 'other', nativeId: 'native-other' })]);
   assert.deepEqual(role.current(ROOM_A), manager);
 });
 
-test('the seat a finished rotation hands over is the one the successor adds with; a kept or branched one adds nothing (R220.2)', t => {
+// R254 changed the kept case: a kept replacement hands the seat over too, and the session it came from is told to whom.
+test('the seat a finished or kept rotation hands over is the one the successor adds with; a branched one adds nothing (R220.2, R254)', t => {
   const other = { sessionId: 'other', nativeId: 'native-other' };
   const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('other', [ROOM_A])];
   const adds = (role, actor) => role.creator({ id: actor.sessionId, nativeId: actor.nativeId }, ROOM_A, null, records, new Map());
+  const handedToNext = error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes('经理已经交给 Session next');
   const kept = setup(t);
   kept.role.set(ROOM_A, manager); kept.log([done(manager, next, 'kept')]);
-  assert.equal(adds(kept.role, manager).sessionId, 'manager', 'a kept replacement leaves the seat where it was');
-  assert.throws(() => adds(kept.role, next), key('error.queue.managerOnly'), 'a kept successor does not add');
+  assert.equal(adds(kept.role, next).sessionId, 'next', 'a kept replacement hands the seat to its one successor');
+  assert.throws(() => adds(kept.role, manager), handedToNext, 'the kept session is told who has the seat');
   const finished = setup(t);
   finished.role.set(ROOM_A, manager); finished.log([done(manager, next)]);
   assert.equal(adds(finished.role, next).sessionId, 'next', 'a finished rotation hands the seat to the successor that joined the space');
-  assert.throws(() => adds(finished.role, manager), key('error.queue.managerOnly'), 'the session that went away adds nothing');
+  assert.throws(() => adds(finished.role, manager), handedToNext, 'the session that went away adds nothing');
   const branch = setup(t);
   branch.role.set(ROOM_A, manager); branch.log([done(manager, next), done(manager, other)]);
   assert.throws(() => adds(branch.role, next), key('error.queue.managerOnly'), 'neither side of a branch adds');
   assert.throws(() => adds(branch.role, other), key('error.queue.managerOnly'), 'neither side of a branch adds');
+});
+
+// R254 (the person, 2026-11-25: 「项目经理交接失败,这也是个 bug」, 「貌似 NAW 新需求的项目经理继任又失败了?」): the
+// successor had the manager's work for two hours while the role stayed with the old session the person kept using.
+const other = { sessionId: 'other', nativeId: 'native-other' };
+const waiting = (from, to, reason) => ({ ...done(from, to, 'waiting'), reason });
+const labels = new Map([['manager', 'Manager old'], ['next', 'Manager next']]);
+const handedOver = expected => error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes(`经理已经交给 ${expected}`);
+
+test('R254: the role moves at a confirmed handoff, while the person keeps using the old session', t => {
+  const { role, log } = setup(t);
+  role.set(ROOM_A, manager);
+  const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('worker', [ROOM_A])];
+  const oldActor = { id: 'manager', nativeId: 'native-manager' }, nextActor = { id: 'next', nativeId: 'native-next' };
+  const steps = [
+    [done(manager, next, 'handed')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-message')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-message'), waiting(manager, next, 'person-quiet')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), done(manager, next)],
+  ];
+  for (const entries of steps) {
+    log(entries);
+    const at = entries.at(-1).reason || entries.at(-1).event;
+    assert.deepEqual(role.current(ROOM_A), next, at);
+    assert.deepEqual(role.creator(nextActor, ROOM_A, 'worker', records, labels), { kind: 'secretary', name: 'Manager next', sessionId: 'next' }, at);
+    assert.throws(() => role.creator(oldActor, ROOM_A, null, records, labels), handedOver('Manager next'), at);
+    assert.deepEqual([...role.activeIds(records)], ['next'], `one manager in the space: ${at}`);
+    assert.equal(role.roomOf(records[0]), null, at);
+  }
+  // No label: the successor's own name.
+  assert.throws(() => role.creator(oldActor, ROOM_A, null, records, new Map()), handedOver('Session next'));
+  // Another space's queue is refused as before.
+  assert.throws(() => role.creator(oldActor, ROOM_B, null, [session('manager', [ROOM_A, ROOM_B])], labels), key('error.queue.managerOnly'));
+});
+
+test('R254: a kept rotation moves the role too; a branch does not, and a successor gone before the end gives it back', t => {
+  const { role, log } = setup(t);
+  role.set(ROOM_A, manager);
+  const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('other', [ROOM_A])];
+  const oldActor = { id: 'manager', nativeId: 'native-manager' };
+  log([done(manager, next, 'kept')]);
+  assert.deepEqual(role.current(ROOM_A), next, 'kept');
+  assert.throws(() => role.creator(oldActor, ROOM_A, null, records, labels), handedOver('Manager next'));
+  log([done(manager, next, 'handed'), done(manager, next, 'kept')]);
+  assert.deepEqual(role.current(ROOM_A), next, 'handed, then kept');
+  for (const branch of [
+    [done(manager, next, 'handed'), done(manager, other, 'handed')],
+    [done(manager, next, 'kept'), done(manager, other)],
+    [done(manager, next, 'handed'), done(manager, other, 'kept')],
+    [done(manager, next, 'handed'), done({ sessionId: 'someone', nativeId: 'native-someone' }, next, 'handed')],
+  ]) {
+    log(branch);
+    assert.deepEqual(role.current(ROOM_A), manager, JSON.stringify(branch.map(e => [e.old.id, e.event, e.new.id])));
+    assert.deepEqual(role.creator(oldActor, ROOM_A, null, records, labels), { kind: 'secretary', name: 'Manager old', sessionId: 'manager' });
+  }
+  const gone = { ...done(manager, next, 'failed'), reason: 'successor-gone' };
+  log([done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), gone]);
+  assert.deepEqual(role.current(ROOM_A), manager, 'the old session has its work back, and the role with it');
+  assert.deepEqual(role.creator(oldActor, ROOM_A, null, records, labels).sessionId, 'manager');
+  log([done(manager, next, 'handed'), gone, done(manager, other, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), other, 'a later rotation of it moves the role again');
+  // The handoff line names the old session as it was: one that changed since is not followed.
+  log([done({ ...manager, nativeId: 'native-before' }, next, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  // A successor whose native session was not known when it was confirmed is not followed until it is.
+  log([done(manager, { sessionId: 'next', nativeId: null }, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), manager);
+});
+
+// R254 ① (the butler, 2026-11-25 21:51, after the person's 「感觉没地方改」): the label named the successor while the
+// stored record still named the archived session.
+test('R254: the record is written once nothing can give the role back; a step reached by a handed line is followed, not written', t => {
+  const { dir, role, log } = setup(t);
+  const stored = () => JSON.parse(fs.readFileSync(role.file, 'utf8')).managers[ROOM_A];
+  const third = { sessionId: 'third', nativeId: 'native-third' };
+  const gone = (from, to) => ({ ...done(from, to, 'failed'), reason: 'successor-gone' });
+  role.set(ROOM_A, manager);
+  log([done(manager, next, 'handed')]);
+  assert.deepEqual(role.settle(), []);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [manager, next]);
+  log([done(manager, next, 'handed'), gone(manager, next)]);
+  assert.deepEqual(role.settle(), []);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [manager, manager], 'given back, and nothing was written that would keep it away');
+  // A kept step in the middle (the panel's 10:28 case), a finished one, then a confirmed one still waiting: the record
+  // waits for the session that holds the role, so it and the notice name the same one (review N3).
+  const chain = [done(manager, next, 'kept'), done(next, third), done(third, other, 'handed')];
+  log(chain);
+  assert.deepEqual(role.settle(), [], 'the holder can still give it back');
+  assert.deepEqual([stored(), role.current(ROOM_A)], [manager, other]);
+  log([...chain, gone(third, other)]);
+  assert.deepEqual([role.settle(), role.current(ROOM_A)], [[{ roomId: ROOM_A, from: manager, to: third }], third], 'given back, then written');
+  role.set(ROOM_A, manager);
+  log([...chain, done(third, other, 'kept')]);
+  assert.deepEqual(role.settle({ apply: false }), [{ roomId: ROOM_A, from: manager, to: other }]);
+  assert.deepEqual(stored(), manager, 'apply false writes nothing');
+  assert.deepEqual(role.settle(), [{ roomId: ROOM_A, from: manager, to: other }]);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [other, other]);
+  assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), other, 'a fresh reader agrees');
+  assert.deepEqual(role.settle(), [], 'written once');
+  const records = ['manager', 'next', 'third', 'other'].map(id => session(id, [ROOM_A]));
+  for (const id of ['manager', 'next', 'third']) {
+    assert.throws(() => role.creator({ id, nativeId: `native-${id}` }, ROOM_A, null, records, new Map()), handedOver('Session other'), `${id} is told who has it now`);
+  }
+  assert.equal(role.creator({ id: 'other', nativeId: 'native-other' }, ROOM_A, null, records, new Map()).sessionId, 'other');
+});
+
+test('R254: a branch writes nothing, nor a successor that another space\'s record already names', t => {
+  const branch = setup(t), stored = value => JSON.parse(fs.readFileSync(value.role.file, 'utf8')).managers;
+  branch.role.set(ROOM_A, manager);
+  branch.log([done(manager, next), done(manager, other)]);
+  assert.deepEqual(branch.role.settle(), []);
+  assert.deepEqual(stored(branch)[ROOM_A], manager);
+  const shared = setup(t);
+  shared.role.set(ROOM_A, manager);
+  shared.role.set(ROOM_B, next);
+  shared.log([done(manager, next)]);
+  assert.deepEqual(shared.role.settle(), []);
+  assert.deepEqual(stored(shared), { [ROOM_A]: manager, [ROOM_B]: next });
+});
+
+test("R254: only the manager follows a handoff before it is done; the butler's and the integrator's rule is as it was", t => {
+  const { successor, rotationEdges } = require('../queue-secretary.cjs');
+  const { dir, log } = setup(t);
+  for (const entries of [[done(manager, next, 'handed')], [done(manager, next, 'kept')], [done(manager, next, 'handed'), done(manager, next, 'kept')]]) {
+    log(entries);
+    assert.deepEqual(successor(manager, rotationEdges(path.join(dir, 'rotation-log.jsonl'))), manager);
+  }
+  log([done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), { ...done(manager, next, 'failed'), reason: 'successor-gone' }, done(manager, next)]);
+  assert.deepEqual(rotationEdges(path.join(dir, 'rotation-log.jsonl')).map(entry => entry.event), ['done'], 'what the other roles read is unchanged');
+});
+
+// R254 rework 1 (review B1; PM 续2, 2026-11-25: 「人手动设的那一位立刻生效，一直算数」): the person chose the old session
+// again after its handoff; the space said so, but the handoff logged before took the role away again, for good.
+test('R254 B1: the old session the person designates after its handoff holds the role at once and after reopening; a later handoff moves it', t => {
+  for (const event of ['handed', 'kept']) {
+    const { dir, role } = setup(t);
+    const append = (...entries) => fs.appendFileSync(role.logFile, entries.map(value => `${JSON.stringify(value)}\n`).join(''), { mode: 0o600 });
+    const stored = () => JSON.parse(fs.readFileSync(role.file, 'utf8')).managers[ROOM_A];
+    const records = ['manager', 'next', 'other'].map(id => session(id, [ROOM_A]));
+    const oldActor = { id: 'manager', nativeId: 'native-manager' }, nextActor = { id: 'next', nativeId: 'native-next' };
+    role.set(ROOM_A, manager);
+    append(done(manager, next, event));
+    role.settle();
+    assert.deepEqual(role.current(ROOM_A), next, event);
+    role.set(ROOM_A, manager);
+    for (const reader of [role, new SpaceManagers(dir)]) {
+      assert.deepEqual([reader.current(ROOM_A), stored(), [...reader.activeIds(records)]], [manager, manager, ['manager']], event);
+      assert.equal(reader.creator(oldActor, ROOM_A, null, records, labels).sessionId, 'manager', event);
+      assert.throws(() => reader.creator(nextActor, ROOM_A, null, records, labels), handedOver('Manager old'), `${event}: the successor is told who has it`);
+      assert.deepEqual(reader.settle(), [], event);
+    }
+    // That handoff logged again changes nothing; a new one is followed as in R254.
+    append(done(manager, next, event === 'handed' ? 'kept' : 'handed'));
+    assert.deepEqual(role.current(ROOM_A), manager, event);
+    append(done(manager, other, 'handed'));
+    assert.deepEqual(role.current(ROOM_A), other, event);
+    assert.throws(() => role.creator(oldActor, ROOM_A, null, records, labels), handedOver('Session other'), event);
+  }
+});
+
+test('R254 B1: a handoff begun before the designation still moves the role once its old session is ended', t => {
+  const { role } = setup(t);
+  const append = (...entries) => fs.appendFileSync(role.logFile, entries.map(value => `${JSON.stringify(value)}\n`).join(''), { mode: 0o600 });
+  role.set(ROOM_A, manager);
+  append(done(manager, next, 'handed'));
+  role.set(ROOM_A, manager);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  append(done(manager, next));
+  assert.deepEqual(role.current(ROOM_A), next, 'an ended session holds nothing');
+  assert.deepEqual(role.settle().map(move => move.to), [next]);
+});
+
+// Review N2: a plain member's rotation does not make it a former manager of the space its successor manages now.
+test('R254 N2: a session that never held the role is refused as any member, not told who holds it', t => {
+  const { role, log } = setup(t);
+  const worker = { sessionId: 'worker', nativeId: 'native-worker' };
+  const records = ['worker', 'next'].map(id => session(id, [ROOM_A]));
+  log([done(worker, next, 'kept')]);
+  role.set(ROOM_A, next);
+  assert.throws(() => role.creator({ id: 'worker', nativeId: 'native-worker' }, ROOM_A, null, records, labels), key('error.queue.managerOnly'));
+  // Also when the record was written by an older build, with no line for it.
+  fs.writeFileSync(role.logFile, `${JSON.stringify(done(worker, next, 'kept'))}\n`, { mode: 0o600 });
+  assert.throws(() => role.creator({ id: 'worker', nativeId: 'native-worker' }, ROOM_A, null, records, labels), key('error.queue.managerOnly'));
+  assert.equal(role.creator({ id: 'next', nativeId: 'native-next' }, ROOM_A, null, records, labels).sessionId, 'next');
+});
+
+// The daily case: a record an older build wrote, then a handoff settled into it; the old session is still told.
+test('R254: a manager whose record an older build wrote is told who has the role after its handoff is written', t => {
+  const { role, log } = setup(t);
+  role.set(ROOM_A, manager);
+  log([done(manager, next, 'kept')]);
+  assert.deepEqual(role.settle().map(move => move.to), [next]);
+  const records = ['manager', 'next'].map(id => session(id, [ROOM_A]));
+  assert.throws(() => role.creator({ id: 'manager', nativeId: 'native-manager' }, ROOM_A, null, records, labels), handedOver('Manager next'));
+  role.set(ROOM_A, manager);
+  assert.throws(() => role.creator({ id: 'next', nativeId: 'native-next' }, ROOM_A, null, records, labels), handedOver('Manager old'));
+  // Designated again while the handoff was only confirmed.
+  log([done(manager, next, 'handed')]);
+  role.set(ROOM_A, manager);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  assert.throws(() => role.creator({ id: 'next', nativeId: 'native-next' }, ROOM_A, null, records, labels), handedOver('Manager old'));
 });
 
 test('the role counts only while the very native session is a member of its space', t => {
@@ -168,7 +369,8 @@ test('starting over never leaves the place of the record empty; one that cannot 
   };
   assert.throws(() => reopened.set(ROOM_A, manager, { reset: true }), /full/);
   assert.equal(fs.readFileSync(role.file, 'utf8'), '{broken');
-  assert.deepEqual(fs.readdirSync(dir), ['space-managers.json']);
+  // The designation line is written first; it names no session for a record that was not saved.
+  assert.deepEqual(fs.readdirSync(dir).filter(name => name !== 'rotation-log.jsonl'), ['space-managers.json']);
 });
 
 test('a record that can be read again is, without starting over', t => {
