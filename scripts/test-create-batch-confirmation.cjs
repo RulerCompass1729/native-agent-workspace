@@ -162,7 +162,9 @@ async function run() {
     assert.equal(count(config, '目录 workspace'), 1, 'Directory appears once');
     const rows = batch.locator('.background-batch-item');
     const shown = (await rows.allTextContents()).map(text => text.trim());
-    assert.deepEqual([...shown].sort(), [...names].sort(), 'Every card names its session');
+    // Each row now carries its countdown and details after the name; the name still leads every row.
+    assert.equal(shown.length, names.length, 'One row per card');
+    for (const [index, name] of names.entries()) assert.ok(shown[index].startsWith(name), `Row ${index + 1} names its session: ${shown[index].slice(0, 60)}`);
     assert.ok(shown.every(text => !text.includes('模型：') && !text.includes('权限：')), 'Per-row text keeps only the name');
     assert.equal(await batch.getByRole('button', { name: '全部确认（5）', exact: true }).count(), 1);
     assert.equal(await page.locator('#messages .background-controls button').count(), 3, 'Only the one batch keeps buttons');
@@ -243,7 +245,9 @@ async function run() {
     const batch = batchOf(3);
     await until(async () => await batchOf(3).count() === 1 && await batch.locator('.background-batch-item').count() === 3, 'Only the fresh cards form the batch');
     const shown = (await batch.locator('.background-batch-item').allTextContents()).map(text => text.trim());
-    assert.deepEqual([...shown].sort(), [...freshNames].sort(), 'Expired names are not in the batch');
+    assert.equal(shown.length, freshNames.length, 'Only the fresh cards form rows');
+    for (const [index, name] of freshNames.entries()) assert.ok(shown[index].startsWith(name), `Row ${index + 1} names ${name}: ${shown[index].slice(0, 60)}`);
+    assert.ok(shown.every(text => !expiredNames.some(name => text.startsWith(name))), 'Expired names are not in the batch');
     save('partial-expiry', { expired: expired.map(r => ({ id: r.id, receipt: stored(r.id) })), batch: shown });
     await batch.getByRole('button', { name: '全部确认（3）', exact: true }).click();
     await until(() => fresh.every(r => stored(r.id).state === 'complete'), 'Only the fresh three execute');
