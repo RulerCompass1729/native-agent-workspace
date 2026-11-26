@@ -51,8 +51,9 @@ function returnCopy(view, id, text) {
   return retainRecovery(view, id, text);
 }
 // The open window they were sent from, else any open window of the person's: a closed window's owner never returns
-// (main.cjs gives a new window a new one). Agents' views are not passed in.
+// (main.cjs gives a new window a new one), and one closing is already inactive, not restored at start. Never an agent's.
 function returnWindow(contexts, owner) {
-  return contexts.find(context => context.view?.owner === owner) || contexts[0] || null;
+  const open = contexts.filter(context => !context.background && context.view && context.view.active !== false);
+  return open.find(context => context.view.owner === owner) || open[0] || null;
 }
 module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow };

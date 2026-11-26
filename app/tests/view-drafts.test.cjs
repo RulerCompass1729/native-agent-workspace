@@ -66,4 +66,7 @@ test('words go back to the open window they came from, else to another open one:
   assert.equal(returnWindow([a, b], 'owner-b'), b);
   assert.equal(returnWindow([a], 'owner-b'), a, 'from a window that was closed');
   assert.equal(returnWindow([], 'owner-b'), null, 'no window open: asked again');
+  const closing = { view: { owner: 'owner-b', active: false } }, agent = { background: true, view: { owner: 'owner-b' } };
+  assert.equal(returnWindow([closing, a], 'owner-b'), a, 'a closing window is not restored at start');
+  assert.equal(returnWindow([agent], 'owner-b'), null, 'never an agent’s view');
 });

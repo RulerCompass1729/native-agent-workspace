@@ -1342,7 +1342,7 @@ function windowClientOf(owner) {
 // Held words NAW could not send (queue-dispatch.cjs returnHeld): a copy of that session's draft in a window of the
 // person's, the one they were sent from when it is open. False with no window open; asked again.
 function giveBackHeld(owner, sessionId, text, name) {
-  const context = returnWindow([...windows.values()].filter(c => !c.background && !c.win.isDestroyed()), owner);
+  const context = returnWindow([...windows.values()].filter(c => !c.win.isDestroyed()), owner);
   if (!context) return false;
   const copies = returnCopy(context.view, sessionId, text);
   saveViews();
