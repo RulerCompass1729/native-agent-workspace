@@ -358,7 +358,7 @@ test('the new session\'s box is in the chooser: Claude or Codex, what a Codex bu
   assert.deepEqual([...dialog.matchAll(/<select id="steward-new-effort">(.*?)<\/select>/g)][0][1].match(/value="([^"]*)"/g).map(v => v.slice(7, -1)), ['low', 'medium', 'high', 'xhigh', 'max', '']);
   // M82 (the person, 11-21: 「我怎么把你换成 codex,没地方改模型」): Codex can be chosen; what it lacks is said, not hidden.
   assert.equal(/还不能选|Not available yet/.test(locale.format('zh', 'steward.new.codex') + locale.format('en', 'steward.new.codex')), false);
-  for (const language of ['zh', 'en']) assert.match(locale.format(language, 'steward.new.codex'), language === 'zh' ? /后台.*查会话、开会话、登记结果.*只给 Claude/ : /background control.*look up sessions, open one and record results.*Claude-only/, language);
+  for (const language of ['zh', 'en']) assert.match(locale.format(language, 'steward.new.codex'), language === 'zh' ? /后台.*查会话、开会话、写进度报告的专用工具.*只给 Claude/ : /background control.*look up sessions, open one and write progress reports.*Claude-only/, language);
   assert.match(locale.format('zh', 'steward.new.note'), /变回普通会话。.*自动叫醒先关着/);
 });
 

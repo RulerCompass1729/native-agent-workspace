@@ -3940,7 +3940,7 @@ function renderStewardChooser() {
   if (atEnd) box.scrollTop = box.scrollHeight;
 }
 // From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen; from
-// 换成 Codex… / 换成 Claude… with a new session of that provider chosen.
+// 大管家换成新的 Codex 会话… / …Claude 会话… with a new session of that provider chosen.
 function openStewardChooser(chosen = null, provider = 'claude') {
   if (disconnected || typeof api.steward !== 'function' || $('steward-dialog').open) return;
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();

@@ -10,7 +10,7 @@ Finding at `e42aa85b`: a path already existed, but it was not where the person l
 - A running session's provider cannot be changed natively, so the answer is a new session.
 
 Change:
-- Menu: the butler's own ⋯ and header menus gain 「换成 Codex…」 (a Codex butler: 「换成 Claude…」), right after 「换模型…」. The item appears only where a session can be opened with settings.
+- Menu: the butler's own ⋯ and header menus gain 「大管家换成新的 Codex 会话…」 (a Codex butler: 「大管家换成新的 Claude 会话…」), right after 「换模型…」. The item appears only where a session can be opened with settings.
 - Chooser: the item opens the existing chooser with the new-session row and that provider chosen. Codex starts on its native default model and effort, and those two fields are locked, because Claude's model names are not Codex's. The person can change them later with 换模型….
 - Handoff and duty: the handoff and duty statement are prefilled as for Claude.
 - Codex option: the Codex choice is enabled, and the sentence under it now says what a Codex butler lacks.
@@ -23,6 +23,7 @@ What a Codex butler lacks (source; not run):
 - `workspace_report` serves a dispatched session's report and is not part of the duty statement.
 
 Strings: `menu.stewardToCodex`, `menu.stewardToClaude` (new), `steward.new.codex` (reworded), zh and en.
+- Review of `b58c7fec`: the first label 「换成 Codex…」 read as converting the running session, so the item now names a new session. The note names the report tool as its activity label does (写进度报告 / write progress reports).
 
 Tests (`app/tests/steward-ui.test.cjs`, `app/tests/steward-entry.test.cjs`):
 - Red on `e42aa85b`: 5 of 43 fail.
