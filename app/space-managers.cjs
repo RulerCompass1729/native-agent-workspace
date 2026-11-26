@@ -128,6 +128,9 @@ class SpaceManagers {
   creator(actor, roomId, assignee, records, labels) {
     const record = usableRecord(actor, records);
     if (!record || this.roomOf(record) !== roomId) {
+      // A space nobody was ever designated for is a different answer from "you are another space's manager":
+      // the person still has to designate one (R220.2).
+      if (!this.current(roomId)) throw uiError('error.queue.managerVacant');
       throw uiError('error.queue.managerOnly');
     }
     if (assignee !== null && this.activeIds(records).has(assignee)) {
