@@ -14,6 +14,9 @@ import time
 
 MESSAGE = 'frame 口径待核实'
 BASIS = 'electron-getbounds-v1'
+# windowOptions' width and height in app/main.cjs (test_background_size_is_main_window_default).
+BACKGROUND_SIZE = (1240, 850)
+CLOSED_BACKGROUND_LIMIT = 64
 LEGACY_UNSUPPORTED = dict(status='unconfirmed', retry=False, failurePhase='admission', failureReason='invalid-request',
                           message='The authorized outbox could not confirm delivery; do not resend automatically.')
 
@@ -92,9 +95,17 @@ def outside_menu_bands(box, displays):
     return True
 
 
+def background_default(box, displays):
+    # A hidden background window (app/main.cjs context) keeps windowOptions' default size, centered by Electron.
+    width, height = BACKGROUND_SIZE
+    return box['width'] == width and box['height'] == height and any(
+        abs(2 * (box['x'] - d['bounds']['x']) - (d['bounds']['width'] - width)) <= 1 and
+        abs(2 * (box['y'] - d['bounds']['y']) - (d['bounds']['height'] - height)) <= 1 for d in displays)
+
+
 def infer_menu_windows(records, displays, layers, managed, electron=None):
     # Authorized geometry inference, not proof of an AppKit class or creator.
-    counts, offscreen = {}, []
+    counts, offscreen, closed = {}, [], []
     for row in records:
         if row['id'] in managed:
             continue
@@ -104,6 +115,12 @@ def infer_menu_windows(records, displays, layers, managed, electron=None):
                    box['x'] == d['bounds']['x'] and box['y'] == d['bounds']['y'] and
                    box['width'] == d['bounds']['width'] and box['height'] <= d['menuBarHeight']]
         if not matches and layers.get(row['id']) == 0 and row['onScreen'] is False and outside_menu_bands(box, displays):
+            # A background window Electron already dropped can stay listed here for minutes (alpha.309, 11-26).
+            # Only the v4 list proves it is no live BrowserWindow, so a forgotten live one is still refused above.
+            if electron is not None and background_default(box, displays):
+                closed.append(dict(bounds=box, basis='closed-background'))
+                require(len(closed) <= CLOSED_BACKGROUND_LIMIT)
+                continue
             # One hidden window that is no BrowserWindow (v4) or unproven (older GUI); compare() judges it.
             offscreen.append(dict(bounds=box, basis='unproven' if electron is None else 'outside-electron'))
             require(len(offscreen) <= 1)
@@ -114,7 +131,7 @@ def infer_menu_windows(records, displays, layers, managed, electron=None):
         require(counts[number] <= 4)
     menus = [dict(display=d['id'], count=counts[d['id']], bounds=d['bounds'], menuBarHeight=d['menuBarHeight'])
              for d in displays if d['id'] in counts]
-    return menus, offscreen
+    return menus, offscreen + closed
 
 
 def descriptor(profile, pid):

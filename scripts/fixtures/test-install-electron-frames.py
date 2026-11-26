@@ -183,6 +183,11 @@ class Frames(unittest.TestCase):
 DISPLAY = dict(id=1, bounds=dict(x=0, y=0, width=2560, height=1440), menuBarHeight=30)
 MAIN, BACKGROUND, SYSTEM = 1068, (1115, 1120), 1071
 SYSTEM_BOX = dict(x=0, y=940, width=500, height=500)
+CLOSED, CLOSED_BOX = (19824, 19825, 19826), dict(x=660, y=295, width=1240, height=850)
+
+
+def closed_background(number, onScreen=False, **box):
+    return dict(pid=PID, id=number, onScreen=onScreen, bounds=dict(CLOSED_BOX, **box), layer=0)
 
 
 def cg_287(extra=(), system=True):
@@ -233,6 +238,37 @@ class FramesV4(unittest.TestCase):
         for name, (samples, proof) in cases.items():
             with self.subTest(name), self.assertRaises(ValueError):
                 collect(samples, proof)
+
+    def test_closed_background_windows_outside_electron_are_recorded_not_refused(self):
+        # alpha.309 strict pre (11-26): three background windows Electron had dropped, beside 1071.
+        closed = [closed_background(n) for n in CLOSED]
+        result = collect([cg_287(closed)] * 2, proof_287())
+        self.assertEqual(result['offscreenWindows'], [dict(bounds=SYSTEM_BOX, basis='outside-electron')] +
+                         [dict(bounds=CLOSED_BOX, basis='closed-background')] * 3)
+        many = [closed_background(1200 + n) for n in range(m.CLOSED_BACKGROUND_LIMIT)]
+        self.assertEqual(len(collect([cg_287(many)] * 2, proof_287())['offscreenWindows']), m.CLOSED_BACKGROUND_LIMIT + 1)
+
+    def test_only_the_exact_hidden_default_frame_outside_electron_counts_as_closed(self):
+        cases = {
+            'two pixels off center': ([cg_287([closed_background(1200, x=662)])] * 2, proof_287()),
+            'one pixel taller': ([cg_287([closed_background(1200, height=851)])] * 2, proof_287()),
+            'on screen': ([cg_287([closed_background(1200, onScreen=True)])] * 2, proof_287()),
+            'still a BrowserWindow NAW did not register': ([cg_287([closed_background(1200)])] * 2, proof_287(electron=(MAIN,) + BACKGROUND + (1200,))),
+            'more than the limit': ([cg_287([closed_background(1200 + n) for n in range(m.CLOSED_BACKGROUND_LIMIT + 1)])] * 2, proof_287()),
+            'appears between samples': ([cg_287(), cg_287([closed_background(1200)])], proof_287()),
+        }
+        for name, (samples, proof) in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                collect(samples, proof)
+        for version in [1, 3]:
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                collect([cg_287([closed_background(1200)])] * 2, proof_287(version))
+
+    def test_background_size_is_main_window_default(self):
+        main = (Path(__file__).parent.parent.parent / 'app/main.cjs').read_text(encoding='utf-8')
+        width, height = m.BACKGROUND_SIZE
+        self.assertRegex(main, r"function windowOptions\(view = \{\}\) \{ return \{ title: '[^']+', width: %d, height: %d, \.\.\.view\.bounds," % (width, height))
+        self.assertIn('new BrowserWindow({ ...windowOptions(), show: false, focusable: false, skipTaskbar: true })', main)
 
     def test_electron_list_is_strict_and_covers_every_registered_window(self):
         for electron in [(MAIN,), (MAIN, BACKGROUND[0]), (MAIN,) + BACKGROUND + (MAIN,), (MAIN, True) + BACKGROUND, None, (0,)]:

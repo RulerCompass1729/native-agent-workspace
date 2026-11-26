@@ -243,13 +243,16 @@ function menuInference(values) {
   }).sort((a, b) => a.display - b.display);
 }
 // At most one hidden window of the GUI process that is not a BrowserWindow ('unproven': the GUI could not list them).
+// 'closed-background': a background window Electron already dropped, at its default frame (install-electron-frames.py).
 function offscreenInference(values) {
-  if (!Array.isArray(values) || values.length > 1) throw refusal('frame 口径待核实');
-  return values.map(row => {
-    if (!row || Object.keys(row).sort().join(',') !== 'basis,bounds' || !['outside-electron', 'unproven'].includes(row.basis) ||
+  if (!Array.isArray(values) || values.length > 65) throw refusal('frame 口径待核实');
+  const rows = values.map(row => {
+    if (!row || Object.keys(row).sort().join(',') !== 'basis,bounds' || !['outside-electron', 'unproven', 'closed-background'].includes(row.basis) ||
         !row.bounds || Object.keys(row.bounds).sort().join(',') !== 'height,width,x,y') throw refusal('frame 口径待核实');
     return { bounds: bounds(row.bounds), basis: row.basis };
   });
+  if (rows.filter(row => row.basis !== 'closed-background').length > 1) throw refusal('frame 口径待核实');
+  return rows;
 }
 function collector(options, helper, target) {
   const version = {};
@@ -300,7 +303,7 @@ function compare(before, after, expected) {
     // Not compared with before: an outside window can change shape after start (287's 1071, 11-23).
     // Windows NAW forgot to register are caught by the v4 Electron list instead.
     ['offscreen windows outside Electron (max 1, v4 proof after install)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
-      offscreenAfter.length <= 1 && offscreenAfter.every(w => w.basis === 'outside-electron')],
+      offscreenAfter.every(w => ['outside-electron', 'closed-background'].includes(w.basis))],
   ];
 }
 async function post(before, collect, expected, gate, options) {

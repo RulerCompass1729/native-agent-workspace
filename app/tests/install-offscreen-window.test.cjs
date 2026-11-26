@@ -38,6 +38,17 @@ test('post fails on the offscreen row before running the worker gate', async () 
   assert.equal(result.ok, false); assert.equal(calls, 0);
   post.offscreenWindows = proven; assert.equal((await gate.post(pre, () => post, expected, async () => calls++, { minimumMs: 0, quietMs: 0 })).ok, true);
 });
+test('background windows Electron already dropped do not count toward the one outside window (alpha.309, 11-26)', () => {
+  const closed = Array.from({ length: 3 }, () => ({ bounds: { x: 660, y: 295, width: 1240, height: 850 }, basis: 'closed-background' }));
+  for (const [name, after] of [['the window beside three closed ones', [...proven, ...closed]], ['closed ones only', closed],
+    ['the most closed ones', [...proven, ...Array(64).fill(closed[0])]]]) {
+    const { pre, post, expected } = pair([...unproven, ...closed], after);
+    assert.equal(row(gate.compare(pre, post, expected))[3], true, name);
+  }
+  const { pre, post, expected } = pair([], [...unproven, ...closed]);
+  assert.equal(row(gate.compare(pre, post, expected))[3], false, 'a window without the v4 proof still refuses');
+  for (const bad of [[...proven, ...proven, ...closed], [...proven, ...Array(65).fill(closed[0])]]) assert.throws(() => gate.offscreenInference(bad));
+});
 test('offscreen rows are strict: at most one, a known basis and a real rectangle', () => {
   assert.deepEqual(gate.offscreenInference(proven), proven);
   for (const bad of [[...proven, ...proven], [{ bounds: box, basis: 'menu' }], [{ bounds: { ...box, width: 0 }, basis: 'unproven' }],
