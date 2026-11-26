@@ -283,16 +283,28 @@ test('NAW runs the check once when a session starts under an unqualified launche
 });
 
 test('closing NAW ends a running check and keeps no record of it', mac, async t => {
-  const f = fixture(t, '/bin/sleep 30'), stop = new AbortController();
-  const pending = check.checkOnce({ file: f.file, ...f.options, signal: stop.signal });
-  // The program itself, after the sandbox has started it: the sandbox's own command line names the program too.
-  const running = () => execFileSync('/bin/ps', ['-axo', 'command='], { encoding: 'utf8' }).split('\n').some(line => line.includes(f.program) && !line.includes('sandbox-exec'));
-  for (let i = 0; i < 100 && !running(); i++) await sleep(30);
-  assert.equal(running(), true, 'The program is running');
-  const before = Date.now(); stop.abort();
-  assert.equal(await pending, null); assert.ok(Date.now() - before < 5000);
-  await sleep(100); assert.equal(running(), false, 'The program is gone');
-  assert.equal(fs.existsSync(f.file), false); assert.deepEqual(fs.readdirSync(f.privateDir), []);
-  assert.equal(await check.checkOnce({ file: f.file, ...f.options, signal: stop.signal }), null, 'Nothing starts once NAW is closing');
-  assert.equal(fs.existsSync(f.file), false);
+  // The program reports its own PIDs: ps reads arguments from process memory, and under memory pressure, or while
+  // /bin/sh re-executes as bash, a listing can lack them.
+  const f = fixture(t, '/bin/sleep 30 &\nCHILD=$!\necho "$$ $CHILD" > "$HOME/child-ready"\nwait');
+  const stop = new AbortController(), completed = {};
+  t.signal.addEventListener('abort', () => stop.abort(), { once: true });
+  const pending = f.running = check.checkOnce({ file: f.file, ...f.options, signal: stop.signal });
+  pending.then(value => { completed.value = value; });
+  const alive = pid => {
+    try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+  };
+  try {
+    const pids = (await readyFile(f, 'child-ready', completed, /^[1-9]\d* [1-9]\d*\n$/)).split(' ').map(Number);
+    assert.equal(pids.every(alive), true, 'The program is running');
+    const before = Date.now(); stop.abort();
+    assert.equal(await pending, null); assert.ok(Date.now() - before < 5000);
+    // Bounded, as in the time-limit test: a busy machine can take a while to let the child go.
+    for (const deadline = Date.now() + 5000; pids.some(alive) && Date.now() < deadline;) await sleep(25);
+    assert.equal(pids.some(alive), false, 'The program is gone');
+    assert.equal(fs.existsSync(f.file), false); assert.deepEqual(fs.readdirSync(f.privateDir), []);
+    assert.equal(await check.checkOnce({ file: f.file, ...f.options, signal: stop.signal }), null, 'Nothing starts once NAW is closing');
+    assert.equal(fs.existsSync(f.file), false);
+  } finally {
+    stop.abort(); await pending;
+  }
 });
