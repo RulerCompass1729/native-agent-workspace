@@ -1,4 +1,4 @@
-// Real browser DOM, actual waiting-list and question-form sources, synthetic
+// Real browser DOM, actual task-board (R250: it holds what waits for you) and question-form sources, synthetic
 // state/answer transport. No model, daily app, listener or external request.
 const scratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
@@ -14,8 +14,8 @@ const check = (name, ok) => { assert.ok(ok, name); console.log('PASS', name); pa
   const errors = []; context.on('page', p => p.on('pageerror', e => errors.push(e.message)));
   await context.route('**/*', route => route.abort());
   const page = await context.newPage();
-  await page.setContent('<div id="header"></div><div id="header-actions"></div><div id="room-layout"></div><button id="room-record"></button>');
-  for (const file of ['approval-policy.js', 'task-stream.js', 'renderer/activity-stream.js']) await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'app', file), 'utf8') });
+  await page.setContent('<div id="header"></div><div id="header-actions"></div><div id="room-layout"></div><button id="room-record"></button><div id="task-board"></div>');
+  for (const file of ['approval-policy.js', 'task-stream.js', 'renderer/disclosure-list.js', 'renderer/activity-stream.js', 'renderer/task-board.js']) await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'app', file), 'utf8') });
   await page.addScriptTag({ content: `
     const owner = 'human', disconnected = false;
     let state = { capabilities: ['nativeQuestionAnswer'], sessions: [
@@ -31,13 +31,18 @@ const check = (name, ok) => { assert.ok(ok, name); console.log('PASS', name); pa
     const appendNativeQuestions = () => {};
     ${section('function appendQuestionForm(', 'function nativeApprovalPreview(')}
     ${section('function renderWaitingQuestion(', 'function renderApproval(')}
+    const board = nativeWorkspaceTaskBoard.bind({ host: document.getElementById('task-board'), document, text: key => key,
+      onWaiting: (slot, item) => { if (item.kind === 'question') renderWaitingQuestion(slot.question, item); } });
+    board.update({ rooms: [], sessions: [], connected: true, confirmations: [], confirmationsAvailable: true });
     const stream = nativeWorkspaceActivityStream.bind({ document, state: () => state, rooms: () => [], inRoom: () => false,
       text: key => key, language: () => 'zh', connected: () => true, attempt: f => f(), toggleChanged: () => {},
-      question: renderWaitingQuestion });
+      question: renderWaitingQuestion, waitingChanged: items => board.setWaiting(items) });
     stream.render(); window.probe = { state, stream, answers };
   ` });
-  await page.locator('#stream-waiting-more').click();
-  const row = page.locator('[data-waiting-id="question:a:q1"]');
+  // The question opens in place in its board row (R250 A).
+  const row = page.locator('#task-board-panel .task-board-task:has(.task-board-entry[data-item-id="question:a:q1"])');
+  const reopen = async () => { if (!await page.locator('#task-board-panel').isVisible()) await page.locator('.task-board-toggle').click(); await row.locator('.task-board-entry').click(); await row.locator('.question-form').waitFor(); };
+  await reopen();
   const input = row.locator('input[type="text"]'), submit = row.locator('.question-form > button');
   const original = '  半句原文 / not sent  ';
   await input.fill(original);
@@ -45,8 +50,8 @@ const check = (name, ok) => { assert.ok(ok, name); console.log('PASS', name); pa
   await page.evaluate(() => { probe.state.sessions[1].name = 'B renamed'; probe.stream.render(); });
   check('an unrelated approval refresh preserves the exact typed answer', await input.inputValue() === original);
   check('the same input stays connected and focused with its selection', await input.evaluate(n => n === originalInput && document.activeElement === n && n.selectionStart === 3 && n.selectionEnd === 7));
-  await page.locator('#stream-waiting-more').click(); await page.locator('#stream-waiting-more').click();
-  check('closing and reopening the list preserves the draft', await input.inputValue() === original);
+  await page.keyboard.press('Escape'); await page.locator('#task-board-panel').waitFor({ state: 'hidden' }); await reopen();
+  check('closing and reopening the board preserves the draft', await input.inputValue() === original);
   await page.evaluate(() => {
     const other = structuredClone(probe.state.sessions[0]); other.id = 'c'; other.nativeId = 'native-c';
     other.approvals[0].requestId = 'q2'; other.approvals[0].receivedAt = 2;

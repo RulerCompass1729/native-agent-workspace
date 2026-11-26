@@ -6,6 +6,7 @@ const { createIn } = require('./fixtures/create-view.cjs');
 // question then leaves each of them (11-15, the person: 「agent 需要问的问题我根本可能看不见」).
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const loopback = require('./fixtures/loopback-model.cjs');
+const boardWaiting = require('./fixtures/board-waiting.cjs'), locale = require('../app/ui-locale.js');
 const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
@@ -85,25 +86,27 @@ function ledger() {
   fs.appendFileSync(path.join(home, 'config.toml'), `\n[projects.${JSON.stringify(chosenFolder)}]\ntrust_level = "trusted"\n`);
   await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native ready', 60000);
-  check('nothing waits before the question', await page.locator('#stream-waiting').isHidden());
+  // What waits for the person is on the task board (R250): a count on its button, a row per item that opens in place.
+  const board = boardWaiting(page);
+  check('nothing waits before the question', await board.need().isHidden());
   await page.locator('#message-input').fill('Ask me one synthetic question, then finish.'); await page.locator('#send-button').click();
   await until(async () => (await snapshot()).sessions[0].approval, 'Actual native question reaches NAW', 60000);
   const asked = await snapshot(), s = asked.sessions[0]; fs.writeFileSync(path.join(base, 'asked.json'), JSON.stringify(asked, null, 2));
   check('native sends item/tool/requestUserInput with isBlocking false', s.approval.method === 'item/tool/requestUserInput' && s.approval.params.isBlocking === false && s.approval.params.questions?.[0]?.question === QUESTION, s.approval);
   // Native's own status says its turn waits on this question (waitingOnUserInput): NAW lists it once, as the question.
   checks.push({ name: 'native turn status while the question is open', ok: true, detail: s.state });
-  await page.locator('#stream-waiting').waitFor();
-  const lead = await page.locator('#stream-waiting .stream-waiting-lead').innerText();
-  check('等你 +1 with the question text', lead.includes('1 件待你处理') && lead.includes(QUESTION) && lead.includes('Native question'), lead);
+  await board.need().waitFor();
+  const need = await board.need().innerText();
+  check('等你 +1', need === locale.format('zh', 'taskBoard.need', { count: 1 }), need);
   const viewForm = page.locator('#approval .question-form');
   check('the session view form is answerable', await viewForm.count() === 1 && await viewForm.locator('input[type=radio]').first().isEnabled());
   check('the phone home row says it needs you', (await phone()).question === true);
   check('the butler record has the open question once', JSON.stringify(ledger().map(e => [e.kind, e.payload.reason, e.payload.text])) === JSON.stringify([['blocked', 'native-question', QUESTION]]), ledger());
   if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-window-asked.png') });
-  await page.locator('#stream-waiting-more').click();
-  const row = page.locator(`#stream-waiting-list [data-waiting-id="question:${s.id}:${s.approval.requestId}"]`); await row.waitFor();
-  check('the 等你 row is marked as not blocking', (await row.locator('.stream-waiting-link .stream-kind').innerText()) === '问题 · 不阻塞本轮');
-  if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-strip-asked.png') });
+  const row = await board.expand(`question:${s.id}:${s.approval.requestId}`), line = await row.locator('.task-board-entry').innerText();
+  check('the 等你 row names the question and its session', line.includes(QUESTION) && line.includes('Native question'), line);
+  check('the 等你 row is marked as not blocking', (await row.locator('.task-board-sub').innerText()) === '问题 · 不阻塞本轮');
+  if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-board-asked.png') });
   const form = row.locator('.question-form'); await form.locator(`input[type=radio][value="${SECOND}"]`).check(); await form.locator(':scope > button').click();
   // Native resolves its own request only after it has the reply; the answer then reaches the model as the tool output.
   await until(async () => !(await snapshot()).sessions[0].approval, 'Native resolves the question after NAW answers', 30000);
@@ -111,8 +114,9 @@ function ledger() {
   const second = fs.existsSync(path.join(base, 'request-2.json')) ? JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8')) : null;
   const output = second?.input?.find(i => i.type === 'function_call_output' && i.call_id === 'nb_question_call')?.output || '';
   check('native received the chosen answer', output.includes(SECOND) && !output.includes(FIRST), { calls, output });
-  await until(async () => page.locator('#stream-waiting').isHidden(), '等你 clears');
-  check('等你 -1', await page.locator('#stream-waiting').isHidden());
+  await until(async () => board.need().isHidden(), '等你 clears');
+  check('等你 -1', await board.need().isHidden());
+  await board.close();
   check('the session view has no open question', await page.locator('#approval .question-form:visible').count() === 0);
   check('the phone row no longer needs you', (await phone()).question === false);
   await until(async () => ledger().length === 2, 'Butler record of the end');

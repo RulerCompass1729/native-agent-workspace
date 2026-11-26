@@ -28,7 +28,10 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-close{font-size:18px;border:0;background:transparent;color:var(--muted);min-width:32px;min-height:32px;padding:0;flex:none}
 .task-board-availability{font-size:12px;line-height:1.5;margin:0;padding:6px 16px;color:var(--approval-ink,var(--ink));flex:none;border-bottom:1px solid var(--border)}
 .task-board-availability[hidden]{display:none}
-.task-board-list{flex:1 1 auto;min-height:min(240px,30vh);overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;padding:2px 0 10px}
+/* Every group's rows share the list's columns (subgrid), so labels, agents and times line up down the board. */
+.task-board-list{flex:1 1 auto;min-height:min(240px,30vh);overflow:auto;overflow-anchor:none;scrollbar-gutter:stable;padding:2px 0 10px;display:grid;grid-template-columns:24px 8px minmax(0,1fr) fit-content(220px) minmax(0,150px) minmax(0,130px) max-content max-content 6px;column-gap:10px;align-content:start}
+.task-board-group,.task-board-rows,.task-board-task,.task-board-line{grid-column:1/-1;display:grid;grid-template-columns:subgrid}
+.task-board-group>*,.task-board-task>.task-board-detail,.task-board-empty{grid-column:1/-1}
 .task-board-group{margin:0;padding:0}
 .task-board-group-head{display:flex;align-items:center;gap:8px;padding:9px 16px 7px;position:sticky;top:0;z-index:1;background:var(--surface)}
 .task-board-fold{display:flex;align-items:center;gap:8px;font:inherit;font-weight:600;border:0;background:transparent;color:var(--ink);padding:2px 6px 2px 2px;min-height:28px}
@@ -41,10 +44,10 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-group-note{margin:0;padding:2px 16px 8px 40px;font-size:12px;color:var(--approval-ink,var(--ink))}
 .task-board-rows{list-style:none;margin:0;padding:0}
 .task-board-task{border-top:1px solid var(--border);font-size:13px;line-height:1.5}
-.task-board-line{display:grid;grid-template-columns:8px minmax(0,1fr) auto minmax(0,150px) minmax(0,130px) auto 72px;align-items:center;gap:10px;padding:5px 16px 5px 34px;min-height:36px;cursor:pointer}
+.task-board-line{align-items:center;padding:5px 0;min-height:36px;cursor:pointer}
 .task-board-line:hover{background:var(--hover)}
 .task-board-task.open>.task-board-line{background:var(--panel)}
-.task-board-dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.task-board-dot{grid-column:2;width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .task-board-dot[data-group=waiting]{background:var(--approval-ink,var(--ink))}
 .task-board-dot[data-group=sent]{background:var(--agent-working,var(--ink))}
 .task-board-dot[data-group=queued]{background:transparent;box-shadow:inset 0 0 0 1.5px var(--muted)}
@@ -58,7 +61,7 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-sub[data-sub=failed]{color:var(--task-board-error);background:color-mix(in srgb,var(--task-board-error) 14%,transparent)}
 .task-board-sub[data-sub=ready]{color:var(--green,var(--ink));font-family:ui-monospace,Menlo,monospace}
 .task-board-sub[data-sub=plain]{background:transparent;padding-left:0}
-.task-board-line>[hidden]{display:block;visibility:hidden}
+.task-board-line>[hidden]{display:block!important;visibility:hidden}
 .task-board-agent{display:block;min-width:0;max-width:100%;justify-self:start;font:inherit;font-size:12px;text-align:left;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink);padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .task-board-agent:not(:disabled):hover{border-color:var(--border);background:var(--raised)}
 .task-board-agent:disabled{opacity:1;color:var(--muted);cursor:default}
@@ -79,11 +82,11 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-waiting .background-controls{margin-top:0;max-width:100%;overflow-wrap:anywhere}
 .task-board-waiting pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .task-board-waiting .background-state:not([data-expires-at]){display:none}
-.task-board-more{display:block;margin:4px 16px 6px 34px;font:inherit;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;background:transparent;padding:4px 10px;min-height:28px}
+.task-board-more{display:block;justify-self:start;margin:4px 16px 6px 34px;font:inherit;font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;background:transparent;padding:4px 10px;min-height:28px}
 .task-board-empty{font-size:13px;color:var(--muted);padding:24px 16px;margin:0}
 .task-board-panel mark{background:color-mix(in srgb,#e8c547 40%,transparent);color:inherit;border-radius:2px}
 .task-board-footer{padding:8px 16px;font-size:12px;line-height:1.5;border-top:1px solid var(--border);color:var(--muted);flex:none}
 .task-board button:focus-visible,.task-board input:focus-visible,.task-board-panel button:focus-visible,.task-board-panel input:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
-@media(max-width:1000px){.task-board-line{grid-template-columns:8px minmax(0,1fr) auto minmax(0,120px) auto;padding-left:20px}.task-board-line>:is(.task-board-space,.task-board-id){display:none}.task-board-detail{padding-left:36px}}
-@media(max-width:600px){.task-board-panel{border-radius:0;border-inline:0}.task-board-heading{flex-wrap:wrap;padding:10px 12px;gap:8px}.task-board-search{order:5;flex-basis:100%;max-width:none}.task-board-line{grid-template-columns:8px minmax(0,1fr) auto;padding:6px 12px;gap:6px 8px}.task-board-agent,.task-board-when{grid-column:2/-1}.task-board-detail{padding:4px 12px 12px}.task-board-group-head{padding-inline:12px}}
+@media(max-width:1000px){.task-board-list{grid-template-columns:10px 8px minmax(0,1fr) fit-content(160px) minmax(0,120px) max-content 6px}.task-board-line>:is(.task-board-space,.task-board-id){display:none!important}.task-board-detail{padding-left:36px}}
+@media(max-width:600px){.task-board-panel{border-radius:0;border-inline:0}.task-board-heading{flex-wrap:wrap;padding:10px 12px;gap:8px}.task-board-search{order:5;flex-basis:100%;max-width:none}.task-board-list,.task-board-group,.task-board-rows,.task-board-task{display:block}.task-board-line{grid-template-columns:8px minmax(0,1fr) auto;padding:6px 12px;gap:6px 8px}.task-board-dot{grid-column:auto}.task-board-line>[hidden]{display:none!important}.task-board-agent,.task-board-when{grid-column:2/-1}.task-board-detail{padding:4px 12px 12px}.task-board-group-head{padding-inline:12px}}
 @media(max-width:1000px){.compact-room .header-identity{flex-wrap:wrap;row-gap:0}.compact-room h1{flex:none;max-width:100%}}

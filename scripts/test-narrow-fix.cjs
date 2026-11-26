@@ -2,7 +2,7 @@
 // shared-records panel must not cover the member grid, and member names must stay
 // distinguishable. Hidden Electron, disposable profile, synthetic native transport.
 const scratch = require('./fixtures/test-scratch.cjs');
-const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs'), boardWaiting = require('./fixtures/board-waiting.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { _electron } = scratch.playwright(require('playwright'));
@@ -74,7 +74,9 @@ async function main() {
   }
   const request = await control('rename', [ids[1], 'Claude B · 已确认']);
   assert.equal(request.state, 'confirmation-required');
-  await until(() => page.locator('#stream-waiting').isVisible(), 'Waiting strip visible');
+  // What waits for the person is on the task board (R250); its card opens in place in the row.
+  const board = boardWaiting(page);
+  await until(() => board.need().isVisible(), 'Board counts the waiting card');
   const win = await app.browserWindow(page);
   async function capture(size, view) {
     await win.evaluate((w, [width, height]) => w.setContentSize(width, height), size); await delay(600);
@@ -82,11 +84,11 @@ async function main() {
     await page.screenshot({ path: file });
     console.log('SHOT', file);
   }
-  // Main interface and expanded waiting strip, at both requested sizes.
+  // Main interface and the board with the card open, at both requested sizes.
   for (const size of [[1240, 820], [850, 600]]) await capture(size, 'main');
-  if (await page.locator('#stream-waiting-more').getAttribute('aria-expanded') !== 'true') await page.locator('#stream-waiting-more').click();
-  await page.locator('#stream-waiting-list').waitFor();
+  await board.expand([request.actor.id, request.actor.nativeId, request.id].join(':'));
   for (const size of [[1240, 820], [850, 600]]) await capture(size, 'waiting');
+  await board.close();
   // Assertions at 850x600.
   await win.evaluate(w => w.setContentSize(850, 600)); await delay(600);
   // Progressive layouts initially show only one card here. Measure all six names.

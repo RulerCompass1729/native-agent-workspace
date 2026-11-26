@@ -252,6 +252,18 @@ test('cards, questions and creation permissions open in place through the existi
   f.board.dispose();
 });
 
+// The shared card countdown (renderer.js) keeps a line ticking only under a row carrying the card's own id (not its key).
+test('an open card sits under its card id, and a closed board keeps no open card ticking', () => {
+  const f = setup('zh', { onWaiting: () => {} });
+  f.board.setWaiting([card(f, 100)]);
+  f.board.open(); f.entry('actor:native:operation').fire('click');
+  assert.equal(f.row('actor:native:operation').querySelector('.task-board-waiting').dataset.waitingId, 'message');
+  f.board.close();
+  assert.equal(f.row('actor:native:operation').querySelector('.task-board-waiting'), null);
+  assert.equal(f.entry('actor:native:operation').getAttribute('aria-expanded'), 'false');
+  f.board.dispose();
+});
+
 // C: dispatched work is 在做 whatever the session reports; a decision left with an ended session is an old dispatch.
 test('a dispatched item stays 在做 and a decision left with an ended session is 旧派单 under 异常', () => {
   const f = setup(), q = f.input.rooms[0].queue;
@@ -321,4 +333,36 @@ test('the footer states the 300-per-space retention, in both languages, with no 
     for (const e of f.host.querySelectorAll('*')) for (const name of ['aria-label', 'placeholder']) assert.doesNotMatch(e.getAttribute(name) || e[name] || '', /taskBoard\.|\{[a-z]+\}/);
     f.board.dispose();
   }
+});
+
+// The stream lists only cards the person can act on; one that cannot be verified stays on the board under 异常 (B).
+test('an unverifiable confirmation card is listed under 异常 for checking, with no countdown or count', () => {
+  const f = setup();
+  f.input.confirmations = [
+    { key: 'member:native-member:check', sessionId: 'member', nativeId: 'native-member', operationId: 'check', state: 'unverifiable', actionable: false, expiresAt: f.now() + 200000 },
+    { key: 'member:native-member:live', sessionId: 'member', nativeId: 'native-member', operationId: 'live', state: 'confirmation-required', actionable: true, expiresAt: f.now() + 100000 },
+  ];
+  f.board.update(f.input); f.board.setWaiting([]);
+  f.button.fire('click');
+  const problem = f.groups().find(g => g.key === 'problem');
+  assert.deepEqual(problem.rows, ['member:native-member:check'], 'only the unverifiable card; an actionable one arrives as a waiting item');
+  const row = f.row('member:native-member:check'), sub = row.querySelector('.task-board-sub');
+  assert.equal(row.querySelector('.task-board-task-title').textContent, f.format('taskBoard.confirmation'));
+  assert.equal(sub.textContent, f.format('taskBoard.cardsUnverified')); assert.doesNotMatch(sub.textContent, /\d+:\d{2}/);
+  assert.equal(f.button.querySelector('.task-status-need').textContent, f.format('taskBoard.need', { count: 1 }), 'the fixture review only'); assert.equal(f.button.querySelector('.task-status-due').hidden, true);
+  f.entry('member:native-member:check').fire('click');
+  assert.deepEqual(row.querySelectorAll('.task-board-action').map(b => b.dataset.action), ['openSessionOf']);
+  row.querySelector('.task-board-action').fire('click');
+  assert.deepEqual(f.calls.at(-1), ['session', 'member', 'native-member']);
+  f.board.dispose();
+});
+
+test('a waiting item without its own title names its kind once, as the title', () => {
+  const f = setup();
+  f.board.setWaiting([{ id: 'approval:member', kind: 'approval', title: '', actorId: 'member', actorName: 'Synthetic member', sessionId: 'member', time: f.now() }]);
+  f.button.fire('click');
+  const row = f.row('approval:member');
+  assert.equal(row.querySelector('.task-board-task-title').textContent, f.format('stream.approval'));
+  assert.equal(row.querySelector('.task-board-sub').textContent, ''); assert.equal(row.querySelector('.task-board-sub').hidden, true);
+  f.board.dispose();
 });

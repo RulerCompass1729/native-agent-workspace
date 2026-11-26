@@ -1001,6 +1001,9 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-creation-card .operator-grant label[hidden] { display:none; }
 .operator-creation-card .operator-grant-consent { flex-direction:row; align-items:flex-start; line-height:1.65; }
 .operator-grant-consent input { flex:none; margin-top:5px; }
+/* Grants sit in the settings dialog (R251 D): undo the dialog's full-width, spaced inputs. */
+dialog .operator-creation-card .operator-grant input[type=checkbox] { width:auto; margin:5px 0 0; }
+dialog .operator-creation-card .operator-grant input:not([type=checkbox]) { margin-bottom:0; }
 .operator-task-details > summary, .operator-new-grant > summary { cursor:pointer; min-height:28px; }
 .operator-task-body { max-height:200px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; background:var(--panel); }
 .operator-creation-buttons { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }

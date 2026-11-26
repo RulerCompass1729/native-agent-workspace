@@ -13,5 +13,6 @@ for (const language of ['zh', 'en']) test(language + ': the button counts every 
   s.advance(100000); assert.equal(s.cardHidden(), true); assert.equal(s.count(), 3);
   rooms[0].queue[0].reason = 'no-reply'; s.render();
   assert.equal(s.count(), 3);
-  assert.deepEqual(s.subs(), [f('stream.approval'), f('taskBoard.status.review'), f('taskBoard.status.waiting')].sort());
+  // The untitled approval names its kind once, as its title (task-board-dialog), so no sub repeats it.
+  assert.deepEqual(s.subs(), [f('taskBoard.status.review'), f('taskBoard.status.waiting')].sort());
 });

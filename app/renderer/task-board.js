@@ -123,6 +123,9 @@
         text: typeof item.title === 'string' ? item.title : '', reason: '', memberKey: item.actorId || item.sessionId || '', memberName: item.actorName || '', route: item.actorId || item.sessionId || '',
         spaceId: item.roomId || '', spaceName: spaces.get(item.roomId)?.name || '', ready: null, expiresAt, events: timestamp(item.time) === null ? [] : [['asked', item.time]], waiting: item });
     }
+    // The stream lists only cards the person can act on; one that cannot be verified is checked under 异常, with no countdown.
+    for (const card of status.cards || []) if (card.kind === 'unknown') rows.push({ key: card.key, id: card.id, source: 'confirmation', kind: 'unknown', group: 'problem', sub: 'unverified',
+      text: '', reason: '', memberKey: card.memberKey, memberName: '', route: card.memberKey, spaceId: '', spaceName: '', ready: null, expiresAt: null, events: [] });
     return rows;
   }
   const latest = row => row.events.at(-1) || null;
@@ -193,7 +196,7 @@
       e.replaceChildren(...parts);
     }
     const liveSession = id => id && input.sessions?.find(s => s.id === id && !s.archived) || null;
-    const title = row => row.text.split(/\r?\n/).map(line => line.trim()).find(Boolean) || (row.source === 'space' ? f('untitled', { id: row.id.slice(0, 8) }) : text('stream.' + row.kind));
+    const title = row => row.text.split(/\r?\n/).map(line => line.trim()).find(Boolean) || (row.source === 'space' ? f('untitled', { id: row.id.slice(0, 8) }) : row.source === 'confirmation' ? f('confirmation') : text('stream.' + row.kind));
     const who = row => row.memberName || liveSession(row.memberKey)?.name || f(row.memberKey ? 'memberMissing' : 'unassigned');
     const where = row => row.spaceName || f('independent');
     const groupKey = (row, by = grouping) => by === 'status' ? row.group : by === 'agent' ? row.memberKey || '-' : row.spaceId || '-';
@@ -201,6 +204,7 @@
     const unavailable = () => status.historyGroups.filter(p => !p.available && !p.statusExcluded);
     function subText(row) {
       if (row.sub === 'card') return f('sub.card', { time: remaining(row.expiresAt ?? now()) });
+      if (row.sub === 'unverified') return f('cardsUnverified');
       if (row.source === 'waiting') return text('stream.' + row.kind);
       return row.sub ? f(row.sub === 'decide' ? 'status.waiting' : row.sub === 'look' ? 'status.review' : row.sub === 'failed' ? 'tab.failed' : 'status.' + row.sub) : '';
     }
@@ -280,6 +284,9 @@
       if (!opened) return;
       const inside = panel.contains(doc.activeElement);
       opened = false; panel.hidden = true; translate(); drawBar();
+      // A closed board keeps no open row, so no hidden card keeps a countdown; the next opening starts folded (F).
+      const v = views.get(expanded); expanded = '';
+      if (v) { v.detail?.box.remove(); v.element.classList.remove('open'); attr(v.entry, 'aria-expanded', 'false'); }
       if ((restore || inside || doc.activeElement === doc.body) && toggle.isConnected && !doc.querySelector('dialog:modal')) toggle.focus({ preventScroll: true });
     }
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
@@ -328,7 +335,7 @@
       const words = title(row); paint(v.name, words); v.entry.title = words;
       // A row that changed status while the board is open keeps its place and names its new status.
       const moved = grouping === 'status' && frozen.where.get(row.key) !== row.group;
-      const label = subText(row) || (moved ? f('group.' + row.group) : row.ready ? f('ready', { commit: row.ready.commit.slice(0, 8) }) : grouping === 'status' ? '' : f('group.' + row.group));
+      const own = subText(row), label = (own === words ? '' : own) || (moved ? f('group.' + row.group) : row.ready ? f('ready', { commit: row.ready.commit.slice(0, 8) }) : grouping === 'status' ? '' : f('group.' + row.group));
       set(v.sub, label); v.sub.dataset.sub = row.sub || (!moved && row.ready ? 'ready' : 'plain'); v.sub.hidden = !label;
       v.agent.hidden = grouping === 'agent'; paint(v.agentName, who(row)); v.agent.disabled = !session;
       attr(v.agent, 'aria-label', session ? f('switchTo', { name: who(row) }) : who(row)); v.agent.title = v.agent.getAttribute('aria-label');
@@ -347,7 +354,8 @@
           const box = make('div', 'task-board-waiting'), question = make('div', 'task-board-question'), heading = make('p'), actions = make('div');
           question.append(heading); box.append(question, actions); d.slot = { box, question, heading, entry: { item: box, actions } };
         }
-        set(d.slot.heading, row.kind === 'question' ? row.text : '');
+        // The shared card countdown (renderer.js) ticks only under a row carrying the card's own id, not the row key.
+        d.slot.box.dataset.waitingId = row.waiting.card?.id || row.id; set(d.slot.heading, row.kind === 'question' ? row.text : '');
         onWaiting(d.slot, row.waiting); parts.push(d.slot.box);
       }
       if (row.kind !== 'question') { paint(d.full, row.text); if (row.text) parts.push(d.full); }

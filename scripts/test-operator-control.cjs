@@ -18,6 +18,8 @@ try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw e
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Codex4', task: 'T164 1a four synthetic source journeys', pid: process.pid, at: new Date().toISOString() }));
 const pictures = path.join(process.env.NAW_PICTURES_DIR || path.join(os.homedir(), 'Pictures/naw-dogfood'), new Date().toISOString().slice(0, 7), 't164-' + token);
 let profile, cwd, child, client, app, page, source, sequence = 0, launchCount = 0, expired = false;
+// What waits for the person is on the task board (R250); grants are in settings (R251 D).
+const board = () => require('./fixtures/board-waiting.cjs')(page), grants = () => page.locator('#setup-grants-list');
 const checks = [], errors = [], trace = [], geometry = [], activeStartedAt = Date.now();
 const guiProcesses = [];
 let deadline;
@@ -46,7 +48,8 @@ async function launch() {
   fs.writeFileSync(path.join(evidence, 'allocated.json'), JSON.stringify({ token, profile, childPid: child.pid, guiProcesses, at: new Date().toISOString(), sourceBefore }));
   page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-session').waitFor(); await page.locator('#message-input').waitFor();
 }
-async function choose(id) { await page.locator(`.session-link[data-session-id="${id}"]`).click(); }
+async function choose(id) {
+  await board().close(); await page.locator(`.session-link[data-session-id="${id}"]`).click(); }
 async function menu(id, label) { await page.locator(`[data-session-menu="${id}"]`).click(); await page.getByRole('menuitem', { name: label, exact: true }).click(); }
 async function capture(label) { await page.screenshot({ path: path.join(pictures, label + '.png') }); fs.writeFileSync(path.join(evidence, label + '.json'), JSON.stringify(await state(), null, 2)); }
 async function readableCard(card, label) {
@@ -72,7 +75,8 @@ async function spaceGrantJourney(card, args) {
   const name = await space.locator('option[value="shared"]').innerText();
   assert.equal(await sentence.innerText(), `允许上面厂商、目录及权限在我填的额度和期限内建会话，建出的会话加入「${name}」成为那里的成员，并接那里排队的活；会产生厂商用量。首条任务和报告通知当前不会投递。`);
   await card.scrollIntoViewIfNeeded(); await capture('space-01-form-zh');
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en'); await page.locator('#close-setup').click();
+  await board().expandKind('operator-creation');
   await until(async () => await card.locator('button[type=submit]').textContent() === 'Allow and create', 'Grant labels repaint to English');
   const english = await space.locator('option[value="shared"]').innerText();
   assert.equal(await sentence.innerText(), `Allow creation for this provider, directory and permission within my quotas and expiry; the sessions created join “${english}” as members and are sent the work queued there. Provider usage may incur costs. Initial tasks and report notifications are not delivered in this phase.`);
@@ -84,9 +88,9 @@ async function spaceGrantJourney(card, args) {
     return texts.concat([...box.querySelectorAll('[aria-label]')].map(element => element.getAttribute('aria-label'))).filter(text => /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/.test(text));
   });
   assert.deepEqual(leftover, [], 'Nothing in the card stays in Chinese after the switch to English');
-  await page.locator('#close-setup').click(); if (await page.locator('#stream-waiting-list').isHidden()) await page.locator('.stream-waiting-more').click(); await card.scrollIntoViewIfNeeded(); await capture('space-02-form-en');
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
-  if (await page.locator('#stream-waiting-list').isHidden()) await page.locator('.stream-waiting-more').click();
+  await card.scrollIntoViewIfNeeded(); await capture('space-02-form-en');
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
+  await board().expandKind('operator-creation');
   await card.getByRole('button', { name: '允许并创建', exact: true }).click();
   // The cleared tick is a required field, so the form itself refuses to submit: nothing is saved, nothing created.
   await wait(800);
@@ -125,14 +129,13 @@ async function creationCardJourney() {
   const args = { action_id: 'card-one', provider: 'claude', cwd, name: 'Synthetic helper', task: ('Full synthetic task <literal>\n').repeat(90), permission: process.env.NAW_TEST_OPERATOR_BYPASS === '1' ? 'bypass' : 'default' };
   await tool(source, 'open', args);
   await tool(source, 'open', { ...args, action_id: 'card-two', name: 'Second helper' });
-  await until(async () => (await page.locator('.stream-waiting-count').innerText()).includes('2'), 'Both requests counted above terminal');
+  await until(async () => (await board().need().innerText()).includes('2'), 'Both requests counted above terminal');
   const omitted = (await desk()).sessions.find(s => s.id === source);
   assert.equal(omitted.messagesOmitted, true, 'Discovery does not load the initiator conversation');
-  await page.locator('.stream-waiting-more').click();
-  const rows = page.locator('#stream-waiting-list .operator-creation-card');
-  const cardFor = action => page.locator('#stream-waiting-list [data-waiting-id=' + JSON.stringify('operator-creation:' + source + ':' + JSON.stringify([original, action])) + '] .operator-creation-card');
+  const cardId = action => 'operator-creation:' + source + ':' + JSON.stringify([original, action]);
+  const cardFor = action => board().row(cardId(action)).locator('.operator-creation-card');
   const first = cardFor('card-one');
-  await first.waitFor();
+  await board().expand(cardId('card-one')); await first.waitFor();
   if (args.permission === 'bypass') {
     const warning = first.locator('.operator-bypass'); assert.match(await warning.innerText(), /跳过确认/);
     assert.ok(await warning.evaluate(el => Number(getComputedStyle(el).fontWeight) >= 700), 'Bypass permission is visually emphasized');
@@ -149,22 +152,21 @@ async function creationCardJourney() {
   const inputHandle = await daily.elementHandle(), formHandle = await form.elementHandle();
   await daily.fill('3'); await concurrent.fill('3'); await consent.check();
   await page.evaluate(id => workspace.rename(id, 'Renamed observer'), observer);
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en'); await page.locator('#close-setup').click();
+  await board().expand(cardId('card-one'));
   await until(async () => (await form.locator('button[type=submit]').textContent()) === 'Allow and create', 'English labels painted');
   assert.equal(await daily.evaluate((el, old) => el === old, inputHandle), true);
   assert.equal(await form.evaluate((el, old) => el === old, formHandle), true);
   assert.equal(await daily.inputValue(), '3'); assert.equal(await consent.isChecked(), true);
   const before = await desk(); assert.equal(before.viewState.selected, observer); assert.equal(before.sessions.find(s => s.id === source).nativeId, original);
-  await page.locator('#close-setup').click();
-  if (await page.locator('#stream-waiting-list').isHidden()) await page.locator('.stream-waiting-more').click();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 780));
   await first.scrollIntoViewIfNeeded();
   const overflow = await first.evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth, text: el.innerText }));
   assert.ok(overflow.scroll <= overflow.width + 1, 'Narrow English card has no horizontal overflow');
   await capture('card-02-en-850');
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 880));
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
-  if (await page.locator('#stream-waiting-list').isHidden()) await page.locator('.stream-waiting-more').click();
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
+  await board().expand(cardId('card-one'));
   await space.selectOption('shared'); assert.equal(await consent.isChecked(), false); await consent.check();
   const untilMs = await form.locator('input[type=datetime-local]').evaluate(e => new Date(e.value).getTime());
   await capture('card-03-zh-scope');
@@ -172,7 +174,7 @@ async function creationCardJourney() {
   await until(async () => (await state()).sessions.length === 3, 'One session after double submit');
   assert.equal((await state()).operatorPolicy.domains.length, 1); const domain = (await state()).operatorPolicy.domains[0];
   assert.equal(domain.daily, 3); assert.equal(domain.concurrent, 3); assert.equal(domain.expiresAt, untilMs); assert.equal(domain.permission, args.permission); assert.equal(domain.space, 'shared');
-  const covered = cardFor('card-two');
+  const covered = cardFor('card-two'); await board().expand(cardId('card-two'));
   await covered.getByRole('button', { name: '使用已有授权', exact: true }).waitFor();
   assert.match(await covered.innerText(), /已被授权/); assert.match(await covered.innerText(), /每天（UTC）最多 3 个/); assert.match(await covered.innerText(), /队列任务/);
   assert.equal(await covered.locator('.operator-new-grant').evaluate(el => el.open), false);
@@ -211,11 +213,11 @@ async function quotaJourney() {
   const edit = { domainId, daily: 16, concurrent: 6, revision: 0, nativeId: native, consent: true };
   await assert.rejects(require('../app/background-operation.cjs').run(actor, () => client.call('operatorAction', source, 'quota', edit)), /Only the person/);
   await assert.rejects(tool(source, 'quota', edit), /Invalid operator tool|Unknown operator tool/);
-  await page.locator('.operator-grants-toggle').click();
-  const card = page.locator('#operator-grants-list [data-domain-id=' + JSON.stringify(domainId) + ']');
-  await card.waitFor(); assert.equal(await page.locator('#operator-grants-list .operator-quota-card').count(), 2);
+  await board().close(); await page.locator('#setup-button').click();
+  const card = grants().locator('[data-domain-id=' + JSON.stringify(domainId) + ']');
+  await card.waitFor(); assert.equal(await grants().locator('.operator-quota-card').count(), 2);
   assert.match(await card.innerText(), /2 \/ 8/); assert.match(await card.innerText(), /2 \/ 6/);
-  assert.equal(await page.locator('.stream-waiting-lead').isHidden(), true, 'Valid grants are not pending requests');
+  assert.equal(await board().need().isHidden(), true, 'Valid grants are not pending requests');
   await capture('quota-01-no-pending');
   await card.getByRole('button', { name: '调整额度', exact: true }).click();
   const form = card.locator('form'), daily = form.locator('input[type=number]').nth(0), concurrent = form.locator('input[type=number]').nth(1), consent = form.locator('input[type=checkbox]'), save = form.locator('button[type=submit]');
@@ -224,12 +226,16 @@ async function quotaJourney() {
   const handle = await daily.elementHandle(); await open('quota-live-update');
   await until(async () => (await card.innerText()).includes('3 / 8'), 'Actual usage updates while editing');
   assert.equal(await daily.evaluate((el, before) => el === before, handle), true); assert.equal(await daily.inputValue(), '16'); assert.equal(await consent.isChecked(), true);
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en'); await page.locator('#close-setup').click();
-  await page.locator('.operator-grants-toggle').click();
+  await page.locator('#ui-language').selectOption('en');
+  // The switch is saved through the Host first; settings stay open, so wait for the repaint instead of closing them.
+  await until(async () => (await card.innerText()).includes('stays at 6'), 'The quota card follows the language switch in place');
   assert.equal(await daily.evaluate((el, before) => el === before, handle), true); assert.equal(await consent.isChecked(), true);
   assert.match(await card.innerText(), /stays at 6/); assert.match(await card.innerText(), /changes from 8 to 16/);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 820)); await card.scrollIntoViewIfNeeded();
-  assert.ok(await card.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'English quota card has no horizontal overflow at 850px'); await capture('quota-02-en-increase');
+  // Names the widest element when it fails, so a layout regression points at its cause.
+  const overflow = await card.evaluate(el => { const right = el.getBoundingClientRect().right; const wide = [...el.querySelectorAll('*')].filter(e => e.getBoundingClientRect().right > right + 1).map(e => e.tagName + '.' + e.className + ' ' + Math.round(e.getBoundingClientRect().width));
+    return { scroll: el.scrollWidth, client: el.clientWidth, wide: wide.slice(0, 5) }; });
+  assert.ok(overflow.scroll <= overflow.client + 1, 'English quota card has no horizontal overflow at 850px: ' + JSON.stringify(overflow)); await capture('quota-02-en-increase');
   await form.evaluate(el => { el.requestSubmit(); el.requestSubmit(); });
   await until(async () => (await state()).operatorPolicy.domains.find(d => d.id === domainId).quotaRevision === 1, 'One doubled daily quota');
   let domain = (await state()).operatorPolicy.domains.find(d => d.id === domainId);
@@ -251,7 +257,7 @@ async function quotaJourney() {
   assert.equal((await desk()).viewState.selected, observer); assert.equal((await session(source)).nativeId, native); assert.equal((await session(source)).liveDraft, 'ORIGINAL UNSENT INITIATOR DRAFT');
   await client.call('operatorAction', source, 'revoke', domainId);
   await until(async () => await card.count() === 0, 'Revoked grant removed from active cards');
-  assert.equal(await page.locator('#operator-grants-list .operator-quota-card').count(), 1);
+  assert.equal(await grants().locator('.operator-quota-card').count(), 1);
   const stats = await fixture('stats'); assert.equal(stats.sends.length, 0); assert.equal(stats.inputs.length, 0); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0); assert.deepEqual(errors, []);
   checks.push('No pending request: both active grants show scope, actual UTC daily use, concurrency and expiry above another native terminal',
     'Increase8->16 and decrease12->1 require fresh consent; every edit resets it; current use3 survives, no expiry/scope reset and no other domain changes',
@@ -273,20 +279,22 @@ async function run() {
   // This journey starts in an existing shared space; an empty unused legacy room is deliberately hidden.
   await client.call('join', source, true);
   await launch();
-  await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '启用 agent 控制接口…', exact: true }).click();
+  // Since 4bbf308b (11-24) the room menu enables control through 「全局未开，点此启用控制接口」.
+  await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '全局未开，点此启用控制接口', exact: true }).click();
+  await page.locator('#operator-settings-dialog button[value=close]').click(); await page.locator('#operator-settings-dialog').waitFor({ state: 'detached' });
   await menu(source, '允许此会话使用控制接口'); await until(async () => (await session(source)).operatorEnabled, 'Source explicitly enabled');
   if (process.env.NAW_TEST_OPERATOR_CARD === '1') return creationCardJourney();
   if (process.env.NAW_TEST_OPERATOR_QUOTA === '1') return quotaJourney();
   const args = { action_id: 'gui-one', provider: 'claude', cwd, task: 'Synthetic pending creation task', permission: 'default' };
   const pending = await tool(source, 'open', args); assert.equal(pending.status, 'pending-authorization');
-  await page.locator('.stream-waiting-lead').click();
-  const card = page.locator('#stream-waiting-list .operator-grant'); await card.waitFor();
+  const card = (await board().expandKind('operator-creation')).locator('.operator-grant'); await card.waitFor();
   if (process.env.NAW_TEST_OPERATOR_SPACE === '1') return spaceGrantJourney(card, args);
   await card.locator('input[type=number]').nth(0).fill('2'); await card.locator('input[type=number]').nth(1).fill('2');
   await card.locator('select').first().selectOption('custom');
   const expiry = new Date(Date.now() + 3600000); expiry.setMinutes(expiry.getMinutes() - expiry.getTimezoneOffset()); await card.locator('input[type=datetime-local]').fill(expiry.toISOString().slice(0, 16));
   await card.locator('input[type=checkbox]').check();
-  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en'); await page.locator('#close-setup').click();
+  await board().expandKind('operator-creation');
   await until(async () => await card.locator('button[type=submit]').textContent() === 'Allow and create', 'Grant labels repaint to English');
   assert.equal(await card.locator('input[type=number]').nth(0).inputValue(), '2'); assert.equal(await card.locator('input[type=checkbox]').isChecked(), true);
   // Nothing in the card keeps the earlier language: labels read their inner words when painted, not when the card was drawn.
@@ -296,8 +304,8 @@ async function run() {
     return texts.concat([...box.querySelectorAll('[aria-label]')].map(element => element.getAttribute('aria-label'))).filter(text => /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/.test(text));
   });
   assert.deepEqual(leftover, [], 'Nothing in the card stays in Chinese after the switch to English');
-  await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
-  if (await page.locator('#stream-waiting-list').isHidden()) await page.locator('.stream-waiting-more').click();
+  await board().close(); await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
+  await board().expandKind('operator-creation');
   await card.getByRole('button', { name: '允许并创建', exact: true }).click();
   await until(async () => (await state()).sessions.length === 2, 'Exactly one executor created');
   const created = await tool(source, 'open', args), executor = created.sessionId; assert.equal(created.status, 'created');
