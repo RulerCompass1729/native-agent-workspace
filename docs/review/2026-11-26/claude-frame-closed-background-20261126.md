@@ -46,3 +46,22 @@
   (one new test, red on the base), `install-electron-frames` 16/16 and `install-menu-inference` 22/22.
 - Not run: a strict pre against the daily GUI. That is the release operator's step.
 - Later, if needed: the GUI could report the window numbers it closed (a v5 proof) instead of geometry.
+
+## Review follow-up (00:26 PASS on c2f3fe47, three non-blocking notes)
+
+- `offscreenInference` in `check-install-state.cjs` capped only the total (65), so 65 closed background
+  windows alone passed while Python stops at 64. The new case failed on c2f3fe47 ("Missing expected
+  exception: 65 closed alone"). JS now has `CLOSED_BACKGROUND_LIMIT = 64` and keeps at most one other
+  window. A test reads the Python constant, so the two limits cannot drift apart.
+- `scripts/test-install-windows.cjs` asserted at most one offscreen window in total. It now applies the
+  gate's rule and lets closed background windows through.
+- The pre and compare table rows now name the 64 closed background windows next to "max 1".
+- `install-backend-version.cjs` (`check-install-state.cjs:207`) is resolved next to the gate itself, as
+  `install-state-reused-slot.test.cjs` asserts. Run from a checkout, both come from the same commit. A
+  copy of the gate run elsewhere without it refuses ("Backend version unconfirmed"), so it fails closed.
+
+Checks (author-run, no model calls): `install-offscreen-window` 7/7 (5/7 on c2f3fe47),
+`install-electron-frames` 16/16, `install-menu-inference` 22/22, `install-state-reused-slot` 21/21,
+`install-state-review` 10/10, `install-state` 25/25, `install-version-count` 11/11,
+`install-window-frame` 9/9, `runtime-closure-definition` 26/26, and the Python gate tests 23/23.
+Not run: `scripts/test-install-windows.cjs` needs a real Electron GUI. It was syntax-checked only.

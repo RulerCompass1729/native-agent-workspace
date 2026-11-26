@@ -1,5 +1,5 @@
 'use strict';
-const test = require('node:test'), assert = require('node:assert/strict');
+const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const gate = require('../../scripts/check-install-state.cjs');
 const frame = { x: 20, y: 40, width: 1200, height: 800 }, box = { x: 0, y: 940, width: 500, height: 500 };
 const proven = [{ bounds: box, basis: 'outside-electron' }], unproven = [{ bounds: box, basis: 'unproven' }];
@@ -47,7 +47,13 @@ test('background windows Electron already dropped do not count toward the one ou
   }
   const { pre, post, expected } = pair([], [...unproven, ...closed]);
   assert.equal(row(gate.compare(pre, post, expected))[3], false, 'a window without the v4 proof still refuses');
-  for (const bad of [[...proven, ...proven, ...closed], [...proven, ...Array(65).fill(closed[0])]]) assert.throws(() => gate.offscreenInference(bad));
+  assert.equal(gate.offscreenInference(Array(64).fill(closed[0])).length, 64);
+  for (const [name, bad] of [['two other windows', [...proven, ...proven, ...closed]], ['65 closed beside one', [...proven, ...Array(65).fill(closed[0])]],
+    ['65 closed alone', Array(65).fill(closed[0])]]) assert.throws(() => gate.offscreenInference(bad), /frame 口径待核实/, name);
+});
+test('the closed background limit is the one install-electron-frames.py applies', () => {
+  const python = fs.readFileSync(path.join(__dirname, '../../scripts/install-electron-frames.py'), 'utf8');
+  assert.equal(Number(python.match(/^CLOSED_BACKGROUND_LIMIT = (\d+)$/m)?.[1]), gate.CLOSED_BACKGROUND_LIMIT);
 });
 test('offscreen rows are strict: at most one, a known basis and a real rectangle', () => {
   assert.deepEqual(gate.offscreenInference(proven), proven);
