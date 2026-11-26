@@ -8,6 +8,7 @@ const { randomUUID } = require('node:crypto');
 const { readLayout } = require('./service-layout.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const backgroundOperation = require('./background-operation.cjs');
+const { interrupts } = require('./terminal-interrupt.cjs');
 const CAPABILITY = 'agentWakeV1', PREFLIGHT = 'agentWakePreflightV1', QUEUE_DONE = 'agentWakeQueueDoneV1', COOLDOWN = 60000, MAX_STREAK = 8;
 function root(w) { return w.peerRunner?.root() || (/^[a-f0-9]{20}$/.test(path.basename(w.dataDir)) && path.basename(path.dirname(w.dataDir)) === 'backends' ? path.dirname(path.dirname(w.dataDir)) : w.dataDir); }
 function marker(w, name) { return path.join(root(w), name); }
@@ -158,12 +159,6 @@ function arrivals(s) {
 function recipientInput(s, { control = 0, peer = 0 }) {
   const value = arrivals(s);
   recipientCounts.set(s, { ...value, control: value.control + control, peer: value.peer + peer });
-}
-// Esc anywhere in one piece of terminal input, or Esc or Ctrl-C as a key report (Ctrl-C's own byte is told apart before
-// this, workspace.cjs input). Arrow and editing keys, a paste's marks and an Option key (Esc and one character) are not.
-function interrupts(data) {
-  if (/^\x1b[^\x1b]$/u.test(data) && !/^\x1b[[O]$/.test(data)) return false;
-  return data.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|O[ -~])/g, key => /^\x1b\[(?:27;\d+;)?(?:27|67|99)(?:[;:][\d;:]*)?[u~]$/.test(key) ? '\x1b' : '').includes('\x1b');
 }
 function sourceIdentity(w, s) {
   const proof = identity(s), input = inputChanges.get(s);

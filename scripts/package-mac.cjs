@@ -273,6 +273,7 @@ async function build() {
       'temp-ownership.cjs',
       'temp-reminders.cjs',
       'terminal-continuation.js',
+      'terminal-interrupt.cjs',
       'terminal-keyboard.cjs',
       'text-paths.cjs',
       'ui-errors.cjs',

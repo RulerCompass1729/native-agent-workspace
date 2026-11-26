@@ -255,12 +255,19 @@ test('a stop that did not stop it: what goes out, or is scheduled for a later tu
   assert.deepEqual(stalls(later), [line(later, again)]);
 });
 test('what counts as a stop in the terminal is what the workspace takes for one, and the daily app passes it on', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../workspace.cjs'), 'utf8');
-  const found = /const interrupt = (data === .+);/.exec(source);
-  const workspace = Function('data', 'return ' + found[1]);
-  for (const data of ['', '\x1b', '\x03', 'a\x03b', '\x1b\x1b', '\x1b[A', '\x1bOA', '\x1b[<64;10;10M', 'words', '\r', '\x04']) {
-    assert.equal(rules.terminalInterrupt(data), workspace(data), JSON.stringify(data));
+  const stop = require('../terminal-interrupt.cjs');
+  // R207.1: Esc as a key report (CSI 27u / 99;5u) is the same person stop as Esc's own byte, in the
+  // dispatcher and in workspace.cjs; Ctrl-C's byte stays included, as before.
+  for (const data of ['\x1b', '\x1b[27u', '\x1b[27;1u', '\x1b[99;5u', '\x1b[27;5;99~', 'abc\x1b', '\x1b\x1b', 'a\x03b', '\x03']) {
+    assert.equal(stop.interrupt(data), true, JSON.stringify(data));
+    assert.equal(rules.terminalInterrupt(data), stop.interrupt(data), JSON.stringify(data));
   }
+  for (const data of ['', '\x1b[A', '\x1bOA', '\x1b[<64;10;10M', '\x1ba', 'words', '\r', '\x04']) {
+    assert.equal(stop.interrupt(data), false, JSON.stringify(data));
+    assert.equal(rules.terminalInterrupt(data), stop.interrupt(data), JSON.stringify(data));
+  }
+  const source = fs.readFileSync(path.join(__dirname, '../workspace.cjs'), 'utf8');
+  assert.match(source, /const interrupt = terminalInterrupt\(data\);/);
   for (const data of [undefined, null, 3, {}, ['\x1b']]) assert.equal(rules.terminalInterrupt(data), false);
   for (const data of ['\x1b', '\x03']) assert.equal(rules.terminalReplyOnly(data), false);
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');

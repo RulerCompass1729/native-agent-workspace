@@ -36,6 +36,7 @@ const cleanText = (value, max = 16000) => {
 // tool progress) are display only and must not change saved state.
 const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const wake = require('./session-wake.cjs');
+const { interrupt: terminalInterrupt } = require('./terminal-interrupt.cjs');
 // An interrupt the native side has not confirmed. When observed background work keeps the turn running (11-09: a
 // sub-agent held an interrupted Claude turn for 45 minutes behind a generic notice), say what, since when NAW saw
 // it, and where it can be stopped. Only what NAW observed: agent names from hook events, counts from the last report.
@@ -1984,7 +1985,7 @@ class Workspace extends EventEmitter {
     if (!response) {
       if (!backgroundOperation.current()) wake.human(this, id);
       this.cancelCapacity(id); this.pause('真人在原生终端操作', undefined, false, uiActivity('notice.run.humanTerminalAction')[1]); s.controlRevision++;
-      const interrupt = data === '\x1b' || data.includes('\x03');
+      const interrupt = terminalInterrupt(data);
       if (!backgroundOperation.current()) {
         this.terminalKeys.set(id, (this.terminalKeys.get(id) || 0) + 1);
         // Text, paste and editing keep the session's wake permission; native Esc/Ctrl-C still withdraw it.
