@@ -13,7 +13,7 @@ A desktop workspace where people can use their existing agents individually or t
 
 The central idea: **a native agent session has its own life. It can join a collaboration, leave it, and keep working.** A conversation view, terminal, window, and collaboration membership are different things.
 
-Initial target: macOS, Claude Code + Codex + a human. The Antigravity CLI (`agy`) can also run as a terminal-only member, with [narrower behavior and known limits](docs/readiness.md#antigravity-terminal-members-2026-11-24). Windows, Linux, and further agents remain architectural extension points.
+Initial target: macOS, Claude Code + Codex + a human. The Antigravity CLI (`agy`) can also run as a terminal-only member, with [narrower behavior and known limits](docs/readiness.md#antigravity-terminal-members-2026-11-24). pi on DeepSeek can run the same way once its pinned runtime is installed ([limits](docs/readiness.md#pi-terminal-members-2026-11-25)). Windows, Linux, and further agents remain architectural extension points.
 
 ## Status
 

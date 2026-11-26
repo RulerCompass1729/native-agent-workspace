@@ -1,6 +1,8 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { textPattern } = require('./fixtures/ui-text.cjs');
+// What waits for the person is counted on the task board's button (R250).
+const boardNeed = () => page.locator('.task-board-toggle .task-status-need');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
@@ -424,9 +426,9 @@ async function cleanup() {
         assert.ok((await snapshot()).sessions[0].nativeApproval?.requests.length, 'A held real dialog must remain reported');
         await page.locator('#chat-tab').click();
         assert.equal(await page.locator('#approval').isVisible(), true);
-        assert.equal(await page.locator('#stream-waiting').isVisible(), true);
+        assert.equal(await boardNeed().isVisible(), true);
         assert.match(await page.locator('#session-status').innerText(), /等待确认/);
-        fs.writeFileSync(path.join(base, 'held-surfaces.json'), JSON.stringify({ header: await page.locator('#session-status').innerText(), banner: await page.locator('#approval').innerText(), footer: await page.locator('#native-phase').innerText(), waiting: await page.locator('#stream-waiting').innerText() }, null, 2));
+        fs.writeFileSync(path.join(base, 'held-surfaces.json'), JSON.stringify({ header: await page.locator('#session-status').innerText(), banner: await page.locator('#approval').innerText(), footer: await page.locator('#native-phase').innerText(), waiting: await boardNeed().innerText() }, null, 2));
         await page.locator('#terminal-tab').click();
         assert.match(await rows(), /❯ 1\. Yes/);
       }
@@ -444,7 +446,7 @@ async function cleanup() {
       const running = (await snapshot()).sessions[0];
       fs.writeFileSync(path.join(base, 'running-terminal.txt'), await rows());
       await page.locator('#chat-tab').click();
-      const surfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await page.locator('#stream-waiting').isVisible() };
+      const surfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await boardNeed().isVisible() };
       fs.writeFileSync(path.join(base, 'running-surfaces.json'), JSON.stringify({ state: running.state, nativeApproval: running.nativeApproval, nativeInputRequired: running.nativeInputRequired, surfaces }, null, 2));
       console.log('RUNNING PERMISSION', JSON.stringify({ state: running.state, nativeApproval: running.nativeApproval, surfaces }));
       await page.locator('#terminal-tab').click();
@@ -464,7 +466,7 @@ async function cleanup() {
       const resumed = (await snapshot()).sessions[0];
       fs.writeFileSync(path.join(base, 'resumed-terminal.txt'), await rows());
       await page.locator('#chat-tab').click();
-      const resumedSurfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await page.locator('#stream-waiting').isVisible() };
+      const resumedSurfaces = { header: await page.locator('#session-status').innerText(), bannerVisible: await page.locator('#approval').isVisible(), footer: await page.locator('#native-phase').innerText(), waitingVisible: await boardNeed().isVisible() };
       const clearedAfterMs = Date.now() - backgroundedAt;
       fs.writeFileSync(path.join(base, 'resumed-surfaces.json'), JSON.stringify({ state: resumed.state, nativeApproval: resumed.nativeApproval, nativeInputRequired: resumed.nativeInputRequired, surfaces: resumedSurfaces, clearedAfterMs }, null, 2));
       console.log('RESUMED PERMISSION', JSON.stringify({ state: resumed.state, nativeApproval: resumed.nativeApproval, surfaces: resumedSurfaces }));

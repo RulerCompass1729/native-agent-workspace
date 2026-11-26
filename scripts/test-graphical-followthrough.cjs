@@ -57,7 +57,7 @@ const shot = async name => {
   fs.mkdirSync(evidence, { recursive: true });
   await page.screenshot({ path: path.join(evidence, name + '.png') });
   fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(await snapshot(), null, 2));
-  const ui = await page.evaluate(() => ({ privateDraft: document.querySelector('#message-input').value, sharedDraft: document.querySelector('#shared-input').value, shareOpen: document.querySelector('#share-dialog').open, shareText: document.querySelector('#share-text').value, shareRecipient: document.querySelector('#share-recipient').value, filter: document.querySelector('#room-filter').value, search: document.querySelector('#room-search').value }));
+  const ui = await page.evaluate(() => ({ privateDraft: document.querySelector('#message-input').value, sharedDraft: document.querySelector('#shared-input').value, shareOpen: document.querySelector('#share-dialog').open, shareText: document.querySelector('#share-text').value, shareRecipient: document.querySelector('#share-recipient').value, feedSearch: document.querySelector('#space-feed .feed-search')?.value ?? null, feedPeople: [...document.querySelectorAll('#space-feed .feed-person[aria-pressed="true"]')].map(b => b.dataset.person) }));
   fs.writeFileSync(path.join(evidence, name + '.ui.json'), JSON.stringify(ui, null, 2));
 };
 async function guards() { const values = await app.evaluate(() => globalThis.followthroughGuards); assert.deepEqual(values, { clipboard: 0, external: 0, dialogs: 0, maintenance: 0, replacement: 0 }); guardSamples.push(values); }
@@ -86,9 +86,19 @@ async function create(provider, name) {
   await page.getByRole('menuitem', { name: `移到「${shared.name}」`, exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(row => row.id === s.id).roomIds?.includes('shared'), 'Visible membership acknowledged'); return s.id;
 }
-async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
+// R248 ② merged the 记录 view into the 信息流 (R249): its rows are the feed's lines, and 「查看会话」 is a line's 「打开原会话」.
+async function room() { await page.locator('#room-nav').click(); await page.locator('#room-stream').click(); await page.locator('#space-feed .feed-list').waitFor(); }
+const feedLine = id => page.locator(`#space-feed .feed-list [data-feed-id="${id}"]`);
+const feedRows = () => page.locator('#space-feed .feed-list .feed-row');
+const feedSearch = () => page.locator('#space-feed .feed-search');
+const person = id => page.locator(`#space-feed .feed-person[data-person="${id}"]`);
+async function original(line) {
+  await line.waitFor();
+  if (!(await line.locator('details').evaluate(el => el.open))) await line.locator('summary').click();
+  return line.locator('.feed-original');
+}
 async function readableAction(button, label) {
-  await page.locator('#room-search').click(); await page.mouse.move(3, 3);
+  await feedSearch().click(); await page.mouse.move(3, 3);
   assert.ok(await button.isEnabled());
   const backgrounds = [];
   for (const colorScheme of ['light', 'dark']) {
@@ -155,26 +165,30 @@ async function run() {
   const draft = '明天再讨论行程安排，先不发送。'; await page.locator('#message-input').fill(draft);
   await shot('permission-and-draft');
   // The person chooses the existing native surface for this confirmation.
-  await page.locator('#terminal-tab').click(); const input = page.locator(`[data-terminal-id="${b}"] .xterm-helper-textarea`);
+  // A member view whose terminal is closed offers 打开终端 in place of the 终端 tab (renderPaneSwitches).
+  await page.locator(await page.locator('#terminal-tab').isVisible() ? '#terminal-tab' : '#open-native-terminal').click(); const input = page.locator(`[data-terminal-id="${b}"] .xterm-helper-textarea`);
   await input.waitFor({ state: 'attached' }); await input.focus(); await input.press('Enter');
   await until(async () => (await native()).inputs.some(i => i.id === b && i.data === '\r'), 'One native confirmation key');
   await native('event', { target: b, value: { method: 'serverRequest/resolved', params: { requestId: 11 } } });
   const result = '预算核查：午餐 54 元，交通 21 元，合计 75 元，人均 25 元。\n\n私人备注：明天再讨论行程。';
   await native('release', { text: result });
   await until(async () => (await snapshot()).room.messages.find(m => m.id === request.id)?.status === 'reply-private', 'Native intervention keeps completed answer private');
-  await room(); const row = page.locator(`#room-messages [data-message-id="${request.id}"]`);
-  await row.getByText('分享已失效，回复保留在原会话', { exact: true }).waitFor();
+  await room(); const row = feedLine('room:' + request.id); await row.waitFor();
+  // 「分享已失效，回复保留在原会话」 was the 记录 row's delivery state; the 信息流 shows no delivery states (11-26 record,
+  // follow-up 3, side finding 3). The state is the wait for 'reply-private' above, and shared-replies.test.cjs:163.
+  assert.equal(await row.locator('.feed-who').innerText(), '你 → 预算核查');
   assert.equal((await snapshot()).room.messages.some(m => m.text === result), false);
+  const viewResult = await original(row);
   if (process.env.NAW_EXPECT_NAVIGATION_GAP === '1') {
-    assert.equal(await row.getByRole('button', { name: '查看会话', exact: true }).isVisible(), false);
+    assert.equal(await viewResult.isVisible(), false);
     await shot('reproduced-missing-navigation'); console.log('REPRODUCED: private result exists, but its shared record hides the existing conversation action.'); return;
   }
-  await readableAction(row.getByRole('button', { name: '查看会话', exact: true }), 'directed-result-action');
-  await row.getByRole('button', { name: '查看会话', exact: true }).click();
+  await readableAction(viewResult, 'directed-result-action');
+  await viewResult.click();
   const answer = page.locator('#messages article').filter({ has: page.locator('.message-body', { hasText: result }) });
   await answer.waitFor(); assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.equal((await native()).sends.length, 1); await shot('private-result-found');
-  await check('Directed budget task → native confirmation → terminal intervention → private result is reachable from its shared record; same identity/draft, no automatic re-sharing');
+  await check('Directed budget task → native confirmation → terminal intervention → private result is reachable from its 信息流 line; same identity/draft, no automatic re-sharing');
   // Reuse the existing preview, selecting only what this next recipient needs.
   // Message actions appear while the pointer is over the message, as for a person.
   await answer.hover(); await answer.getByRole('button', { name: '选择并分享：Codex的回复', exact: true }).click();
@@ -188,20 +202,24 @@ async function run() {
   await until(async () => (await snapshot()).room.messages.some(m => m.text === summary), 'Explicit reply shared');
   assert.equal((await snapshot()).room.messages.some(m => m.text.includes('私人备注')), false);
   await check('Explicit preview edits and exact recipient share only selected result; private note/history never enters shared records or the other session');
-  await page.locator('#room-filter').selectOption(a); await page.locator('#room-search').fill('出游预算已核对');
-  await until(async () => await page.locator('#room-messages article').count() === 1, 'Exact result filter');
-  await page.locator('#copy-timeline').click(); const copied = await app.evaluate(() => global.copyValues.at(-1));
-  assert.ok(copied.includes(summary)); assert.ok(!copied.includes('私人备注'));
-  await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('已确认预算\n' + summary); await page.locator('#save-notes').click();
+  await person(a).click(); await feedSearch().fill('出游预算已核对');
+  await until(async () => await feedRows().count() === 1 && await person(a).getAttribute('aria-pressed') === 'true', 'Exact result filter');
+  // R248 ② took 复制 away with the 记录 view (follow-up 2 N5 deleted the hidden #copy-timeline); the 信息流 has no copy.
+  // What the person reads and selects is the filtered line, so its text gets the copy's check.
+  const filtered = feedRows().first(); await filtered.locator('summary').click(); const copied = await filtered.innerText();
+  assert.ok(copied.includes(summary), copied); assert.ok(!copied.includes('私人备注'), copied);
+  // 共享笔记 left with the 记录 toolbar (R248 ②); the space's menu opens it.
+  await page.locator('#room-header-more').click(); await page.getByRole('menuitem', { name: '共享笔记', exact: true }).click();
+  await page.locator('#room-notes-text').fill('已确认预算\n' + summary); await page.locator('#save-notes').click();
   await until(async () => (await snapshot()).room.notes === '已确认预算\n' + summary, 'Local note saved');
   // The latest notes event is this note: revealDefaultSpace saved an earlier one at launch (T-170).
   const noteId = (await snapshot()).room.events.findLast(e => e.kind === 'notes').id;
   await openSearchScope('room'); await page.locator('#search-input').fill('已确认预算');
   await page.locator(`[data-search-key="shared:${noteId}"]`).click();
-  await page.locator(`#room-messages [data-message-id="${noteId}"]`).waitFor();
+  await page.locator(`#space-feed .feed-list [data-feed-id="record:${noteId}"][data-search-target="true"]`).waitFor();
   assert.equal((await native()).sends.length, 2); await shot('local-result-note');
-  await check('Filter/copy the result, save shared notes and find the saved decision locally: zero additional model submissions');
-  await page.locator('#room-search').fill(''); await page.locator('#room-filter').selectOption('');
+  await check('Filter the result in the 信息流, read only the shared result there, save shared notes and find the saved decision locally: zero additional model submissions');
+  await feedSearch().fill(''); if (await person(a).getAttribute('aria-pressed') === 'true') await person(a).click();
   // A finite exchange has no directed-send row. Its pause record must keep the
   // exact waiting session reachable without turning private output into sharing.
   await inlineRecipient(page, a);
@@ -215,9 +233,10 @@ async function run() {
   await until(async () => (await snapshot()).room.run?.status === 'paused', 'Permission pauses exchange');
   const paused = (await snapshot()).room.messages.findLast(m => m.role === 'system' && m.runId);
   assert.equal(paused.sessionId, b);
-  const pauseRow = page.locator(`#room-messages [data-message-id="${paused.id}"]`);
-  assert.equal(await pauseRow.locator('.message-heading .message-author').innerText(), '协作');
-  const pauseAction = pauseRow.getByRole('button', { name: '查看会话', exact: true });
+  const pauseRow = feedLine('record:' + paused.id);
+  // The 记录 row's author was 「协作」; in the 信息流 it is a 通知 that names no speaker, so it is not b's words.
+  await pauseRow.waitFor(); assert.equal(await pauseRow.locator('.feed-kind').innerText(), '通知'); assert.equal(await pauseRow.locator('.feed-who').isVisible(), false);
+  const pauseAction = await original(pauseRow);
   await readableAction(pauseAction, 'paused-result-action');
   for (let tabs = 0; tabs < 80 && !(await pauseAction.evaluate(el => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
   assert.ok(await pauseAction.evaluate(el => el === document.activeElement && el.matches(':focus-visible')), 'Result action reachable with visible keyboard focus');
@@ -230,7 +249,7 @@ async function run() {
   await native('event', { target: b, value: { method: 'serverRequest/resolved', params: { requestId: 12 } } });
   const checked = '二次核验完成：75 元和人均 25 元都正确，未增加预算项目。';
   await native('release', { text: checked });
-  await room(); await pauseRow.getByRole('button', { name: '查看会话', exact: true }).click();
+  await room(); await (await original(pauseRow)).click();
   await findReply(b, checked);
   assert.equal((await snapshot()).room.messages.some(m => m.text === checked), false);
   assert.equal((await snapshot()).room.run.status, 'paused'); assert.equal((await native()).sends.length, 4);
@@ -264,7 +283,7 @@ async function run() {
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).archived, 'Session archived');
   await room();
-  await page.locator(`#room-messages [data-message-id="${request.id}"]`).getByRole('button', { name: '查看会话', exact: true }).click();
+  await (await original(feedLine('room:' + request.id))).click();
   await findReply(b, result); assert.equal(await page.locator('#message-input').getAttribute('readonly'), '');
   assert.equal((await snapshot()).sessions.find(s => s.id === b).archived, true);
   await page.getByRole('button', { name: '恢复会话', exact: true }).click();
@@ -278,7 +297,7 @@ async function run() {
   assert.deepEqual(after.room.messages, before.room.messages); assert.equal(after.room.notes, before.room.notes);
   await selectSession(b); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  const log = await native(); assert.equal(log.sends.length, 5); assert.equal(log.modelCalls, 0); assert.deepEqual(log.inputs, [{ id: b, data: '\r' }]); assert.deepEqual(log.decisions, [{ id: 12, result: { decision: 'accept' } }]); assert.deepEqual(errors, []); await guards(); assert.equal(copyBatches.flat().length + (await app.evaluate(() => global.copyValues)).length, 1, 'Only the explicit filtered copy used the in-memory clipboard');
+  const log = await native(); assert.equal(log.sends.length, 5); assert.equal(log.modelCalls, 0); assert.deepEqual(log.inputs, [{ id: b, data: '\r' }]); assert.deepEqual(log.decisions, [{ id: 12, result: { decision: 'accept' } }]); assert.deepEqual(errors, []); await guards(); assert.equal(copyBatches.flat().length + (await app.evaluate(() => global.copyValues)).length, 0, 'With no copy in the 信息流 (R248 ②), nothing used the in-memory clipboard');
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
   await check('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, five authorized synthetic submissions and no model calls');

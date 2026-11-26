@@ -5,7 +5,7 @@ const source = fs.readFileSync(path.join(root, 'app/renderer/renderer.js'), 'utf
 const locale = require('../ui-locale.js'), messages = require('../ui-messages.js');
 
 test('the wake chip persists, follows state and language, and opens the existing log from its detail', () => {
-  const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('  // A saved full-page records view', start);
+  const start = source.indexOf('function renderStewardWakeWarning('), end = source.indexOf('  // R248/R249: the shared record and', start);
   const p = { textContent: '' }, button = { textContent: '' }, step = { hidden: true }, summary = { setAttribute(k, v) { this[k] = v; } };
   const text = { textContent: '', setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; } };
   const parts = { p, summary, '.wake-chip-text': text, '.steward-wake-step': step, '.steward-wake-record': button }, box = { hidden: true, open: false, dataset: {}, querySelector: tag => parts[tag] };

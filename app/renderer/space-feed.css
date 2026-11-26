@@ -1,0 +1,68 @@
+/* R248/R249: a space's 总览 and 信息流 (space-feed.js), and the four fixed tabs above them. */
+#room-tabs #room-summary,#room-tabs #room-stream,#room-tabs #room-overview,#room-tabs #room-member{background:transparent;border-color:transparent;box-shadow:none;font-weight:500;border-radius:0;color:var(--muted)}
+#room-tabs #room-summary[aria-current=page],#room-tabs #room-stream[aria-current=page],#room-tabs #room-overview[aria-current=page],#room-tabs #room-member[aria-current=page]{font-weight:650;color:var(--ink);box-shadow:inset 0 -2px 0 var(--green)}
+#room-tabs #room-member{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.room-tab-badge{display:inline-block;min-width:16px;margin-left:5px;padding:0 5px;border-radius:8px;background:color-mix(in srgb,var(--agent-waiting) 18%,var(--raised));color:var(--approval-ink);font-size:11px;line-height:16px;text-align:center;font-weight:600}
+.room-tab-badge[hidden]{display:none}
+
+.space-feed,.space-summary{display:flex;flex-direction:column;flex:1;min-height:0}
+.space-feed[hidden],.space-summary[hidden]{display:none}
+.feed-tools{display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--border);flex:none;flex-wrap:wrap}
+.feed-seg,.feed-kinds{display:flex;background:var(--panel);padding:2px;border-radius:8px}
+.feed-seg button,.feed-kinds button{border:0;background:transparent;font-size:12px;padding:5px 11px}
+.feed-seg button[aria-pressed=true],.feed-kinds button[aria-pressed=true]{background:var(--raised);box-shadow:0 1px 4px #17251812;font-weight:600}
+.feed-search{margin-left:auto;width:min(260px,40%);padding:6px 10px;font-size:12px}
+.feed-people{display:flex;gap:4px;padding:6px 16px;border-bottom:1px solid var(--border);overflow-x:auto;flex:none;scrollbar-width:thin}
+.feed-person{flex:none;padding:3px 10px;font-size:12px;border-radius:999px;background:none;white-space:nowrap}
+.feed-person[aria-pressed=true]{background:var(--green);border-color:var(--green);color:white;font-weight:600}
+.feed-list{flex:1;min-height:0;overflow:auto;padding:4px 16px 20px;overscroll-behavior:contain}
+.feed-list:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+.feed-day{font-size:11px;color:var(--muted);font-weight:500;margin:14px 0 4px}
+.feed-row .disclosure-title{display:flex;align-items:baseline;gap:8px;min-width:0}
+.feed-kind{flex:none;min-width:34px;padding:0 6px;border-radius:4px;font-size:11px;line-height:18px;text-align:center;background:var(--panel);color:var(--muted)}
+.feed-kind.k-say,.feed-kind.k-reply{background:color-mix(in srgb,var(--agent-background) 14%,var(--raised));color:color-mix(in srgb,var(--agent-background) 70%,var(--ink))}
+.feed-kind.k-dispatch,.feed-kind.k-ready,.feed-kind.k-done,.feed-kind.k-answered{background:color-mix(in srgb,var(--agent-idle) 16%,var(--raised));color:color-mix(in srgb,var(--agent-idle) 60%,var(--ink))}
+.feed-kind.k-wait{background:color-mix(in srgb,var(--agent-waiting) 18%,var(--raised));color:var(--approval-ink);font-weight:600}
+.feed-space{flex:none;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}
+.feed-space[hidden],.feed-who[hidden]{display:none}
+.feed-who{flex:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.feed-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feed-body{white-space:pre-wrap;overflow-wrap:anywhere}
+.feed-original{margin-top:6px}
+.feed-original[hidden],.feed-answer[hidden]{display:none}
+.feed-row.feed-waiting{background:color-mix(in srgb,var(--agent-waiting) 6%,transparent)}
+.feed-answer{padding:3px 10px;font-size:12px;border-color:var(--approval-ink);color:var(--approval-ink)}
+.feed-empty{margin:40px auto;text-align:center}
+
+.space-summary{overflow:auto;padding:14px 18px 20px;gap:16px}
+.space-summary h3{font-size:13px;font-weight:600;margin:0 0 6px}
+.summary-waits{border:1px solid color-mix(in srgb,var(--agent-waiting) 40%,var(--border));border-radius:8px;padding:10px 12px;background:color-mix(in srgb,var(--agent-waiting) 5%,var(--raised))}
+.summary-waits[hidden],.summary-queue[hidden]{display:none}
+.summary-wait{display:flex;align-items:baseline;gap:10px;padding:4px 0;font-size:13px}
+.summary-question{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.summary-answer{padding:3px 10px;font-size:12px;border-color:var(--approval-ink);color:var(--approval-ink)}
+.summary-table{width:100%;border-collapse:collapse;font-size:13px;background:var(--raised);border:1px solid var(--border);border-radius:8px}
+.summary-table th{text-align:left;font-size:11px;font-weight:500;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--border)}
+.summary-table td{padding:4px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+.summary-table tr:last-child td{border-bottom:0}
+.summary-open{display:flex;align-items:center;gap:6px;border:0;background:none;padding:4px 0;font-weight:600;text-align:left}
+.summary-open .agent-icon{width:20px;height:20px;border-radius:6px;font-size:11px}
+.summary-tag{font-size:11px;font-weight:500;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.summary-state{white-space:nowrap}
+.summary-state.tone-working{color:color-mix(in srgb,var(--agent-working) 75%,var(--ink))}
+.summary-state.tone-waiting{color:var(--approval-ink);font-weight:600}
+.summary-state.tone-idle{color:color-mix(in srgb,var(--agent-idle) 75%,var(--ink))}
+.summary-state.tone-other{color:var(--muted)}
+.summary-item,.summary-last{max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.summary-item{width:30%}.summary-last{width:34%}
+.summary-id{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);margin:0 6px}
+.summary-time{white-space:nowrap;font-variant-numeric:tabular-nums}
+.summary-queue{margin:0;font-size:13px;display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;line-height:1.6}
+.summary-queue button{margin-left:8px}
+
+/* R247: the open space keeps its place in the left list and is highlighted there. */
+.session-space-group.current-space{background:color-mix(in srgb,var(--green) 6%,transparent);box-shadow:inset 3px 0 var(--green);border-radius:6px}
+/* The open member keeps the selected row's look (review 1, F3). */
+.session-row.in-current-space{box-shadow:inset 3px 0 var(--green)}
+.session-row.in-current-space:not(.active){background:color-mix(in srgb,var(--green) 6%,transparent)}
+@media(max-width:899px){.feed-tools,.feed-people{padding-inline:10px}.feed-list{padding-inline:10px}.feed-search{width:100%;margin-left:0}}

@@ -351,11 +351,31 @@ function undelivered(w, s, r, args, error) {
   try { w.changed?.(s?.id); } catch { /* Shown with the next state. */ }
   return true;
 }
-// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4).
-function unbound(w, s, r, recipientId) { return undelivered(w, s, r, { recipient_id: recipientId }, { sourceIssue: 'root-turn-unbound' }); }
+// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4). `butler` is kept
+// as the butler's session, which is what butler-ingress.cjs observeWakeUndelivered looks for.
+function unbound(w, s, r, recipientId) {
+  let to = { recipient_id: recipientId };
+  try {
+    to = addressed(w, to);
+  } catch {
+    // No butler now: kept as it was written.
+  }
+  return undelivered(w, s, r, to, { sourceIssue: 'root-turn-unbound' });
+}
+// R253 (the person, 2026-11-25: 「说明你和大管家之间的交流不畅」): a space's manager is shown no butler and the board
+// names it by eight characters, so `butler` addresses the butler the person designated, as it is now.
+const BUTLER = 'butler';
+function addressed(w, args) {
+  if (args?.recipient_id !== BUTLER) return args;
+  let steward = null;
+  try { steward = stewardNow(w); } catch { /* A designation that cannot be read names nobody. */ }
+  if (!steward) throw uiError('error.wake.noButler');
+  return { ...args, recipient_id: steward.sessionId };
+}
 function stage(w, s, r, native, args) {
-  try { return stageCall(w, s, r, native, args); }
-  catch (error) { undelivered(w, s, r, args, error); throw error; }
+  let to = args;
+  try { to = addressed(w, args); return stageCall(w, s, r, native, to); }
+  catch (error) { undelivered(w, s, r, to, error); throw error; }
 }
 // The refused turn's error names its change; with none, the same refusal as before.
 function issueCause(w, s, issue, intent, since) {
@@ -375,11 +395,13 @@ function stageCall(w, s, r, native, args) {
     if (pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return ['staged', 'not-sent'].includes(row?.wake?.status) ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });
     throw uiError("error.wake.turnAlreadyRequested");
   }
-  // Any earlier call of the turn refuses everyone else's next, as before. For the butler, one that failed before
-  // anything was registered does not count (a registered one is counted from its row in stageOnce).
-  if (turn) {
+  // A call of the turn that failed before anything was registered does not count, for any sender (R253: a manager's
+  // retry with the right id was refused); a registered one is counted from its row in stageOnce. One still under way
+  // refuses everyone else's next, as before.
+  const counted = turn ? turn.calls.filter(call => !call.failed) : [];
+  if (counted.length) {
     if (!isSteward(w, s)) throw uiError("error.wake.turnAlreadyRequested");
-    stewardLimit(turn.calls.filter(call => !call.failed).map(call => call.recipient), args?.recipient_id);
+    stewardLimit(counted.map(call => call.recipient), args?.recipient_id);
   }
   const promise = stageOnce(w, s, r, native, args);
   const call = { callId: native?.callId, recipient: args?.recipient_id, body: args?.message, promise, failed: false };

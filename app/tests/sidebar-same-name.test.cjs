@@ -30,8 +30,8 @@ test('it counts sessions, and changes nothing it is given', () => {
 });
 test('the sidebar marks the row from the listed sessions, once per render', () => {
   const render = section('function renderSessions() {', '\nfunction ');
-  // 11-23: in a space the listed sessions are its members, so the set follows whichever list is shown.
-  assert.ok(render.includes("const visible = selected === 'room' ? orderedMembers() : sidebarSessions();") && render.includes('const positions = new Map(), repeated = sameNameSessions(visible);'), 'The set comes from the sessions listed in the sidebar, not from grouped occurrences');
+  // R247 (11-25): a space keeps the same left list, so the set always comes from it.
+  assert.ok(render.includes("const visible = sidebarSessions(), openSpace = selected === 'room' ? spaceId : null;") && render.includes('const positions = new Map(), repeated = sameNameSessions(visible);'), 'The set comes from the sessions listed in the sidebar, not from grouped occurrences');
   assert.ok(render.includes("row.element.classList.toggle('same-name', repeated.has(record.id));"), 'Every row update sets or clears the mark');
   assert.equal(render.split('sameNameSessions(').length - 1, 1);
 });

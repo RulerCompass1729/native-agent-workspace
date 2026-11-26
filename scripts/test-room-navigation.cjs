@@ -46,7 +46,16 @@ function fixture(method, target, value, navigation = false) {
   });
 }
 const snapshot = () => client.call('initial'), uiState = () => page.evaluate(() => workspace.initial());
-const tab = id => page.locator(`#room-member-tabs [data-room-session="${id}"]`);
+// R248 ③: the left list switches members; the member tabs above the main area are always hidden (renderer.js render).
+const row = id => page.locator(`#session-list .session-row[data-session-row="${id}"]`);
+const tab = id => row(id).locator('.session-link');
+const member = id => row(id).evaluate(el => el.classList.contains('in-current-space'));
+const person = id => page.locator(`#space-feed .feed-person[data-person="${id}"]`);
+const feedRows = () => page.locator('#space-feed .feed-list [data-feed-id]'), feedText = () => page.locator('#space-feed .feed-list').innerText();
+const feedSearch = () => page.locator('#space-feed .feed-search');
+const onTab = async id => (await page.locator(id).getAttribute('aria-current')) === 'page';
+// A member view whose terminal is closed offers 打开终端 in place of the 终端 tab (renderPaneSwitches).
+const showTerminal = async () => page.locator(await page.locator('#terminal-tab').isVisible() ? '#terminal-tab' : '#open-native-terminal').click();
 async function capture(name) { await page.screenshot({ path: path.join(evidence, name + '.png') }); }
 async function readableMember(label) {
   assert.equal(await page.locator('#collaboration-overview').isVisible(), false, 'Stable tabs replace the duplicate overview ribbon in the full view');
@@ -82,6 +91,10 @@ async function launch() {
   await page.locator('#new-session').waitFor(); const initial = await uiState();
   assert.equal(initial.servicePid, child.pid); assert.equal(initial.runtimeVersion, require('../package.json').version); assert.equal(initial.services.length, 1);
 }
+// A product gap found while rewriting this script for R248 (11-26 record, follow-up 3): reported, not fixed in a test-only
+// change. The check goes on so later checks still report, and the run fails at the end while any gap is open.
+const gaps = [];
+function gap(ok, message) { if (ok) return; gaps.push(message); console.log('OPEN GAP ' + message); }
 async function checked(name, body) { assert.ok(checks.length < 5); await body(); await noUnexpectedCalls(await fixture('stats')); checks.push(name); fs.writeFileSync(path.join(evidence, 'checks.json'), JSON.stringify(checks, null, 2)); console.log('PASS', name); }
 async function run() {
   profile = fs.realpathSync(scratch.directory(path.join(os.tmpdir(), 'naw-room-navigation-')));
@@ -94,21 +107,27 @@ async function run() {
   new RoomState(profile);
   fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner, active: true, selected: 'room', mode: 'chat', spaceId: 'shared', roomViews: { shared: { roomSurface: 'records', roomFilter: 'synthetic-departed-member', roomSearch: 'retained', sharedDraft: 'Shared unsent' } } }]), { mode: 0o600 });
   await launch();
-  await checked('1 historical scope is explicit and recent-all restores the original history without changing the draft', async () => {
-    await until(async () => await page.locator('#room-filter').inputValue() === 'synthetic-departed-member', 'Saved historical filter restored');
-    assert.equal(await page.locator('#room-member-tabs button').count(), 3); assert.equal(await page.locator('#room-record-scope').isVisible(), true);
+  await checked('1 a saved 记录 view opens on the 总览; the 信息流 finds the departed member\'s record and keeps its words; the draft is unchanged', async () => {
+    // R248 ①: a space opens on its 总览 whatever was saved. views.json above saves the 记录 view, which R248 ② removed.
+    await until(async () => await onTab('#room-summary') && await page.locator('#space-summary').isVisible(), 'Saved 记录 view opens the 总览');
+    assert.equal(await page.locator('#space-summary .summary-row').count(), 3);
     const unknownLabels = ['zh', 'en'].map(language => require('../app/ui-locale.js').format(language, 'collab.contextUnknown'));
-    const unknownLabel = await tab(ids[2]).getAttribute('aria-label');
-    assert.ok(unknownLabels.some(label => unknownLabel.includes(label)), 'Unknown native context remains visible when the old ribbon is hidden');
-    assert.equal(await page.locator('#room-messages [data-message-id]').count(), 1);
-    await page.locator('#room-record-clear').click(); assert.equal(await page.locator('#room-filter').inputValue(), '');
-    assert.equal(await page.locator('#room-messages [data-message-id]').count(), 5);
-    await page.locator('#room-record-restore').click(); assert.equal(await page.locator('#room-filter').inputValue(), 'synthetic-departed-member');
-    assert.equal(await page.locator('#room-search').inputValue(), 'retained'); assert.equal(await page.locator('#shared-input').inputValue(), 'Shared unsent');
+    const unknownLabel = await page.locator(`#space-summary .summary-row[data-session-id="${ids[2]}"] .summary-state`).innerText();
+    assert.ok(unknownLabels.some(label => unknownLabel.includes(label)), 'Unknown native context remains visible: ' + unknownLabel);
+    // R248 ②/R249: the 记录 view's member filter and search are the 信息流's names and search box; its 清除/恢复 pair went with it.
+    await page.locator('#room-stream').click();
+    await feedSearch().fill('Synthetic retained historical'); await until(async () => await feedRows().count() === 1, 'Departed member record found');
+    assert.match(await feedText(), /Synthetic retained historical record/);
+    await feedSearch().fill(''); await until(async () => await feedRows().count() > 1, 'Every line');
+    for (const text of ['Synthetic manual request to member A', 'Synthetic unrelated request to B', 'Synthetic retained historical record']) assert.ok((await feedText()).includes(text), text);
+    await feedSearch().fill('retained'); await page.locator('#room-summary').click(); await page.locator('#room-stream').click();
+    assert.equal(await feedSearch().inputValue(), 'retained', 'The search words stay across tabs');
+    assert.equal(await page.locator('#shared-input').inputValue(), 'Shared unsent');
+    await feedSearch().fill('Synthetic');
     await chooseRecipient(page, ids[0]); await capture('01-history-scope');
   });
   const sharedDraft = await page.locator('#shared-input').inputValue();
-  await checked('2 full member -> related records -> all recent -> return retains reading, mode, recipient and both drafts', async () => {
+  await checked('2 full member -> related exchanges -> search -> back to the member retains reading, mode, recipient and both drafts', async () => {
     await tab(ids[0]).click(); await until(async () => (await uiState()).viewState.roomSession === ids[0], 'A full view');
     await readableMember('three-member full view');
     await tab(ids[1]).focus();const originalTab=await tab(ids[1]).elementHandle();await page.evaluate(([id,name])=>workspace.rename(id,name),[ids[1],'Synthetic route B · renamed']);
@@ -117,72 +136,85 @@ async function run() {
     await page.locator('#message-input').evaluate(el => el.setSelectionRange(3, 8));
     await page.locator('#messages').evaluate(el => { el.scrollTop = Math.floor(el.scrollHeight / 3); });
     const before = await page.locator('#messages').evaluate(el => el.scrollTop); assert.ok(before > 0);
-    await page.locator('#member-related-records').click(); assert.equal(await page.locator('#room-search').isVisible(), false);
+    // 相关往来 opens the 信息流 on this member (space-feed.js showPerson).
+    await page.locator('#member-related-records').click();
+    await until(async () => await onTab('#room-stream') && await person(ids[0]).getAttribute('aria-pressed') === 'true', 'Feed on A');
     assert.equal(await page.locator('#collaboration-overview').isVisible(), false, 'Shared records do not repeat the overview ribbon');
-    assert.equal(await page.locator('#room-search').inputValue(), 'retained'); assert.equal(await page.locator('#room-messages [data-message-id]').count(), 3);
+    assert.equal(await feedSearch().inputValue(), 'Synthetic', 'The search words stay');
+    const related = await feedText();
+    assert.ok(related.includes('Synthetic manual request to member A') && !related.includes('Synthetic unrelated request to B'), 'Only A\'s lines: ' + related);
     assert.equal(await page.locator('#shared-input').inputValue(), sharedDraft);
-    const wakeText=await page.locator('#room-messages').innerText();assert.ok(wakeText.includes('Synthetic waiting message from B to A'));
-    assert.ok(["The sender’s original message could not be verified","The sender's original message could not be verified",'无法核对发送方的原消息'].some(text=>wakeText.includes(text)),'Missing original wake stays unconfirmed without falsely claiming the sender was removed');
+    assert.ok(related.includes('Synthetic waiting message from B to A'), 'The wake from B to A is one of A\'s lines: ' + related);
+    const wakeLine = await page.locator('#space-feed .feed-row', { hasText: 'Synthetic waiting message from B to A' }).innerText();
+    gap(["The sender’s original message could not be verified","The sender's original message could not be verified",'无法核对发送方的原消息'].some(text=>wakeLine.includes(text)),'Missing original wake stays unconfirmed without falsely claiming the sender was removed: ' + wakeLine);
     await capture('02-related-records');
     await page.locator('#search-button').click();await page.locator('#search-input').fill('Synthetic unrelated request to B');
     await until(async()=>await page.locator('#search-results button').count()===1,'One unique shared-record search result');await page.locator('#search-results button').click();
-    assert.equal(await page.locator('#room-messages [data-search-target="true"]').count(),1,'Explicit searched record becomes visible outside the prior related scope');
-    await page.locator('#return-reading').click();await until(async()=> (await uiState()).viewState.roomViews.shared.roomRecordScope===ids[0],'Search returns to original related member scope');
-    assert.equal(await page.locator('#room-messages [data-message-id]').count(),3);assert.equal(await page.locator('#shared-input').inputValue(),sharedDraft);
-    await page.locator('#room-record-clear').click(); assert.equal(await page.locator('#room-messages [data-message-id]').count(), 5);
-    await page.locator('#room-record-return').click();
+    assert.equal(await page.locator('#space-feed [data-search-target="true"]').count(),1,'Explicit searched record becomes visible outside the prior related scope');
+    await page.locator('#return-reading').click(); await until(async () => await onTab('#room-stream'), 'Search returns to the 信息流');
+    let restored = false;
+    for (let i = 0; i < 20 && !restored; i++) { restored = await person(ids[0]).getAttribute('aria-pressed') === 'true' && await feedSearch().inputValue() === 'Synthetic'; if (!restored) await pause(50); }
+    gap(restored, 'Search returns to the 信息流 on A with its words: pressed ' + JSON.stringify(await page.locator('#space-feed .feed-person[aria-pressed="true"]').allTextContents()) + ', search ' + JSON.stringify(await feedSearch().inputValue()));
+    if (restored) assert.ok(!(await feedText()).includes('Synthetic unrelated request to B'));
+    assert.equal(await page.locator('#shared-input').inputValue(),sharedDraft);
+    const words = await feedSearch().inputValue();
+    if (await person(ids[0]).getAttribute('aria-pressed') === 'true') await person(ids[0]).click();
+    await until(async () => (await feedText()).includes('Synthetic unrelated request to B'), 'Every member\'s lines');
+    // The 成员 tab names A and returns to it, in place of the removed 返回 button.
+    assert.match(await page.locator('#room-member').innerText(), /Synthetic route A/); await page.locator('#room-member').click();
     await until(async () => Math.abs((await page.locator('#messages').evaluate(el => el.scrollTop)) - before) <= 2, 'Exact member reading position restored');
     assert.equal(await page.locator('#message-input').inputValue(), 'Private unsent 0');
     assert.deepEqual(await page.locator('#message-input').evaluate(el => [el.selectionStart, el.selectionEnd]), [3, 8]);
     const kept = (await uiState()).viewState.roomViews.shared; assert.equal(kept.roomRecipient, ids[0]); assert.equal(kept.sharedDraft, sharedDraft);
-    assert.equal(kept.roomFilter, 'synthetic-departed-member'); assert.equal(kept.roomSearch, 'retained');
+    // kept.roomFilter/roomSearch belong to the removed 记录 view (11-26 record, side finding 4); the 信息流 keeps its own words.
+    assert.equal(await feedSearch().inputValue(), words);
   });
-  await checked('3 explicit native viewing is remembered, while subsequent tab and record navigation does not take control', async () => {
+  await checked('3 explicit native viewing is remembered, while subsequent member and related navigation does not take control', async () => {
     await noUnexpectedCalls(await fixture('stats'));
-    await page.locator('#terminal-tab').click(); await until(async () => (await uiState()).viewState.mode === 'terminal', 'Explicit native view');
+    await showTerminal(); await until(async () => (await uiState()).viewState.mode === 'terminal', 'Explicit native view');
     await fixture('output', ids[0], { data: '\x1b[2J\x1b[HOWNED NAVIGATION DISPLAY\r\n' });
     await nativeDisplay(ids[0], '06-explicit-native-display', false);
     passiveBaseline = { ...(await fixture('stats')).overviewCalls };
     await tab(ids[1]).click(); await until(async () => (await uiState()).viewState.roomSession === ids[1], 'B full view');
     await tab(ids[0]).click(); await until(async () => (await uiState()).viewState.mode === 'terminal', 'A native view restored');
     await nativeDisplay(ids[0], '07-tab-restored-native-display');
-    await page.locator('#member-related-records').click(); await page.locator('#room-record-return').click();
-    await until(async () => (await uiState()).viewState.mode === 'terminal', 'Native view restored after related records');
+    await page.locator('#member-related-records').click(); await page.locator('#room-member').click();
+    await until(async () => (await uiState()).viewState.roomSession === ids[0] && (await uiState()).viewState.mode === 'terminal', 'Native view restored after related records');
     await nativeDisplay(ids[0], '08-related-restored-native-display');
     await noUnexpectedCalls(await fixture('stats'));
   });
-  await checked('4 three/four/five members share stable tabs; narrow names remain accessible and removal rejects the old return target', async () => {
-    for (const [index, id] of ids.slice(3).entries()) { await client.call('join', id, true); await until(async () => await page.locator('#room-member-tabs button').count() === index + 4, 'New member tab'); }
+  await checked('4 three/four/five members are on the left list; narrow names remain accessible and removal rejects the old return target', async () => {
+    for (const [index, id] of ids.slice(3).entries()) { await client.call('join', id, true); await until(async () => await page.locator('#session-list .session-row.in-current-space').count() === index + 4, 'New member row'); }
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(820, 720); });
-    await page.locator('#room-overview').focus(); await page.locator('#room-overview').press('End'); assert.equal(await tab(ids[4]).evaluate(el => el === document.activeElement), true);
+    // R248 ③: the four tabs take the arrow keys; End reaches 成员 and moves focus only.
+    await page.locator('#room-overview').focus(); await page.locator('#room-overview').press('End'); assert.equal(await page.locator('#room-member').evaluate(el => el === document.activeElement), true);
     assert.equal((await uiState()).viewState.roomSession, ids[0], 'Arrow navigation moves focus only');
     await tab(ids[4]).press('Enter'); await until(async () => (await uiState()).viewState.roomSession === ids[4], 'Fifth member active');
     await readableMember('five-member narrow full view');
     for (const id of ids) assert.ok((await tab(id).getAttribute('aria-label')).includes('Synthetic route'));
     const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
-    for (const box of await page.locator('#room-member-tabs button').evaluateAll(elements => elements.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.width > 0 && box.left >= -1 && box.right <= viewport.width + 1 && box.top >= 0 && box.bottom <= viewport.height);
+    for (const id of ids) { await tab(id).scrollIntoViewIfNeeded(); const box = await tab(id).evaluate(el => el.getBoundingClientRect().toJSON()); assert.ok(box.width > 0 && box.left >= -1 && box.right <= viewport.width + 1 && box.top >= 0 && box.bottom <= viewport.height, 'Left row inside the window: ' + JSON.stringify(box)); }
     await capture('03-five-members-narrow'); await page.locator('#member-related-records').click();
-    await client.call('join', ids[4], false); await until(async () => await page.locator('#room-record-return').isDisabled(), 'Removed member cannot be returned to');
-    assert.equal(await page.locator('#room-record-scope').isVisible(), true); await capture('04-removed-member');
-    await page.locator('#room-record').click();
+    // No 返回 button is left: the 成员 tab stops naming the removed member and its left row leaves the space.
+    await client.call('join', ids[4], false); await until(async () => !(await page.locator('#room-member').innerText()).includes('Synthetic route E') && !(await member(ids[4])), 'Removed member cannot be returned to');
+    assert.equal(await onTab('#room-stream'), true); await capture('04-removed-member');
+    await page.locator('#room-stream').click();
     await tab(ids[1]).click();await client.call('join',ids[1],false);
-    await until(async()=>await tab(ids[1]).count()===0,'Focused member removed');
-    assert.equal(await page.locator('#room-tabs button').evaluateAll(elements=>elements.filter(el=>!el.hidden&&el.tabIndex===0&&['room-overview','room-record'].includes(el.id)||el.dataset.roomSession&&el.tabIndex===0).length),1,'After selected-member removal exactly one navigation button remains a keyboard entry');
-    await client.call('join',ids[1],true);await until(async()=>await tab(ids[1]).count()===1,'Same native member rejoins');
-    await page.locator('#room-record').click();
+    await until(async()=>!(await member(ids[1])),'Focused member removed');
+    assert.equal(await page.locator('#room-tabs button').evaluateAll(elements=>elements.filter(el=>!el.hidden&&el.tabIndex===0&&['room-summary','room-stream','room-overview','room-member'].includes(el.id)||el.dataset.roomSession&&el.tabIndex===0).length),1,'After selected-member removal exactly one navigation button remains a keyboard entry');
+    await client.call('join',ids[1],true);await until(async()=>await member(ids[1]),'Same native member rejoins');
+    await page.locator('#room-stream').click();
   });
-  if (!layoutOnly) await checked('5 closing during recent-all preview retains canonical history, original native records and drafts on ordinary owned reopen', async () => {
-    await page.locator('#room-record-clear').click(); assert.equal(await page.locator('#room-filter').inputValue(), '');
-    assert.equal(await page.locator('#room-record-restore').isVisible(), true);
-    await until(async () => (await uiState()).viewState.roomViews.shared.roomFilter === 'synthetic-departed-member', 'Canonical history retained while previewing recent records');
+  if (!layoutOnly) await checked('5 closing while a search result is open retains original native records and drafts on ordinary owned reopen; the reopened window opens the 总览', async () => {
+    await feedSearch().fill('retained');
     await page.locator('#search-button').click();await page.locator('#search-input').fill('Synthetic unrelated request to B');
-    await until(async()=>await page.locator('#search-results button').count()===1,'Unique result while previewing recent-all');await page.locator('#search-results button').click();
-    assert.equal(await page.locator('#room-messages [data-search-target="true"]').count(),1);
-    assert.equal((await uiState()).viewState.roomViews.shared.roomFilter,'synthetic-departed-member','Opening a result without Return preserves canonical history on save');
+    await until(async()=>await page.locator('#search-results button').count()===1,'Unique result before closing');await page.locator('#search-results button').click();
+    assert.equal(await page.locator('#space-feed [data-search-target="true"]').count(),1);
     await capture('09-recent-preview-before-close');
     await app.close(); app = null; pageReads = (await fixture('stats')).snapshotReads.length; await launch();
-    await until(async () => await page.locator('#room-filter').inputValue() === 'synthetic-departed-member', 'Original history after reopen');
-    assert.equal(await page.locator('#room-record-return').isVisible(), false); assert.equal(await page.locator('#room-search').inputValue(), 'retained');
+    // R248 ①: it opens the 总览 and does not keep the last view; the 信息流's names and words are not saved.
+    await until(async () => await onTab('#room-summary'), 'Reopen lands on the 总览');
+    assert.equal(await page.locator('#return-reading').isVisible(), false); await page.locator('#room-stream').click(); assert.equal(await feedSearch().inputValue(), '');
     assert.equal(await page.locator('#shared-input').inputValue(), sharedDraft); assert.equal((await uiState()).viewState.roomViews.shared.roomRecipient, ids[0]);
     const after = await snapshot(); assert.deepEqual(after.sessions.map(s => [s.id, s.nativeId]), original);
     assert.deepEqual(after.sessions.map(s => s.liveDraft), ids.map((_, i) => `Private unsent ${i}`));
@@ -194,7 +226,8 @@ async function run() {
   assert.deepEqual(finalRecords.map(s => s.liveDraft), ids.map((_, i) => `Private unsent ${i}`));
   const final = await fixture('stats'); await noUnexpectedCalls(final);
   assert.equal(checks.length, layoutOnly ? 4 : 5); assert.deepEqual(errors, []); assert.deepEqual(sourceHashes(), frozen);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks: checks.slice(), scope: layoutOnly ? 'targeted-layout-no-reopen' : 'five-complete-journeys', launches, activeSeconds: (Date.now() - started) / 1000, original, finalRecords, final, errors, layoutReadings, source: frozen }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ gaps, checks: checks.slice(), scope: layoutOnly ? 'targeted-layout-no-reopen' : 'five-complete-journeys', launches, activeSeconds: (Date.now() - started) / 1000, original, finalRecords, final, errors, layoutReadings, source: frozen }, null, 2));
+  assert.deepEqual(gaps, [], 'Open product gaps');
 }
 const cleanup = scratch.cleanup(async () => { if (app) await app.close(); client?.close(); if (child?.connected) child.disconnect(); if (child && child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); } });
 Promise.race([run(), new Promise((_, reject) => { deadline = setTimeout(() => { expired = true; reject(Error('Owned navigation GUI cap exhausted')); }, layoutOnly ? 120000 : 180000); })]).catch(async error => {

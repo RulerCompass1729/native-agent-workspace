@@ -11,6 +11,7 @@ const { RoomState } = require('../room-state.cjs');
 const { SessionLabels } = require('../session-labels.cjs');
 const uiLocale = require('../ui-locale.js');
 const { StewardRole } = require('../steward-role.cjs');
+const { SpaceManagers } = require('../space-managers.cjs');
 const { QuietWindows } = require('../quiet-windows.cjs');
 
 const HOUR = 60 * 60 * 1000;
@@ -4460,7 +4461,7 @@ async function mainNames(sandbox) {
   const from = main.indexOf('async function startQueueDispatcher()'), end = main.indexOf('async function broadcastRoom()', from);
   let handed = null;
   Object.assign(sandbox, { queueDispatcher: null, dataDir: '', process: { env: {} }, backgroundTest: false, roomState: {}, personClient() {}, broadcastRoom() {}, notifyRotation() {},
-    creationDefaults: {}, observePersonActions() {}, stewardWake: null, answerNotices: null, versionNotices: null, quietWindows: null,
+    creationDefaults: {}, observePersonActions() {}, stewardWake: null, answerNotices: null, versionNotices: null, managerNotices: null, quietWindows: null,
     QueueDispatcher: class { constructor(options) { handed = options.labels; } async start() {} } });
   vm.createContext(sandbox);
   await vm.runInContext(main.slice(from, end) + '\nstartQueueDispatcher()', sandbox);
@@ -6692,6 +6693,94 @@ test('R206: someone always at it is never cut off', async t => {
   assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 0); assert.deepEqual(eventsOf(f), []); assert.equal(f.role.current().sessionId, 'a');
   assert.ok(ROWS(f).length < 12, 'a wait is not a line per pass');
   assert.deepEqual(stalls, [['a', 'content', 'person-quiet']], 'a long wait is one line in the butler\'s record');
+});
+
+// R254 (the person, 2026-11-25: 「貌似 NAW 新需求的项目经理继任又失败了?」「为啥也没修复也没提醒」): a space's manager
+// rotated while the person kept talking in the old session; the addition waited at person-quiet for two hours, and the
+// role with it, while the successor was already sent the manager's work.
+test('R254: a manager whose old session the person keeps using hands the role over at the handoff, not after the addition', async t => {
+  const f = await handedOver(t, { butler: false });
+  const managers = new SpaceManagers(f.dir);
+  managers.set('shared', { sessionId: 'a', nativeId: 'native-a' });
+  const records = () => f.client.state.sessions, labels = new Map([[f.newId, 'Manager next']]);
+  const oldActor = { id: 'a', nativeId: 'native-a' };
+  for (let i = 0; i < 6; i += 1) {
+    f.person(`第 ${i} 句`); await f.pass();
+    const next = { sessionId: f.newId, nativeId: f.session(f.newId).nativeId };
+    assert.deepEqual(managers.current('shared'), next, `at once, and while the person talks (${i})`);
+    assert.equal(managers.creator({ id: f.newId, nativeId: next.nativeId }, 'shared', null, records(), labels).sessionId, f.newId);
+    assert.throws(() => managers.creator(oldActor, 'shared', null, records(), labels),
+      error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes('经理已经交给 Manager next'));
+    assert.deepEqual([...managers.activeIds(records())], [f.newId], 'one manager in the space');
+    assert.deepEqual(managers.settle(), [], 'confirmed only: followed, not yet written into the record');
+    await f.pass(29);
+  }
+  assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 0); assert.deepEqual(eventsOf(f), [], 'still waiting: nothing done or kept');
+  assert.ok(gatesOf(f).includes('person-quiet'), 'held where the person found it');
+  assert.equal(ROWS(f).filter(e => e.event === 'handed').length, 1, 'one line at the handoff, not one per pass');
+  // The person stops; the addition is told and the old session ended, as before.
+  await f.pass(31);
+  await supplemented(f); finished(f);
+  assert.equal(managers.current('shared').sessionId, f.newId);
+  // R254 ①: finished, the record names the successor itself; the ended old session adds nothing.
+  assert.deepEqual(managers.settle().map(move => [move.from.sessionId, move.to.sessionId]), [['a', f.newId]]);
+  assert.equal(JSON.parse(fs.readFileSync(managers.file, 'utf8')).managers.shared.sessionId, f.newId);
+  assert.equal(managers.creator({ id: f.newId, nativeId: f.session(f.newId).nativeId }, 'shared', null, records(), labels).sessionId, f.newId);
+  assert.throws(() => managers.creator(oldActor, 'shared', null, records(), labels), error => error.uiMessage?.key === 'error.queue.managerOnly');
+});
+
+test('R254: a handoff line that could not be written is written on the next pass, once', async t => {
+  const f = await handedOver(t, { butler: false });
+  const managers = new SpaceManagers(f.dir);
+  managers.set('shared', { sessionId: 'a', nativeId: 'native-a' });
+  const append = fs.appendFileSync; let refuse = true;
+  fs.appendFileSync = (file, ...rest) => { if (refuse && String(file).endsWith('rotation-log.jsonl')) throw Error('disk full'); return append(file, ...rest); };
+  t.after(() => { fs.appendFileSync = append; });
+  f.person(); await f.pass();
+  assert.equal(managers.current('shared').sessionId, 'a', 'not in the file: not moved');
+  assert.equal(f.dispatcher.rotations.a.handedLogged, undefined);
+  refuse = false; f.person(); await f.pass(1); await f.pass(1);
+  assert.equal(managers.current('shared').sessionId, f.newId);
+  assert.equal(ROWS(f).filter(e => e.event === 'handed').length, 1);
+  assert.equal(f.dispatcher.rotationEntries().filter(e => e.event === 'handed').length, 1, 'no line kept twice in memory either');
+});
+
+// Review N6 (R254 rework 1): a waiting record without the successor's native session (one restored from an older
+// version; a confirmation itself waits for it, rotation-handoff.cjs outcome) was marked as logged, with a line no
+// manager can follow, and never written again.
+test('R254 N6: no handed line without the successor\'s native session, and none marked as written', async t => {
+  const f = await handedOver(t, { butler: false });
+  const record = { ...f.dispatcher.rotations.a, handoffConfirmed: true, newNativeId: null };
+  const handed = () => ROWS(f).filter(e => e.event === 'handed').map(e => e.new.nativeId);
+  f.dispatcher.noteHanded('a', record);
+  assert.deepEqual([handed(), record.handedLogged], [[], undefined]);
+  record.newNativeId = f.session(f.newId).nativeId;
+  f.dispatcher.noteHanded('a', record);
+  assert.deepEqual([handed(), record.handedLogged], [[record.newNativeId], true]);
+});
+
+// Review N1 (R254 rework 1): the failed line that gives a manager its role back could not be written once and was
+// not tried again, so the role stayed with a successor that was gone.
+test('R254 N1: a successor gone after its handed line gives the work and the role back only with the failed line, tried again', async t => {
+  const f = await handedOver(t, { butler: false });
+  const managers = new SpaceManagers(f.dir);
+  managers.set('shared', { sessionId: 'a', nativeId: 'native-a' });
+  f.person(); await f.pass();
+  assert.equal(managers.current('shared').sessionId, f.newId);
+  const task = f.room.queueAdd('给继任的', f.newId);
+  const append = fs.appendFileSync; let refuse = true;
+  fs.appendFileSync = (file, ...rest) => { if (refuse && String(file).endsWith('rotation-log.jsonl')) throw Error('disk full'); return append(file, ...rest); };
+  t.after(() => { fs.appendFileSync = append; });
+  f.session(f.newId).serviceCapabilities = [];
+  f.room.update({ archivedSessions: [f.newId] });
+  await f.pass(1); await f.pass(1);
+  assert.ok(f.dispatcher.rotations.a, 'nothing given back while the line is unwritten');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, f.newId);
+  refuse = false; await f.pass(1);
+  assert.equal(f.dispatcher.rotations.a, undefined);
+  assert.deepEqual(eventsOf(f), ['failed'], 'one failed line');
+  assert.equal(managers.current('shared').sessionId, 'a', 'the role is back with the old session');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'a');
 });
 
 test('R206: more from the person while the addition is written is the next interruption, asked for once too', async t => {

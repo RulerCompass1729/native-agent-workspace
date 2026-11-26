@@ -13,7 +13,7 @@ function openSearch(scope = 'all') {
   searchOpener = document.activeElement; searchNavigating = false;
   captureReadingViews();
   searchOrigin = { spaceId, selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
-    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread, roomRecordScope, roomRecordReturn: roomRecordReturn && { ...roomRecordReturn }, roomFilterHistory: roomFilterHistory && { ...roomFilterHistory } };
+    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread, roomRecordScope, roomRecordReturn: roomRecordReturn && { ...roomRecordReturn }, roomFilterHistory: roomFilterHistory && { ...roomFilterHistory }, feed: selected === 'room' && roomSurface === 'stream' && getSpaceFeed()?.filters() || null };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
   const focused = current();
@@ -41,7 +41,7 @@ async function renderSearch() {
     row.dataset.searchKey = result.key;
     const metadata = node('small');
     ui.display.computed(metadata, 'text', () => {
-      const source = result.provider ? (result.provider === 'claude' ? 'Claude' : result.provider === 'dsh' ? 'DSH' : result.provider === 'agy' ? 'Antigravity' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
+      const source = result.provider ? (result.provider === 'claude' ? 'Claude' : result.provider === 'dsh' ? 'DSH' : result.provider === 'agy' ? 'Antigravity' : result.provider === 'pi' ? 'pi' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
       return [source, result.archived && uiText('search.archivedFlag'), result.role && uiText(['user', 'human'].includes(result.role) ? 'reading.you' : result.role === 'system' ? 'search.event' : 'search.agent')].filter(Boolean).join(' · ');
     });
     // A space's archived flag stays in the small line; an archived session's name carries the marker.
@@ -164,14 +164,13 @@ async function showRoomRecord(roomId, messageId, query = '') {
     toast(uiText('search.sharedRemoved')); return false;
   }
   await selectSpace(roomId);
-  const stream = getActivityStream();
-  if (stream) { stream.open(roomId, '', messageId); return true; }
-  roomRecordScope = ''; roomRecordReturn = null;
-  $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
-  roomSurface = 'records';
-  await selectRoom();
-  if (messageId) pointToMessage($('room-messages'), roomReadingKey(), messageId, query);
-  return true;
+  // R248: the shared record is the 信息流 now; a record it does not show as a line opens where it came from.
+  const feed = getSpaceFeed();
+  if (!feed) return false;
+  feed.reveal(messageId); showRoomSurface('stream'); feed.render();
+  if (!messageId || feed.shown()) return true;
+  const row = records.find(m => m.id === messageId), target = window.nativeWorkspaceTaskStream.originalTarget(row);
+  return target ? openOriginal(target) : true;
 }
 async function returnToReading() {
   const target = searchReturn; if (!target) return;
@@ -179,6 +178,7 @@ async function returnToReading() {
   if (target.selected === 'room' && (!spaceRecord(target.spaceId || 'shared') || spaceRecord(target.spaceId || 'shared').archived)) { toast(uiText('search.roomUnavailable')); return; }
   searchReturn = null; $('return-reading').hidden = true;
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
+  getSpaceFeed()?.restore(target.feed);
   if (spaceId !== (target.spaceId || 'shared')) await selectSpace(target.spaceId || 'shared');
   $('room-search').value = target.roomSearch;
   roomThread = target.roomThread || '';

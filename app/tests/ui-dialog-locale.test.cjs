@@ -280,7 +280,7 @@ test('the room status bar shows a working member\'s native state in the interfac
     roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention() {}, roomRecipient: () => member.id, renderTimeline() {}, selectRoom() {}, draggableSession() {},
-    orderedMembers: () => f.people,
+    orderedMembers: () => f.people, focusedRoomMember: () => false,
   });
   f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
   const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };
@@ -306,7 +306,7 @@ test('shared queued/native-route labels repaint without changing recipient, pend
     roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention: () => effects.push('normalize'), roomRecipient: () => recipient.id, renderTimeline: () => effects.push('timeline'), selectRoom() {}, draggableSession() {},
-    orderedMembers: () => f.people,
+    orderedMembers: () => f.people, focusedRoomMember: () => false,
   });
   f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
   const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };
@@ -336,7 +336,7 @@ test('the actual setup view repaints known report and pending errors while prese
   assert.deepEqual(f.$('setup-status').children, rows); assert.equal(report.textContent, 'Custom program locations could not be read. Check the local data file in Settings.');
   assert.equal(f.document.activeElement, choose); assert.equal(JSON.stringify(f.state), before); assert.deepEqual(f.calls, []);
   let reject, reads = 0; f.context.api = { preflight() { reads++; return new Promise((_resolve, no) => reject = no); } };
-  f.context.renderInterfaceLanguage = () => {}; f.context.createReadiness = () => {};
+  f.context.renderInterfaceLanguage = () => {}; f.context.createReadiness = () => {}; f.context.renderSetupGrants = () => {};
   const loading = f.context.showSetup(); assert.equal(reads, 1); assert.equal(typeof reject, 'function'); f.switch('zh'); reject(error); await loading;
   assert.equal(f.context.setupFailure.message, error.message); f.switch('en'); f.context.renderSetupPrograms(true);
   assert.ok(f.$('setup-status').textContent.includes('Custom program locations could not be read.')); assert.equal(reads, 1);

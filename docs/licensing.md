@@ -31,6 +31,7 @@ MIT 同样允许商业使用并要求保留版权/许可通知，更简洁；Apa
 | DSH 自身源码 | 所读 commit 顶层 MIT；允许商用修改与分发，需保留版权和许可 | 记录 commit、路径、修改与完整 MIT 文本；不把上游代码改署名为本项目原创 |
 | DSH 品牌 | 独立品牌规范允许如实描述关系，避免直接以完整官方品牌命名或暗示背书 | 用自己的产品名；仅真实描述兼容/依赖关系；不复制官方 logo |
 | DSH 完整依赖 | THIRD_PARTY_NOTICES 列出不同许可；不覆盖所有传递依赖结论 | 对最终实际分发 closure 重新核查，不以顶层 MIT 代替 |
+| pi（@earendil-works/pi-coding-agent 1.6.1） | npm 包与源码顶层 MIT；123 个包全部来自 npm 公共源并带 sha512（`scripts/pi-tui-runtime/package-lock.json`） | 不进仓库、不打包进 app；由 `scripts/install-pi-tui.cjs` 按锁文件装进 NAW 数据目录；若以后随 app 分发，先对实际 closure 逐包核许可 |
 | Claude Agent SDK | 官方 README 指向 Anthropic 商业条款，不能把其 MIT wrapper 视作 SDK 的许可 | 本产品完整 Teams 不采用 SDK 作为默认主会话；将来引入时单独核条款与登录路径 |
 | Claude Code | 专有条款；当前官方文档允许在规定条件下于产品中运行未修改二进制 | 保持未修改的原生 CLI、原生登录与用户直接计费；不收集/转存账号 token，不代理或转售用户用量 |
 | Codex | 官方仓库 Apache-2.0；模型服务和品牌并非由源码许可证一并授权 | 复用源码/分发时保留适用 LICENSE、NOTICE 与修改说明；服务认证遵循官方机制 |

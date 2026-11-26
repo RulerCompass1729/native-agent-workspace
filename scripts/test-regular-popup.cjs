@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const scratch = require('./fixtures/test-scratch.cjs'), { _electron } = scratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs'), { createSourceEntry } = require('./fixtures/synthetic-source-boot.cjs');
 const code = path.resolve(__dirname, '..'), output = process.env.NAW_EVIDENCE_DIR, pictures = process.env.NAW_PICTURES_DIR;
+const locale = require('../app/ui-locale.js'), language = process.env.NAW_TEST_UI_LANGUAGE || 'zh', t = (key, params) => locale.format(language, key, params);
 for (const p of [output, pictures]) { assert.ok(p && path.isAbsolute(p) && !p.startsWith(code + path.sep)); fs.mkdirSync(p, { recursive: true, mode: 0o700 }); }
 const slot = process.env.NAW_GUI_TEST_SLOT; assert.ok(slot && path.isAbsolute(slot));
 const token = randomUUID(), checks = [], errors = [], blocked = [];
@@ -32,39 +33,58 @@ const clean = scratch.cleanup(async () => {
   const id = await client.call('create', { provider: 'claude', name: 'Claude · 合成示例', cwd: work, view: 'chat' });
   const entry = createSourceEntry({ profile, code, fixturePid: child.pid }), file = path.join(entry, 'entry.cjs');
   const prefix = `const e=require('electron');e.Notification.isSupported=()=>false;require(${JSON.stringify(path.join(code, 'app/preflight.cjs'))}).preflight=()=>({claude:true,codex:true,python:true,paths:{},configured:{}});for(const k of ['show','showInactive','focus'])e.BrowserWindow.prototype[k]=function(){};for(const k of ['showOpenDialog','showSaveDialog','showMessageBox','showOpenDialogSync','showSaveDialogSync','showMessageBoxSync'])e.dialog[k]=()=>{throw Error('OS dialog forbidden')};e.shell.openExternal=e.shell.openPath=async()=>{throw Error('External open forbidden')};
-  const m=require(${JSON.stringify(path.join(code, 'app/regular-popup.cjs'))}),original=m.create;m.create=options=>{const engine=original(options),stats={source:0,selection:0,notices:[],realCalls:0};globalThis.discoveryTest={engine,stats,pricingError(){const p=require(${JSON.stringify(path.join(code, 'app/regular-popup-dsh.cjs'))}),previous=p.pricingQualified;p.pricingQualified=()=>false;try{p.assertPricingQualified();}catch(error){return error;}finally{p.pricingQualified=previous;}},arm(){engine.permitted=true;engine.now=()=>new Date(2026,10,18,10).getTime();engine.readSource=async()=>{stats.source++;await new Promise(resolve=>globalThis.discoveryTest.release=resolve);return[{id:'fixture-one',title:'demo/local-notes',description:'A synthetic local-first project',url:'https://github.com/demo/local-notes'},{id:'fixture-two',title:'demo/agent-tests',description:'A synthetic agent test fixture',url:'https://github.com/demo/agent-tests'}]};engine.select=async payload=>{stats.selection++;stats.payload=payload;return{picks:[{id:'fixture-one',why:'本地优先的资料整理方式，适合你关注的离线工作流。'},{id:'fixture-two',why:'可借鉴它的合成测试思路，检查 agent 的失败恢复。'}],costMicros:1200}};engine.notify=value=>stats.notices.push(value);}};return engine;};globalThis.fetch=()=>{globalThis.discoveryTest.stats.realCalls++;throw Error('Real fetch forbidden')};`;
+  const m=require(${JSON.stringify(path.join(code, 'app/regular-popup.cjs'))}),original=m.create;m.create=options=>{const engine=original(options),stats={source:0,selection:0,notices:[],realCalls:0};globalThis.discoveryTest={engine,stats,pricingError(){const p=require(${JSON.stringify(path.join(code, 'app/regular-popup-dsh.cjs'))}),previous=p.pricingQualified;p.pricingQualified=()=>false;try{p.assertPricingQualified();}catch(error){return error;}finally{p.pricingQualified=previous;}},arm(){engine.permitted=true;engine.now=()=>{const d=new Date();d.setHours(10,0,0,0);return d.getTime();};engine.readSource=async()=>{stats.source++;await new Promise(resolve=>globalThis.discoveryTest.release=resolve);return[{id:'fixture-one',title:'demo/local-notes',description:'A synthetic local-first project',url:'https://github.com/demo/local-notes'},{id:'fixture-two',title:'demo/agent-tests',description:'A synthetic agent test fixture',url:'https://github.com/demo/agent-tests'}]};engine.select=async payload=>{stats.selection++;stats.payload=payload;return{picks:[{id:'fixture-one',why:'本地优先的资料整理方式，适合你关注的离线工作流。'},{id:'fixture-two',why:'可借鉴它的合成测试思路，检查 agent 的失败恢复。'}],costMicros:1200}};engine.notify=value=>stats.notices.push(value);}};return engine;};globalThis.fetch=()=>{globalThis.discoveryTest.stats.realCalls++;throw Error('Real fetch forbidden')};`;
   fs.writeFileSync(file, `require(${JSON.stringify(path.join(code, 'app/regular-popup-transport.cjs'))}).createTransport=()=>{throw Error('Real transport forbidden in GUI')};` + prefix + fs.readFileSync(file, 'utf8'));
-  app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: 'zh' }), timeout: 60000 });
+  app = await _electron.launch({ executablePath: require('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: language }), timeout: 60000 });
   page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', e => errors.push(e.message));
   await page.route('**/*', route => { const u = new URL(route.request().url()); if (u.protocol === 'file:' || ['127.0.0.1', 'localhost'].includes(u.hostname)) return route.continue(); blocked.push(u.hostname); return route.abort(); });
   await page.locator('#discoveries-button').waitFor();
   check('all windows stay hidden', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(w => !w.isVisible() && !w.isFocused())));
   await page.locator('#discoveries-button').click();
-  check('one enabled opt-in button starts off', !await page.locator('.discoveries-activate').isDisabled() && await page.locator('.discoveries-activate').textContent() === '启用' && await page.locator('.discoveries-dialog input[type=checkbox]').count() === 0);
-  check('production is off and outbound disclosure is visible', (await page.locator('#discoveries-status').textContent()).includes('关闭') && (await page.locator('.discoveries-privacy').textContent()).includes('DeepSeek'));
+  check('one enabled opt-in button starts off', !await page.locator('.discoveries-activate').isDisabled() && await page.locator('.discoveries-activate').textContent() === t('discoveries.activate') && await page.locator('.discoveries-dialog input[type=checkbox]').count() === 0);
+  check('production is off and outbound disclosure is visible', (await page.locator('#discoveries-status').textContent()).includes(t('discoveries.off')) && await page.locator('.discoveries-privacy').textContent() === t('discoveries.terms'));
   await page.screenshot({ path: path.join(pictures, 'default-off.png'), scale: 'css' });
-  await page.locator('.discoveries-dialog>header button').click();
+  await page.locator('.discoveries-dialog .discoveries-x').click();
   await app.evaluate(() => discoveryTest.arm());
   await page.locator('#discoveries-button').click();
   await page.locator('#discoveries-concern').fill('我关注本地优先工具和 agent 测试。'); await page.locator('#discoveries-time').fill('09:00');
   await page.locator('.discoveries-activate').click();
   await until(() => app.evaluate(() => discoveryTest.stats.source === 1), 'Fixture source requested by scheduled timer');
-  await page.locator('.discoveries-dialog>header button').click();
+  await page.locator('.discoveries-dialog .discoveries-x').click();
   await page.locator(`.session-link[data-session-id="${id}"]`).first().click();
   if (!((await page.locator('#chat-tab').getAttribute('class')) || '').includes('active')) await page.locator('#chat-tab').click();
-  if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
+  if (await page.locator('#send-button').textContent() === t('composer.claim')) await page.locator('#send-button').click();
   await page.locator('#message-input').fill('这份未发送的合成草稿必须保留。'); await page.locator('#message-input').focus();
   await app.evaluate(() => discoveryTest.release());
   await page.locator('.discoveries-popup:popover-open').waitFor();
-  check('built UI includes the picked count and original source', await page.locator('#discoveries-popup-title').textContent() === '今天替你挑了2项' && await page.locator('.discoveries-source').textContent() === 'GitHub Trending');
+  check('built UI includes the picked count and original source', await page.locator('#discoveries-popup-title').textContent() === t('discoveries.picked', { count: 2 }) && await page.locator('.discoveries-source').textContent() === 'GitHub Trending');
   check('arrival retains genuine composer focus and draft', await page.locator('#message-input').evaluate(e => document.activeElement === e && e.value === '这份未发送的合成草稿必须保留。'));
   check('two reasons and only source links', await page.locator('.discoveries-popup article').count() === 2 && await page.locator('.discoveries-popup .discoveries-why').count() === 2 && await page.locator('.discoveries-popup a').evaluateAll(links => links.every(a => a.href.startsWith('https://github.com/demo/'))));
+  // R252 (11-25): content first, settings folded behind 设置; × and an outside click close; an unsaved draft survives.
   await page.locator('#discoveries-button').click();
+  const layout = await page.locator('.discoveries-dialog').evaluate(d => ({ closedby: d.getAttribute('closedby'), settings: d.querySelector('.discoveries-settings').hidden, toggle: d.querySelector('.discoveries-settings-toggle').getAttribute('aria-expanded'),
+    order: [...d.children].map(e => e.className || e.tagName), today: d.querySelector('.discoveries-content h3').textContent }));
+  check('a running source opens to today\'s picks, with its settings folded behind 设置', layout.closedby === 'any' && layout.settings && layout.toggle === 'false' && layout.today.includes('2') && layout.order.indexOf('discoveries-content') > layout.order.indexOf('discoveries-settings'));
+  // The arrow is aria-hidden: aria-expanded already says whether the settings are open (N7).
+  check('the settings button is named by its word alone, without the arrow', await page.locator('.discoveries-dialog').getByRole('button', { name: t('discoveries.settings'), exact: true }).count() === 1);
+  await page.screenshot({ path: path.join(pictures, 'content-first.png'), scale: 'css' });
+  await page.locator('.discoveries-settings-toggle').click();
   await page.locator('#discoveries-concern').fill('正在修改的兴趣草稿'); await page.locator('#discoveries-concern').focus();
   await app.evaluate(() => discoveryTest.engine.changed(discoveryTest.engine.status(), true)); await delay(100);
   check('arrival defers behind a modal and preserves its unsaved draft', await page.locator('.discoveries-popup').isHidden() && await page.locator('#discoveries-concern').evaluate(e => document.activeElement === e && e.value === '正在修改的兴趣草稿'));
-  await page.locator('.discoveries-dialog>header button').click(); await page.locator('.discoveries-popup:popover-open').waitFor();
+  await page.mouse.click(4, 4);
+  check('an outside click closes the dialog', !await page.locator('.discoveries-dialog').evaluate(d => d.open));
+  await page.locator('.discoveries-popup:popover-open').waitFor();
   check('deferred card appears after the modal closes', await page.locator('.discoveries-popup article').count() === 2);
+  await page.locator('#discoveries-button').click();
+  const reopened = await page.locator('.discoveries-dialog').evaluate(d => ({ settings: !d.querySelector('.discoveries-settings').hidden, unsaved: d.querySelector('.discoveries-unsaved').hidden ? '' : d.querySelector('.discoveries-unsaved').textContent, value: d.querySelector('#discoveries-concern').value }));
+  check('the unsaved draft reopens its settings, marked 未保存', reopened.settings && reopened.unsaved === t('discoveries.unsaved') && reopened.value === '正在修改的兴趣草稿');
+  await page.screenshot({ path: path.join(pictures, 'unsaved-draft.png'), scale: 'css' });
+  await page.locator('.discoveries-dialog .discoveries-x').click();
+  await app.evaluate(() => discoveryTest.engine.changed(discoveryTest.engine.status(), true)); await page.locator('.discoveries-popup:popover-open').waitFor();
+  await page.locator('#messages').click({ position: { x: 5, y: 5 } });
+  check('the new-result card closes on an outside click', await page.locator('.discoveries-popup').isHidden());
+  await app.evaluate(() => discoveryTest.engine.changed(discoveryTest.engine.status(), true)); await page.locator('.discoveries-popup:popover-open').waitFor();
   const measurements = [];
   for (const [width, height] of [[1240, 820], [850, 600]]) for (const theme of ['light', 'dark']) {
     await app.evaluate(({ BrowserWindow, nativeTheme }, { width, height, theme }) => { nativeTheme.themeSource = theme; BrowserWindow.getAllWindows()[0].setContentSize(width, height); }, { width, height, theme });
@@ -97,7 +117,7 @@ const clean = scratch.cleanup(async () => {
   await page.waitForFunction(() => document.querySelector('.discoveries-run-note').textContent.startsWith('2026-11-19'));
   check('history labels the execution budget date rather than the earlier source period', (await page.locator('.discoveries-run-note').textContent()).startsWith('2026-11-19'));
   await app.evaluate(async () => { const f = discoveryTest.budgetFixture; await f.tick(); discoveryTest.engine.changed(f.status(), false); f.dispose(); });
-  await page.waitForFunction(() => document.querySelector('.discoveries-run-note').textContent.includes('今日因预算未确认跳过'));
+  await page.waitForFunction(note => document.querySelector('.discoveries-run-note').textContent.includes(note), t('discoveries.run.budget-unconfirmed'));
   check('history makes the unconfirmed-budget skip and reservation visible', (await page.locator('.discoveries-run-note').textContent()).includes('0.007000'));
   await page.screenshot({ path: path.join(pictures, 'budget-unconfirmed-history.png'), scale: 'css' });
   await app.evaluate(async () => {
@@ -105,8 +125,8 @@ const clean = scratch.cleanup(async () => {
       readSource: async () => [{ id: 'x', title: 'Public fixture', description: 'public', url: 'https://github.com/demo/tool' }], select: async () => { throw discoveryTest.pricingError(); } });
     e.configure({ enabled: true, concern: 'tools', time: '00:00' }); await e.tick(); discoveryTest.engine.changed(e.status(), false); e.dispose();
   });
-  await page.waitForFunction(() => document.querySelector('#discoveries-status').textContent.includes('费率尚未核定'));
-  check('unqualified rates show a distinct pause with no unspent reservation', (await page.locator('.discoveries-run-note').textContent()).includes('0.000000') && !(await page.locator('#discoveries-status').textContent()).includes('未确认'));
+  await page.waitForFunction(note => document.querySelector('#discoveries-status').textContent.includes(note), t('discoveries.run.pricing-paused'));
+  check('unqualified rates show a distinct pause with no unspent reservation', (await page.locator('.discoveries-run-note').textContent()).includes('0.000000') && !(await page.locator('#discoveries-status').textContent()).includes({ zh: '未确认', en: 'unconfirmed' }[language]));
   await page.screenshot({ path: path.join(pictures, 'pricing-paused.png'), scale: 'css' });
   await app.evaluate(async () => {
     const e = new discoveryTest.engine.constructor({ store: { read: () => null, write() {} }, permitted: true, now: () => Date.parse('2027-01-01T12:00:00Z'),
@@ -114,7 +134,7 @@ const clean = scratch.cleanup(async () => {
       select: async () => ({ picks: [], costMicros: 421, usage: { inputTokens: 1000, cachedInputTokens: 100, outputTokens: 100, totalTokens: 1200, providerAt: Date.parse('2027-01-01T12:00:00Z'), tier: 'peak-bound' } }) });
     e.configure({ enabled: true, concern: 'tools', time: '00:00' }); await e.tick(); discoveryTest.engine.changed(e.status(), false); e.dispose();
   });
-  await page.waitForFunction(() => document.querySelector('.discoveries-run-note').textContent.includes('高峰价上界估算'));
+  await page.waitForFunction(note => document.querySelector('.discoveries-run-note').textContent.includes(note), t('discoveries.spentUpper', { cost: '' }));
   check('unknown calendar accounting is labelled as an upper estimate', (await page.locator('.discoveries-run-note').textContent()).includes('0.000421'));
   await page.screenshot({ path: path.join(pictures, 'peak-upper-bound.png'), scale: 'css' });
   const stats = await app.evaluate(() => discoveryTest.stats);

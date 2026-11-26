@@ -39,6 +39,18 @@ assert.ok(!(deny && three), 'Choose one native scenario');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 40000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
 const snapshot = () => page.evaluate(() => workspace.initial());
+// R248 ② merged the 记录 view into the 信息流 (R249). A member's own row is the left list's: the 总览 table and the
+// status row also carry data-session-id now.
+async function room() { await page.locator('#room-nav').click(); await page.locator('#room-stream').click(); await page.locator('#space-feed .feed-list').waitFor(); }
+const feedText = () => page.locator('#space-feed .feed-list').innerText();
+const person = id => page.locator(`#space-feed .feed-person[data-person="${id}"]`);
+const sessionLink = id => page.locator(`#session-list .session-link[data-session-id="${id}"]`);
+// A member view whose terminal is closed offers 打开终端 in place of the 终端 tab (renderPaneSwitches).
+const showTerminal = async () => page.locator(await page.locator('#terminal-tab').isVisible() ? '#terminal-tab' : '#open-native-terminal').click();
+// Product gaps found while rewriting this script for R248 (11-26 record, follow-up 3): reported, not fixed in a
+// test-only change. The run goes on and fails at the end while any gap is open.
+const gaps = [];
+function gap(ok, message) { if (ok) return; gaps.push(message); console.log('OPEN GAP ' + message); }
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...body })}\n\n`); }
 function claudeBlock(res, index, content) {
   event(res, 'content_block_start', { index, content_block: content.type === 'text' ? { type: 'text', text: '' } : { ...content, input: {} } });
@@ -184,7 +196,7 @@ async function openUsage() {
 }
 async function start(first, text) {
   const previousRun = (await snapshot()).room.run?.id;
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await room();
   await inlineRecipient(page, first);
   await fillRoomMessage(page, text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   await page.locator('#run-mode').selectOption('directed');
@@ -230,7 +242,7 @@ async function start(first, text) {
     const second = await create('claude', 'secondClaude');
     const identities = [claude, codex, second].map(s => [s.id, s.nativeId, s.pid]);
     for (const member of [claude, codex, second]) {
-      const link = page.locator(`[data-session-id="${member.id}"]`);
+      const link = sessionLink(member.id);
       // U22: same-name sessions are told apart in the sidebar. Each row shows its own short id beside the name.
       assert.ok((await link.innerText()).includes(member.id.slice(0, 6)), 'Same-name sidebar distinguishes native sessions');
       assert.equal(await link.locator('.session-short-id').isVisible(), true, 'The short id of a same-name row is shown');
@@ -249,7 +261,7 @@ async function start(first, text) {
       await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '移出「共同工作」到独立会话', exact: true }).click();
       await until(async () => !(await snapshot()).sessions.find(s => s.id === member.id).roomId, 'Independent same-name invite candidate');
     }
-    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await room();
     for (const member of [claude, second]) {
       await page.locator('#manage-members').click();
       const invitation = page.locator(`[data-invite-session="${member.id}"]`);
@@ -287,39 +299,44 @@ async function start(first, text) {
     const addressed = state.room.messages.filter(m => m.addressed);
     assert.deepEqual(addressed.map(m => [m.sessionId, m.deliveries[0].recipientId, m.deliveries[0].status]), [[claude.id, second.id, 'submitted'], [second.id, codex.id, 'submitted'], [codex.id, claude.id, 'submitted']]);
     assert.equal(await roomBody(page), '重新打开后保留的协作草稿');
-    assert.match(await page.locator('#room-messages').innerText(), /三位完成：最终预算 50 元/);
-    for (const message of state.room.messages.filter(m => m.sharedStream && m.role === 'system')) {
-      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Native turn notices identify their exact participant');
+    assert.match(await feedText(), /三位完成：最终预算 50 元/);
+    // Native turn notices mirror a member's own stream; the 信息流 reads that from the member and does not repeat it
+    // (task-stream.js spaceFeed skips sharedStream rows). Each member's reply line names who said it instead.
+    for (const member of [claude, codex, second]) {
+      const said = page.locator(`#space-feed .feed-list [data-feed-id^="reply:${member.id}:"] .feed-who`).first();
+      gap(await said.count() > 0 && (await said.innerText()).includes(member.id.slice(0, 6)), 'The 信息流 names each same-name member exactly (V13/U22): ' + member.id.slice(0, 6));
     }
+    // The member cards are the 网格's.
+    await page.locator('#room-overview').click();
     for (const member of [claude, codex, second]) assert.ok((await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${member.id}"]`).innerText()).includes(member.id.slice(0, 6)));
-    const beforeCopy = await app.evaluate(() => globalThis.copiedText.length);
-    await page.locator('#copy-timeline').click();
-    await until(async () => await app.evaluate(() => globalThis.copiedText.length) === beforeCopy + 1, 'Fresh copy acknowledgement');
-    const copied = await app.evaluate(() => globalThis.copiedText.at(-1));
-    for (const member of [claude, codex, second]) assert.ok(copied.includes(member.id.slice(0, 6)), 'Copied shared record keeps source identities');
-    await page.locator('#room-filter').selectOption(second.id);
-    assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
-    assert.doesNotMatch(await page.locator('#room-messages').innerText(), /三位完成：最终预算/);
-    await page.locator('#room-filter').selectOption('');
-    await page.locator(`[data-session-id="${second.id}"]`).click(); await leaveSpace(page);
-    await page.locator('#terminal-tab').click();
+    await page.locator('#room-stream').click();
+    // R248 ② took 复制 away with the 记录 view (follow-up 2 N5 deleted the hidden #copy-timeline); what the person
+    // reads in the 信息流 gets the copy's check.
+    const copied = await feedText();
+    for (const member of [claude, codex, second]) gap(copied.includes(member.id.slice(0, 6)), 'The 信息流 keeps source identities that the copy kept: ' + member.id.slice(0, 6));
+    await person(second.id).click(); await until(async () => !/三位完成：最终预算/.test(await feedText()), 'Only the second Claude\'s lines');
+    assert.match(await feedText(), /材料核对完成/);
+    assert.doesNotMatch(await feedText(), /三位完成：最终预算/);
+    await person(second.id).click();
+    await sessionLink(second.id).click(); await leaveSpace(page);
+    await showTerminal();
     await until(async () => (await page.locator('#terminal-area').innerText()).includes('材料核对完成'), 'Detached native TUI retains its own work');
     assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
-    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
+    await room();
+    assert.match(await feedText(), /材料核对完成/);
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
     if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
     assert.ok((await page.locator(`[data-archived-session="${second.id}"] .disclosure-title`).innerText()).includes(second.id.slice(0, 6)));
     await page.locator(`[data-archived-session="${second.id}"]`).getByRole('button', { name: /^恢复会话 / }).click();
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
     await page.locator('#rename-name').fill('材料核对'); await page.locator('#confirm-rename').click();
-    await until(async () => (await page.locator(`[data-session-id="${second.id}"]`).getAttribute('aria-label')).includes('材料核对'), 'Rename propagates');
+    await until(async () => (await sessionLink(second.id).getAttribute('aria-label')).includes('材料核对'), 'Rename propagates');
     // The other half of U22: once its name is unique, the row no longer shows its short id.
-    assert.ok(!(await page.locator(`[data-session-id="${second.id}"]`).innerText()).includes(second.id.slice(0, 6)), 'Unique name stays compact');
-    assert.equal(await page.locator(`[data-session-id="${second.id}"] .session-short-id`).isVisible(), false);
+    assert.ok(!(await sessionLink(second.id).innerText()).includes(second.id.slice(0, 6)), 'Unique name stays compact');
+    assert.equal(await sessionLink(second.id).locator('.session-short-id').isVisible(), false);
     assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
-    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    assert.match(await page.locator('#room-messages').innerText(), /材料核对/);
+    await room();
+    assert.match(await feedText(), /材料核对/);
     assert.deepEqual(counts, { claude: 5, codex: 2 }); assert.deepEqual(errors, []);
     fs.writeFileSync(path.join(base, 'three-completed.json'), JSON.stringify(await snapshot(), null, 2));
     // Only these owned completed test sessions; native task permissions are not stubbed.
@@ -328,28 +345,21 @@ async function start(first, text) {
       return { response: 1 };
     }; });
     for (const member of [claude, second]) {
-      await page.locator(`[data-session-id="${member.id}"]`).click();
+      await sessionLink(member.id).click();
       if (!(await page.locator('#advanced').evaluate(el => el.open))) await page.locator('#advanced summary').click();
       await page.getByRole('button', { name: '结束这个原生会话…', exact: true }).click();
       await until(async () => (await snapshot()).sessions.find(s => s.id === member.id)?.state === 'ended', 'Owned native Claude exits');
       await page.getByRole('button', { name: '移除本应用记录…', exact: true }).click();
       await until(async () => !(await snapshot()).sessions.some(s => s.id === member.id), 'Owned session reference removed');
     }
-    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    for (const message of state.room.messages.filter(m => m.sharedStream && [claude.id, second.id].includes(m.sessionId))) {
-      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Forgotten native row preserves exact author identity');
-    }
-    for (const message of addressed) {
-      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-delivery summary`).innerText()).includes(message.deliveries[0].recipientId.slice(0, 6)) || message.deliveries[0].recipientId === codex.id, 'Forgotten recipient retains exact identity');
-    }
-    const beforeHistoryCopy = await app.evaluate(() => globalThis.copiedText.length);
-    await page.locator('#copy-timeline').click();
-    await until(async () => await app.evaluate(() => globalThis.copiedText.length) === beforeHistoryCopy + 1, 'Fresh historical copy acknowledgement');
-    const historyCopy = await app.evaluate(() => globalThis.copiedText.at(-1));
-    for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
+    await room();
+    // As above, and with no copy (R248 ②): the 信息流's own lines keep the removed authors and recipients.
+    const history = await feedText();
+    for (const member of [claude, second]) gap(history.includes(member.id.slice(0, 6)), 'Forgotten native author keeps its exact identity in the 信息流: ' + member.id.slice(0, 6));
+    for (const message of addressed) gap(message.deliveries[0].recipientId === codex.id || history.includes(message.deliveries[0].recipientId.slice(0, 6)), 'Forgotten recipient keeps its exact identity in the 信息流: ' + message.deliveries[0].recipientId.slice(0, 6));
     fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
-    clean();
+    clean(); assert.deepEqual(gaps, [], 'Open product gaps');
     console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, crossService: peer, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sessions show their own short id in the sidebar row and keep their exact identity in accessible names, menus, member dialog, native notices, copied history and archive; a unique name stays compact', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
     return;
   }
@@ -369,7 +379,7 @@ async function start(first, text) {
   assert.equal(state.room.run.status, 'completed'); assert.equal(state.room.run.steps, 3); assert.equal(state.diagnostics.dispatches, 3);
   assert.deepEqual(counts, { claude: 3, codex: 2 });
   assert.equal(state.room.messages.filter(m => m.addressed).length, 2);
-  assert.match(await page.locator('#room-messages').innerText(), /最终预算：50 元/);
+  assert.match(await feedText(), /最终预算：50 元/);
   for (const m of state.room.messages.filter(m => m.addressed)) { assert.equal(m.deliveries.length, 1); assert.equal(m.deliveries[0].status, 'submitted'); }
   if (longFinal) { assert.ok(state.room.messages.some(m => m.finalReply && m.text?.includes('LONG_HUMAN_FINAL_ONLY'))); assert.ok(!JSON.stringify(JSON.parse(fs.readFileSync(path.join(base, 'codex-1-request.json'))).input).includes('LONG_HUMAN_FINAL_ONLY')); }
   checks.push('Real native structured calls: Claude → Codex → Claude, exact recipient and receipt, one main reader');
@@ -385,12 +395,12 @@ async function start(first, text) {
     await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
     assert.equal(await roomBody(page), '用量查看期间保留的草稿');
     assert.equal((await snapshot()).viewState.roomRecipient, recipient);
-    await page.locator(`[data-session-id="${codex.id}"]`).click(); await openUsage();
+    await sessionLink(codex.id).click(); await openUsage();
     assert.equal(await page.locator('[data-usage-session]').count(), 1);
     assert.equal(await page.locator('[data-usage-session]').getAttribute('data-usage-session'), codex.id);
     assert.match(await page.locator('#trust-status').innerText(), /本机读数时间/);
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-scoped-usage.png') }); }
-    await page.locator('#close-privacy').click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#close-privacy').click(); await room();
     await fillRoomMessage(page, ''); assert.deepEqual(counts, before); assert.equal(tokenCountRequests, 0);
     checks.push('Actual native usage stays scoped to room or original session; refresh preserves draft/recipient with zero additional inference');
   }
@@ -403,9 +413,9 @@ async function start(first, text) {
   await until(async () => (await snapshot()).sessions.find(s => s.id === codex.id).state === 'idle', 'Current native turn can finish after pause');
   assert.equal((await snapshot()).room.run.status, 'paused'); assert.equal(counts.claude, 3); assert.equal((await snapshot()).diagnostics.dispatches, 4);
   checks.push('Human pause revokes a staged message; no peer task starts');
-  await page.locator(`[data-session-id="${claude.id}"]`).click(); await leaveSpace(page);
+  await sessionLink(claude.id).click(); await leaveSpace(page);
   const nativeClaude = page.locator(`[data-terminal-id="${claude.id}"]`);
-  await page.locator('#terminal-tab').click(); await nativeClaude.waitFor({ state: 'visible' });
+  await showTerminal(); await nativeClaude.waitFor({ state: 'visible' });
   await until(async () => (await nativeClaude.innerText()).includes('最终预算'), 'Same Claude terminal shows collaborative result');
   await nativeClaude.locator('.xterm-screen').click(); await page.keyboard.type('Continue privately with this budget.');
   await until(async () => (await nativeClaude.innerText()).includes('Continue privately with this budget.'), 'Native draft visible'); await page.keyboard.press('Enter');
@@ -413,7 +423,7 @@ async function start(first, text) {
   await until(async () => (await snapshot()).sessions.find(s => s.id === claude.id).state === 'idle', 'Private turn finishes');
   assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('私人备注')));
   checks.push('Detach and continue in the same native TUI; private continuation does not enter the room');
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await room();
   await fillRoomMessage(page, '下一次的草稿，暂不发送。'); await sleep(400);
   const before = await snapshot();
   assert.deepEqual(before.sessions.map(s => [s.id, s.nativeId]), identities.map(([id, nativeId]) => [id, nativeId]));
@@ -426,7 +436,7 @@ async function start(first, text) {
   assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid, s.processIdentity, s.serverIdentity]), before.sessions.map(s => [s.id, s.nativeId, s.pid, s.processIdentity, s.serverIdentity]));
   assert.equal(state.room.run.status, 'paused'); assert.equal(state.diagnostics.dispatches, before.diagnostics.dispatches);
   assert.equal(await roomBody(page), '下一次的草稿，暂不发送。');
-  assert.match(await page.locator('#room-messages').innerText(), /最终预算：50 元/);
+  assert.match(await feedText(), /最终预算：50 元/);
   assert.deepEqual(counts, { claude: 4, codex: 4 }); assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(base, 'reopened.json'), JSON.stringify(state, null, 2));
   checks.push('Full application reopening preserves IDs/PIDs, room history and draft without replay');
@@ -434,7 +444,8 @@ async function start(first, text) {
     assert.equal(state.sessions.find(s => s.provider === 'claude').nativePermissionMode, 'default', 'Claude reported manual mode');
     checks.push('In manual mode the pre-allowed directed tool ran with no native prompt');
   }
-  clean(); console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, checks, counts, paidModelCalls: 0, evidence: base }, null, 2));
+  clean(); assert.deepEqual(gaps, [], 'Open product gaps');
+  console.log(JSON.stringify({ versions, fixtures: summaries(), trustPresses, startup, checks, counts, paidModelCalls: 0, evidence: base }, null, 2));
 })().catch(async error => {
   fs.writeFileSync(path.join(base, 'startup.json'), JSON.stringify(startup, null, 2));
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); }

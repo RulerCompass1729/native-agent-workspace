@@ -1,4 +1,4 @@
-// 11-23 「点开之后状态条…至少需要完全展开」: the board lists every agent, and old dispatches leave 等你.
+// 11-23 old dispatches leave 等你; since R250 (11-25) the board lists tasks only, and the header squares (R178) show the agents.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const board = require('../renderer/task-board.js'), stream = require('../task-stream.js'), locale = require('../ui-locale.js');
@@ -45,120 +45,50 @@ function setup(language = 'zh', data = input()) {
 }
 const kinds = status => Object.fromEntries(status.historyGroups.find(p => p.id === 'dev').all.map(q => [q.id.slice(0, 8), q.kind]));
 
-test('an item still waiting for a decision from an archived or ended session is an old dispatch, not 等你', () => {
+test('an item still waiting for a decision from an archived or ended session is an old dispatch under 异常, not 等你', () => {
   const status = board.overview(input(), now), k = kinds(status);
   assert.equal(k.eeeeeeee, 'stale'); assert.equal(k.ffffffff, 'stale');
   assert.equal(k.bbbbbbbb, 'waiting'); assert.equal(k.gggggggg, 'waiting');
   assert.equal(k.hhhhhhhh, 'waiting', 'a session missing from the list may simply not be loaded yet');
   assert.equal(status.waiting, 4);
-  const counts = board.selectTasks(status.historyGroups.flatMap(p => p.all), { tab: 'stale' }, now).counts;
-  assert.equal(counts.stale, 2); assert.equal(counts.waiting, 4);
-  assert.equal(counts.active, ['sent', 'queued', 'waiting', 'review', 'stale', 'failed', 'unknown'].reduce((n, key) => n + counts[key], 0), 'old dispatches stay unfinished, not hidden');
+  const f = setup(), group = key => f.host.querySelectorAll('.task-board-group').find(g => g.dataset.groupKey === key);
+  assert.deepEqual(group('problem').querySelectorAll('.task-board-entry').map(e => e.dataset.itemId).sort(), ['eeeeeeee5555', 'ffffffff6666']);
+  assert.deepEqual(group('problem').querySelectorAll('.task-board-sub').map(e => e.textContent), ['旧派单', '旧派单']);
+  assert.equal(group('waiting').querySelectorAll('.task-board-entry').length, 4);
+  assert.equal(f.host.querySelector('.task-status-need').textContent, '4 件等你');
+  f.board.dispose();
 });
 
-test('the header 等你 strip leaves old dispatches out and keeps every live decision', () => {
+test('the 等你 list leaves old dispatches out and keeps every live decision', () => {
   const data = input(), items = stream.waitingItems({ rooms: data.rooms, sessions: data.sessions });
   assert.deepEqual(items.filter(i => i.kind === 'decide').map(i => i.itemId).sort(), ['bbbbbbbb2222', 'cccccccc3333', 'gggggggg7777', 'hhhhhhhh8888']);
 });
 
-for (const language of ['zh', 'en']) test(language + ': old dispatches have their own tab with a one-line explanation', () => {
-  const f = setup(language);
-  try {
-    const tab = f.host.querySelector('[data-board-tab="stale"]');
-    assert.ok(tab); assert.equal(tab.dataset.count, '2'); assert.equal(f.host.querySelector('[data-board-tab="waiting"]').dataset.count, '4');
-    tab.fire('click');
-    const help = f.host.querySelector('.task-board-state-help');
-    assert.equal(help.hidden, false);
-    assert.ok(help.textContent.includes(language === 'zh' ? '会话已结束' : 'has ended'), help.textContent);
-    assert.equal(f.host.querySelectorAll('.task-board-task').length, 2);
-  } finally { f.board.dispose(); }
+test('the open board lists tasks only: no agent cards, row steps or conversation rows', () => {
+  for (const language of ['zh', 'en']) {
+    const f = setup(language), ids = input().rooms[0].queue.map(q => q.id);
+    assert.equal(f.host.querySelector('.task-board-people'), null); assert.equal(f.host.querySelector('.task-board-person'), null);
+    assert.equal(f.host.querySelector('.task-board-task-step'), null);
+    for (const b of f.host.querySelectorAll('.task-board-fold')) if (b.getAttribute('aria-expanded') === 'false') b.fire('click');
+    const rows = f.host.querySelectorAll('.task-board-entry');
+    assert.deepEqual(rows.map(e => e.dataset.itemId).sort(), ids.sort(), 'a working conversation without a task is not a row');
+    assert.ok(rows.every(e => e.dataset.source === 'space'));
+    assert.ok(f.host.querySelectorAll('.task-board-agent').some(e => e.textContent === LONG), 'the whole name stays');
+    f.board.dispose();
+  }
 });
 
-test('the open board starts with every agent, grouped by space, above the task tabs', () => {
-  const f = setup();
-  try {
-    const panel = f.host.querySelector('.task-board-panel'), people = f.people();
-    assert.ok(people, 'member section');
-    assert.ok(panel.children.indexOf(people) >= 0 && panel.children.indexOf(people) < panel.children.indexOf(f.host.querySelector('.task-board-tabs')));
-    assert.deepEqual(f.ids(f.space('dev')), ['a1', 'w1', 'd1', 'end1', 'i1'], 'waiting and working cards first, then the rest; archived left out');
-    assert.deepEqual(f.ids(f.space('ops')), ['i1']);
-    assert.deepEqual(f.ids(f.space('@independent')), ['solo'], 'an independent conversation that is not running is not listed');
-    const summary = people.querySelector('.task-board-people-summary').textContent;
-    for (const part of ['成员 6', '1 个等你', '2 个卡住或断开', '2 个在做', '1 个空闲']) assert.ok(summary.includes(part), part + ' in ' + summary);
-    assert.ok(people.querySelector('.task-board-people-excluded').textContent.includes('已归档 1'));
-    assert.ok(!f.host.textContent.includes('至少'));
-    assert.ok(!people.textContent.includes('…'), 'nothing in the member section is cut');
-  } finally { f.board.dispose(); }
-});
-
-test('a working agent card shows its state, minutes, current item with id and what waits under it', () => {
-  const f = setup();
-  try {
-    const card = f.person('w1');
-    assert.ok(card.classList.contains('task-board-person-card'));
-    for (const part of [LONG, '在做 52 分', 'Current synthetic item', '#aaaaaaaa', '名下 2 件待你处理', '1 件排队']) assert.ok(card.textContent.includes(part), part);
-    assert.ok(!card.textContent.includes('second line'));
-    const label = card.getAttribute('aria-label');
-    for (const part of [LONG, '在做 52 分', 'Current synthetic item']) assert.ok(label.includes(part), part + ' in ' + label);
-    assert.equal(card.querySelector('.task-board-person-square').className, 'state-dot working task-board-person-square', 'the same square as the header');
-    const asker = f.person('a1');
-    assert.ok(asker.classList.contains('task-board-person-card'));
-    assert.ok(asker.textContent.includes('Asker decision') && asker.textContent.includes('#gggggggg'));
-    const strip = f.person('i1');
-    assert.ok(strip.classList.contains('task-board-person-strip'));
-    assert.ok(strip.textContent.includes('Idle member') && strip.textContent.includes('Idle'));
-    card.fire('click');
-    assert.deepEqual(f.calls, [['session', 'w1', 'n-w1']]);
-    assert.equal(f.host.querySelector('.task-board-panel').hidden, true);
-  } finally { f.board.dispose(); }
-});
-
-test('the old-dispatch line in a space opens their tab', () => {
-  const f = setup();
-  try {
-    const line = f.space('dev').querySelector('.task-board-people-stale');
-    assert.ok(line.textContent.includes('旧派单 2 件'), line.textContent);
-    // The summary above counts agents, never items: name the counts these really leave.
-    assert.ok(line.textContent.includes('不计入顶栏和「等你」标签的件数') && !line.textContent.includes('上面'), line.textContent);
-    assert.equal(f.space('ops').querySelector('.task-board-people-stale'), null);
-    line.fire('click');
-    assert.equal(f.host.querySelector('[data-board-tab="stale"]').getAttribute('aria-selected'), 'true');
-    assert.ok(f.doc.activeElement === f.host.querySelector('[data-board-tab="stale"]'), 'keyboard focus follows to the tab it opened');
-  } finally { f.board.dispose(); }
-});
-
-test('31 members across 4 spaces are all listed with whole names', () => {
-  const spaces = ['s1', 's2', 's3', 's4'], data = { rooms: spaces.map(id => ({ id, name: 'Space ' + id, queue: [] })), sessions: [], confirmations: [], confirmationsAvailable: true, connected: true };
-  for (let i = 0; i < 31; i++) data.sessions.push({ id: 'm' + i, name: 'Synthetic member number ' + i + ' with a long name', state: i % 3 ? 'idle' : 'working', roomIds: [spaces[i % 4]],
-    ...shown(i % 3 ? 'state-dot idle' : 'state-dot working', i % 3 ? 'idle' : 'working', i % 3 ? 'Idle' : 'Working') });
-  const f = setup('zh', data);
-  try {
-    assert.equal(f.ids(f.people()).length, 31);
-    for (const s of data.sessions) assert.ok(f.person(s.id, s.roomIds[0]).textContent.includes(s.name), s.name);
-  } finally { f.board.dispose(); }
-});
-
-test('en: the member section has no missing or Chinese-only text', () => {
-  const f = setup('en');
-  try {
-    const text = f.people().textContent;
-    for (const part of ['6 members', '1 needs you', '2 stuck or offline', '2 working', '1 idle', '52 min', '2 to handle', '1 queued', 'not counted in the header or the Needs you tab']) assert.ok(text.includes(part), part + ' in ' + text);
-    assert.ok(!/[一-鿿]/.test(text), text);
-  } finally { f.board.dispose(); }
-});
-
-test('the renderer hands the board each session\'s header square, group and short state', () => {
+test('the renderer hands the board only each session\'s name and whether it has ended', () => {
   const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
   const start = source.indexOf('function updateTaskBoard('), end = source.indexOf('const spaceCall', start);
   assert.ok(start >= 0 && end > start);
   let captured;
-  const distribution = require('../renderer/agent-distribution.js');
-  const context = vm.createContext({ state: { sessions: [{ id: 'x', name: 'X', state: 'working' }, { id: 'y', name: 'Y', state: 'approval' }] }, disconnected: false, spaceId: 'dev',
-    allSpaces: () => [], spaceName: r => r.name, taskBoard: { update: value => { captured = value; } },
-    sidebarPresentation: s => s.state === 'working' ? { tone: 'working', workTone: '', compact: 'Working now', waiting: false } : { tone: 'approval', workTone: '', compact: 'Needs approval', waiting: true },
-    window: { nativeWorkspaceAgentDistribution: distribution, nativeWorkspaceTaskBoard: board, nativeWorkspaceSpaces: { roomIds: () => [] }, nativeWorkspaceFleet: { currentFleet: () => ({ running: 0, unknown: 0, work: { unconfirmed: false } }) } } });
+  const sessions = [{ id: 'x', nativeId: 'n-x', name: 'X', state: 'working' }, { id: 'y', name: 'Y', state: 'ended', archived: true }];
+  for (const s of sessions) for (const key of ['messages', 'approval', 'claudeQuestion', 'nativeApproval']) Object.defineProperty(s, key, { get() { throw Error('The board reads no conversation or request'); } });
+  const context = vm.createContext({ state: { sessions }, disconnected: false, spaceId: 'dev', allSpaces: () => [], spaceName: r => r.name, taskBoard: { update: value => { captured = value; } },
+    window: { nativeWorkspaceTaskBoard: board, nativeWorkspaceSpaces: { roomIds: () => [] } } });
   vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
-  assert.deepEqual(captured.sessions.map(s => [s.look, s.agentStatus, s.statusText]), [['state-dot working', 'working', 'Working now'], ['state-dot approval', 'waiting', 'Needs approval']]);
+  assert.deepEqual(JSON.parse(JSON.stringify(captured.sessions)), [{ id: 'x', nativeId: 'n-x', name: 'X', state: 'working' }, { id: 'y', name: 'Y', state: 'ended', archived: true }]);
 });
 
 test('the header shows +N for squares that do not fit, and every square comes back when they do', () => {

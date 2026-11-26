@@ -33,7 +33,7 @@ function fixture() {
   ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
   const context = vm.createContext({ spaceName: room => room?.name, $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
     document: { querySelector(selector) { assert.equal(selector, 'dialog:modal:not(#setup-dialog)'); return [...elements.values()].find(e => e !== $('setup-dialog') && e.open && e.modal) || null; } },
-    ui, uiText, activityStream: undefined, taskBoardRefreshes: 0, updateTaskBoard() { context.taskBoardRefreshes++; }, updateAgentDistribution() {},
+    ui, uiText, activityStream: undefined, taskBoardRefreshes: 0, updateTaskBoard() { context.taskBoardRefreshes++; }, updateAgentDistribution() {}, grantRenders: 0, renderSetupGrants() { context.grantRenders++; },
     toast: text => messages.push(text), mobileSetup: { open() {}, close() {} }, toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
   vm.runInContext(source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope =')), context);
@@ -57,6 +57,7 @@ test('the actual notes button passes selected space rather than treating its cli
 test('ordinary settings leave the conversation interactive while real dialogs stay modal', async () => {
   const f = fixture(), work = f.context.showSetup();
   assert.equal(f.$('setup-dialog').matches(':modal'), false, 'ordinary settings must not make the conversation inert');
+  assert.equal(f.context.grantRenders, 1, 'settings show the current session-creation grants (R251 D)');
   f.calls[0].resolve(preflight()); await work;
   f.context.openNotes(); assert.equal(f.$('notes-dialog').matches(':modal'), true);
 });

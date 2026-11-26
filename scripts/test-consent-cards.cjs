@@ -1,6 +1,7 @@
 // Hidden integration check of product confirmation cards; synthetic transport, no DOM/CSS replacement.
 const scratch = require('./fixtures/test-scratch.cjs');
-const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs'), boardWaiting = require('./fixtures/board-waiting.cjs');
+const locale = require('../app/ui-locale.js');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { _electron } = scratch.playwright(require('playwright'));
@@ -111,7 +112,8 @@ async function main() {
   const old = await control('create', createArgs), current = await control('create', createArgs);
   const clear = await control('clearSharedHistory', []);
   const messageId = r => `background:${r.actor.nativeId}:${r.id}`;
-  const pending = r => page.locator(`[data-waiting-id="${messageId(r)}"]`);
+  // What waits for the person is on the task board (R250); a card opens in place in its row.
+  const key = r => [r.actor.id, r.actor.nativeId, r.id].join(':'), board = boardWaiting(page), pending = r => board.row(key(r)), expand = r => board.expand(key(r));
   await until(async () => (await page.evaluate(() => workspace.initial())).backgroundConfirmations.length === 2, 'Exactly two current confirmations');
   record('actual pending list excludes the superseded request');
   const win = await app.browserWindow(page), shots = [];
@@ -120,10 +122,7 @@ async function main() {
     await until(async () => (await page.locator('#setup-title').textContent()) === (lang === 'zh' ? '设置' : 'Settings'), 'Language changes');
     await page.locator('#close-setup').click();
   }
-  async function panel(open) {
-    const more = page.locator('#stream-waiting-more');
-    if ((await more.getAttribute('aria-expanded') === 'true') !== open) await more.click();
-  }
+  const panel = open => open ? board.open() : board.close();
   async function shot(lang, variant, width, view) {
     await win.evaluate((w, width) => w.setContentSize(width, width === 850 ? 650 : 820), width);
     await delay(300);
@@ -141,15 +140,17 @@ async function main() {
     await page.screenshot({ path: path.join(pictures, file) }); shots.push(file);
     checkForeground();
     const metrics = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth,
-      buttons: [...document.querySelectorAll('.stream-waiting-list .background-buttons button')].map(b => ({ text: b.textContent, width: b.clientWidth, scroll: b.scrollWidth })) }));
+      buttons: [...document.querySelectorAll('#task-board-panel .background-buttons button')].map(b => ({ text: b.textContent, width: b.clientWidth, scroll: b.scrollWidth })) }));
     assert.ok(metrics.scroll <= metrics.width, 'No horizontal page overflow');
     for (const b of metrics.buttons) assert.ok(b.scroll <= b.width + 1, 'Button label fits: ' + b.text);
   }
   // First open, with no conversation card to have already started the shared clock.
   assert.equal(await page.locator('.background-state[data-expires-at]').count(), 0);
   await panel(true);
-  const clocks = page.locator('#stream-waiting-list .background-state[data-expires-at]');
-  assert.equal(await clocks.count(), 2);
+  assert.equal(await board.waiting().count(), 2, 'The board lists both current confirmations');
+  await expand(clear);
+  const clocks = page.locator('#task-board-panel .background-state[data-expires-at]');
+  assert.equal(await clocks.count(), 1, 'One card opens in place');
   const mounted = await clocks.elementHandles();
   const clockSnapshot = () => clocks.evaluateAll(nodes => nodes.map(n => ({ text: n.textContent, expiresAt: n.dataset.expiresAt })));
   const initialClocks = await clockSnapshot(), startedAt = Date.now();
@@ -159,51 +160,53 @@ async function main() {
   for (const [index, initial] of initialClocks.entries()) {
     assert.ok(await mounted[index].evaluate(n => n.isConnected), 'The same card stays mounted without a state redraw');
     assert.equal(nextClocks[index].expiresAt, initial.expiresAt, 'Ticking preserves the stored deadline');
-    assert.notEqual(nextClocks[index].text, initial.text, 'First-open waiting countdown changes within 1.6 seconds');
+    assert.notEqual(nextClocks[index].text, initial.text, 'First-open board card countdown changes within 1.6 seconds');
   }
-  assert.equal((await clockProbe()).timers.active, 1, 'Both cards use one observed shared timer');
-  record('both first-open waiting countdowns tick without a conversation card or deadline change');
+  assert.equal((await clockProbe()).timers.active, 1, 'The card uses one observed shared timer');
+  record('the first-open board card countdown ticks without a conversation card or deadline change');
   await panel(false);
-  await idleClock('Closing the list with no conversation cards');
+  await idleClock('Closing the board with no conversation cards');
   for (const handle of mounted) { assert.equal(await handle.evaluate(n => n.isConnected), false); await handle.dispose(); }
-  record('removing the last visible countdown stops the clock');
+  record('closing the board detaches its card and stops the clock');
   for (const lang of ['zh', 'en']) for (const variant of ['implemented']) {
     await page.reload(); await page.locator('#new-session').waitFor(); await language(lang);
     await page.locator(`.session-link[data-session-id="${other}"]`).click();
     await page.locator('#chat-tab').click();
     await until(() => page.locator('#message-input').isVisible(), 'Other conversation visible');
-    assert.ok(await page.locator('#stream-waiting').isVisible());
+    assert.equal(await board.need().textContent(), locale.format(lang, 'taskBoard.need', { count: 2 }));
     for (const width of [1240, 850]) await shot(lang, variant, width, 'conversation');
     await page.locator('#terminal-tab').click();
     await until(() => page.locator('#native-pane').isVisible(), 'Native terminal visible');
-    assert.ok(await page.locator('#stream-waiting').isVisible());
+    assert.equal(await board.need().textContent(), locale.format(lang, 'taskBoard.need', { count: 2 }));
     for (const width of [1240, 850]) await shot(lang, variant, width, 'terminal');
     await page.locator('#room-nav').click(); await page.locator('#room-overview').click();
-    assert.ok(await page.locator('#stream-waiting').isVisible());
+    assert.equal(await board.need().textContent(), locale.format(lang, 'taskBoard.need', { count: 2 }));
     for (const width of [1240, 850]) await shot(lang, variant, width, 'overview');
     await panel(true);
-    assert.equal(await page.locator('.stream-waiting-row').count(), 2);
+    assert.equal(await board.waiting().count(), 2);
+    await expand(current);
     for (const width of [1240, 850]) await shot(lang, variant, width, 'cards');
     assert.equal(await pending(current).locator('.background-sentence').textContent(), lang === 'zh' ? '新建会话「Claude 7 · NAW 开发」 · Claude · 目录 claude-cards-20261115 · 跳过权限确认' : 'Create session “Claude 7 · NAW 开发” · Claude · Folder claude-cards-20261115 · Skip permission prompts');
-    assert.equal(await page.locator('.stream-waiting-count').textContent(), lang === 'zh' ? '有 2 件等你确认' : '2 actions need your confirmation');
-    assert.equal(await page.locator('.stream-waiting-title').textContent(), lang === 'zh' ? '清空「项目协作」的共享记录' : 'Clear shared records in “项目协作”');
+    assert.equal(await pending(current).locator('.background-details').count(), 1);
+    assert.equal(await pending(current).locator('.background-details').getAttribute('open'), null);
+    assert.equal(await pending(clear).locator('.task-board-task-title').textContent(), lang === 'zh' ? '清空「项目协作」的共享记录' : 'Clear shared records in “项目协作”');
+    await expand(clear);
     assert.equal(await pending(clear).locator('.background-sentence').textContent(), lang === 'zh' ? '清空空间「项目协作」的共享记录' : 'Clear shared records in “项目协作”');
     assert.equal(await pending(clear).locator('.background-risk-delete').count(), 1);
     assert.equal(await pending(clear).locator('.background-buttons .primary').textContent(), lang === 'zh' ? '确认' : 'Confirm');
-    assert.equal(await pending(current).locator('.background-details').count(), 1);
-    assert.equal(await pending(current).locator('.background-details').getAttribute('open'), null);
-    await pending(current).locator('.stream-waiting-link').click();
+    await expand(current); await pending(current).locator('.task-board-action[data-action="fullCard"]').click();
     await until(() => page.locator(`[data-message-id="${messageId(current)}"][data-search-target]`).isVisible(), 'One click reaches the exact card');
     const stale = page.locator(`#conversation-pane [data-message-id="${messageId(old)}"]`);
     assert.equal(await stale.locator('.background-buttons').count(), 0);
     for (const width of [1240, 850]) await shot(lang, variant, width, 'original-and-void');
-    record(`${lang}/${variant}: strip in conversation, native terminal and overview; direct navigation and disabled duplicate`);
+    record(`${lang}/${variant}: board count in conversation, native terminal and overview; direct navigation and disabled duplicate`);
   }
-  await panel(true); await pending(current).locator('.background-buttons button:not(.primary)').click();
+  await expand(current); await pending(current).locator('.background-buttons button:not(.primary)').click();
   await until(() => pending(current).count().then(n => n === 0), 'Cancel removes only that card');
   assert.ok(await pending(clear).isVisible());
-  await pending(clear).locator('.background-buttons button:not(.primary)').click();
-  await until(() => page.locator('#stream-waiting').isHidden(), 'Last cancellation clears the strip');
+  await expand(clear); await pending(clear).locator('.background-buttons button:not(.primary)').click();
+  await until(() => board.need().isHidden(), 'Last cancellation clears the board count');
+  await board.close();
   const final = await client.call('initial');
   assert.equal(await page.evaluate(async () => (await workspace.initial()).backgroundConfirmations.length), 0, 'No pending human confirmations');
   await page.locator(`.session-link[data-session-id="${source}"]`).click(); await page.locator('#chat-tab').click();
@@ -215,7 +218,7 @@ async function main() {
   assert.equal(await page.locator('#message-input').inputValue(), '保留这份未发送的草稿。');
   const again = await control('clearSharedHistory', []);
   await until(async () => (await page.evaluate(() => workspace.initial())).backgroundConfirmations.length === 1, 'A new confirmation arrives');
-  await panel(true);
+  await expand(again);
   const renewed = pending(again).locator('.background-state[data-expires-at]');
   const text = await renewed.textContent(), deadline = await renewed.getAttribute('data-expires-at');
   await delay(1600);
@@ -223,14 +226,15 @@ async function main() {
   assert.equal(await renewed.getAttribute('data-expires-at'), deadline, 'Restart does not change the deadline');
   const replacedNode = await renewed.elementHandle();
   await panel(false); await panel(true);
-  assert.equal(await replacedNode.evaluate(n => n.isConnected), false, 'List repaint detaches the old countdown node');
-  await replacedNode.dispose();
+  assert.equal(await replacedNode.evaluate(n => n.isConnected), false, 'Closing the board detaches the old countdown node');
+  await replacedNode.dispose(); await expand(again);
   assert.equal(await renewed.getAttribute('data-expires-at'), deadline, 'Repaint preserves the deadline');
   const repaintedText = await renewed.textContent(); await delay(1600);
   assert.notEqual(await renewed.textContent(), repaintedText, 'The replacement node keeps ticking');
   assert.equal((await clockProbe()).timers.active, 1, 'Repaint retains only one shared timer');
   await pending(again).locator('.background-buttons button:not(.primary)').click();
-  await until(() => page.locator('#stream-waiting').isHidden(), 'The renewed confirmation is cancelled');
+  await until(() => board.need().isHidden(), 'The renewed confirmation is cancelled');
+  await board.close();
   await idleClock('Cancelling the renewed confirmation');
   record('new confirmations restart the clock; repaint replaces nodes without retaining timers');
   assert.equal(fs.existsSync(createArgs[0].cwd), false, 'No requested directory created');

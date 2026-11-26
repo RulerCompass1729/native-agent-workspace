@@ -1,15 +1,20 @@
 'use strict';
 // The project manager (项目经理) of each collaboration space: at most one session per space, and one space per
 // session. Only the person designates it (main.cjs); it may add to that space's queue and reads that space only.
-// After a session rotation the record follows the written log to the one clear successor, by the same rules as the
-// butler's and the integrator's. A record that cannot be read is an error, never "nobody".
+// After a session rotation the record follows the written log to the one clear successor from the moment it confirms
+// the handoff (handoffChain, R254), not only once the old session is ended as the butler's and the integrator's do.
+// The person's own designation holds at once, against every handoff logged before it. The record itself takes no new
+// field (an older build would not read it): a designation by the person (set) and a handoff written into it (settle)
+// are each first a line in the rotation log, `designated` or `settled`, with the session it named before. A revoke,
+// the other space a designation clears and the secretary's retirement write no line. A record that cannot be read
+// is an error, never "nobody".
 // It took the place of the one secretary for all of NAW (queue-secretary.cjs), whose file it reads once and never writes.
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { uiError } = require('./ui-errors.cjs');
 const { roomId: validRoomId, roomIds, isMember } = require('./collaboration-spaces.cjs');
-const { successor, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
+const { handoffSteps, designatedAt, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
 
 const RECORD_MAX = 256 * 1024;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -70,26 +75,41 @@ class SpaceManagers {
       this.failed = error.code !== 'ENOENT';
     }
   }
-  // Each space's designated session as it is now. Two spaces naming the same session is no one's role.
-  all() {
+  // The rotation log's lines a manager follows.
+  entries() {
     if (this.failed) {
       throw uiError('error.manager.state');
     }
-    let entries = [];
-    if (this.managers.size) {
-      try {
-        entries = rotationEdges(this.logFile);
-      } catch (error) {
-        if (error.code !== 'ENOENT') {
-          throw uiError('error.manager.state');
-        }
+    try {
+      return rotationEdges(this.logFile, { handoffs: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw uiError('error.manager.state');
       }
+      return [];
     }
-    const current = new Map();
+  }
+  // Each space's designated sessions, from the one recorded to the one that holds the role now; each step says
+  // whether a later failure could still give it back (`final` false).
+  chains() {
+    if (this.failed) {
+      throw uiError('error.manager.state');
+    }
+    const entries = this.managers.size ? this.entries() : [];
+    const chains = new Map();
     for (const [roomId, selected] of this.managers) {
       if (selected) {
-        current.set(roomId, successor(selected, entries));
+        chains.set(roomId, handoffSteps(selected, entries, designatedAt(entries, roomId, selected)));
       }
+    }
+    return chains;
+  }
+  // Each space's designated session as it is now. Two spaces naming the same session is no one's role.
+  all() {
+    const current = new Map();
+    for (const [roomId, chain] of this.chains()) {
+      const { sessionId, nativeId } = chain.at(-1);
+      current.set(roomId, { sessionId, nativeId });
     }
     return current;
   }
@@ -119,6 +139,57 @@ class SpaceManagers {
     const roomId = this.secretaryRetired?.roomId;
     return roomId ? this.current(roomId) : null;
   }
+  // The session that manages this space now, when this one held the role in this space before; or null. A session
+  // that never held it (a plain member that rotated) is not told who does (review N2).
+  handedTo(record, roomId) {
+    const holder = this.current(roomId);
+    if (!holder || !validId(record?.id) || !validId(record?.nativeId) || record.id === holder.sessionId && record.nativeId === holder.nativeId) {
+      return null;
+    }
+    const held = this.holders(roomId).some(step => step.sessionId === record.id && step.nativeId === record.nativeId);
+    return held && this.designated({ id: holder.sessionId, nativeId: holder.nativeId }) === roomId ? holder : null;
+  }
+  // Every session that held this space's role: each session the record named, followed through the handoffs logged
+  // while it was named there.
+  holders(roomId) {
+    const entries = this.entries(), held = [...this.chains().get(roomId) || []];
+    for (const [at, entry] of entries.entries()) {
+      const before = entry?.event === 'settled' ? entry.old : entry?.event === 'designated' ? entry.before : null;
+      if (entry.spaces?.[0] !== roomId || !validId(before?.id) || !validId(before?.nativeId)) {
+        continue;
+      }
+      const prior = entries.slice(0, at), selected = { sessionId: before.id, nativeId: before.nativeId };
+      held.push(...handoffSteps(selected, prior, designatedAt(prior, roomId, selected)));
+    }
+    return held;
+  }
+  // R254 ①: once nothing can give it back (kept or done), the record names the session holding the role itself, so
+  // the record, the label and the permission agree. While a later step is reached through a handed line only, the
+  // record waits: a failed handoff gives it back, and an older build cannot read a record that says where it came
+  // from. `apply` false: only what would be written. Returns { roomId, from, to } for each space written, `to` the holder.
+  settle({ apply = true } = {}) {
+    const moves = [], managers = new Map(this.managers), now = this.all();
+    for (const [roomId, chain] of this.chains()) {
+      const last = chain.at(-1);
+      if (chain.length < 2 || !last.final) {
+        continue;
+      }
+      const to = { sessionId: last.sessionId, nativeId: last.nativeId };
+      // One space per session: a successor another space's record already reaches stays as it is.
+      if ([...now].some(([other, value]) => other !== roomId && value.sessionId === to.sessionId)) {
+        continue;
+      }
+      managers.set(roomId, to);
+      moves.push({ roomId, from: { sessionId: chain[0].sessionId, nativeId: chain[0].nativeId }, to });
+    }
+    if (apply && moves.length) {
+      for (const { roomId, from, to } of moves) {
+        this.logChange({ event: 'settled', spaces: [roomId], old: { id: from.sessionId, nativeId: from.nativeId }, new: { id: to.sessionId, nativeId: to.nativeId } });
+      }
+      this.save(managers, this.secretaryRetired);
+    }
+    return moves;
+  }
   // Every session that manages a space now.
   activeIds(sessions) {
     return new Set(sessions.filter(session => this.roomOf(session)).map(session => session.id));
@@ -127,6 +198,11 @@ class SpaceManagers {
   // directly or through another space's manager.
   creator(actor, roomId, assignee, records, labels) {
     const record = usableRecord(actor, records);
+    const holder = record && this.handedTo(record, roomId);
+    if (holder) {
+      const name = labels.get(holder.sessionId) || records.find(value => value.id === holder.sessionId)?.name || holder.sessionId;
+      throw uiError('error.queue.managerHandedOver', { name });
+    }
     if (!record || this.roomOf(record) !== roomId) {
       // A space nobody was ever designated for is a different answer from "you are another space's manager":
       // the person still has to designate one (R220.2).
@@ -155,7 +231,12 @@ class SpaceManagers {
         }
       }
     }
+    const before = this.failed ? null : this.managers.get(roomId) || null;
     managers.set(roomId, selected);
+    if (selected) {
+      this.logChange({ event: 'designated', spaces: [roomId], old: { id: selected.sessionId, nativeId: selected.nativeId }, new: null,
+        before: before && { id: before.sessionId, nativeId: before.nativeId } });
+    }
     if (!this.failed) {
       this.save(managers, this.secretaryRetired);
       return;
@@ -204,6 +285,27 @@ class SpaceManagers {
     }
     this.save(managers, { roomId });
     return { status: 'retired', roomId, name: record.name, sessionId: record.id };
+  }
+  // Written before the record: a change that cannot be logged is not made. A line logged for a record that then
+  // fails to save still names, as `before`, the session the record kept.
+  logChange(entry) {
+    const line = JSON.stringify({ time: Date.now(), ...entry });
+    let fd;
+    try {
+      fd = fs.openSync(this.logFile, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid() || stat.mode & 0o077) {
+        throw Error('Unsafe rotation log');
+      }
+      fs.writeSync(fd, `${line}\n`);
+      fs.fsyncSync(fd);
+    } catch {
+      throw uiError('error.manager.save');
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
   }
   save(next, secretaryRetired) {
     const managers = new Map([...next].filter(([, value]) => value || !secretaryRetired));

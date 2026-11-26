@@ -1,9 +1,8 @@
-// 11-24 加项 1+5: 「用户完全看不出到底在干啥」 — the in-progress row, the member card and the session header
+// 11-24 加项 1+5: 「用户完全看不出到底在干啥」 — the session header
 // name the running command, its start time and (Codex) the last output line.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const board = require('../renderer/task-board.js'), locale = require('../ui-locale.js'), distribution = require('../renderer/agent-distribution.js');
-const { fixture } = require('./fixtures/task-board-dom.cjs');
 const now = new Date(2026, 10, 23, 20, 16, 2).getTime(), minute = 60000, started = now - 9 * minute - 2000;
 const renderer = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
 const slice = (from, to, source = renderer) => { const a = source.indexOf(from), b = source.indexOf(to, a); assert.ok(a >= 0 && b > a, from); return source.slice(a, b); };
@@ -57,93 +56,8 @@ test('only a running tool of the current native turn counts, and the newest one 
   assert.equal(board.runningStep(idle), null);
 });
 
-function boardInput(steps) {
-  return {
-    rooms: [{ id: 'dev', name: 'Dev space', queue: [
-      { id: 'aaaaaaaa1111', status: 'sent', sentTo: 'b', text: 'Install synthetic build', sentAt: now - 16 * minute },
-      { id: 'bbbbbbbb2222', status: 'sent', sentTo: 'b', text: 'Older synthetic item', sentAt: now - 40 * minute },
-      { id: 'cccccccc3333', status: 'sent', sentTo: 'c', text: 'Run synthetic suite', sentAt: now - 7 * minute },
-      { id: 'dddddddd4444', status: 'queued', assignee: 'i', text: 'Queued synthetic' },
-    ] }],
-    sessions: [
-      { id: 'b', nativeId: 'n-b', name: 'B', state: 'working', roomIds: ['dev'], step: steps.b },
-      { id: 'c', nativeId: 'n-c', name: 'C', state: 'working', roomIds: ['dev'], step: steps.c },
-      { id: 'i', nativeId: 'n-i', name: 'I', state: 'idle', roomIds: ['dev'], step: steps.i },
-    ],
-    confirmations: [], confirmationsAvailable: true, connected: true,
-  };
-}
+// The board's row steps and agent cards left with R250 (11-25); the session header keeps the running tool.
 const clock = value => new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(value);
-function open(language, steps) {
-  const f = fixture();
-  f.board = board.bind({ host: f.host, document: f.doc, text: (k, p) => locale.format(language, k, p), now: () => now, onQueue() {}, onSession() {} });
-  f.board.update(boardInput(steps)); f.board.open();
-  f.row = id => f.host.querySelectorAll('.task-board-task').find(e => e.dataset.taskKey.includes(id));
-  f.card = id => f.host.querySelector('.task-board-people').querySelector('[data-person-id="' + id + '"]');
-  return f;
-}
-const action = language => locale.format(language, 'activity.tool.Bash');
-const steps = language => ({
-  b: { action: action(language), detail: 'Wait for memory pressure, then package', startedAt: started, lastLine: '' },
-  c: { action: action(language), detail: 'node --test app/tests', startedAt: now - 5 * minute, lastLine: '▶ suite-2: 2/5 files' },
-  i: { action: action(language), detail: 'should not show', startedAt: started, lastLine: 'should not show' },
-});
-
-for (const language of ['zh', 'en']) test(language + ': the in-progress row and the card say what runs and since when; only the member\'s newest item carries it', () => {
-  const f = open(language, steps(language));
-  try {
-    const at = clock(started), b = f.row('aaaaaaaa'), older = f.row('bbbbbbbb'), c = f.row('cccccccc');
-    const words = language === 'zh' ? '正在运行命令：Wait for memory pressure, then package · ' + at + ' 起' : 'Running a command: Wait for memory pressure, then package · since ' + at;
-    assert.equal(b.querySelector('.task-board-task-step').textContent, words);
-    assert.equal(b.querySelector('.task-board-task-output'), null, 'Claude: no output line');
-    assert.equal(older.querySelector('.task-board-task-step'), null, 'an older in-progress item of the same member');
-    assert.equal(c.querySelector('.task-board-task-output').textContent, (language === 'zh' ? '最后输出：' : 'Last output: ') + '▶ suite-2: 2/5 files');
-    const card = f.card('b');
-    assert.equal(card.querySelector('.task-board-person-step').textContent, words);
-    assert.ok(card.getAttribute('aria-label').endsWith(' · ' + words), card.getAttribute('aria-label'));
-    assert.ok(f.card('c').getAttribute('aria-label').endsWith('▶ suite-2: 2/5 files'));
-    assert.ok(!f.host.textContent.includes('should not show'), 'an idle member shows no step');
-    if (language === 'en') assert.ok(!/[一-鿿]/.test(b.textContent + card.textContent), b.textContent);
-    f.board.update(boardInput({}));
-    assert.equal(f.row('aaaaaaaa').querySelector('.task-board-task-step'), null, 'the step line goes when the tool ends');
-    assert.equal(f.card('b').querySelector('.task-board-person-step'), null);
-  } finally { f.board.dispose(); }
-});
-
-test('a step that is not well formed is ignored by the board', () => {
-  for (const bad of [{ action: '', detail: '', startedAt: started, lastLine: '' }, { action: 'x', detail: 1, startedAt: started, lastLine: '' }, { action: 'x', detail: '', startedAt: NaN, lastLine: '' }, { action: 'x', detail: '', startedAt: -1, lastLine: '' }]) {
-    const f = open('zh', { b: bad });
-    try {
-      assert.equal(f.row('aaaaaaaa').querySelector('.task-board-task-step'), null, JSON.stringify(bad));
-      assert.equal(f.card('b').querySelector('.task-board-person-step'), null);
-    } finally { f.board.dispose(); }
-  }
-});
-
-function intake(sessions, disconnected = false) {
-  let input;
-  const context = vm.createContext({ nativeCommandPreview: vm.runInNewContext('(' + preview + ')'), window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: distribution, nativeWorkspaceTaskBoard: board },
-    sidebarPresentation: () => ({ compact: '', tone: 'working', workTone: '' }), uiText: (k, p) => locale.format('zh', k, p),
-    state: { sessions, backgroundConfirmations: [], backgroundConfirmationsAvailable: true }, disconnected, spaceId: 'dev',
-    allSpaces: () => [{ id: 'dev', name: 'Dev', queue: [] }], spaceName: r => r.name, taskBoard: { update(value) { input = value; } } });
-  vm.runInContext(slice('function updateTaskBoard() {', '\nconst spaceCall') + '\nupdateTaskBoard();', context);
-  return input;
-}
-
-test('the renderer hands the board four short facts of the running tool and reads no other session\'s conversation', () => {
-  const idle = { id: 'i', nativeId: 'n-i', name: 'I', state: 'idle', roomIds: ['dev'] };
-  Object.defineProperty(idle, 'messages', { get() { throw Error('Conversation access forbidden'); } });
-  const input = intake([claude([claudeRow()], { name: 'B', roomIds: ['dev'] }), idle]);
-  assert.deepEqual(JSON.parse(JSON.stringify(input.sessions[0].step)), { action: '正在运行命令', detail: 'Wait for memory pressure, then package', startedAt: started, lastLine: '' });
-  assert.equal(input.sessions[1].step, null);
-  assert.equal(JSON.stringify(input).includes('build-local'), false, 'the raw command input does not reach the board when a description exists');
-  assert.equal(intake([claude([claudeRow()], { name: 'B', roomIds: ['dev'] })], true).sessions[0].step, null, 'nothing while the service is disconnected');
-  assert.equal(intake([claude([claudeRow()], { name: 'B', roomIds: ['dev'], nativeInputRequired: true })]).sessions[0].step, null, 'nothing while the native interface waits for the person');
-  const codex = { id: 'c', nativeId: 'n-c', activeTurnId: 't-c', state: 'working', name: 'C', roomIds: ['dev'] };
-  assert.equal(intake([{ ...codex, messages: [codexRow({ title: "/bin/zsh -lc 'npm run package'", input: "/bin/zsh -lc 'npm run package'" })] }]).sessions[0].step.detail, 'npm run package');
-  assert.equal(intake([{ ...codex, messages: [codexRow({ title: "/bin/zsh -lc 'cat a && npm test'", commandActions: [{ type: 'unknown', command: 'npm test' }] })] }]).sessions[0].step.detail, 'npm test');
-});
-
 // renders each session in turn into the same header elements
 function header(...sessions) {
   const elements = new Map(), $ = id => { if (!elements.has(id)) elements.set(id, { id, hidden: false, textContent: '' }); return elements.get(id); };

@@ -35,14 +35,11 @@ test('cancellation warning keeps its confirmation buttons through language repai
  const cancel=f.walk().find(el=>el.tagName==='button'&&el.textContent==='撤销请求…');assert.ok(cancel);cancel.onclick();
  const confirm=f.walk().find(el=>el.tagName==='button'&&el.textContent==='确认撤销请求');assert.ok(confirm);assert.doesNotThrow(()=>f.refresh());assert.ok(f.walk().includes(confirm));assert.equal(confirm.textContent,'Confirm cancellation');
 });
-test('the shared participant filter includes report sender and initiator without granting native row attribution',()=>{
- const from=renderer.indexOf('function timelineParticipants('),to=renderer.indexOf('function showRoomRecords(',from);
- let filter='executor';const rows=[{id:'report',text:'Original report body',operator:{senderId:'executor',recipientId:'initiator'}},{id:'other',text:'Other body',operator:{senderId:'other',recipientId:'another'}}];
- const context=vm.createContext({roomRecordReturn:null,roomRecordScope:'',roomThread:'',roomThreads:{roots:new Map()},timeline:()=>rows,$:id=>({value:id==='room-filter'?filter:''})});
- const read=()=>Array.from(vm.runInContext(renderer.slice(from,to)+'\nfilteredTimeline().map(x=>x.id)',context));
- assert.deepEqual(read(),['report']);filter='initiator';assert.deepEqual(read(),['report']);assert.equal(rows[0].sessionId,undefined);
- context.roomRecordReturn={id:'executor'};context.roomRecordScope='executor';filter='another';assert.deepEqual(read(),['report']);
- context.roomRecordReturn=null;context.roomRecordScope='';filter='unknown';assert.deepEqual(read(),[]);
+test('timeline participants include a report sender and initiator without granting native row attribution',()=>{
+ const from=renderer.indexOf('function timelineParticipants('),to=renderer.indexOf('\n}\n',from)+3;
+ const row={id:'report',text:'Original report body',operator:{senderId:'executor',recipientId:'initiator'}};
+ const ids=Array.from(vm.runInContext(renderer.slice(from,to)+'\ntimelineParticipants(row)',vm.createContext({row})));
+ assert.ok(ids.includes('executor')&&ids.includes('initiator'),JSON.stringify(ids));assert.equal(row.sessionId,undefined);
 });
 test('closed requests show their ending without asking the person to end them again',()=>{
  const f=fixture({recipientId:'s',requestId:'request',version:1,state:'closed',closedReason:'accepted',reportState:'ready',actionable:true,cannotUpdate:true});

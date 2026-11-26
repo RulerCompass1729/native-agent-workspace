@@ -37,6 +37,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
+const { ManagerNotices } = require('./manager-notices.cjs');
 const { VersionEvents, VersionNotices, RunMark } = require('./version-events.cjs');
 const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
@@ -92,6 +93,8 @@ function observePersonActions(snapshot) {
 // The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
 const answerNotices = new AnswerNotices();
 const versionNotices = new VersionNotices();
+// What changed in a space, owed to its project manager until the dispatcher tells it (R253).
+const managerNotices = new ManagerNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -951,6 +954,22 @@ async function retireSecretary(snapshot) {
     if (result.status === 'retired') await broadcastRoom();
   });
 }
+// R254 ①: a manager's finished rotation is written into the record, and the space says who took the role over. Looked
+// at with a state at most every ten seconds; the role itself already follows the log in between.
+let settleManagersAt = 0;
+async function settleManagers(snapshot) {
+  if (!spaceManagers || spaceManagers.failed || Date.now() < settleManagersAt) return;
+  settleManagersAt = Date.now() + 10000;
+  if (!spaceManagers.settle({ apply: false }).length) return;
+  await roomState.serial(async () => {
+    const sessions = roomState.apply(snapshot).sessions;
+    const moves = spaceManagers.settle();
+    for (const { roomId, to } of moves) try {
+      roomState.noteManager(roomId, 'notice.room.managerHanded', { name: sessionLabels.labels.get(to.sessionId) || sessions.find(s => s.id === to.sessionId)?.name || to.sessionId }, to.sessionId);
+    } catch { /* The role is the record. */ }
+    if (moves.length) await broadcastRoom();
+  });
+}
 // Where the role counts now: { roomId: { sessionId, nativeId } }, members of their own space only. A manager that is
 // handing over leaves its space a moment before its successor takes the role: it counts until then.
 function activeManagers(sessions) {
@@ -1161,6 +1180,7 @@ function bindClient(context) {
     if (!context.background) placeOpened(client, data).catch(() => {});
     if (!context.background) carryGrants(client, data).catch(() => {});
     if (!context.background) retireSecretary(data).catch(() => {});
+    if (!context.background) settleManagers(data).catch(() => {});
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
@@ -1283,6 +1303,8 @@ async function startQueueDispatcher() {
       answerNotices,
       // What this start brought, owed to the manager that took over from the secretary (version-events.cjs).
       versionNotices,
+      // A space's manager, told who joined or left its space and what became of the items it added (manager-notices.cjs).
+      managerNotices,
       // Each space's project manager now (space-managers.cjs): what planning keeps from it.
       managers: sessions => activeManagers(sessions),
       // Sessions on a backend in a migration's quiet window get no new item or NAW message (quiet-windows.cjs).

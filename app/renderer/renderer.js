@@ -206,8 +206,10 @@ catch (error) { console.error(error); }
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;
-let roomSurface = 'overview', roomOverview;
-let activityStream, speechStream;
+// R248: a space's four fixed views. 'overview' is the 网格, or the 成员 view when roomSession names a member.
+const ROOM_SURFACES = ['summary', 'stream', 'overview'];
+let roomSurface = 'summary', roomOverview;
+let activityStream, spaceFeed, spaceSummary;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
@@ -226,7 +228,14 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
-const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
+const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }),
+  onOriginal: target => attempt(() => openOriginal(target)), onWaiting: renderBoardWaiting });
+// A waiting row the board opens in place (R250 A): the conversation's own card, answer form or creation card.
+function renderBoardWaiting(slot, item) {
+  if (item.kind === 'operator-creation') renderOperatorCreation(slot.entry, item.message, { inbox: true });
+  else if (item.card) renderBackgroundControls(slot.entry, item.card.message);
+  else if (item.kind === 'question') renderWaitingQuestion(slot.question, item);
+}
 const agentDistribution = window.nativeWorkspaceAgentDistribution.bind({ host: $('agent-distribution'), document, text: uiText,
   onSession: id => attempt(() => select(id, 'chat')), onMode: () => attempt(persistView) });
 function distributionStewardRole(record, rooms) {
@@ -250,6 +259,29 @@ function updateAgentDistribution() {
 }
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
+// Agent session-creation grants are settings (R251 D, 11-25): each one's holder, use, limits, expiry and quota edit.
+const setupGrantRows = new Map();
+let setupGrantCount = 0;
+function renderSetupGrants() {
+  if (!$('setup-dialog')?.open || !state) return;
+  const grants = (state.operatorPolicy?.domains || []).filter(d => !d.revokedAt && d.expiresAt > Date.now()), list = $('setup-grants-list'), rows = [];
+  setupGrantCount = grants.length; $('setup-grants').hidden = !grants.length;
+  ui.display.text($('setup-grants-count'), 'operator.quota.settingsCount', () => ({ count: setupGrantCount }));
+  for (const domain of grants) {
+    let entry = setupGrantRows.get(domain.id);
+    if (!entry) { const row = node('div', undefined, 'setup-grant'), actions = node('div'); row.append(actions); entry = { item: row, actions }; setupGrantRows.set(domain.id, entry); }
+    renderOperatorQuota(entry, domain); rows.push(entry.item);
+  }
+  // In place: an open quota edit keeps its input and focus across updates.
+  for (const row of [...list.children]) if (!rows.includes(row)) row.remove();
+  rows.forEach((row, i) => { if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null); });
+  for (const id of [...setupGrantRows.keys()]) if (!grants.some(d => d.id === id)) setupGrantRows.delete(id);
+}
+async function openGrants(id) {
+  await showSetup();
+  updateState(await api.initial()); render();
+  setupGrantRows.get(id)?.quotaHeading?.focus();
+}
 function updateTaskBoard() {
   if (!state) return;
   taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
@@ -257,18 +289,8 @@ function updateTaskBoard() {
       createdAt: Number.isFinite(q.createdAt) && q.createdAt >= 0 ? q.createdAt : null, sentAt: Number.isFinite(q.sentAt) && q.sentAt >= 0 ? q.sentAt : null,
       ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
-    sessions: state.sessions.map(s => {
-      let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
-      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected), presentation = sidebarPresentation(s), { look, group } = window.nativeWorkspaceAgentDistribution;
-      return { id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
-        look: look(presentation), agentStatus: group(presentation), statusText: presentation.compact,
-        transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
-        approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
-        claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),
-        nativeApproval: s.nativeApproval ? { requests: s.nativeApproval.requests?.map(a => ({ pending: a.pending })) } : null, nativeInputRequired: s.nativeInputRequired,
-        background: s.background, backgroundStale: s.backgroundStale, runningChildren: fleet.running, unknownChildren: fleet.unknown, workUnconfirmed: fleet.work.unconfirmed,
-        step: disconnected ? null : runningStepView(s) };
-    }), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
+    // The board lists tasks, not live session state (R250): names and whether a session has ended.
+    sessions: state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, archived: s.archived })), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
       state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition })),
     confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId });
 }
@@ -280,7 +302,7 @@ function runningStepView(s) {
   return { action: action || uiText('activity.tool.other'), detail: step.detail, startedAt: step.startedAt, lastLine: step.lastLine };
 }
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
-const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
+const roomViewFields = ['sharedDraft', 'roomSession', 'roomMemberChoice', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
 const sharedSurface = () => selected === 'room' && !focusedRoomMember();
 const focusedReadingKey = id => focusedRoomMember() ? spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}` : id;
@@ -306,7 +328,6 @@ let mentionChanging = false, mentionComposing = false;
 let pendingRoomFilter = '';
 let roomThread = '', roomReplyTo = '';
 let roomRecordScope = '', roomRecordReturn = null, roomFilterHistory = null;
-const roomRecordSelections = new Map();
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
 const roomReadingKey = () => roomRecordScope ? `related:${spaceId}:${roomRecordScope}` : roomRecordReturn ? `related-all:${spaceId}:${roomRecordReturn.id}` : roomRecentPreview() ? `room-recent:${spaceId}` : spaceId === 'shared' ? roomThread ? `room:${roomThread}` : 'room' : `room:${spaceId}:${roomThread || 'main'}`;
 const sessionRows = new Map();
@@ -928,16 +949,11 @@ function orderedMembers(id = spaceId) {
   return people.map((record, index) => ({ record, rank: ranks.get(record.id) ?? fallback + index }))
     .sort((a, b) => a.rank - b.rank).map(item => item.record);
 }
-// A left member row points at that member's column; in one member's view it switches to that member.
-async function revealSpaceMember(id) {
-  if (selected !== 'room' || !members().some(s => s.id === id)) return;
-  if (focusedRoomMember()) { if (roomSession !== id) roomOverview?.focus(id); return; }
-  if (roomSurface !== 'overview') {
-    captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview';
-    await selectRoom('', true);
-    await new Promise(resolve => requestAnimationFrame(resolve));
-  }
-  if (selected === 'room' && roomSurface === 'overview') roomOverview?.reveal(id);
+// R248: a member of the open space opens in its 成员 view, the left list and the tabs staying; R247: any other
+// row, also one under a space in 按空间分组 outside it, opens its session alone as before.
+function openSidebarRow(id) {
+  if (selected !== 'room' || !members().some(s => s.id === id)) return select(id);
+  if (!focusedRoomMember() || roomSession !== id) openRoomMember(id);
 }
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
@@ -953,6 +969,7 @@ function focusRoomMember(id, previous, originKey) {
   const key = spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}`;
   if (id && id !== previous && !readingPositions[key] && readingPositions[originKey]) readingPositions[key] = structuredClone(readingPositions[originKey]);
   roomSurface = 'overview'; roomSession = id; roomRecordScope = ''; roomRecordReturn = null; restoreRoomMemberView(id);
+  if (id) (roomViews[spaceId] ||= {}).roomMemberChoice = id;
   activateSoloComposer(id);
   lastMessages = ''; render(); attempt(persistView);
 }
@@ -1072,13 +1089,31 @@ function renderRoomMemberTabs(people = orderedMembers()) {
   }
   for (const tab of retained.values()) tab.remove();
   refreshRoomMemberTabs(people);
-  const routes = [$('room-overview'), $('room-conversation'), $('room-record')];
-  const active = routes.includes(document.activeElement) ? document.activeElement : roomSurface === 'records' ? $('room-record') : roomSurface === 'conversation' ? $('room-conversation') : $('room-overview');
+  const routes = roomTabs(), active = routes.includes(document.activeElement) ? document.activeElement : $(roomTabCurrent());
   routes.forEach(route => { route.tabIndex = route === active ? 0 : -1; });
+}
+// R248: 总览 · 信息流 · 网格 · 成员 are always there; the one shown is marked, and nothing else in the row changes.
+function roomTabs() { return ['room-summary', 'room-stream', 'room-overview', 'room-member'].map($); }
+function roomTabCurrent() {
+  if (focusedRoomMember() && members().some(s => s.id === roomSession && !s.archived)) return 'room-member';
+  return roomSurface === 'summary' ? 'room-summary' : roomSurface === 'stream' ? 'room-stream' : 'room-overview';
+}
+function markRoomTabs() {
+  const currentTab = roomTabCurrent();
+  for (const tab of roomTabs()) {
+    tab.removeAttribute('aria-pressed');
+    if (tab.id === currentTab) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+  }
+  const person = focusedRoomMember() ? current() : roomMemberChoice();
+  if (person) ui.display.text($('room-member'), 'room.memberTab', { name: spaceMemberLabel(person) }); else ui.display.text($('room-member'), 'room.memberTabEmpty');
+  $('room-member').disabled = !person;
+  const waiting = getSpaceFeed()?.waiting(state.room) || 0, badge = $('room-stream-waiting');
+  badge.hidden = !waiting; badge.textContent = waiting ? String(waiting) : '';
+  ui.display.attribute($('room-stream'), 'aria-label', waiting ? 'room.streamWaiting' : 'room.stream', { count: waiting });
 }
 function roomNavigationKey(event) {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.ctrlKey || event.metaKey) return;
-  const routes = [$('room-overview'), $('room-conversation'), $('room-record')], index = routes.indexOf(event.target);
+  const routes = roomTabs().filter(route => !route.disabled), index = routes.indexOf(event.target);
   if (index < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? routes.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + routes.length) % routes.length;
@@ -1173,24 +1208,21 @@ function renderRoomOverview() {
       attempt(persistView);
     },
   });
-  const focused = focusedRoomMember(), records = roomSurface === 'records', conversation = roomSurface === 'conversation';
-  $('collaboration-overview').hidden = focused || records || conversation;
+  const focused = focusedRoomMember(), grid = roomSurface === 'overview' && !focused;
+  $('collaboration-overview').hidden = !grid && !focused;
   for (const person of members()) readLegacyProgress(person);
-  roomOverview.update(orderedMembers(), !disconnected, !records && !conversation, focused ? roomSession : '');
+  roomOverview.update(orderedMembers(), !disconnected, grid, focused ? roomSession : '');
   renderHeaderLayout(current(), selected === 'room');
-  const overview = $('room-overview');
-  overview.removeAttribute('aria-pressed');
-  if (!records && !conversation && !focused) overview.setAttribute('aria-current', 'page'); else overview.removeAttribute('aria-current');
-  if (conversation) $('room-conversation').setAttribute('aria-current', 'page'); else $('room-conversation').removeAttribute('aria-current');
-  ui.display.text(overview, focused ? 'room.returnSpace' : 'room.overview', { name: spaceName(state.room) });
-  $('room-record').setAttribute('aria-pressed', String(records));
-  if (roomOverview) roomOverview.toolbar.hidden = focused || records || conversation;
+  markRoomTabs();
+  $('room-record').setAttribute('aria-pressed', 'false');
+  // R248: the grid is the only layout; 列表 and 简化信息 are gone, and Back is the 网格 tab.
+  if (roomOverview) roomOverview.toolbar.hidden = true;
   // The header's row now holds what this page shows of it.
   fitRoomTabs();
   $('member-related-records').hidden = !focused;
-  $('room-record-view').querySelector('.timeline-tools').hidden = !records;
-  $('room-messages').hidden = !records;
-  if (!records) $('thread-heading').hidden = true;
+  $('room-record-view').querySelector('.timeline-tools').hidden = true;
+  $('room-messages').hidden = true;
+  $('thread-heading').hidden = true;
   $('room-composer').hidden = focused;
   $('room-layout').classList.toggle('collaboration-focus', focused);
   // Header, footer and shared-composer layout must settle before measuring the columns.
@@ -1432,6 +1464,15 @@ function hierFolderContainers(visible, list) {
   for (const [key, section] of hierSections) if (!keep.has(key)) { section.element.remove(); hierSections.delete(key); }
   return containers;
 }
+// A space heading sticks only while it takes at most 40% of the list's height, as VS Code's sticky scroll
+// (maxWidgetViewRatio); in a shorter list it scrolls away so the rows under it can be clicked.
+function fitSidebarStickyHeadings() {
+  const list = $('session-list');
+  let tallest = 0;
+  for (const heading of list.querySelectorAll(':scope > .session-space-group > h3')) tallest = Math.max(tallest, heading.offsetHeight);
+  const fits = String(tallest > 0 && tallest <= list.clientHeight * 0.4);
+  if (list.dataset.stickyHeadings !== fits) list.dataset.stickyHeadings = fits;
+}
 function decorateSidebarHierarchy() {
   const text = hierText(), folderView = hierFolderActive();
   hierViewButton();
@@ -1468,6 +1509,7 @@ function decorateSidebarHierarchy() {
     ui.display.computed(row.link, 'aria-description', () => [steward ? '' : hierRole(record), long && row.hier.parts.textContent, doing && hierText().doingTitle(doing), folder.path ? hierText().folder(folder.path, folder.branch) : hierFolder(record).name, queue.added.length && hierText().added(queue.added.length)].filter(Boolean).join(' · '));
 
   }
+  fitSidebarStickyHeadings();
 }
 function hierHeaderCrumb(record) {
   let crumb = document.getElementById('sidebar-folder-path');
@@ -1866,15 +1908,16 @@ function captureRoomView() {
 }
 function restoreRoomView() {
   const view = roomViews[spaceId] ||= {};
-  $('shared-input').value = view.sharedDraft || ''; roomSession = view.roomSession || '';
+  // R248: a space opens on its 总览; each member's own view stays in roomMemberViews for its 成员 tab.
+  $('shared-input').value = view.sharedDraft || ''; roomSession = '';
   roomMention = view.roomMention ? { ...view.roomMention } : null;
   pendingRoomFilter = view.roomFilter || ''; $('room-filter').value = pendingRoomFilter; $('room-search').value = view.roomSearch || '';
-  roomThread = view.roomThread || ''; roomReplyTo = view.roomReplyTo || ''; roomSurface = view.roomSurface || 'overview';
+  roomThread = view.roomThread || ''; roomReplyTo = view.roomReplyTo || ''; roomSurface = 'summary';
   roomRecordScope = view.roomRecordScope || ''; roomRecordReturn = view.roomRecordReturn || null; roomFilterHistory = view.roomFilterHistory || null;
   roomDraftRevision = view.draftRevision || 0; roomSubmitting = view.submitting || null;
   roomMentionHistory = roomHistories.get(spaceId) || nativeWorkspaceMentions.editHistory(); roomHistories.set(spaceId, roomMentionHistory);
   normalizeRoomMention(); populateSelect($('recipient'), members()); $('recipient').value = roomRecipient();
-  if (roomSurface === 'overview' && roomSession) restoreRoomMemberView(roomSession); else mode = 'chat';
+  mode = 'chat';
 }
 function persistedRoomViews() {
   return Object.fromEntries(Object.entries(roomViews).map(([id, value]) => [id, Object.fromEntries(roomViewFields.filter(k => value[k] !== undefined).map(k => [k, value[k]]))]));
@@ -1898,7 +1941,10 @@ async function selectSpace(id) {
     roomOverview?.dispose(); roomOverview = null; spaceId = id; state = projectSpace(state); restoreRoomView();
     runPreview = null; shareRevision++; lastRoomMessages = ''; lastMessages = '';
   }
-  return selectRoom(roomSession, true);
+  // Decision A (R248): entering a space, or its name again, opens its 总览.
+  if (focusedRoomMember() || roomSession) { rememberRoomMemberView(); roomSession = ''; }
+  roomSurface = 'summary'; roomRecordScope = ''; roomRecordReturn = null; mode = 'chat';
+  return selectRoom('', true);
 }
 function renderSpaceNavigation() {
   $('room-nav').parentElement.hidden = !allSpaces().some(r => r.id === 'shared');
@@ -2071,7 +2117,7 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
 // Native-reported vendor identity is independent of the program running it.
 // Optional local PNGs stay outside the public repository; letters work without them.
 const VENDOR_MARKS = { anthropic: ['A', 'Anthropic'], openai: ['O', 'OpenAI'], deepseek: ['D', 'DeepSeek'] };
-const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH' };
+const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH', pi: 'pi' };
 function sessionMaker(record) {
   const shell = record?.shell || record?.provider;
   const vendor = typeof record?.vendor === 'string' && record.vendor ? record.vendor : shell === 'claude' ? 'anthropic' : null;
@@ -3140,8 +3186,9 @@ async function answerConfirmationBatch(batch, cancel) {
 }
 // A create batch states its one shared configuration once; each row keeps only the name that differs.
 function backgroundPermissionText(summary) {
-  // DSH keeps its own approvals and takes no per-session settings.
+  // DSH keeps its own approvals and takes no per-session settings; pi has no approvals and takes none either.
   if (summary?.provider === 'dsh') return uiText('background.permission.dsh');
+  if (summary?.provider === 'pi') return uiText('background.permission.pi');
   const modes = ['manual', 'plan', 'dontAsk', 'acceptEdits', 'auto', 'bypassPermissions'];
   if (summary?.risks?.includes('skipPermissions') || summary?.permissionMode === 'bypassPermissions') return uiText('background.permission.skipped');
   return uiText(modes.includes(summary?.permissionMode) ? 'background.permission.' + summary.permissionMode : 'background.permission.native');
@@ -3149,7 +3196,7 @@ function backgroundPermissionText(summary) {
 function backgroundBatchConfig(summary) {
   const parts = [], native = uiText('standing.nativeDefault');
   if (summary.provider) parts.push(providerName(summary.provider));
-  if (summary.provider !== 'dsh') {
+  if (summary.provider !== 'dsh' && summary.provider !== 'pi') {
     parts.push(uiText('background.card.model', { model: summary.model || native }));
     if (summary.effort) parts.push(uiText('background.card.effort', { effort: summary.effort }));
     if (summary.profile) parts.push(uiText('background.card.profile', { profile: summary.profile }));
@@ -3441,7 +3488,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
   const permission = uiNode('span', 'operator.permission', () => ({ permission: uiText('operator.' + op.args.permission) }));
   permission.classList.toggle('operator-bypass', op.args.permission === 'bypass'); facts.append(permission); controls.append(facts);
   if (!inbox) {
-    controls.append(uiButton('operator.card.review', () => getActivityStream()?.showCreation(op.initiatorId, op.actionKey), 'small'));
+    controls.append(uiButton('operator.card.review', () => taskBoard.show(`operator-creation:${op.initiatorId}:${op.actionKey}`), 'small'));
     return;
   }
   const currentRequest = () => {
@@ -3491,7 +3538,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
       if (latest.space && !allSpaces().some(r => r.id === latest.space && !r.archived)) throw uiError('error.operator.stale');
       await act('authorize', { key: op.actionKey, domainId: grant.id });
     }), 'small primary');
-    approvalNodes.push(reuse); coverage.append(reuse, uiButton('operator.quota.edit', () => getActivityStream()?.showGrants(grant.id), 'small')); controls.append(coverage);
+    approvalNodes.push(reuse); coverage.append(reuse, uiButton('operator.quota.edit', () => attempt(() => openGrants(grant.id)), 'small')); controls.append(coverage);
   }
   const localValue = ms => { const date = new Date(ms); return new Date(ms - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const draft = entry.operatorGrantDraft ||= { daily: '1', concurrent: '1', duration: '1', expires: localValue(Date.now() + 3600000), space: '', consent: false };
@@ -4302,8 +4349,9 @@ function renderSpaceSwitch(room) {
 function renderSpaceRail() {
   const active = selected === 'room';
   $('space-rail-routes').hidden = !active;
-  $('switch-space').hidden = !active || Boolean(focusedRoomMember());
-  renderSpaceSwitch(active && !focusedRoomMember() ? spaceRecord(spaceId) : null);
+  // R248: the space's header, its name as the switch, stays the same with a member open.
+  $('switch-space').hidden = !active;
+  renderSpaceSwitch(active ? spaceRecord(spaceId) : null);
 }
 // Every unarchived session but the butler the person talks to, which has its own place above the lists.
 function sidebarSessions() {
@@ -4551,6 +4599,7 @@ function providerName(provider) {
   if (provider === 'claude') return 'Claude';
   if (provider === 'dsh') return 'DSH';
   if (provider === 'agy') return 'Antigravity';
+  if (provider === 'pi') return 'pi';
   return 'Codex';
 }
 async function moveSidebarSession(id, target, after) {
@@ -4558,32 +4607,31 @@ async function moveSidebarSession(id, target, after) {
   await api.sidebar({ type: 'move', id, target, after });
 }
 function renderSidebarGroups() {
-  const spaceView = selected === 'room', grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
-  $('workspace-group').hidden = spaceView || grouped && renameTarget?.id !== 'room';
-  document.querySelector('.session-view-switch').hidden = spaceView;
-  $('sessions-create-slot').hidden = spaceView;
+  // R247: the left list stays as it is outside a space; the open space is only highlighted.
+  const grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
+  $('workspace-group').hidden = grouped && renameTarget?.id !== 'room';
   $('workspace-group').dataset.groupedSessions = String(grouped);
   const createSlot = $(grouped ? 'sessions-create-slot' : 'workspace-create-slot');
   if ($('new-space').parentElement !== createSlot) createSlot.append($('new-space'));
   const discoveryGroup = $(grouped ? 'sessions-group' : 'workspace-group');
   if ($('space-discovery').parentElement !== discoveryGroup) discoveryGroup.insertBefore($('space-discovery'), discoveryGroup.querySelector('.sidebar-group-body'));
   $('space-discovery').hidden = Boolean(count) || Boolean(state.sidebar?.[grouped ? 'sessionsCollapsed' : 'workspaceCollapsed']);
-  ui.display.text($('session-group-label'), spaceView ? 'sidebar.spaceMembers' : grouped ? 'sidebar.spaces' : 'sidebar.sessions');
+  ui.display.text($('session-group-label'), grouped ? 'sidebar.spaces' : 'sidebar.sessions');
   const visible = state.sessions.filter(s => !s.archived && s.id !== state.steward?.sessionId);
   const working = visible.filter(s => s.state === 'working').length;
-  ui.display.computed($('session-group-summary'), 'text', () => spaceView ? String(members().length) : grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
+  ui.display.computed($('session-group-summary'), 'text', () => grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
   ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
   // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
-  document.querySelector('.drop-hint').hidden = spaceView || !allSpaces().some(r => !r.archived);
+  document.querySelector('.drop-hint').hidden = !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    const name = () => uiText({ sessions: spaceView ? 'sidebar.spaceMembers' : grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
-    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? spaceView ? uiText('sidebar.memberCount', { count: members().length }) : grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
+    const name = () => uiText({ sessions: grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
+    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' && !grouped && !spaceView ? uiText('sidebar.sessionDrop') : name() }));
+    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' && !grouped ? uiText('sidebar.sessionDrop') : name() }));
   }
   sidebarLayout?.update(state.sidebar);
 }
@@ -4605,16 +4653,13 @@ function renderSessions() {
     if (!model || model.actionsKey !== sessionMenu.actionsKey) sessionMenu.close();
     else if (sessionMenu.factsKey !== sidebarFactsKey(current)) { sessionMenu.factsKey = sidebarFactsKey(current); sessionMenu.close.update(model.items); }
   }
-  // In a space the list is that space's members, in its column order, one row per column.
-  const visible = selected === 'room' ? orderedMembers() : sidebarSessions();
-  const spaceView = selected === 'room', grouped = !spaceView && sidebarView === 'grouped', occurrences = [], containers = new Map();
+  // R247: entering a space keeps this list; the space's group, or its members' rows, are highlighted.
+  const visible = sidebarSessions(), openSpace = selected === 'room' ? spaceId : null;
+  const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
   const list = $('session-list');
-  const folderOf = typeof hierFolderContainers === 'function' ? hierFolderContainers(grouped || spaceView ? null : visible, list) : null;
+  const folderOf = typeof hierFolderContainers === 'function' ? hierFolderContainers(grouped ? null : visible, list) : null;
   $('sessions-flat').setAttribute('aria-pressed', String(sidebarView !== 'grouped')); $('sessions-grouped').setAttribute('aria-pressed', String(sidebarView === 'grouped'));
-  if (spaceView) {
-    for (const group of sidebarGroups.values()) group.element.remove();
-    for (const record of visible) occurrences.push({ record, key: `member:${spaceId}:${record.id}`, group: spaceId, container: list, member: true });
-  } else if (grouped) {
+  if (grouped) {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, room: r, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
@@ -4655,6 +4700,7 @@ function renderSessions() {
       else ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: groupName(), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
       const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
+      entry.element.classList.toggle('current-space', open);
       entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
       if (group.id) ui.display.attribute(entry.title, 'aria-label', 'sidebar.openSpace', () => ({ name: groupName() }));
       // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
@@ -4690,14 +4736,13 @@ function renderSessions() {
   if (sessionMenu && !sessionMenu.anchor && sessionMenu.rowKey && !keys.has(sessionMenu.rowKey)) sessionMenu.close();
   for (const [key, row] of sessionRows) if (!keys.has(key) && renameTarget?.row !== row.element) { row.element.remove(); sessionRows.delete(key); }
   const positions = new Map(), repeated = sameNameSessions(visible);
-  for (const { record, key, group, container, steward = false, member = false } of occurrences) {
+  for (const { record, key, group, container, steward = false } of occurrences) {
     let row = sessionRows.get(key);
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id; element.dataset.occurrence = key;
-      const link = button('', () => member ? revealSpaceMember(record.id) : select(record.id), 'session-link'); link.dataset.sessionId = record.id;
-      // The butler's row is not reordered and not dragged into a space; a member row only points at its column.
-      if (member) element.classList.add('space-member-row');
-      else if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
+      const link = button('', () => attempt(() => openSidebarRow(record.id)), 'session-link'); link.dataset.sessionId = record.id;
+      // The butler's row is not reordered and not dragged into a space.
+      if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
       const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
       const metadata = node('span', undefined, 'session-metadata'), time = node('time', undefined, 'session-time'), marker = node('span', undefined, 'sidebar-state-marker');
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
@@ -4722,7 +4767,7 @@ function renderSessions() {
     const version = () => backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`);
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, spaceName(r)]));
-    row.badges.hidden = Boolean((grouped || member) && group);
+    row.badges.hidden = Boolean(grouped && group);
     if (row.badgeKey !== badgeKey) {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
       // shortens it only by the width it has (T-144). The full list is in the hover card and the row's label.
@@ -4734,7 +4779,9 @@ function renderSessions() {
     // Compact version marks keep the three cases apart: older alpha, different, unreported.
     const notice = version(), versionMark = notice ? { old: '↑', different: '≠', unknown: '?' }[notice.kind] : '';
     row.version.textContent = versionMark; row.version.dataset.marker = versionMark; ui.display.computed(row.version, 'title', () => version()?.title || ''); row.version.hidden = !notice;
-    const current = member ? focusedRoomMember() && roomSession === record.id : record.id === selected;
+    const ofOpenSpace = Boolean(openSpace) && !steward && (group ? group === openSpace : inSpace(record, openSpace));
+    const current = ofOpenSpace ? Boolean(focusedRoomMember()) && roomSession === record.id : record.id === selected;
+    row.element.classList.toggle('in-current-space', ofOpenSpace && !group);
     row.link.classList.toggle('active', current); row.element.classList.toggle('active', current);
     if (current) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     const moreParams = () => ({ name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceName(spaceRecord(group))}` : '' }); ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
@@ -4759,11 +4806,12 @@ function createReadiness() {
   renderCreateSpaces();
   renderCreateProfiles();
   renderDshProvider();
+  renderPiProvider();
   renderAgyProvider();
   const historyProvider = chosenProvider();
   // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
-  // DSH and Antigravity sessions have no history picker here.
-  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || historyProvider === 'agy' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  // DSH, pi and Antigravity sessions have no history picker here.
+  $('open-native-history').hidden = deepseekChosen() || ['dsh', 'pi', 'agy'].includes(historyProvider) || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   $('open-claude-sessions').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeSessionList');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
@@ -4800,7 +4848,7 @@ function createReadiness() {
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   // DSH keeps its own approvals; the service refuses bypass for it.
   if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true' && historyProvider !== 'agy') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
-  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
+  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh' || historyProvider === 'pi';
   if ($('skip-permissions-option').hidden) { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
@@ -4812,8 +4860,8 @@ function createReadiness() {
     return;
   }
   const provider = chosenProvider();
-  // DSH and Antigravity are ready when the service resolved their runtimes.
-  const programReady = provider === 'dsh' ? state.available?.dsh === true : provider === 'agy' ? state.available?.agy === true : state.preflight?.[provider];
+  // DSH, pi and Antigravity are ready when the service resolved their runtimes.
+  const programReady = ['dsh', 'pi', 'agy'].includes(provider) ? state.available?.[provider] === true : state.preflight?.[provider];
   const ready = state.preflight?.python && programReady && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
@@ -4833,6 +4881,13 @@ function renderDshProvider() {
   const offered = state.available?.dsh === true;
   $('dsh-provider').hidden = !offered;
   const chosen = document.querySelector('input[name="provider"]:checked').value === 'dsh';
+  if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+}
+// pi on DeepSeek, offered only when the service reports NAW's pinned pi runtime.
+function renderPiProvider() {
+  const offered = state.available?.pi === true;
+  $('pi-provider').hidden = !offered;
+  const chosen = document.querySelector('input[name="provider"]:checked').value === 'pi';
   if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
 }
 function renderAgyProvider() {
@@ -5028,7 +5083,7 @@ function renderSetupPrograms(localeOnly = false) {
 }
 async function showSetup() {
   const ticket = setupTicket = openSetupDialog();
-  mobileSetup.open();
+  mobileSetup.open(); renderSetupGrants();
   setupLoading = true; setupFailure = null;
   renderInterfaceLanguage(); renderSetupPrograms();
   try {
@@ -5134,11 +5189,6 @@ function renderSnapshotMaterials() {
 function timelineParticipants(message) {
   return [...new Set([message.sessionId, message.recipientId, ...(message.deliveries || []).map(d => d.recipientId), message.wake?.senderId, message.wake?.recipientId, message.operator?.senderId, message.operator?.recipientId, message.peerMessage?.senderId, message.peerMessage?.recipientId].filter(id => typeof id === 'string' && id))];
 }
-function filteredTimeline() {
-  const related = Boolean(roomRecordReturn || roomRecordScope), id = related ? roomRecordScope : $('room-filter').value;
-  const query = related ? '' : $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (related || !roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || timelineParticipants(m).includes(id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
-}
 
 function getActivityStream() {
   if (!window.nativeWorkspaceActivityStream) return null;
@@ -5147,13 +5197,10 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
-    waitingChanged: count => taskBoard.setWaitingCount(count),
-    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, cardHidden: confirmationCardHidden, question: renderWaitingQuestion,
-    creation: (entry, message) => renderOperatorCreation(entry, message, { inbox: true }),
-    quota: renderOperatorQuota, refresh: async () => { updateState(await api.initial()); render(); },
+    waitingChanged: items => taskBoard.setWaiting(items), cardHidden: confirmationCardHidden,
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
-    original: openOriginal,
+    original: openOriginal, showStream: () => showRoomSurface('stream'),
   });
 }
 async function openOriginal(target) {
@@ -5164,54 +5211,65 @@ async function openOriginal(target) {
   if (!target.messageId || !pointToMessage($('messages'), record.id, target.messageId)) toastMessage('stream.openedSession');
   return true;
 }
-function getSpeechStream() {
-  if (!window.nativeWorkspaceSpeechStream || !window.nativeWorkspaceTaskStream) return null;
-  return speechStream ||= window.nativeWorkspaceSpeechStream.bind({
+// The member a space's 成员 tab opens: the one open now, else the one last opened there, else the first member.
+function roomMemberChoice() {
+  const people = orderedMembers(), chosen = focusedRoomMember() ? roomSession : roomViews[spaceId]?.roomMemberChoice;
+  return people.find(s => s.id === chosen && !s.archived) || people.find(s => !s.archived) || null;
+}
+function memberStateTone(s) {
+  if (window.nativeWorkspaceTaskStream.needsApproval(s)) return 'waiting';
+  return s.state === 'working' ? 'working' : s.state === 'idle' ? 'idle' : 'other';
+}
+function getSpaceFeed() {
+  if (!window.nativeWorkspaceSpaceFeed || !window.nativeWorkspaceTaskStream || !window.nativeWorkspaceDisclosure) return null;
+  return spaceFeed ||= window.nativeWorkspaceSpaceFeed.bindFeed({
     document, text: uiText, language: () => ui.language.getSnapshot().active, attempt,
-    original: openOriginal, mount: panel => $('room-record-view').insertBefore(panel, $('room-composer')), room: () => state.room,
-    members: () => orderedMembers(), butlerId: () => state.steward?.sessionId || '',
-    visible: () => selected === 'room' && roomSurface === 'conversation',
+    mount: panel => $('room-record-view').insertBefore(panel, $('room-composer')), room: () => state.room,
+    rooms: allSpaces, roomName: spaceName, butlerId: () => state.steward?.sessionId || '',
+    // Every space's members as this window holds them: what it already shows, never more (R249 19:09).
+    membersOf: id => orderedMembers(id),
+    displayText: (text, notice) => ui.displayText(text, notice), label: row => row ? roomMessageLabel(row) : '',
+    sameName: sameNameSessions, shortId: sessionShortId,
+    requestStatus: row => { const key = readingMessageStatusKey(row, true, null); return key ? uiText(key) : ''; },
+    visible: () => selected === 'room' && roomSurface === 'stream',
+    original: openOriginal, answer: item => answerFeedItem(item),
   });
 }
-// The sidebar's space members open this with one member chosen; '' shows everyone.
-function showConversation(memberId = '') {
-  const stream = getSpeechStream();
-  if (selected !== 'room' || !stream) return;
+function getSpaceSummary() {
+  if (!window.nativeWorkspaceSpaceFeed || !window.nativeWorkspaceTaskStream) return null;
+  return spaceSummary ||= window.nativeWorkspaceSpaceFeed.bindSummary({
+    document, text: uiText, language: () => ui.language.getSnapshot().active, attempt,
+    mount: panel => $('room-record-view').insertBefore(panel, $('room-composer')), room: () => state.room, members: () => orderedMembers().filter(s => !s.archived),
+    facts: s => ({ state: roomMemberStateText(s), tone: memberStateTone(s) }), role: s => hierRole(s),
+    icon: s => { const mark = icon(s, true); mark.setAttribute('aria-hidden', 'true'); return mark; },
+    visible: () => selected === 'room' && roomSurface === 'summary',
+    openMember: id => openRoomMember(id), openQueue: () => openQueue(spaceId),
+  });
+}
+// 「去回答」: the member's view in its space, where the person answers in its own conversation.
+async function answerFeedItem(item) {
+  if (item.roomId !== spaceId) await selectSpace(item.roomId);
+  if (members().some(s => s.id === item.fromId)) return openRoomMember(item.fromId);
+  if (item.target) return openOriginal(item.target);
+  toastMessage('toast.originalRemoved');
+}
+// R248: 总览, 信息流 and 网格 switch the main area only; the left list, the tabs and the header stay as they are.
+function showRoomSurface(surface) {
+  if (selected !== 'room' || !ROOM_SURFACES.includes(surface)) return;
+  if (surface === 'overview' && focusedRoomMember()) { roomOverview?.focus(''); return; }
+  if (roomSurface === surface && !roomSession) return;
   captureReadingViews(); rememberRoomMemberView(); suspendColumnInputs();
   const leaving = terminals.get(activeSessionId());
   if (leaving?.composing) leaving.term.blur();
   selectionRevision++;
-  roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'conversation'; roomSession = ''; mode = 'chat'; activateSoloComposer('');
-  stream.open(state.room.id, memberId);
-  render(); attempt(persistView);
+  roomRecordScope = ''; roomRecordReturn = null; roomSurface = surface; roomSession = ''; mode = 'chat'; activateSoloComposer('');
+  lastMessages = ''; render(); attempt(persistView);
 }
-function showRoomRecords(related = false) {
-  const stream = getActivityStream();
-  if (stream) {
-    if (related) stream.open(spaceId, current()?.id || ''); else stream.toggle(spaceId);
-    return;
-  }
-  const record = related && focusedRoomMember() ? current() : null;
-  if (related && !record) return;
-  captureReadingViews(); rememberRoomMemberView(); suspendColumnInputs();
-  const selection = document.getSelection();
-  if (record && selection?.rangeCount && !selection.isCollapsed && $('messages').contains(selection.anchorNode)) roomRecordSelections.set(spaceId, selection.getRangeAt(0).cloneRange());
-  const leaving = terminals.get(activeSessionId());
-  if (leaving?.composing) leaving.term.blur();
-  selectionRevision++;
-  roomRecordScope = record?.id || ''; roomRecordReturn = record ? { id: record.id, nativeId: record.nativeId || '' } : null;
-  roomSurface = 'records'; roomSession = ''; mode = 'chat'; activateSoloComposer('');
-  lastRoomMessages = ''; render(); attempt(persistView);
-  (record ? $('room-record-return') : $('room-record')).focus({ preventScroll: true });
-}
-function returnRoomRecordMember() {
-  const target = roomRecordReturn, record = target && members().find(s => s.id === target.id && (s.nativeId || '') === target.nativeId);
-  if (!record) return toastMessage('toast.originalRemoved');
-  const range = roomRecordSelections.get(spaceId); roomRecordSelections.delete(spaceId);
-  openRoomMember(record.id);
-  if (range?.startContainer.isConnected && range.endContainer.isConnected) {
-    const selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-  }
+// The sidebar's space members and the member view's related records open the stream on that member.
+function showConversation() { showRoomSurface('stream'); }
+function showRoomRecords(member) {
+  if (member && focusedRoomMember()) getSpaceFeed()?.showPerson(roomSession);
+  showRoomSurface('stream');
 }
 function clearRoomRecordFilter() {
   captureReadingViews();
@@ -5267,17 +5325,8 @@ function renderTimeline() {
   filter.hidden = $('room-search').hidden = filter.disabled;
   $('room-record-context').hidden = roomSurface !== 'records' || !(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread || roomFilterHistory);
   ui.display.computed($('room-record-scope'), 'text', () => roomRecordScope ? uiText('room.relatedScope', { name: state.sessions.find(s => s.id === roomRecordScope)?.name || uiText('identity.historicalMember') }) : roomRecordReturn || roomRecentPreview() ? uiText('room.recentRecordView') : chosen || $('room-search').value || roomThread ? uiText('room.filteredScope') : '');
-  $('room-record-return').hidden = !roomRecordReturn;
-  const returning = roomRecordReturn && members().find(s => s.id === roomRecordReturn.id && (s.nativeId || '') === roomRecordReturn.nativeId);
-  $('room-record-return').disabled = !returning;
-  ui.display.text($('room-record-return'), 'room.returnMember', { name: returning?.name || uiText('identity.historicalMember') });
   $('room-record-clear').hidden = roomRecordReturn ? !roomRecordScope : !(roomRecordScope || chosen || $('room-search').value || roomThread);
   $('room-record-restore').hidden = !roomFilterHistory || Boolean(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread);
-  const messages = filteredTimeline();
-  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name, Boolean(s.archived)]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
-  if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
-  const filtered = roomRecordScope || !roomRecordReturn && (filter.value || $('room-search').value || roomThread);
-  ui.display.text($('timeline-count'), filtered ? 'room.filteredRecordCount' : 'room.recordCount', { count: messages.length, total: timeline().length }); $('copy-timeline').disabled = !messages.length;
 }
 async function moveRoomMember(id, target, after, destination = spaceId) {
   await api.spaceAction(destination, 'memberOrder', [{ id, target, after }]);
@@ -5636,14 +5685,16 @@ function visibleModeControl(next) {
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
   const focusedMember = Boolean(inRoom && s);
-  const compactRoom = Boolean(inRoom && !s), header = $('header'), tabs = $('room-tabs'), band = $('run-status').parentElement;
-  const moving = compactRoom !== header.classList.contains('compact-room') || roomOverview && (roomOverview.toolbar.parentElement === tabs) !== compactRoom;
+  // R248: every space view keeps the space's one-line header; only the area under the tabs changes.
+  const compactRoom = Boolean(inRoom), header = $('header'), tabs = $('room-tabs'), band = $('run-status').parentElement;
+  const moving = compactRoom !== header.classList.contains('compact-room') || tabs.parentElement !== $('room-view');
   if (moving) { captureReadingViews(); restoreOverviewReading(); }
   header.classList.toggle('compact-room', compactRoom);
-  header.classList.toggle('focused-member', focusedMember);
+  header.classList.remove('focused-member');
   $('room-view').classList.toggle('compact-room-surface', inRoom);
   $('room-view').classList.toggle('focused-member-surface', focusedMember);
-  $('room-member-status').hidden = !focusedMember;
+  // R248: 总览 shows every member's state, so the tab row keeps no per-member status button.
+  $('room-member-status').hidden = true;
   if ($('room-member-status-dialog').open && roomMemberStatusContext?.key !== roomMemberStatusKey()) $('room-member-status-dialog').close();
   const relocate = (element, parent, before = null) => {
     if (element.parentElement === parent) return;
@@ -5651,11 +5702,12 @@ function renderHeaderLayout(s, inRoom) {
     parent.insertBefore(element, before);
     if (active?.getClientRects().length && !active.hidden) active.focus({ preventScroll: true });
   };
-  if (compactRoom) { relocate(band, header, $('header-actions')); relocate(tabs, header); }
-  else { relocate(band, $('room-view'), $('room-layout')); relocate(tabs, $('room-view'), $('room-layout')); }
+  if (compactRoom) relocate(band, header, $('header-actions'));
+  else relocate(band, $('room-view'), $('room-layout'));
+  relocate(tabs, $('room-view'), $('room-layout'));
   if (roomOverview) {
-    relocate(roomOverview.toolbar, compactRoom ? tabs : $('collaboration-overview'), compactRoom ? $('manage-members') : $('collaboration-overview').firstChild);
-    $('collaboration-overview').dataset.externalToolbar = String(compactRoom);
+    relocate(roomOverview.toolbar, $('collaboration-overview'), $('collaboration-overview').firstChild);
+    $('collaboration-overview').dataset.externalToolbar = 'false';
   }
   $('header').classList.toggle('compact-session', compact);
   $('session-view').classList.toggle('compact-session-surface', compact);
@@ -5669,19 +5721,18 @@ function renderHeaderLayout(s, inRoom) {
   }
   $('conversation-pane-toolbar').hidden = !s || $('conversation-pane').hidden;
   $('terminal-more').hidden = !compact;
-  $('title').tabIndex = compact || compactRoom || focusedMember ? 0 : -1;
-  ui.display.computed($('title'), 'title', () => compact || focusedMember ? archivedName(s) : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
+  $('title').tabIndex = compact || compactRoom ? 0 : -1;
+  ui.display.computed($('title'), 'title', () => compact ? archivedName(s) : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : spaceName(state.room) : '');
   if (typeof renderSessionChainChip === 'function') renderSessionChainChip(compact ? s : null);
   if (typeof hierHeaderCrumb === 'function') hierHeaderCrumb(compact ? s : null);
-  $('title').onfocus = () => { if (header.classList.contains('compact-room') || header.classList.contains('focused-member')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
+  $('title').onfocus = () => { if (header.classList.contains('compact-room')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
-  if (!compactRoom && !focusedMember) header.classList.remove('reveal-room-title');
-  $('subtitle').tabIndex = focusedMember ? 0 : -1;
-  $('subtitle').onfocus = focusedMember ? $('title').onfocus : null;
-  $('subtitle').onblur = focusedMember ? $('title').onblur : null;
+  if (!compactRoom) header.classList.remove('reveal-room-title');
+  $('subtitle').tabIndex = -1;
+  $('subtitle').onfocus = $('subtitle').onblur = null;
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
   const values = s ? [s.provider === 'claude' ? 'Claude Code' : providerName(s.provider), sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
-  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length, focusedMember && spaceName(state.room)]);
+  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length]);
   if (subtitle.dataset.identity !== signature) {
     ui.display.unbind(subtitle); subtitle.replaceChildren();
     if (compact) subtitle.replaceChildren(...values.map((value, index) => {
@@ -5692,7 +5743,7 @@ function renderHeaderLayout(s, inRoom) {
       else { field.title = value; field.setAttribute('aria-label', value); }
       return field;
     }));
-    else ui.display.computed(subtitle, 'text', () => compactRoom ? uiText('header.members', { count: members().length }) : focusedMember ? uiText('room.memberContext', { name: spaceName(state.room) }) : s ? values.slice(0, -1).map((value, index) => index === 2 ? ui.displayText(value, s.modelUiMessage) : value).concat(uiText(values.at(-1))).join(' · ') : uiText(inRoom ? 'header.roomHelp' : 'header.welcomeHelp'));
+    else ui.display.computed(subtitle, 'text', () => compactRoom ? uiText('header.members', { count: members().length }) : s ? values.slice(0, -1).map((value, index) => index === 2 ? ui.displayText(value, s.modelUiMessage) : value).concat(uiText(values.at(-1))).join(' · ') : uiText(inRoom ? 'header.roomHelp' : 'header.welcomeHelp'));
     subtitle.dataset.identity = signature;
   }
   if (sessionMenu?.anchor && sessionMenu.key !== (sessionMenu.kind === 'member' ? memberMenuKey(sessionMenu.id) : headerMenuKey())) sessionMenu.close();
@@ -5825,11 +5876,22 @@ function renderHeader(s, inRoom) {
   h.openSession.disabled = disconnected;
   if (s) ui.display.attribute(h.openSession, 'aria-label', 'collab.openSessionNamed', { name: participantLabel(s, state.sessions) });
   h.restore.hidden = !s?.archived;
-  h.more.hidden = !inRoom || !!s;
+  h.more.hidden = !inRoom;
   h.more.disabled = disconnected || state.room.archived || renameTarget?.id === 'room' && renameTarget.roomId === spaceId;
   h.compactMore.hidden = !s;
   renderSpaceMessagePreview(s);
+  placeMemberControls(h, Boolean(inRoom && s));
   renderHeaderLayout(s, inRoom);
+}
+// R248: a space keeps one header in every view; a focused member's own controls sit in its toolbar under the tabs.
+function placeMemberControls(h, inToolbar) {
+  const before = [h.openSession, h.resume, h.membership, h.selectedText, spaceMessagePreview.trigger, spaceMessagePreview.panel];
+  if ((h.openSession.parentElement === $('session-toolbar')) === inToolbar) return;
+  const after = [h.usage, h.restore, h.compactMore];
+  const active = [...before, ...after].find(e => e.contains(document.activeElement)) ? document.activeElement : null;
+  if (inToolbar) $('session-toolbar').append(...before, ...after);
+  else { for (const e of [...before, h.usage, h.restore]) $('header-actions').insertBefore(e, h.more); h.more.after(h.compactMore); }
+  if (active?.getClientRects().length && !active.hidden) active.focus({ preventScroll: true });
 }
 function appendNativeQuestions(parent, questions) {
   if (!Array.isArray(questions) || !questions.length || questions.length > 20) return false;
@@ -6193,9 +6255,10 @@ function renderStewardWakeWarning(wakeBlock) {
 function render() {
   if (!state || rendering) return;
   renderStewardWakeWarning(state.stewardWakeStatus);
-  // A saved full-page records view opens as the new sidebar beside the members.
-  const restoreStream = selected === 'room' && roomSurface === 'records' && Boolean(window.nativeWorkspaceActivityStream);
-  if (restoreStream) roomSurface = 'overview';
+  // R248/R249: the shared record and 「对话」 are the 信息流 now; a view saved on either opens the 总览.
+  if (selected === 'room' && !ROOM_SURFACES.includes(roomSurface)) roomSurface = 'summary';
+  // Only the 成员 view (the grid's focus) has one member open; 总览 and 信息流 belong to the whole space.
+  if (selected === 'room' && roomSurface !== 'overview' && roomSession) roomSession = '';
   // The entry is not part of the window state: the window asks for it once here, and again on its own events.
   butlerEntry.start();
   if ($('butler-row')?.hidden === true && $('butler-review-dialog')?.open) $('butler-review-dialog').close();
@@ -6237,8 +6300,8 @@ function render() {
     renderPaneSwitches(s, inRoom);
     $('session-files').hidden = inRoom && !memberFocus;
     $('member-related-records').hidden = !memberFocus;
-    // Set on every route, not only in a space: the toolbar holding it shows for any session.
-    $('room-member-tabs').hidden = !memberFocus;
+    // R248: the 成员 tab names the member; the left list switches members (no second roster above it).
+    $('room-member-tabs').hidden = true;
     document.title = sessionWindowTitle(s);
     $('welcome').hidden = Boolean(s || inRoom || inPanorama); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('panorama-view').hidden = !inPanorama;
@@ -6246,7 +6309,6 @@ function render() {
     $('panorama-nav').setAttribute('aria-pressed', String(inPanorama));
     $('return-panorama').hidden = !panoramaView.returning || inPanorama;
     if (inRoom && state.room.unavailable) ui.display.text($('title'), 'space.unavailable');
-    else if (inRoom && s) ui.display.computed($('title'), 'text', () => archivedName(s));
     else if (inRoom) ui.display.computed($('title'), 'text', () => spaceName(state.room));
     else if (s?.name) ui.display.computed($('title'), 'text', () => archivedName(s));
     else ui.display.text($('title'), 'header.workspace');
@@ -6257,7 +6319,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderResumeAll(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
-    updateTaskBoard(); updateAgentDistribution();
+    updateTaskBoard(); renderSetupGrants(); updateAgentDistribution();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -6319,7 +6381,6 @@ function render() {
       const run = state.room.run;
       const people = orderedMembers();
       renderRoomMemberTabs(people);
-      $('room-record').setAttribute('aria-pressed', String(roomSurface === 'records'));
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
       $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
@@ -6398,7 +6459,7 @@ function render() {
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
     renderRename(); updateSelectedSharing();
     if (removedRoomFocus) focusRemainingMember(removedRoomFocus.origin, removedRoomFocus.index);
-  } finally { restoreVisibleReading(); rendering = false; reportShown(); const stream = getActivityStream(); if (restoreStream) stream?.open(spaceId); else stream?.render(); getSpeechStream()?.render(); }
+  } finally { restoreVisibleReading(); rendering = false; reportShown(); getActivityStream()?.render(); getSpaceFeed()?.render(); getSpaceSummary()?.render(); }
 }
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
@@ -6877,7 +6938,7 @@ sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.queryS
 disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move. The sidebar opening or closing changes
 // the header row's width with no window resize: the row is fitted again on the next frame, not inside the observer.
-const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); if (entries.some(e => e.target === $('room-tabs'))) requestAnimationFrame(() => fitRoomTabs(true)); }); observer.observe($('terminal-area')); observer.observe($('collaboration-overview')); observer.observe($('room-tabs'));
+const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); if (entries.some(e => e.target === $('room-tabs'))) requestAnimationFrame(() => fitRoomTabs(true)); if (entries.some(e => e.target === $('session-list'))) fitSidebarStickyHeadings(); }); observer.observe($('session-list')); observer.observe($('terminal-area')); observer.observe($('collaboration-overview')); observer.observe($('room-tabs'));
 function applySplit() {
   for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
   for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }
@@ -6950,7 +7011,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // A DSH session opens in its terminal (it has no conversation view yet) and leaves the remembered view alone.
     let view = preference;
     if (provider === 'codex') view = $('initial-view').value;
-    if (provider === 'dsh' || provider === 'agy') view = 'terminal';
+    if (['dsh', 'pi', 'agy'].includes(provider)) view = 'terminal';
     else preference = view;
     // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
     const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;
@@ -7078,15 +7139,13 @@ $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared')
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); event.stopPropagation(); openRoomMenu({ x: event.clientX, y: event.clientY }, $('room-more'), 'shared'); };
 $('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(undefined, $('room-more'), 'shared'); } };
-$('room-overview').onclick = () => attempt(() => {
-  if (focusedRoomMember()) { roomOverview.focus(''); return; }
-  captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview'; return selectRoom('', true);
-});
+$('room-summary').onclick = () => attempt(() => showRoomSurface('summary'));
+$('room-stream').onclick = () => attempt(() => showRoomSurface('stream'));
+$('room-overview').onclick = () => attempt(() => showRoomSurface('overview'));
+$('room-member').onclick = () => attempt(() => { const person = roomMemberChoice(); if (person && !focusedRoomMember()) openRoomMember(person.id); });
 $('room-record').onclick = () => attempt(() => showRoomRecords());
-$('room-conversation').onclick = () => attempt(() => showConversation());
 $('room-tabs').addEventListener('keydown', roomNavigationKey);
 $('member-related-records').onclick = () => attempt(() => showRoomRecords(true));
-$('room-record-return').onclick = () => attempt(returnRoomRecordMember);
 $('room-record-clear').onclick = () => attempt(clearRoomRecordFilter);
 $('room-record-restore').onclick = () => attempt(restoreRoomRecordFilter);
 $('manage-members').onclick = () => openInvite($('manage-members'));
@@ -8106,7 +8165,6 @@ $('run-form').onsubmit = event => {
 $('room-search').oninput = $('room-filter').onchange = () => { roomFilterHistory = null; renderTimeline(); attempt(persistView); };
 $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
-$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString(ui.language.getSnapshot().active) : uiText('reading.unknownTime')} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = () => openNotes(); $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('room-notes-attach').onchange = () => drawNotesAttach();
 $('notes-form').onsubmit = async event => {
@@ -8577,7 +8635,8 @@ attempt(async () => {
   terminalSplit = Number.isFinite(state.viewState.terminalSplit) && state.viewState.terminalSplit >= 0.2 && state.viewState.terminalSplit <= 0.8 ? state.viewState.terminalSplit : 0.5; applySplit();
   readingPositions = state.viewState.readingPositions || {};
   if (state.viewState.panorama) panoramaView = structuredClone(state.viewState.panorama);
-  roomSession = typeof savedRoomView.roomSession === 'string' ? savedRoomView.roomSession : '';
+  // R248 (「每次进空间应该都是列表界面…而不是保留在上次进入的状态」): a restart opens a space on its 总览 too.
+  roomSession = '';
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof savedRoomView.sharedDraft === 'string' ? savedRoomView.sharedDraft : '';
@@ -8588,7 +8647,7 @@ attempt(async () => {
   const savedRecipient = savedRoomView.roomRecipient;
   const savedMention = savedRoomView.roomMention;
   if (savedMention && nativeWorkspaceMentions.validView(savedMention, $('shared-input').value, savedRecipient)) roomMention = savedMention;
-  roomSurface = savedRoomView.roomSurface || 'overview';
+  roomSurface = 'summary';
   normalizeRoomMention();
   if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
     // Older views have a draft but no recipient: require an explicit choice.

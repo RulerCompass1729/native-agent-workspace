@@ -1,7 +1,7 @@
 // Hidden Electron, disposable profile, real renderer/IPC/confirmation handler;
 // synthetic native transport only. No provider processes or product model calls.
 const scratch = require('./fixtures/test-scratch.cjs');
-const { revealDefaultSpace } = require('./fixtures/default-space.cjs');
+const { revealDefaultSpace } = require('./fixtures/default-space.cjs'), boardWaiting = require('./fixtures/board-waiting.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { _electron } = scratch.playwright(require('playwright'));
@@ -114,18 +114,22 @@ async function main() {
     assert.match(await page.locator('[data-record-id="shared-copy-1"] .disclosure-title').innerText(), /Claude B/); record('shared message identifies its real sender');
     await original('shared-copy-1');
     await until(() => page.locator('[data-message-id="native-original-1"][data-search-target]').isVisible(), 'Exact original selected'); record('click opens exact original message');
-    assert.ok(await page.locator('#stream-waiting').isVisible()); record('waiting strip stays in independent session');
-    await page.locator('#stream-waiting-more').click();
+    // What waits for the person is on the task board (R250); its card opens in place in the row.
+    const board = boardWaiting(page);
+    assert.equal(await page.locator('#stream-waiting').count(), 0); assert.ok(await board.need().isVisible()); record('the board, not the stream, counts the waiting card');
+    const key = r => [r.actor.id, r.actor.nativeId, r.id].join(':'), pending = await board.expand(key(request));
     for (const size of [[1240, 820], [850, 600]]) await capture(size, 'waiting');
-    const pending = page.locator(`[data-waiting-id="background:${request.actor.nativeId}:${request.id}"]`);
+    const clock = pending.locator('.background-state[data-expires-at]'), first = await clock.textContent(); await delay(1600);
+    assert.notEqual(await clock.textContent(), first); record('the card opened on the board keeps counting down');
     await pending.getByRole('button', { name: request.confirmation.options.buttons[0], exact: true }).click();
     await until(() => pending.count().then(n => n === 0), 'Cancelled card leaves waiting');
-    assert.equal((await client.call('initial')).sessions.find(s => s.id === ids[1]).name, 'Claude B'); record('strip cancellation uses original handler without rename');
+    assert.equal((await client.call('initial')).sessions.find(s => s.id === ids[1]).name, 'Claude B'); record('board cancellation uses original handler without rename');
     const confirm = await control('rename', [ids[1], 'Claude B · 已确认']);
-    await until(() => page.locator('#stream-waiting').isVisible(), 'New confirmation visible');
-    if (await page.locator('#stream-waiting-more').getAttribute('aria-expanded') !== 'true') await page.locator('#stream-waiting-more').click();
-    await page.locator(`[data-waiting-id="background:${confirm.actor.nativeId}:${confirm.id}"]`).getByRole('button', { name: confirm.confirmation.options.buttons[1], exact: true }).click();
-    await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === ids[1]).name === 'Claude B · 已确认', 'Rename confirmed'); record('strip confirmation uses original handler');
+    await until(() => board.row(key(confirm)).count().then(n => n === 1), 'New confirmation listed');
+    // The card names its confirm button 确认 (its primary), not the operation's option text.
+    await (await board.expand(key(confirm))).locator('.background-buttons .primary').click();
+    await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === ids[1]).name === 'Claude B · 已确认', 'Rename confirmed'); record('board confirmation uses original handler');
+    await board.close();
     await page.locator('#room-nav').click();
     if (!await page.locator('#activity-stream').isVisible()) await page.locator('#room-record').click();
     await original('without-original');

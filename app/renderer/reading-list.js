@@ -39,6 +39,12 @@ function readingSpaceMessageStatus(message, room = false) {
   const status = receipts.length === 1 ? readingDeliveryStatusKey(message, receipts[0]) : 'delivery.unknown';
   return typeof status === 'string' ? status : 'delivery.unknown';
 }
+// A row's own delivery or run state, as its line says it; the space's 信息流 uses it for a request too.
+// Only Claude rows take queued input; native sends it once the agent is idle.
+function readingMessageStatusKey(m, room = false, session = null) {
+  const keys = { 'awaiting-native': m.inputMode === 'queue' ? m.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': m.deliveredInto ? 'reading.status.midturnPrivate' : 'reading.status.private' };
+  return typeof m.status === 'string' && Object.hasOwn(keys, m.status) ? keys[m.status] : undefined;
+}
 function readingSpaceMessageBody(message, room) {
   if (!room || readingSpaceMessageKind(message) !== 'wake') return null;
   const body = message.wake.body, text = ui.displayText(message.text, message.uiMessage);
@@ -691,7 +697,7 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
     group.content.className = group.effective ? 'process-content' : '';
     group.summary.hidden = !group.effective;
     group.item.dataset.running = String(plan.active);
-    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : view.session?.provider === 'dsh' ? 'DSH' : view.session?.provider === 'agy' ? 'Antigravity' : 'Codex');
+    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : view.session?.provider === 'dsh' ? 'DSH' : view.session?.provider === 'agy' ? 'Antigravity' : view.session?.provider === 'pi' ? 'pi' : 'Codex');
     const caption = () => plan.captionRead ? plan.captionRead() : plan.caption, outcome = () => plan.outcomeRead ? plan.outcomeRead() : plan.outcome;
     ui.display.computed(group.author, 'text', author); ui.display.computed(group.caption, 'text', caption); ui.display.computed(group.outcome, 'text', outcome);
     const summary = () => `${author()} · ${plan.active ? uiText('process.active') : ''}${caption()}${outcome() ? ' · ' + outcome() : ''}`;
@@ -877,7 +883,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       // NAW waking the butler (steward-wake.cjs) goes out as a NAW message like a queue item; said as what it is.
       if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-wake:')) return uiText('reading.stewardWake');
       if (!room && m.origin === 'naw-dispatch' && typeof m.dispatchItem === 'string' && m.dispatchItem.startsWith('steward-patrol:')) return uiText('reading.stewardPatrol');
-      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : sessionProvider === 'dsh' ? 'DSH' : 'Codex');
+      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : sessionProvider === 'claude' ? 'Claude' : sessionProvider === 'dsh' ? 'DSH' : sessionProvider === 'pi' ? 'pi' : 'Codex');
     };
     // Heading/action bindings share this synchronous author resolution. Release
     // it before painting content so retained getters stay live if painting fails.
@@ -935,8 +941,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (spaceStatus) { const fact = node('span', undefined, 'space-message-status'); ui.display.text(fact, spaceStatus); entry.heading.append(fact); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      // Only Claude rows take queued input; native sends it once the agent is idle.
-      const status = { 'awaiting-native': m.inputMode === 'queue' ? m.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': m.deliveredInto ? 'reading.status.midturnPrivate' : 'reading.status.private' }[m.status];
+      const status = readingMessageStatusKey(m, room, session);
       delete entry.wakeLabel;
       if (wake) { entry.wakeLabel = node('span'); entry.heading.append(entry.wakeLabel); }
       else if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }

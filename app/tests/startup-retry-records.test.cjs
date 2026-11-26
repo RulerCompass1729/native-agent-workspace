@@ -30,7 +30,7 @@ function app(t) {
   const ingress = { recover() {}, captureOutcome: () => null, set roomState(value) { this.held = value; } };
   const sandbox = { dataDir, queueDispatcher: null, butlerIngress: ingress, personActions: {}, backgroundTest: false, process: { env: {} }, windows: new Map(),
     RoomState, SessionLabels, bindQueueOutcomes, QueueDispatcher: Dispatcher, keepStewardOutside() {}, notifyQueueOutcome() {}, connect() {}, broadcastRoom: async () => {},
-    notifyRotation() {}, creationDefaults: { get: () => ({}) }, stewardWake: null, answerNotices: null, versionNotices: null, quietWindows: null };
+    notifyRotation() {}, creationDefaults: { get: () => ({}) }, stewardWake: null, answerNotices: null, versionNotices: null, managerNotices: null, quietWindows: null };
   vm.createContext(sandbox);
   vm.runInContext(personActionsSource(main).replace('let personActions = null;', '') + '\nvar roomState, sessionLabels;\n' +
     section('async function startQueueDispatcher()', 'async function broadcastRoom()') +

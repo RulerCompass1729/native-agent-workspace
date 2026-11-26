@@ -36,8 +36,8 @@
   .hier-line>.session-space-badges[hidden]{display:none}
   .hier-line>.session-space-badges .space-badge{flex:0 1 auto;width:auto}
 
-  /* Space view: the space heading stays at the top while its members scroll (VS Code's sticky scroll). */
-  #session-list[data-hier-view="space"] .session-space-group>h3{position:sticky;top:0;z-index:2;background:var(--raised)}
+  /* Space view: the space heading stays at the top while its members scroll (VS Code's sticky scroll), when the list has room (renderer fitSidebarStickyHeadings). */
+  #session-list[data-hier-view="space"][data-sticky-headings="true"] .session-space-group>h3{position:sticky;top:0;z-index:2;background:var(--raised)}
   #session-list[data-hier-view="space"] .session-space-group:not([data-session-group="independent"])>h3{background:var(--raised)}
 
   /* Folder view (Orca's repository → worktree → agent): one foldable section per folder. */

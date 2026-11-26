@@ -15,6 +15,7 @@ const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
+const { managerText } = require('./manager-notices.cjs');
 const { codexQuotaBlock } = require('./native-usage.js');
 const { rotationBlocked, rotationEpoch, queuePurposeValid } = require('./submission-policy.cjs');
 const { detached } = require('./background-operation.cjs');
@@ -2261,8 +2262,8 @@ function validLogEntry(entry) {
     return false;
   }
   // archived: an old session NAW archived after its done rotation (only done and kept link sessions).
-  // asked, withdrawn, dropped: a rotation asked for by hand (R207).
-  if (!['asked', 'withdrawn', 'dropped', 'requested', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
+  // asked, withdrawn, dropped: a rotation asked for by hand (R207). handed: the successor confirmed its handoff (R254).
+  if (!['asked', 'withdrawn', 'dropped', 'requested', 'handed', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
     return false;
   }
   if (entry.noticeId !== undefined && !validTrustReceipt(entry.noticeId)) return false;
@@ -2837,6 +2838,8 @@ class QueueDispatcher {
     this.lastFullPass = 0;
     this.onState = snapshot => {
       this.dirty = true;
+      // Kept for the next tick to look at managers' spaces with (observeManagers): no snapshot read of its own.
+      if (this.managerNotices) this.stateSeen = snapshot;
       if (this.observePersonActions) this.observePersonActions(snapshot);
       if (this.observeQueueState) this.observeVacancyReadiness(snapshot, this.now());
     };
@@ -2874,6 +2877,8 @@ class QueueDispatcher {
     this.answerNotices = options.answerNotices || null;
     // What a restart brought, owed to the former secretary's space's manager (version-events.cjs), or null; sent as answers are.
     this.versionNotices = options.versionNotices || null;
+    // What changed in a space, owed to its project manager (manager-notices.cjs), or null; sent as answers are.
+    this.managerNotices = options.managerNotices || null;
     // Each space's project manager now: { roomId: { sessionId, nativeId } } (space-managers.cjs). It may throw.
     this.managers = options.managers || (() => ({}));
     // Migration quiet windows (quiet-windows.cjs), or null: their sessions get no new item or NAW message.
@@ -3529,6 +3534,9 @@ class QueueDispatcher {
     if (this.versionNotices && this.versionNotices.waiting()) {
       return true;
     }
+    if (this.managerNotices && this.managerNotices.waiting()) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -3710,12 +3718,14 @@ class QueueDispatcher {
         this.listen(this.client);
         const snapshot = this.client.snapshot();
         if (this.observePersonActions) this.observePersonActions(snapshot);
+        this.observeManagers(snapshot);
         this.idleSince.clear();
         return;
       }
       this.dropOwnClient();
       const watching = Boolean(windowClient);
       if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {
+        if (watching) this.observeManagers();
         if (!watching) {
           this.listen(null);
         }
@@ -3734,7 +3744,7 @@ class QueueDispatcher {
     const rotating = this.activeRotations().some(id => !waitingOld(this.rotations[id]));
     const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
-      this.answerSoon(now) || this.clickSoon();
+      this.answerSoon(now) || this.clickSoon() || Boolean(this.managerNotices?.endingSoon(now, this.tickMs * 2));
     if (!due) {
       return;
     }
@@ -3852,7 +3862,7 @@ class QueueDispatcher {
       actions, engaged, modelChanges: this.modelChanges(), handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged, quietPending);
-    if ((this.answerNotices || this.versionNotices) && !this.closed) await this.notifyAnswers(current, engaged);
+    if ((this.answerNotices || this.versionNotices || this.managerNotices) && !this.closed) await this.notifyAnswers(current, engaged);
   }
 
   // The designated butler, woken when NAW has recorded something new (steward-wake.cjs keeps the switch, the position,
@@ -3958,6 +3968,25 @@ class QueueDispatcher {
     // The version a restart brought and the backends still on an old one, owed to the former secretary's
     // space's manager (version-events.cjs): the same send, after the two minutes queue work waits for the person.
     if (this.versionNotices && !this.closed) await this.notifyOwed(this.versionNotices, told => this.versionNotices.text(told), 'version-notice', this.humanQuietMs, current, holding);
+    // What changed in a manager's space: read as the record is after this pass sent and settled its items.
+    if (this.managerNotices && !this.closed) {
+      this.observeManagers(this.client.snapshot());
+      await this.notifyOwed(this.managerNotices, managerText, 'manager-notice', this.humanQuietMs, current, holding);
+    }
+  }
+
+  // Between full passes too, from the last state event's snapshot (at most once a tick, only after an event): a session
+  // joining a space with no queued work is a change.
+  observeManagers(snapshot = this.stateSeen) {
+    this.stateSeen = null;
+    // A list marked unavailable says nothing about who is in a space.
+    if (!this.managerNotices || !Array.isArray(snapshot?.sessions) || snapshot.unavailable) return;
+    try {
+      const view = this.roomState.apply(snapshot);
+      if (this.managerNotices.observe(view.rooms, view.sessions, this.managers(view.sessions), this.now())) this.dirty = true;
+    } catch {
+      // A space or manager record that cannot be read now: looked at again on the next pass.
+    }
   }
 
   async notifyOwed(notices, text, kind, quietMs, current, holding) {
@@ -5935,6 +5964,7 @@ class QueueDispatcher {
   // The rotation waits from here on for its old session (advanceWaiting); the successor has the work and rests as after
   // any rotation.
   async holdOld(oldId, record, gate, now, old = null) {
+    this.noteHanded(oldId, record);
     if (!waitingOld(record)) {
       record.waitSince = now;
       record.oldId ??= oldId;
@@ -5948,6 +5978,21 @@ class QueueDispatcher {
     this.noteGate(oldId, record, gate, now);
     this.save();
     await this.broadcast();
+  }
+
+  // A confirmed handoff whose old session is kept waiting: one line, which a space's project manager follows at once
+  // (R254: the person kept talking in the old one for two hours while its successor already had the manager's work).
+  noteHanded(oldId, record) {
+    // A line without the successor's native session names no one to follow; it is written once that is known (review N6).
+    if (record.handedLogged || !validId(record.newNativeId || '')) return;
+    record.oldId ??= oldId;
+    const entry = this.appendLog('handed', record);
+    if (this.unlogged === entry) {
+      this.log.splice(this.log.indexOf(entry), 1);
+      return;
+    }
+    record.handedLogged = true;
+    this.save();
   }
 
   restSuccessor(oldId, record, now) {
@@ -6091,6 +6136,8 @@ class QueueDispatcher {
   // A waiting rotation, on each pass: nothing here is timed out. First whether it can still be finished at all, then
   // whether the old session is free, then what it did after its handoff is told to the successor, then it is ended.
   async advanceWaiting(oldId, record, snapshot, now) {
+    // One already waiting when this version started, or whose line could not be written.
+    this.noteHanded(oldId, record);
     const old = snapshot.sessions.find(s => s.id === oldId);
     const note = gate => this.noteGate(oldId, record, gate, now);
     // Whatever the step waits for, it goes on without holding them.
@@ -6284,6 +6331,18 @@ class QueueDispatcher {
   // The successor is gone before the old session could be ended: the old one has its work back, and is due again as
   // after any interruption.
   async dropSuccessor(oldId, record, old, holder, gone, now) {
+    // A manager that followed the handed line comes back only with this one: nothing is given back before it is
+    // written, and it is tried again on the next pass (review N1).
+    const failed = { ...record, oldId, reason: 'successor-gone' };
+    if (record.handedLogged && !record.failedLogged) {
+      const entry = this.appendLog('failed', failed, { reason: failed.reason });
+      if (this.unlogged === entry) {
+        this.log.splice(this.log.indexOf(entry), 1);
+        return this.noteGate(oldId, record, 'log-unwritten', now);
+      }
+      record.failedLogged = true;
+      this.save();
+    }
     const spaces = gone && old ? spacesOf(old) : [];
     // The spaces it left for a stop that did not go through.
     const home = old && spacesOf(old).every(id => record.roomIds.includes(id));
@@ -6306,8 +6365,7 @@ class QueueDispatcher {
     this.finishTried.delete(oldId);
     this.deferredAt.set(oldId, { at: now, due: record.reason });
     this.save();
-    const failed = { ...record, oldId, reason: 'successor-gone' };
-    this.appendLog('failed', failed, { reason: failed.reason });
+    if (!record.failedLogged) this.appendLog('failed', failed, { reason: failed.reason });
     this.failedEvent(record.roomIds, oldId, failed);
     this.notify('failed', failed);
     await this.broadcast();

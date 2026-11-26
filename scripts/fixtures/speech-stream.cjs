@@ -20,7 +20,6 @@ function seed({ butler, pm, a, b }) {
       wake: { id: 'wake-pm-a', senderId: pm, recipientId: a, senderName: '项目经理', recipientName: 'Claude A', body: 'A，先修输入框，再补测试。' } },
     { id: 'tool-a', role: 'tool', sessionId: a, sharedStream: true, text: 'npm test', time: at(29) },
   ];
-  room.events = [...(room.events || []), { id: 'q-1', kind: 'queue', role: 'system', time: at(25), uiMessage: { key: 'notice.queue.dispatched', params: { text: '写文档', name: 'Claude B' } } }];
   s(pm).messages = [
     { id: 'tag-pm', role: 'user', origin: 'room', text: '把今天要做的三件事排一下。', time: yesterday },
     { id: 'pm-think', role: 'assistant', status: 'complete', phase: 'commentary', text: '先看队列。', time: yesterday + 30000 },

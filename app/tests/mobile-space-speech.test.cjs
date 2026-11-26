@@ -66,3 +66,12 @@ test('a read of every space at once carries no speech', async t => {
     assert.equal(Object.hasOwn(view.rooms[0], 'speech'), false);
   }
 });
+// R248 ② follow-up 4, gap 1: the phone's speech says a wake is unconfirmed when its original cannot be verified.
+test('the phone keeps the unconfirmed-wake warning', async t => {
+  const f = fixture(t);
+  f.source.rooms[0].messages.push({ id: 'w-lost', role: 'system', kind: 'agent-wake', text: '无法核对发送方的原消息，投递结果未确认。\nA, lost note.', wakeStatus: 'unknown', time: 40,
+    uiMessage: { version: 1, key: 'notice.wake.senderRemoved', params: { body: 'A, lost note.' } },
+    wake: { id: 'w-lost', senderId: 'b', recipientId: 'a', senderName: 'Synthetic B', recipientName: 'Synthetic A', body: 'A, lost note.' } });
+  const speech = (await f.read({ kind: 'room', id: 'shared' })).rooms[0].speech;
+  assert.equal(speech.at(-1).text, '无法核对发送方的原消息，投递结果未确认。\nA, lost note.');
+});
