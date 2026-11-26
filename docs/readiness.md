@@ -1668,8 +1668,8 @@ What it can do:
   terminal changes it.
 - Checked: `scripts/pi-tui-offline-check.cjs` (27 checks: a turn through the proxy to a
   loopback stand-in, reopening, a refused host, a lost witness, no key in pi's files),
-  `scripts/pi-tui-sandbox-check.cjs` (30 checks of the sandbox, each refusal against a
-  control without it), and two synthetic turns on `deepseek-flash` against the real
+  `scripts/pi-tui-sandbox-check.cjs` (44 checks of the sandbox, refusals against
+  controls without it), and two synthetic turns on `deepseek-flash` against the real
   service: a reply, then pi's bash tool writing a file and running `ls` in the working
   folder; the proxy saw only `api.deepseek.com:443` and nothing was refused.
 
@@ -1684,6 +1684,9 @@ Known limits:
   write outside the working folder, pi's own folder and the temporary folders; they
   fail and the session goes on. A working folder inside `~/Library` or NAW's data
   folder is therefore read-only for pi.
+- git commands that write (`add`, `commit`) fail when the repository's git folder is
+  outside the working folder: in a git worktree, or below the repository's top folder.
+  Opened at the repository's top, they work.
 - pi's `find` and `grep` tools need `fd` and `ripgrep`; when they are not installed pi
   says so and, being offline, does not download them. Its other tools work.
 - NAW shows no usage for it; pi's own footer does.

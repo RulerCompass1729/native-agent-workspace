@@ -3,7 +3,8 @@
 // Local check of the sandbox NAW puts around pi (app/pi-tui.cjs sandboxProfile): no pi, no model, no
 // network beyond this machine's loopback. Each probe runs a small command under the profile and expects
 // a refusal, with a control that shows the same command works without it. No probe opens a window,
-// sends an Apple Event or writes outside its own folders; a probe file that appears anyway is removed.
+// sends an Apple Event or writes outside its own folders; a probe file or launchd job that appears
+// anyway is removed. The launchd probe has no control: it would create a job outside the sandbox.
 //   node scripts/pi-tui-sandbox-check.cjs [--work-parent <folder outside the temporary folders>]
 // With --work-parent the working folder is made there, so the working-folder rule is tested on its own
 // rather than through the temporary-folder rule.
@@ -53,6 +54,19 @@ const APPEND_OPEN = `try { require('fs').closeSync(require('fs').openSync(proces
 const READ = `try { require('fs').readFileSync(process.argv[1]); console.log('read'); } catch (e) { console.log(e.code); }`;
 const CONNECT = `const s = require('net').connect(Number(process.argv[1]), '127.0.0.1', () => { console.log('connected'); s.destroy(); }); s.on('error', e => console.log(e.code));`;
 const LISTEN = `const s = require('net').createServer().listen(0, '127.0.0.1', () => { console.log('listening'); s.close(); }); s.on('error', e => console.log(e.code));`;
+const LINK = `try { require('fs').linkSync(process.argv[1], process.argv[2]); console.log('linked'); } catch (e) { console.log(e.code); }`;
+// bootstrap_look_up is how a process reaches a macOS service by name.
+const LOOKUP_SERVICE = [
+  'import ctypes, sys',
+  "libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib')",
+  "bootstrap = ctypes.c_uint.in_dll(libc, 'bootstrap_port')",
+  'for name in sys.argv[1:]:',
+  '    port = ctypes.c_uint(0)',
+  '    found = libc.bootstrap_look_up(bootstrap, name.encode(), ctypes.byref(port)) == 0',
+  "    print(name, 'found' if found else 'refused')",
+].join('\n');
+const SERVICES = ['com.apple.coreservices.launchservicesd', 'com.apple.nsurlsessiond', 'com.apple.lsd.mapdb', 'com.apple.lsd.open'];
+const REACHABLE_SERVICE = 'com.apple.cfprefsd.daemon';
 const LOOKUP = `require('dns').lookup('api.deepseek.com', (e, address) => console.log(e ? e.code : 'resolved'));`;
 
 function removeIfThere(file) {
@@ -140,6 +154,51 @@ async function main() {
       const inside = run(profile, ['/bin/sh', '-c', '"$@"', 'probe', ...argv]);
       check(`run ${label}: refused`, inside.status === 126 && /not permitted/i.test(inside.out), `exit ${inside.status}`);
     }
+
+    // Hard links: a link where pi may write, to a file where it may not, would let it write there.
+    const linked = path.join(path.dirname(path.dirname(dataDir)), `linked-${tag}.json`);
+    fs.writeFileSync(linked, 'kept');
+    for (const [label, folder] of [['into pi\'s home', where.home], ['into the working folder', work]]) {
+      const link = path.join(folder, `link-${tag}`);
+      const control = nodeProbe(null, LINK, linked, link).out.trim();
+      removeIfThere(link);
+      check(`control: hard link ${label} works without the sandbox`, control === 'linked', control);
+      const inside = nodeProbe(profile, LINK, linked, link).out.trim();
+      const stray = removeIfThere(link);
+      check(`hard link ${label} to a file in the NAW data folder: refused`, inside === 'EPERM' && !stray && fs.readFileSync(linked, 'utf8') === 'kept', inside);
+    }
+
+    // macOS stops copies of these programs, sandbox or not, so a copy does not get past the rule above.
+    for (const [label, from, args] of [['open', '/usr/bin/open', ['--help']], ['osascript', '/usr/bin/osascript', ['-e', 'return 1']], ['launchctl', '/bin/launchctl', ['version']]]) {
+      const copy = path.join(work, `${label}-${tag}`);
+      fs.copyFileSync(from, copy);
+      fs.chmodSync(copy, 0o755);
+      const outside = run(null, [copy, ...args]);
+      const inside = run(profile, [copy, ...args]);
+      fs.unlinkSync(copy);
+      check(`a copy of ${label} does not run, with or without the sandbox`, outside.status !== 0 && inside.status !== 0, `${outside.signal || outside.status}/${inside.signal || inside.status}`);
+    }
+
+    // Each refused service on its own. The reachable one shows the lookup itself works in the sandbox.
+    const python = ['/opt/homebrew/bin/python3', '/usr/local/bin/python3'].find(file => fs.existsSync(file));
+    if (!python) {
+      check('service lookups: a python3 for the probe', false, 'none found');
+    } else {
+      const names = [...SERVICES, REACHABLE_SERVICE];
+      const outside = run(null, [python, '-I', '-c', LOOKUP_SERVICE, ...names]).out.trim().split('\n');
+      const inside = run(profile, [python, '-I', '-c', LOOKUP_SERVICE, ...names]).out.trim().split('\n');
+      check('control: every service is found without the sandbox', names.every(name => outside.includes(`${name} found`)), outside.join(', '));
+      for (const name of SERVICES) check(`look up ${name}: refused`, inside.includes(`${name} refused`));
+      check(`control: ${REACHABLE_SERVICE} is found in the sandbox`, inside.includes(`${REACHABLE_SERVICE} found`));
+    }
+
+    // launchd: even with the program rule taken out, the system launchctl cannot submit a job.
+    const label = `naw-pi-probe-${tag}`;
+    const loose = profile.split('\n').filter(line => !line.startsWith('(deny process-exec')).join('\n');
+    const submitted = run(loose, ['/bin/launchctl', 'submit', '-l', label, '--', '/usr/bin/true']);
+    const listed = run(null, ['/bin/launchctl', 'list', label]).status === 0;
+    if (listed) run(null, ['/bin/launchctl', 'remove', label]);
+    check('submit a launchd job from the sandbox: refused', submitted.status !== 0 && !listed, `exit ${submitted.status}`);
 
     // LaunchServices: lsappinfo asks the same service `open` would.
     const front = run(null, ['/usr/bin/lsappinfo', 'front']).out.trim();

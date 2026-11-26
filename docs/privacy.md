@@ -507,14 +507,22 @@ launchd jobs are refused, and so are `open`, `osascript`, `automator`, `shortcut
 temporary folders and `/dev`. The rest of NAW's data folder, the pi runtime,
 `~/Library` (launch agents included), `~/.ssh`, `~/.config` and the shell startup files
 are refused, so a command cannot leave something there that a program outside the
-sandbox later runs. These refusals are quiet: the command fails and the session goes on.
-`scripts/pi-tui-sandbox-check.cjs` tests each of them on this machine against a control
-without the sandbox.
+sandbox later runs; hard links to files there are refused as well. These refusals are
+quiet: the command fails and the session goes on.
 
-What stays open: other programs later use what pi writes in the working folder as it
-is (a git hook, a project script, a rule file another agent reads). macOS services that
-act for a process, other than those named above, were not each audited. A working
-folder inside `~/Library` or NAW's data folder is read-only for pi.
+`scripts/pi-tui-sandbox-check.cjs` tests on this machine, each against a control without
+the sandbox: the writes and hard links, the named programs at their system paths, each
+refused service lookup, other connections and name lookups. It also shows that macOS
+stops copies of those programs, sandbox or not, and that the system `launchctl` cannot
+submit a job from the sandbox even with the program rule taken out (without a control,
+which would create a job). The Apple Events rule is not tested on its own: that needs
+another app to receive one, and macOS would ask the person first.
+
+What stays open: other programs later use what pi writes in the working folder, or in
+the temporary folders every program shares, as it is (a git hook, a project script, a
+rule file another agent reads). macOS services that act for a process, other than those
+named above, were not each audited. A working folder inside `~/Library` or NAW's data
+folder is read-only for pi.
 
 **The key.** pi uses the DSH TUI's Keychain item (`NAW DSH TUI DeepSeek API key`,
 account `deepseek`). NAW reads it at each start and hands it only to the session's
