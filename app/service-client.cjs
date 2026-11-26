@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const { execFileSync, spawn } = require('node:child_process');
+const backgroundOperation = require('./background-operation.cjs');
 const { readLayout, writeLayout, DSH_INHERIT_ATTEMPTS } = require('./service-layout.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
@@ -19,17 +20,18 @@ const openingRetired = new Map();
 function retiredState(directory) {
   const workspace = fs.lstatSync(path.join(directory, 'workspace.json'));
   if (!workspace.isFile() || workspace.uid !== process.getuid() || (workspace.mode & 0o077)) throw uiError('error.service.invalidLayout');
-  let rooms;
-  try { rooms = fs.lstatSync(path.join(directory, 'room-records.json')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const stamp = [workspace, rooms].map(stat => stat ? [stat.dev, stat.ino, stat.mtimeMs, stat.size].join(':') : '').join('/');
+  const files = ['room-records.json', 'operator-records.json'].map(name => {
+    try { return fs.lstatSync(path.join(directory, name)); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  });
+  const stamp = [workspace, ...files].map(stat => stat ? [stat.dev, stat.ino, stat.ctimeMs, stat.mtimeMs, stat.size].join(':') : '').join('/');
   const cached = retiredStates.get(directory);
   const cachedState = cached?.stamp === stamp ? cached.state.deref() : null;
   if (cachedState) return cachedState;
   const stored = Workspace.recordedSnapshot(directory);
   if (stored.storageWarning || !stored.sessions.every(session => ['ended', 'recoverable'].includes(session.state))) throw uiError('error.service.invalidLayout');
-  const state = { ...stored, protocol: 1, capabilities: ['collaborationSpacesV1', 'clearSharedHistory', 'resume'],
-    storageRetryable: false, wakePolicy: undefined, operatorPolicy: null };
+  const state = { ...stored, protocol: 1, capabilities: ['collaborationSpacesV1', 'clearSharedHistory', 'resume', 'operatorControl1a'],
+    storageRetryable: false, wakePolicy: undefined };
   retiredStates.set(directory, { stamp, state: new WeakRef(state) });
   return state;
 }
@@ -80,9 +82,14 @@ class RetiredClient extends EventEmitter {
     if (this.closed) throw uiError('error.client.serviceNotConnected');
     if (this.live) return this.live.call(method, ...args);
     if (readLock(path.join(this.directory, 'service.lock')) !== undefined) return (await this.liveClient()).call(method, ...args);
-    if (method === 'initial') return { ...(this.state ||= retiredState(this.directory)), owner: this.owner };
+    if (method === 'initial') return { ...(this.state = retiredState(this.directory)), owner: this.owner };
+    if (method === 'operatorAction' && args[0] === null && args[1] === 'enabled') {
+      if (readLock(path.join(this.scope, 'services.lock'))?.pid !== process.pid || backgroundOperation.current()) throw uiError('error.operator.desktopOnly');
+      return Workspace.setDormantOperatorEnabled(this.directory, args[2]);
+    }
     if (method === 'claim' && args[2] === 'free') return false;
     if (['leave', 'pause', 'observe', 'unobserve', 'shutdown'].includes(method) || method === 'spaceAction' && args[1] === 'pause') return true;
+    if (backgroundOperation.current() && !backgroundOperation.request()?.maintenanceApproved) throw uiError('error.client.connectionUpdatingNoInput');
     return (await this.liveClient()).call(method, ...args);
   }
   close() {

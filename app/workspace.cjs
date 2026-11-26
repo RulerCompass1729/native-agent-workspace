@@ -166,7 +166,7 @@ function spaceMidturnText(roomName, sender, text) {
   return `${head}\n${text}`;
 }
 class Workspace extends EventEmitter {
-  constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces'), { readOnly = false } = {}) {
+  constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces'), { dormant = false } = {}) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
     // Open connections per view owner, and how many are pages a person sees. A window the person closed and
     // the hidden window an agent's request runs in are pageless: they hold no session against a window that
@@ -185,7 +185,7 @@ class Workspace extends EventEmitter {
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.saved = null; // the JSON of both files as last saved (its parts) and the files that save left: unchanged()
-    if (!readOnly) {
+    if (!dormant) {
       this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
       this.deadlineTimer.unref();
     }
@@ -200,7 +200,7 @@ class Workspace extends EventEmitter {
     this.preflightFailures = new WeakMap();
     this.progress = new Map(); this.observedTerminals = new Map();
     this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
-    if (!readOnly) {
+    if (!dormant) {
       fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
       wake.initialize(this);
     }
@@ -269,8 +269,12 @@ class Workspace extends EventEmitter {
     delete this.savedGoalContinuation;
   }
   static recordedSnapshot(dataDir) {
-    const workspace = new Workspace({ binaries: {} }, dataDir, undefined, { readOnly: true });
+    const workspace = new Workspace({ binaries: {} }, dataDir, undefined, { dormant: true });
     return workspace.snapshot();
+  }
+  static setDormantOperatorEnabled(dataDir, enabled) {
+    const workspace = new Workspace({ binaries: {} }, dataDir, undefined, { dormant: true });
+    return workspace.operator.settings(null, enabled);
   }
   usageFor(s) {
     if (s.provider !== 'codex') return s.usage;

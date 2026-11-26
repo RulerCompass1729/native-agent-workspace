@@ -43,11 +43,12 @@ async function stopOwnService(directory) {
   throw Error('Test backend did not finish shutdown');
 }
 // The old backend is the root store with these records; the current one is a separate slot.
-async function oldBackend(t, stored) {
+async function oldBackend(t, stored, realCurrent = false) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-retire-')), oldVersion = process.env.NAW_APP_VERSION;
   let current;
   t.after(async () => {
     await stopOwnService(directory); await current?.close();
+    if (realCurrent) await stopOwnService(path.join(directory, ACTIVE));
     if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
     fs.rmSync(directory, { recursive: true, force: true });
   });
@@ -55,7 +56,12 @@ async function oldBackend(t, stored) {
   else fs.writeFileSync(path.join(directory, 'workspace.json'), JSON.stringify(stored), { mode: 0o600 });
   fs.writeFileSync(path.join(directory, 'runtime-locations.json'), JSON.stringify({ claude: '/usr/bin/false', codex: '/usr/bin/false' }), { mode: 0o600 });
   process.env.NAW_APP_VERSION = VERSION; await ensureService(directory, process.execPath);
-  current = await currentService(path.join(directory, ACTIVE));
+  if (realCurrent) {
+    const active = path.join(directory, ACTIVE);
+    fs.mkdirSync(active, { recursive: true, mode: 0o700 });
+    fs.copyFileSync(path.join(directory, 'runtime-locations.json'), path.join(active, 'runtime-locations.json'));
+    await ensureService(active, process.execPath);
+  } else current = await currentService(path.join(directory, ACTIVE));
   writeLayout(directory, { format: 1, active: ACTIVE, entries: ['.', ACTIVE] });
   return directory;
 }
@@ -169,6 +175,43 @@ test('suspending a stopped store preserves the recoverable session and its draft
     const state = await client.call('initial');
     const row = state.sessions.find(s => s.id === 'old-session');
     assert.deepEqual([row.state, row.nativeId, row.liveDraft], ['recoverable', 'old-native', 'synthetic retained draft']);
+    assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+  } finally { client.close(); }
+});
+
+test('global automatic-message and operator settings survive a cold store reopening', async t => {
+  const directory = await oldBackend(t, records(), true);
+  assert.equal(await retire(directory), true);
+  const stored = fs.readFileSync(path.join(directory, 'workspace.json'));
+  const client = await connect(directory, 'settings-while-cold');
+  try {
+    const before = await client.call('initial');
+    assert.equal(before.wakePolicy.enabled, true);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'workspace.json')), stored);
+    assert.equal(await client.call('wakePolicy', null, false), true);
+    assert.equal(await client.call('operatorAction', null, 'enabled', true), true);
+    assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+    assert.deepEqual((await client.call('initial')).operatorPolicy.backends.map(row => row.enabled), [true, true]);
+    assert.equal(await client.call('operatorAction', null, 'enabled', false), true);
+    assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+    await client.call('claim', 'old-session', 'chat');
+    const after = await client.call('initial');
+    assert.equal(after.wakePolicy.enabled, false);
+    assert.deepEqual(after.operatorPolicy.backends.map(row => row.enabled), [false, false]);
+  } finally { client.close(); }
+});
+
+test('an unapproved background invocation cannot wake a dormant backend', async t => {
+  const directory = await oldBackend(t, records());
+  assert.equal(await retire(directory), true);
+  const client = await connect(directory, 'synthetic-background', { page: false });
+  try {
+    const cold = client.entries.find(entry => entry.key === '.').client;
+    const background = require('../background-operation.cjs');
+    const actor = { id: 'caller', name: 'Synthetic agent', nativeId: 'original', provider: 'codex', turnId: 'turn', callId: 'call', operationId: 'operation' };
+    await assert.rejects(background.run(actor, () => cold.call('claim', 'old-session', 'chat')), {
+      uiMessage: { version: 1, key: 'error.client.connectionUpdatingNoInput', params: {} },
+    });
     assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
   } finally { client.close(); }
 });
