@@ -280,7 +280,7 @@ test('the room status bar shows a working member\'s native state in the interfac
     roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention() {}, roomRecipient: () => member.id, renderTimeline() {}, selectRoom() {}, draggableSession() {},
-    orderedMembers: () => f.people,
+    orderedMembers: () => f.people, focusedRoomMember: () => false,
   });
   f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
   const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };
@@ -306,7 +306,7 @@ test('shared queued/native-route labels repaint without changing recipient, pend
     roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention: () => effects.push('normalize'), roomRecipient: () => recipient.id, renderTimeline: () => effects.push('timeline'), selectRoom() {}, draggableSession() {},
-    orderedMembers: () => f.people,
+    orderedMembers: () => f.people, focusedRoomMember: () => false,
   });
   f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
   const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };

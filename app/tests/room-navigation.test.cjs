@@ -39,7 +39,7 @@ function harness(){
  vendorMarks(source,ctx);
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
  const names=['roomMemberStateText','spaceMemberLabel','focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews','archivedName'];
- for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs'])if(source.includes('function '+name+'('))names.push(name);
+ for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs','roomTabs','roomTabCurrent'])if(source.includes('function '+name+'('))names.push(name);
  vm.runInContext(names.map(actual).join('\n'),ctx);vm.runInContext(source.split('\n').find(l=>l.startsWith('const roomReadingKey =')),ctx);ctx.renderSnapshotMaterials=()=>{};
  if(!ctx.renderRoomMemberTabs){const from=source.indexOf("      const tabs = $('room-member-tabs');",source.indexOf('function render()'));const tail='      refreshRoomMemberTabs(people);';const to=source.indexOf(tail,from);assert.ok(from>=0&&to>from);vm.runInContext('function renderRoomMemberTabs(){const people=orderedMembers();\n'+source.slice(from,to+tail.length)+'\n}',ctx)}
  return{ctx,$,document,calls,key:()=>vm.runInContext('roomReadingKey()',ctx)};
@@ -57,15 +57,14 @@ test('temporary recent-all preserves canonical filters and their separate readin
  const oldKey=key(),position={top:300,follow:false,anchor:'old-thread',offset:8};ctx.readingPositions[oldKey]=position;ctx.clearRoomRecordFilter();assert.equal($('room-filter').value,'');assert.equal($('room-search').value,'');assert.notEqual(key(),oldKey);
  ctx.captureRoomView();const folder=fs.mkdtempSync(path.join(os.tmpdir(),'naw-navigation-canonical-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));const store=new ViewStore(folder);store.load();store.save([{owner:'owned-test',roomViews:ctx.persistedRoomViews(),readingPositions:ctx.readingPositions}]);const reopened=new ViewStore(folder).load()[0];assert.equal(reopened.roomViews.shared.roomFilter,'a');assert.equal(reopened.roomViews.shared.roomSearch,'original');assert.equal(reopened.roomViews.shared.roomThread,'old-thread');assert.deepEqual(reopened.readingPositions[oldKey],position);assert.equal(reopened.roomViews.shared.sharedDraft,'@Agent a UNSENT');assert.equal(reopened.roomViews.shared.draftRevision,7);assert.deepEqual(calls.native,[]);
 });
-test('recent-all from related records retains the original member return point and underlying history',()=>{
- const{ctx,$,calls}=harness();ctx.state.room.messages=[{id:'a-row',recipientId:'a',text:'A'},{id:'b-row',recipientId:'b',text:'B'}];$('room-search').value='untouched history';ctx.roomThread='old-thread';ctx.showRoomRecords(true);ctx.clearRoomRecordFilter();
- assert.equal(ctx.roomRecordReturn.id,'a');assert.deepEqual(Array.from(ctx.filteredTimeline(),m=>m.id),['a-row','b-row']);assert.equal($('room-search').value,'untouched history');assert.equal(ctx.roomThread,'old-thread');ctx.returnRoomRecordMember();assert.equal(ctx.roomSession,'a');assert.equal(ctx.mode,'terminal');assert.equal(ctx.roomDraftRevision,7);assert.equal($('shared-input').value,'@Agent a UNSENT');assert.deepEqual(calls.native,[]);
-});
-
 test('room navigation keys move focus through the existing buttons without changing the selected native view',()=>{
- const{ctx,$,document,calls}=harness();ctx.renderRoomMemberTabs();const tab=$('room-record');tab.focus();const before=ctx.roomSession;let prevented=0;
- ctx.roomNavigationKey({target:tab,key:'Home',preventDefault(){prevented++}});assert.equal(document.activeElement,$('room-overview'));assert.equal(ctx.roomSession,before);assert.equal(prevented,1);
- ctx.roomNavigationKey({target:$('room-overview'),key:'End',isComposing:true,preventDefault(){assert.fail('IME composition')}});assert.equal(document.activeElement,$('room-overview'));assert.deepEqual(calls.native,[]);
+ // R248: the four fixed tabs, 总览 · 信息流 · 网格 · 成员.
+ const{ctx,$,document,calls}=harness();ctx.renderRoomMemberTabs();const tab=$('room-overview');tab.focus();const before=ctx.roomSession;let prevented=0;
+ ctx.roomNavigationKey({target:tab,key:'Home',preventDefault(){prevented++}});assert.equal(document.activeElement,$('room-summary'));assert.equal(ctx.roomSession,before);assert.equal(prevented,1);
+ ctx.roomNavigationKey({target:$('room-summary'),key:'ArrowRight',preventDefault(){prevented++}});assert.equal(document.activeElement,$('room-stream'));
+ ctx.roomNavigationKey({target:$('room-stream'),key:'End',preventDefault(){prevented++}});assert.equal(document.activeElement,$('room-member'));
+ ctx.roomNavigationKey({target:$('room-member'),key:'ArrowRight',preventDefault(){prevented++}});assert.equal(document.activeElement,$('room-summary'));assert.equal(prevented,4);
+ ctx.roomNavigationKey({target:$('room-summary'),key:'End',isComposing:true,preventDefault(){assert.fail('IME composition')}});assert.equal(document.activeElement,$('room-summary'));assert.deepEqual(calls.native,[]);
 });
 test('manual filtering ends only the temporary recent preview and leaves the draft generation alone',()=>{
  const{ctx,$,calls}=harness();ctx.roomSession='';ctx.roomSurface='records';ctx.roomFilterHistory={roomFilter:'a',roomSearch:'original',roomThread:''};$('room-search').value='new explicit query';
@@ -81,7 +80,7 @@ for (const scenario of ['missing saved member', 'archived selected member']) tes
  const {ctx,$,document,calls}=harness();ctx.renderRoomMemberTabs();$('room-member-tabs').firstChild.focus();
  if(scenario==='missing saved member')ctx.roomSession='gone';else ctx.state.sessions[0].archived=true;
  document.activeElement=null;ctx.renderRoomMemberTabs();
- const routes=[$('room-overview'),$('room-record'),...$('room-member-tabs').children];
+ const routes=[...ctx.roomTabs(),...$('room-member-tabs').children];
  assert.equal(routes.filter(el=>el.tabIndex===0).length,1);assert.equal($('room-overview').tabIndex,0);assert.deepEqual(calls.native,[]);
 });
 

@@ -279,7 +279,72 @@
     return { sessionId, nativeId: row.nativeId || '', messageId: row.sharedStream ? row.nativeMessageId || '' :
       row.role === 'human' ? row.deliveries?.find(d => d.recipientId === sessionId)?.id || row.id || '' : '' };
   }
-  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, endedSession, roomTasks, speechStream, speechInvolves, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
+  // R249 信息流: one line per thing that happened in a space, newest first: what was said, each turn's last reply,
+  // dispatches, deliveries, waits for the person, completions, joins and leaves. Records the speech stream already
+  // shows appear once; every other record of the space stays, as 「空间」, so nothing the shared record showed is lost.
+  // room: one space's record; sessions: its members' display sessions (a member without messages reads from the mirror).
+  const FEED_GROUP = { say: 'say', reply: 'say', dispatch: 'work', ready: 'work', done: 'work', queue: 'work', wait: 'wait', join: 'other', space: 'other' };
+  const QUEUE_KIND = {
+    'notice.queue.dispatched': 'dispatch', 'notice.queue.ready': 'ready', 'notice.queue.readyUnnamed': 'ready',
+    'notice.queue.waiting': 'wait', 'notice.queue.lookAt': 'wait', 'notice.queue.resolved': 'done', 'notice.queue.resolvedBySteward': 'done',
+  };
+  function spaceFeed(room, { sessions = [] } = {}) {
+    if (!room) return [];
+    const byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
+    const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
+    const stamp = value => Number.isFinite(value) && Math.abs(value) <= 8640000000000000 ? value : 0;
+    const items = [], spoken = new Set();
+    for (const s of speechStream(room, { sessions })) {
+      if (s.id.startsWith('room:')) spoken.add(s.id.slice(5));
+      // NAW's dispatch input is the dispatch record below, with its item.
+      if (s.fromKind === 'dispatch') continue;
+      items.push({ id: s.id, roomId: room.id, kind: s.fromKind === 'agent' && !s.to.length ? 'reply' : 'say', time: s.time, fromKind: s.fromKind,
+        fromId: s.fromId, fromName: s.fromName, unverified: Boolean(s.unverified), to: s.to, text: s.text, body: s.text, target: s.target || null,
+        involved: [s.fromId, ...s.to.map(t => t.id)].filter(Boolean) });
+    }
+    const tasks = roomTasks(room, { nameOf }), taskOf = new Map();
+    for (const task of tasks.tasks) for (const event of task.history) taskOf.set(event, task);
+    for (const row of [...(Array.isArray(room.messages) ? room.messages : []), ...(Array.isArray(room.events) ? room.events : [])]) {
+      // A mirror of a member's own stream (its tools and partial replies) is read through the speech stream.
+      if (!row || row.volatile || row.sharedStream || spoken.has(row.id)) continue;
+      // Members' words and replies are in the speech stream above; a mirrored part of a reply is not a record.
+      if (!row.uiMessage && !row.kind && (row.role === 'assistant' || row.role === 'human')) continue;
+      if (row.kind === 'agent-wake' || row.kind === 'agent-peer') continue;
+      const key = row.uiMessage?.key || '', params = row.uiMessage?.params || {}, task = taskOf.get(row), ownerId = row.sessionId || task?.ownerId || '';
+      const base = { id: `record:${row.id ?? items.length}`, roomId: room.id, time: stamp(row.time), row, itemId: task?.id || row.itemId || '',
+        taskStatus: task?.status || '', target: originalTarget(row, task?.item), involved: [ownerId].filter(Boolean) };
+      let kind = QUEUE_KIND[key] || (row.monitor?.kind === 'done' ? 'done' : row.kind === 'join' || row.kind === 'leave' ? 'join' : row.kind === 'queue' ? 'queue' : 'space');
+      const name = nameOf(ownerId, params.name || row.name);
+      if (kind === 'dispatch') {
+        items.push({ ...base, kind, fromKind: 'naw', fromId: '', fromName: '', to: ownerId || name ? [{ id: ownerId, name }] : [], text: params.text || '', body: task?.text || params.text || '' });
+      } else if (kind === 'ready') {
+        const title = task?.title || params.text || '';
+        items.push({ ...base, kind, fromKind: 'agent', fromId: ownerId, fromName: name, to: [], text: `READY ${params.branch || ''} ${params.commit || ''}`.trim() + (title ? ` · ${title}` : ''), body: task?.text || title });
+      } else if (kind === 'wait') {
+        const question = task?.item?.reply ? decisionQuestion(task.item.reply) || firstLine(task.item.reply) : '';
+        items.push({ ...base, kind, fromKind: 'agent', fromId: ownerId, fromName: name, to: [], text: question || params.text || '',
+          body: [task?.item?.reply || '', task?.text || ''].filter(Boolean).join('\n\n') || params.text || '', look: key === 'notice.queue.lookAt' });
+      } else if (kind === 'done') {
+        items.push({ ...base, kind, fromKind: ownerId ? 'agent' : '', fromId: ownerId, fromName: name, to: [], text: row.text || params.text || task?.title || '', body: task?.text || row.text || params.text || '' });
+      } else {
+        // Joins, leaves, other queue records and the space's own records read as the shared record showed them.
+        if (kind === 'queue' && !key) kind = 'space';
+        items.push({ ...base, kind, fromKind: ownerId ? 'agent' : '', fromId: ownerId, fromName: kind === 'join' ? name : '', to: [], text: null, body: null });
+      }
+    }
+    const seen = new Set();
+    return items.filter(i => !seen.has(i.id) && seen.add(i.id)).map((item, order) => ({ item, order }))
+      .sort((a, b) => b.item.time - a.item.time || b.order - a.order).map(({ item }) => item);
+  }
+  // One feed line passes the chosen kind group, the chosen people (any of them) and the words searched for.
+  function feedMatches(item, { group = 'all', people = [], query = '', words = () => '' } = {}) {
+    if (group !== 'all' && FEED_GROUP[item.kind] !== group) return false;
+    if (people.length && !people.some(id => item.involved.includes(id) || id === '@person' && item.fromKind === 'person')) return false;
+    if (!query) return true;
+    const needle = query.toLocaleLowerCase();
+    return [item.fromName, ...item.to.map(t => t.name), item.text ?? '', item.body ?? '', words(item)].join('\n').toLocaleLowerCase().includes(needle);
+  }
+  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, FEED_GROUP, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, endedSession, roomTasks, speechStream, speechInvolves, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget, spaceFeed, feedMatches };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.nativeWorkspaceTaskStream = api;
 })(globalThis);

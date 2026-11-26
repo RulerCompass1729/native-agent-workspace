@@ -18,7 +18,8 @@ function fixture() {
   element('shared-input').value = 'Unsent room material'; element('recipient').value = 'b';
   element('room-filter').value = 'departed'; element('room-search').value = 'old source';
   const sessions = ['a', 'b'].map(id => ({ id, nativeId: `native-${id}`, roomId: 'shared', liveDraft: `Unsent private ${id}`, queuedInputs: [{ id: `queued-${id}`, text: `Original queued ${id}` }] }));
-  const context = vm.createContext({getActivityStream:()=>null,
+  const feedPeople = [];
+  const context = vm.createContext({getActivityStream:()=>null, getSpaceFeed: () => ({ showPerson: id => feedPeople.push(id) }),
     structuredClone, roomViews: {}, spaceId: 'shared', selected: 'room', roomSurface: 'overview', roomSession: 'a', mode: 'terminal', terminalLayout: 'split',
     roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, roomRecordSelections: new Map(), readingPositions: { 'collaboration-focus:a': { top: 314, follow: false, anchor: 'original', offset: 4 } },
     roomReturnReading: null, roomThread: 'old-thread', roomReplyTo: 'reply-original', pendingRoomFilter: '', selectionRevision: 4,
@@ -28,6 +29,7 @@ function fixture() {
     $: element, focusedRoomMember: () => context.selected === 'room' && context.roomSurface === 'overview' && Boolean(context.roomSession),
     activeSessionId: () => context.selected === 'room' ? context.roomSession : context.selected,
     current: () => context.state.sessions.find(s => s.id === context.roomSession), members: () => context.state.sessions.filter(s => s.roomId === context.spaceId),
+    orderedMembers: () => context.members(),
     captureReadingViews: () => events.push(['capture']), suspendColumnInputs: () => events.push(['suspend']),
     activateSoloComposer: id => events.push(['composer', id]), render: () => events.push(['render']), persistView: () => context.captureRoomView(),
     attempt: fn => fn(), normalizeRoomMention() {}, populateSelect() {}, roomRecipient: () => element('recipient').value,
@@ -36,8 +38,9 @@ function fixture() {
   });
   context.roomOverview = { key: id => `collaboration:shared:${id}`, focus: id => context.focusRoomMember(id, context.roomSession, `collaboration:shared:${id}`) };
   const fields = source.match(/const roomViewFields = (\[[^;]+\]);/); assert.ok(fields);
-  vm.runInContext(`const roomViewFields = ${fields[1]};\n` + ['roomRecentPreview', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews'].map(actualFunction).join('\n'), context);
-  return { context, element, events, nativeCalls, notices };
+  const surfaces = source.match(/const ROOM_SURFACES = (\[[^;]+\]);/); assert.ok(surfaces);
+  vm.runInContext(`const roomViewFields = ${fields[1]};\nconst ROOM_SURFACES = ${surfaces[1]};\n` + ['roomRecentPreview', 'roomMemberChoice', 'showRoomSurface', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews'].map(actualFunction).join('\n'), context);
+  return { context, element, events, nativeCalls, notices, feedPeople };
 }
 
 test('member navigation restores its own mode and existing reading without any native input/control call', () => {
@@ -49,30 +52,22 @@ test('member navigation restores its own mode and existing reading without any n
   c.state.sessions[0].nativeId = 'replacement-native'; c.restoreRoomMemberView('a'); assert.equal(c.mode, 'chat', 'a saved display choice does not cross native identity');
 });
 
-test('related exchanges temporarily ignore old filters without changing recipient, reply, drafts or queued input', () => {
+// R249: a member's 「相关记录」 is the space's 信息流 on that member; the 成员 tab brings the member back as it was.
+test('related records open the stream on that member without changing recipient, reply, drafts or queued input', () => {
   const f = fixture(), c = f.context, before = plain(c.state.sessions), revision = c.roomDraftRevision;
-  c.timeline = () => [
-    { id: 'one', text: 'Current shared body', peerMessage: { senderId: 'b', recipientId: 'a' }, status: 'submitted' },
-    { id: 'two', text: 'Another participant', recipientId: 'b', status: 'unconfirmed' },
-    { id: 'three', text: 'Original wake body', wake: { senderId: 'a', recipientId: 'b' }, status: 'waiting' },
-  ]; c.roomThreads = { roots: new Map() };
-  c.showRoomRecords(true); assert.equal(c.roomSurface, 'records'); assert.equal(c.roomSession, ''); assert.equal(c.roomRecordScope, 'a');
-  assert.deepEqual(plain(c.filteredTimeline()).map(x => x.id), ['one', 'three']);
-  assert.equal(f.element('room-filter').value, 'departed'); assert.equal(f.element('room-search').value, 'old source');
+  c.showRoomRecords(true); assert.equal(c.roomSurface, 'stream'); assert.equal(c.roomSession, ''); assert.deepEqual(f.feedPeople, ['a']);
   assert.equal(c.roomThread, 'old-thread'); assert.equal(c.roomReplyTo, 'reply-original'); assert.equal(c.roomDraftRevision, revision);
   assert.equal(f.element('recipient').value, 'b'); assert.equal(f.element('shared-input').value, 'Unsent room material');
   assert.deepEqual(plain(c.state.sessions), before); assert.deepEqual(f.nativeCalls, []);
-  c.returnRoomRecordMember(); assert.equal(c.roomSession, 'a'); assert.equal(c.mode, 'terminal'); assert.equal(c.roomRecordScope, '');
+  assert.deepEqual(f.events.filter(e => e[0] === 'blur'), [['blur', 'a']]);
+  c.openRoomMember(c.roomMemberChoice().id); assert.equal(c.roomSession, 'a'); assert.equal(c.roomSurface, 'overview'); assert.equal(c.mode, 'terminal');
   assert.equal(c.readingPositions['collaboration-focus:a'].top, 314); assert.equal(c.roomReplyTo, 'reply-original');
 });
 
-test('return refuses a departed member or changed native identity instead of opening a different session', () => {
-  for (const condition of ['left', 'native-changed']) {
-    const f = fixture(), c = f.context; c.showRoomRecords(true);
-    if (condition === 'left') c.state.sessions[0].roomId = 'elsewhere'; else c.state.sessions[0].nativeId = 'replacement';
-    c.returnRoomRecordMember(); assert.equal(c.roomSurface, 'records'); assert.equal(c.roomSession, '');
-    assert.deepEqual(f.notices, ['toast.originalRemoved']); assert.deepEqual(f.nativeCalls, []);
-  }
+test('the 成员 tab never reopens a departed member', () => {
+  const f = fixture(), c = f.context; c.showRoomSurface('summary'); assert.equal(c.roomMemberChoice().id, 'a');
+  c.state.sessions[0].roomId = 'elsewhere'; assert.equal(c.roomMemberChoice().id, 'b');
+  c.state.sessions[1].roomId = 'elsewhere'; assert.equal(c.roomMemberChoice(), null); assert.deepEqual(f.nativeCalls, []);
 });
 
 test('clear/restore changes only record viewing and never the original reply association or submitting state', () => {
@@ -83,14 +78,16 @@ test('clear/restore changes only record viewing and never the original reply ass
   assert.equal(c.roomDraftRevision, 8); assert.equal(f.element('recipient').value, 'b'); assert.deepEqual(f.nativeCalls, []);
 });
 
-test('existing roomViews persistence round-trips related context and independent member modes across reload', () => {
+test('existing roomViews persistence round-trips the open view and independent member modes across reload', () => {
   const f = fixture(), c = f.context; c.showRoomRecords(true); const stored = plain(c.persistedRoomViews());
   assert.equal(validViews([{ owner: 'window', roomViews: stored }]), true);
-  const restored = fixture(), next = restored.context; next.roomViews = stored; next.restoreRoomView();
-  assert.equal(next.roomRecordScope, 'a'); assert.equal(next.roomRecordReturn.nativeId, 'native-a'); assert.equal(next.roomSession, '');
-  assert.equal(next.roomReplyTo, 'reply-original'); assert.equal(restored.element('room-filter').value, 'departed');
-  next.returnRoomRecordMember(); assert.equal(next.mode, 'terminal'); assert.equal(next.roomSession, 'a'); assert.deepEqual(restored.nativeCalls, []);
+  const restored = fixture(), next = restored.context; next.roomViews = stored; next.roomSession = ''; next.restoreRoomView();
+  assert.equal(next.roomSurface, 'stream'); assert.equal(next.roomSession, ''); assert.equal(next.roomMemberChoice().id, 'a');
+  assert.equal(next.roomReplyTo, 'reply-original');
+  next.openRoomMember('a'); assert.equal(next.mode, 'terminal'); assert.equal(next.roomSession, 'a'); assert.deepEqual(restored.nativeCalls, []);
   next.spaceId = 'other'; next.roomViews.other = {}; next.restoreRoomMemberView('a'); assert.equal(next.mode, 'chat', 'the other space cannot borrow this space mode');
+  // A view saved on the former 对话 or 共享记录 opens the 总览.
+  for (const old of ['records', 'conversation']) { next.spaceId = 'shared'; next.roomViews.shared = { roomSurface: old }; assert.equal(validViews([{ owner: 'window', roomViews: { shared: { roomSurface: old } } }]), true); next.restoreRoomView(); assert.equal(next.roomSurface, 'summary'); }
 });
 
 test('timeline participant union retains both direct endpoints, deliveries, wake and peer endpoints', () => {

@@ -49,7 +49,8 @@
       waitingOpen = false; grantsOpen = false; waitingKey = ''; drawWaiting();
       if (item.card) return host.confirmation({ sessionId: item.sessionId, nativeId: item.card.nativeId, messageId: item.card.id, operationId: item.card.operationId });
       if (item.sessionId || item.actorId) return host.original({ sessionId: item.sessionId || item.actorId, messageId: item.messageId || '', nativeId: '' });
-      if (item.roomId) { await host.selectSpace(item.roomId); open(item.roomId); }
+      // R249: a space's records are its 信息流 tab now.
+      if (item.roomId) { await host.selectSpace(item.roomId); if (host.showStream) host.showStream(); else open(item.roomId); }
     }
     function drawWaiting() {
       const items = model.waitingItems({ rooms: host.rooms(), sessions: sessions(), confirmations: state()?.backgroundConfirmations, operatorCreations: state()?.operatorCreations,
@@ -215,7 +216,7 @@
       if (visible) drawFeed();
       const control = doc.getElementById('room-record');
       if (host.inRoom()) doc.getElementById('header-actions').append(control);
-      control.hidden = !host.inRoom(); control.setAttribute('aria-pressed', String(visible));
+      control.hidden = !host.inRoom() || Boolean(host.showStream); control.setAttribute('aria-pressed', String(visible));
     }
     doc.addEventListener('keydown', e => { if (e.key === 'Escape' && (waitingOpen || grantsOpen)) { const target = grantsOpen ? waitingNodes.grantsButton : waitingNodes.lead; waitingOpen = false; grantsOpen = false; drawWaiting(); target.focus(); } });
     doc.addEventListener('pointerdown', e => { if ((waitingOpen || grantsOpen) && !strip.contains(e.target)) { waitingOpen = false; grantsOpen = false; drawWaiting(); } });
