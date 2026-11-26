@@ -298,18 +298,25 @@ function readHeld(value) {
     if (!validId(id) || !dictionary(entry) || !Array.isArray(entry.items)) continue;
     const items = [];
     for (const item of entry.items) {
-      if (dictionary(item) && validTime(item.at) && typeof item.text === 'string' && item.text.trim()) items.push({ at: item.at, text: item.text });
+      if (dictionary(item) && validTime(item.at) && typeof item.text === 'string' && item.text.trim()) items.push(heldItem(item));
     }
     if (!items.length) continue;
     held[id] = { items, oldNativeId: validId(entry.oldNativeId) ? entry.oldNativeId : null };
     if (dictionary(entry.to) && validId(entry.to.id)) held[id].to = { id: entry.to.id, nativeId: validId(entry.to.nativeId) ? entry.to.nativeId : null };
     if (validTime(entry.tried)) held[id].tried = entry.tried;
     if (validTime(entry.blockedSince)) held[id].blockedSince = entry.blockedSince;
-    if (validTime(entry.returned)) held[id].returned = entry.returned;
     if (typeof entry.name === 'string') held[id].name = entry.name;
     if (Array.isArray(entry.roomIds) && entry.roomIds.every(room => typeof room === 'string')) held[id].roomIds = [...entry.roomIds];
   }
   return held;
+}
+// Which session the person addressed and from which window (view owner): where the words go back if they cannot go.
+function heldItem(item) {
+  return { at: item.at, text: item.text, ...(validId(item.session) ? { session: item.session } : {}), ...(typeof item.from === 'string' && item.from ? { from: item.from } : {}) };
+}
+// Words being given back to the person's window, one copy each (main.cjs giveBackHeld).
+function readReturning(value) {
+  return (Array.isArray(value) ? value : []).filter(item => dictionary(item) && validTime(item.at) && typeof item.text === 'string' && item.text.trim() && validId(item.session)).map(heldItem);
 }
 // How the person's composer would send to it now (renderer sessionInputMethod), or null while it can take nothing.
 function heldMethod(session) {
@@ -2669,6 +2676,7 @@ function readRotations(file, now, faults = {}) {
   faults.withdrawals = readRequests(data.withdrawals);
   faults.typed = readTyped(data.typed);
   faults.held = readHeld(data.held);
+  faults.returning = readReturning(data.returning);
   const result = {};
   for (const oldId of Object.keys(data.rotations)) {
     const record = data.rotations[oldId];
@@ -2838,6 +2846,9 @@ class QueueDispatcher {
     this.withdrawals = this.rotationRead.withdrawals || {};
     this.typed = this.rotationRead.typed || {};
     this.held = this.rotationRead.held || {};
+    this.returning = this.rotationRead.returning || [];
+    // Puts words back as a copy of that session's draft in the person's window; false while that window is closed.
+    this.giveBack = options.giveBack || (() => false);
     this.requestGates = new Map();
     // When an unsent prompt in its own terminal refused the request (FINISH_RETRY_MS).
     this.requestTried = new Map();
@@ -3307,6 +3318,7 @@ class QueueDispatcher {
       ...(Object.keys(this.withdrawals).length ? { withdrawals: this.withdrawals } : {}),
       ...(Object.keys(this.typed).length ? { typed: this.typed } : {}),
       ...(Object.keys(this.held).length ? { held: this.held } : {}),
+      ...(this.returning.length ? { returning: this.returning } : {}),
       ...(Object.keys(this.rejectedRotations).length ? { quarantinedRotations: this.rejectedRotations } : {}) }), { mode: 0o600 });
     fs.renameSync(temp, this.file);
   }
@@ -3739,6 +3751,7 @@ class QueueDispatcher {
       current = this.view();
     }
     if (await this.finishDeferrals(current.snapshot, current.now)) current = this.view();
+    if (this.returning.length) this.giveBackReturning();
     if (Object.keys(this.held).length) {
       await this.flushHeld(current.snapshot);
       current = this.view();
@@ -4408,7 +4421,7 @@ class QueueDispatcher {
   // The person 2026-11-25: 「在一个 agent 要 hand over 的时候把这个queue 启用，等 handover 之后把 queue 的里的内容发给继任，
   // 然后清空这个 queue」, 「hand over 的过程中发过来的消息不能丢」. What they send from NAW to either session meanwhile is
   // saved with that rotation and sent as written once it is over (flushHeld). Null: not held, it goes as before.
-  holdMessage(sessionId, text, nativeId) {
+  holdMessage(sessionId, text, nativeId, from) {
     // What the send would refuse anyway is refused there, as before (cleanText).
     if (typeof text !== 'string' || !text.trim() || text.length > HELD_TEXT_LIMIT || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) return null;
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) return null;
@@ -4422,7 +4435,7 @@ class QueueDispatcher {
     const length = entry.items.reduce((sum, item) => sum + item.text.length + 2, text.length);
     // Sent past the limit, it would land before the rest and cut into the handoff.
     if (entry.items.length >= HELD_LIMIT || length > HELD_TEXT_LIMIT) throw uiError('error.rotation.heldFull');
-    entry.items.push({ at: this.now(), text });
+    entry.items.push(heldItem({ at: this.now(), text, session: sessionId, from }));
     entry.name = record.name || entry.name;
     entry.roomIds = [...(record.roomIds || [])];
     this.held[oldId] = entry;
@@ -4441,7 +4454,7 @@ class QueueDispatcher {
   // session; one message, the person's words in the order sent, through the window that controls that session.
   async flushHeld(snapshot) {
     for (const [oldId, entry] of Object.entries(this.held)) {
-      if (entry.returned || this.heldRotation(oldId) === oldId) continue;
+      if (this.heldRotation(oldId) === oldId) continue;
       const usable = target => {
         const session = target && snapshot.sessions.find(s => s.id === target.id);
         return session && session.state !== 'ended' ? session : null;
@@ -4449,7 +4462,7 @@ class QueueDispatcher {
       const session = usable(entry.to) || usable({ id: oldId });
       const text = entry.items.map(item => item.text).join('\n\n');
       if (!session) {
-        this.returnHeld(oldId, entry, text);
+        this.returnHeld(oldId, entry);
         continue;
       }
       // It is itself being rotated now: the words wait for that one.
@@ -4472,17 +4485,18 @@ class QueueDispatcher {
         continue;
       }
       if (entry.blockedSince !== undefined && this.now() - entry.blockedSince >= HELD_RETURN_MS) {
-        this.returnHeld(oldId, entry, text);
+        this.returnHeld(oldId, entry);
         continue;
       }
       if (this.now() - (entry.tried ?? -Infinity) < HELD_RETRY_MS) continue;
-      // Busy with its own turn, or the person typing there: that is waited for, not counted as blocked.
+      // Busy with its own turn, or the person typing there: waited for. Any other state that takes nothing (an error,
+      // a stop) counts as blocked.
       const method = heldMethod(session);
-      if (!method || session.pendingTag || session.nativeContextPending || session.liveDraft?.trim()) continue;
+      if (session.pendingTag || session.nativeContextPending || session.liveDraft?.trim() || !method && session.state === 'working') continue;
       let client = null;
       try {
         this.roomState.assertAvailable(session.id);
-        client = await this.heldClient(session);
+        if (method) client = await this.heldClient(session);
       } catch { /* As with no window that controls it: blocked. */ }
       const count = entry.items.length;
       entry.tried = this.now();
@@ -4521,14 +4535,29 @@ class QueueDispatcher {
     if (sessionId) this.noteHuman(sessionId, method);
   }
 
-  // Not a silent retry (11-25 review): the person gets the words back in the space and an OS notice. The entry stays,
-  // marked, so nothing of it is destroyed.
-  returnHeld(oldId, entry, text) {
-    entry.returned = this.now();
+  // Not a silent retry, and only to the person (11-25 review: a space is read by its agents): each message goes back
+  // as a copy of the draft of the session they addressed, in the window they sent it from. It leaves the held words
+  // at once, so a new handoff of that session starts with none.
+  returnHeld(oldId, entry) {
+    this.returning.push(...entry.items.map(item => ({ ...item, session: item.session || oldId })));
+    delete this.held[oldId];
     this.save();
-    const name = this.label(oldId, entry.name);
-    try { this.roomState.rotationEvent(entry.roomIds || [], 'heldReturned', name, text); } catch { /* The OS notice still says it. */ }
-    try { Promise.resolve(this.notify('heldReturned', { name, heldText: text })).catch(() => {}); } catch { /* Kept on disk. */ }
+    try { Promise.resolve(this.notify('heldReturned', { name: this.label(oldId, entry.name) })).catch(() => {}); } catch { /* Kept on disk. */ }
+    this.giveBackReturning();
+  }
+
+  // What could not be put back yet (its window closed) is tried again each pass, never dropped.
+  giveBackReturning() {
+    const left = this.returning.filter(item => {
+      try {
+        return !this.giveBack(item.from, item.session, item.text);
+      } catch {
+        return true;
+      }
+    });
+    if (left.length === this.returning.length) return;
+    this.returning = left;
+    this.save();
   }
 
   untouched(old, record, reply) {

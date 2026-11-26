@@ -1513,7 +1513,7 @@ async function keptThenStopped(t, options = {}, text = '先回答这个') {
   await setup.dispatcher.start();
   await setup.dispatcher.schedule();
   setup.advance(1000);
-  assert.deepEqual(setup.dispatcher.holdMessage('a', text), { held: true });
+  assert.deepEqual(setup.dispatcher.holdMessage('a', text, undefined, 'owner-b'), { held: true });
   setup.dispatcher.noteHuman('a', 'interrupt');
   setup.client.reply('a', '交接：分支 abc。');
   setup.client.state.sessions[0].owner = 'owner-b';
@@ -1537,31 +1537,44 @@ test('what was kept goes through the window that controls the receiving session,
   assert.deepEqual(f.dispatcher.held, {});
 });
 
-test('with no window that controls the receiver, the words go back to the person after ten minutes, once, and stay on disk (11-25 review)', async t => {
-  const f = await keptThenStopped(t, { ownerClient: () => null });
+test('with no window that controls the receiver, the words go back after ten minutes to the draft recovery of the window they came from, and into no space (11-25 review)', async t => {
+  const gave = [];
+  const f = await keptThenStopped(t, { ownerClient: () => null, giveBack: (...args) => { gave.push(args); return true; } });
   const first = personSends(f.client, f.dispatcher);
   await passes(f.dispatcher, 4, () => f.dispatcher.held.a?.blockedSince !== undefined);
   assert.equal(f.dispatcher.rotations.a, undefined);
   assert.ok(f.dispatcher.held.a?.blockedSince !== undefined, 'blocked, not sent');
-  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), [], 'not before ten minutes');
+  assert.deepEqual(gave, [], 'not before ten minutes');
   f.advance(10 * 60 * 1000);
   await passes(f.dispatcher, 2);
   assert.deepEqual(first, []);
+  assert.deepEqual(gave, [['owner-b', 'a', '先回答这个']]);
   assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned']);
-  assert.ok(rotationTexts(f.room.value.events).some(text => text.includes('先回答这个') && text.includes('重发')), rotationTexts(f.room.value.events).join('\n'));
-  assert.ok(f.dispatcher.held.a.returned, 'kept, marked as given back');
+  assert.equal(rotationTexts(f.room.value.events).some(text => text.includes('先回答这个')), false, 'the agents of a space never read it');
+  assert.deepEqual([f.dispatcher.held, f.dispatcher.returning], [{}, []]);
   f.advance(HOUR);
   await passes(f.dispatcher, 2);
-  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned'], 'once');
+  assert.equal(gave.length, 1, 'once');
 });
 
-test('with nothing left to take them, the words go back to the person at once (11-25 review)', async t => {
-  const f = await keptThenStopped(t);
+test('with nothing left to take them, the words go back at once; while that window is closed they wait for it, and a new handoff starts empty (11-25 review)', async t => {
+  const gave = [];
+  let open = false;
+  const f = await keptThenStopped(t, { giveBack: (...args) => { if (!open) return false; gave.push(args); return true; } });
   const first = personSends(f.client, f.dispatcher);
   f.client.state.sessions[0].state = 'ended';
   await passes(f.dispatcher, 3);
   assert.deepEqual(first, []);
   assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned']);
+  assert.equal(f.dispatcher.held.a, undefined, 'no given-back entry left for new words to fall into');
+  assert.deepEqual(f.dispatcher.returning.map(item => [item.from, item.session, item.text]), [['owner-b', 'a', '先回答这个']]);
+  const stored = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'), 'utf8'));
+  assert.equal(stored.returning.length, 1, 'kept on disk while its window is closed');
+  open = true;
+  await passes(f.dispatcher, 1);
+  assert.deepEqual(gave, [['owner-b', 'a', '先回答这个']]);
+  assert.deepEqual(f.dispatcher.returning, []);
+  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned'], 'told once');
 });
 
 test('words held while the last were being sent stay for their own rotation, and a send whose answer was lost is not sent twice (11-25 review)', async t => {
@@ -1608,11 +1621,13 @@ test('what was kept is still there after a restart, and an unreadable entry is d
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-held-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'queue-dispatch.json');
-  const held = { a: { items: [{ at: NOW, text: 'kept' }, { at: 'x', text: 'bad' }], oldNativeId: 'native-a', to: { id: 'b', nativeId: null }, name: 'Agent a', roomIds: ['shared'], blockedSince: NOW, returned: 'x' }, c: { items: 'no' } };
-  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: {}, held }), { mode: 0o600 });
+  const held = { a: { items: [{ at: NOW, text: 'kept', session: 'a', from: 'owner-a' }, { at: 'x', text: 'bad' }], oldNativeId: 'native-a', to: { id: 'b', nativeId: null }, name: 'Agent a', roomIds: ['shared'], blockedSince: NOW }, c: { items: 'no' } };
+  const returning = [{ at: NOW, text: 'back', session: 'a', from: 'owner-a' }, { at: NOW, text: 'no session' }];
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rotations: {}, held, returning }), { mode: 0o600 });
   const faults = {};
   rules.readRotations(file, NOW, faults);
-  assert.deepEqual(faults.held, { a: { items: [{ at: NOW, text: 'kept' }], oldNativeId: 'native-a', to: { id: 'b', nativeId: null }, name: 'Agent a', roomIds: ['shared'], blockedSince: NOW } });
+  assert.deepEqual(faults.held, { a: { items: [{ at: NOW, text: 'kept', session: 'a', from: 'owner-a' }], oldNativeId: 'native-a', to: { id: 'b', nativeId: null }, name: 'Agent a', roomIds: ['shared'], blockedSince: NOW } });
+  assert.deepEqual(faults.returning, [{ at: NOW, text: 'back', session: 'a', from: 'owner-a' }]);
 });
 
 // Cut off where no window of NAW saw a stop (a phone, the native CLI): what it wrote is half a handoff.

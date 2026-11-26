@@ -44,4 +44,10 @@ function discardRecovery(view, id, text) {
   if (entry.text === text) entry.discarded = true;
   return entry.recoveries;
 }
-module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery };
+// Words NAW kept during a handoff and could not send (queue-dispatch.cjs returnHeld), back as a copy of this session's draft.
+function returnCopy(view, id, text) {
+  const records = backups(view);
+  if (!Object.hasOwn(records, id)) Object.defineProperty(records, id, { value: { text: '', acknowledged: true, recoveries: [] }, enumerable: true, writable: true, configurable: true });
+  return retainRecovery(view, id, text);
+}
+module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy };

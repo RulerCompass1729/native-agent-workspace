@@ -6843,6 +6843,12 @@ const disposers = [
   // Waiters resume in a microtask, after this render has updated the buttons.
   api.onState(next => { updateState(next); stateArrived(); render(); }),
   api.onStewardWake(status => { if (state) state.stewardWakeStatus = status; renderStewardWakeWarning(status); }),
+  // Words kept during a handoff that NAW could not send, back here only (main.cjs giveBackHeld).
+  api.onDraftRecovery(({ id, copies }) => {
+    draftRecoveries.set(id, copies);
+    if (activeSessionId() === id) renderDraftRecovery(id);
+    toastMessage('toast.rotationHeldReturned');
+  }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
