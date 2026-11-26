@@ -119,8 +119,18 @@ async function behaviour(){
 async function routes(){
  for(const [width,height] of [[850,600],[1240,820]])for(const theme of ['light','dark'])for(const collapsed of [false,true]){
   await size(width,height);await page.emulateMedia({colorScheme:theme});await rail(collapsed);
+  // R248's main action by mouse. At 850×600 in en the sticky space heading once covered the whole list (review 2, N1).
+  await check(`${width} ${theme} ${collapsed?'collapsed':'expanded'} inside a space a member row takes a mouse click`,async()=>{
+   await page.locator(G(rooms[0])).click();await until(async()=>(await viewState()).selected==='room','Space selected');await settle();
+   const link=page.locator(S(ids[1])+' .session-link');await link.scrollIntoViewIfNeeded();
+   const hit=await link.evaluate(e=>{const r=e.getBoundingClientRect(),top=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2),list=document.getElementById('session-list');return {inside:e.contains(top),top:top?.outerHTML.slice(0,160),list:list.clientHeight,position:getComputedStyle(e.closest('.session-space-group').querySelector('h3')).position};});
+   assert.ok(hit.inside,JSON.stringify(hit));
+   // The heading still sticks where the list has room (VS Code's 40%), and scrolls away in the 850×600 list.
+   if(!collapsed)assert.equal(hit.position,width===850?'static':'sticky',JSON.stringify(hit));
+   await link.click();await until(async()=>(await viewState()).roomSession===ids[1],'Member opened by mouse');await settle();
+  });
   await check(`${width} ${theme} space to independent session restores ${collapsed?'collapsed':'expanded'} sidebar geometry`,async()=>{
-   await page.locator(G(rooms[0])).click();await until(async()=>(await page.evaluate(()=>workspace.initial())).viewState.selected==='room','Space selected');await settle();if((await page.evaluate(()=>workspace.initial())).viewState.roomSession!==ids[1]){/* Setup by keyboard: at 850×600 in en the sticky space heading covers the 56 px list (side finding, review record 11-25). */await page.locator(S(ids[1])+' .session-link').focus();await page.keyboard.press('Enter');await until(async()=>(await page.evaluate(()=>workspace.initial())).viewState.roomSession===ids[1],'Member focused');await settle();}
+   if((await viewState()).selected!=='room'){await page.locator(G(rooms[0])).click();await until(async()=>(await viewState()).selected==='room','Space selected');await settle();}
    await page.locator('#independent-nav').click();const names=await page.getByRole('menuitem').allTextContents(),matches=names.filter(n=>n.startsWith(NAMES.sessions[9]+' · '));assert.equal(matches.length,1,JSON.stringify(names));await page.getByRole('menuitem',{name:matches[0],exact:true}).click();await until(async()=>(await page.evaluate(()=>workspace.initial())).viewState.selected===ids[9],'Independent session selected');await settle();await delay(350);
    const data=await page.evaluate(()=>{const e=document.querySelector('.naw[data-native-surface="sidebar"]');return {collapsed:e.dataset.collapsed,width:e.getBoundingClientRect().width,frame:e.closest('[data-naw-shell-sidebar]')?.getBoundingClientRect().width,labels:[...e.querySelectorAll('.rail-label')].map(n=>{const r=document.createRange();r.selectNodeContents(n);return {text:n.textContent,visible:n.getClientRects().length>0,lines:r.getClientRects().length};})};});
    const file=`route-${width}-${theme}-${collapsed?'collapsed':'expanded'}`;await page.screenshot({path:path.join(out,file+'.png')});fs.writeFileSync(path.join(out,file+'.json'),JSON.stringify(data,null,2));
@@ -160,7 +170,8 @@ function readMembers(){
  });
  const box=side.getBoundingClientRect();
  return {collapsed:side.dataset.collapsed,width:box.width,rows,columns:[...document.querySelectorAll('.collaboration-member-status[data-member-id]')].map(e=>e.dataset.memberId),
-  elsewhere:[...document.querySelectorAll('.in-current-space')].filter(e=>!side.contains(e)&&!e.closest('#session-list')).length};
+  // Every element marked as the open space or one of its members, anywhere in the page (review 2, N4).
+  marks:[...document.querySelectorAll('.current-space,.in-current-space')].map(e=>({kind:e.classList.contains('current-space')?'group':'row',inList:side.contains(e)&&Boolean(e.closest('#session-list')),id:e.dataset.sessionGroup||e.dataset.sessionRow||''}))};
 }
 // R247: a space keeps the sidebar as the person set it and the same rows, marking the space's members;
 // R248: a member row opens that member in the space's 成员 tab.
@@ -177,7 +188,9 @@ async function spaceMembers(){
    assert.deepEqual(data.rows.map(r=>r.id),listed,JSON.stringify(data.rows));
    assert.deepEqual(data.rows.filter(r=>r.member).map(r=>r.id).sort(),ids.slice(1,5).sort(),JSON.stringify(data.rows));
    for(const r of data.rows){assert.equal(r.missing,undefined,JSON.stringify(r));assert.ok(r.icon&&r.dot,JSON.stringify(r));assert.equal(r.side,r.header,JSON.stringify(r));assert.equal(r.color,r.headerColor,JSON.stringify(r));assert.ok(r.sidePaint&&r.headerPaint,JSON.stringify(r));}
-   assert.equal(data.elsewhere,0);
+   // Grouped by space: only the open space's group is marked, in the list. A stray mark proves the check can fail.
+   assert.deepEqual(data.marks,[{kind:'group',inList:true,id:rooms[0]}],JSON.stringify(data.marks));
+   const stray=await page.evaluate(`(()=>{const e=document.createElement('span');e.className='in-current-space';document.body.append(e);try{return (${readMembers})().marks.filter(m=>!m.inList).length;}finally{e.remove();}})()`);assert.equal(stray,1);
   });
   await page.mouse.move(width-10,5);await settle();await page.screenshot({path:path.join(out,`space-${label.replace(/ /g,'-')}.png`)});
   await check(label+' a member row opens that member in the 成员 tab; the sidebar keeps its width and rows',async()=>{

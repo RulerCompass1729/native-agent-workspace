@@ -328,7 +328,6 @@ let mentionChanging = false, mentionComposing = false;
 let pendingRoomFilter = '';
 let roomThread = '', roomReplyTo = '';
 let roomRecordScope = '', roomRecordReturn = null, roomFilterHistory = null;
-const roomRecordSelections = new Map();
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
 const roomReadingKey = () => roomRecordScope ? `related:${spaceId}:${roomRecordScope}` : roomRecordReturn ? `related-all:${spaceId}:${roomRecordReturn.id}` : roomRecentPreview() ? `room-recent:${spaceId}` : spaceId === 'shared' ? roomThread ? `room:${roomThread}` : 'room' : `room:${spaceId}:${roomThread || 'main'}`;
 const sessionRows = new Map();
@@ -1465,6 +1464,15 @@ function hierFolderContainers(visible, list) {
   for (const [key, section] of hierSections) if (!keep.has(key)) { section.element.remove(); hierSections.delete(key); }
   return containers;
 }
+// A space heading sticks only while it takes at most 40% of the list's height, as VS Code's sticky scroll
+// (maxWidgetViewRatio); in a shorter list it scrolls away so the rows under it can be clicked.
+function fitSidebarStickyHeadings() {
+  const list = $('session-list');
+  let tallest = 0;
+  for (const heading of list.querySelectorAll(':scope > .session-space-group > h3')) tallest = Math.max(tallest, heading.offsetHeight);
+  const fits = String(tallest > 0 && tallest <= list.clientHeight * 0.4);
+  if (list.dataset.stickyHeadings !== fits) list.dataset.stickyHeadings = fits;
+}
 function decorateSidebarHierarchy() {
   const text = hierText(), folderView = hierFolderActive();
   hierViewButton();
@@ -1501,6 +1509,7 @@ function decorateSidebarHierarchy() {
     ui.display.computed(row.link, 'aria-description', () => [steward ? '' : hierRole(record), long && row.hier.parts.textContent, doing && hierText().doingTitle(doing), folder.path ? hierText().folder(folder.path, folder.branch) : hierFolder(record).name, queue.added.length && hierText().added(queue.added.length)].filter(Boolean).join(' · '));
 
   }
+  fitSidebarStickyHeadings();
 }
 function hierHeaderCrumb(record) {
   let crumb = document.getElementById('sidebar-folder-path');
@@ -5180,11 +5189,6 @@ function renderSnapshotMaterials() {
 function timelineParticipants(message) {
   return [...new Set([message.sessionId, message.recipientId, ...(message.deliveries || []).map(d => d.recipientId), message.wake?.senderId, message.wake?.recipientId, message.operator?.senderId, message.operator?.recipientId, message.peerMessage?.senderId, message.peerMessage?.recipientId].filter(id => typeof id === 'string' && id))];
 }
-function filteredTimeline() {
-  const related = Boolean(roomRecordReturn || roomRecordScope), id = related ? roomRecordScope : $('room-filter').value;
-  const query = related ? '' : $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (related || !roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || timelineParticipants(m).includes(id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
-}
 
 function getActivityStream() {
   if (!window.nativeWorkspaceActivityStream) return null;
@@ -5265,15 +5269,6 @@ function showRoomRecords(member) {
   if (member && focusedRoomMember()) getSpaceFeed()?.showPerson(roomSession);
   showRoomSurface('stream');
 }
-function returnRoomRecordMember() {
-  const target = roomRecordReturn, record = target && members().find(s => s.id === target.id && (s.nativeId || '') === target.nativeId);
-  if (!record) return toastMessage('toast.originalRemoved');
-  const range = roomRecordSelections.get(spaceId); roomRecordSelections.delete(spaceId);
-  openRoomMember(record.id);
-  if (range?.startContainer.isConnected && range.endContainer.isConnected) {
-    const selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range);
-  }
-}
 function clearRoomRecordFilter() {
   captureReadingViews();
   if (roomRecordReturn) { roomRecordScope = ''; lastRoomMessages = ''; render(); attempt(persistView); return; }
@@ -5328,17 +5323,8 @@ function renderTimeline() {
   filter.hidden = $('room-search').hidden = filter.disabled;
   $('room-record-context').hidden = roomSurface !== 'records' || !(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread || roomFilterHistory);
   ui.display.computed($('room-record-scope'), 'text', () => roomRecordScope ? uiText('room.relatedScope', { name: state.sessions.find(s => s.id === roomRecordScope)?.name || uiText('identity.historicalMember') }) : roomRecordReturn || roomRecentPreview() ? uiText('room.recentRecordView') : chosen || $('room-search').value || roomThread ? uiText('room.filteredScope') : '');
-  $('room-record-return').hidden = !roomRecordReturn;
-  const returning = roomRecordReturn && members().find(s => s.id === roomRecordReturn.id && (s.nativeId || '') === roomRecordReturn.nativeId);
-  $('room-record-return').disabled = !returning;
-  ui.display.text($('room-record-return'), 'room.returnMember', { name: returning?.name || uiText('identity.historicalMember') });
   $('room-record-clear').hidden = roomRecordReturn ? !roomRecordScope : !(roomRecordScope || chosen || $('room-search').value || roomThread);
   $('room-record-restore').hidden = !roomFilterHistory || Boolean(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread);
-  const messages = filteredTimeline();
-  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name, Boolean(s.archived)]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
-  if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
-  const filtered = roomRecordScope || !roomRecordReturn && (filter.value || $('room-search').value || roomThread);
-  ui.display.text($('timeline-count'), filtered ? 'room.filteredRecordCount' : 'room.recordCount', { count: messages.length, total: timeline().length }); $('copy-timeline').disabled = !messages.length;
 }
 async function moveRoomMember(id, target, after, destination = spaceId) {
   await api.spaceAction(destination, 'memberOrder', [{ id, target, after }]);
@@ -6950,7 +6936,7 @@ sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.queryS
 disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move. The sidebar opening or closing changes
 // the header row's width with no window resize: the row is fitted again on the next frame, not inside the observer.
-const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); if (entries.some(e => e.target === $('room-tabs'))) requestAnimationFrame(() => fitRoomTabs(true)); }); observer.observe($('terminal-area')); observer.observe($('collaboration-overview')); observer.observe($('room-tabs'));
+const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); if (entries.some(e => e.target === $('room-tabs'))) requestAnimationFrame(() => fitRoomTabs(true)); if (entries.some(e => e.target === $('session-list'))) fitSidebarStickyHeadings(); }); observer.observe($('session-list')); observer.observe($('terminal-area')); observer.observe($('collaboration-overview')); observer.observe($('room-tabs'));
 function applySplit() {
   for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
   for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }
@@ -7158,7 +7144,6 @@ $('room-member').onclick = () => attempt(() => { const person = roomMemberChoice
 $('room-record').onclick = () => attempt(() => showRoomRecords());
 $('room-tabs').addEventListener('keydown', roomNavigationKey);
 $('member-related-records').onclick = () => attempt(() => showRoomRecords(true));
-$('room-record-return').onclick = () => attempt(returnRoomRecordMember);
 $('room-record-clear').onclick = () => attempt(clearRoomRecordFilter);
 $('room-record-restore').onclick = () => attempt(restoreRoomRecordFilter);
 $('manage-members').onclick = () => openInvite($('manage-members'));
@@ -8178,7 +8163,6 @@ $('run-form').onsubmit = event => {
 $('room-search').oninput = $('room-filter').onchange = () => { roomFilterHistory = null; renderTimeline(); attempt(persistView); };
 $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
-$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString(ui.language.getSnapshot().active) : uiText('reading.unknownTime')} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = () => openNotes(); $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('room-notes-attach').onchange = () => drawNotesAttach();
 $('notes-form').onsubmit = async event => {
