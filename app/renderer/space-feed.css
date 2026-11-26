@@ -21,7 +21,7 @@
 .feed-row .disclosure-title{display:flex;align-items:baseline;gap:8px;min-width:0}
 .feed-kind{flex:none;min-width:34px;padding:0 6px;border-radius:4px;font-size:11px;line-height:18px;text-align:center;background:var(--panel);color:var(--muted)}
 .feed-kind.k-say,.feed-kind.k-reply{background:color-mix(in srgb,var(--agent-background) 14%,var(--raised));color:color-mix(in srgb,var(--agent-background) 70%,var(--ink))}
-.feed-kind.k-dispatch,.feed-kind.k-ready,.feed-kind.k-done{background:color-mix(in srgb,var(--agent-idle) 16%,var(--raised));color:color-mix(in srgb,var(--agent-idle) 60%,var(--ink))}
+.feed-kind.k-dispatch,.feed-kind.k-ready,.feed-kind.k-done,.feed-kind.k-answered{background:color-mix(in srgb,var(--agent-idle) 16%,var(--raised));color:color-mix(in srgb,var(--agent-idle) 60%,var(--ink))}
 .feed-kind.k-wait{background:color-mix(in srgb,var(--agent-waiting) 18%,var(--raised));color:var(--approval-ink);font-weight:600}
 .feed-space{flex:none;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}
 .feed-space[hidden],.feed-who[hidden]{display:none}
@@ -62,5 +62,7 @@
 
 /* R247: the open space keeps its place in the left list and is highlighted there. */
 .session-space-group.current-space{background:color-mix(in srgb,var(--green) 6%,transparent);box-shadow:inset 3px 0 var(--green);border-radius:6px}
-.session-row.in-current-space{box-shadow:inset 3px 0 var(--green);background:color-mix(in srgb,var(--green) 6%,transparent)}
+/* The open member keeps the selected row's look (review 1, F3). */
+.session-row.in-current-space{box-shadow:inset 3px 0 var(--green)}
+.session-row.in-current-space:not(.active){background:color-mix(in srgb,var(--green) 6%,transparent)}
 @media(max-width:899px){.feed-tools,.feed-people{padding-inline:10px}.feed-list{padding-inline:10px}.feed-search{width:100%;margin-left:0}}

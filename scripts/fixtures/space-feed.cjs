@@ -38,6 +38,7 @@ function seed({ pm, a, b, c, design }) {
   s(c).messages = [
     { id: 'tag-c', role: 'user', origin: 'room', text: '左栏改成保持原样，只高亮当前空间。', time: at(35) },
     { id: 'c-reply', role: 'assistant', status: 'complete', text: '好，原型里四个标签先画好了。', time: at(30) },
+    { id: 'c-more', role: 'assistant', status: 'complete', text: '标签宽度也对齐了。', time: at(25) },
   ];
   for (const id of [pm, a, b, c]) workspace.changed(id);
   workspace.changed();

@@ -86,3 +86,71 @@ test('an empty or missing space has an empty feed', () => {
   assert.deepEqual(stream.spaceFeed(null), []);
   assert.deepEqual(stream.spaceFeed({ id: 'x' }), []);
 });
+
+// Rework 1, F1 (the person, 11-25 19:09: 「信息流能把所有 对应 agent 的消息包含进去」): a member still in its turn.
+function working() {
+  const { room, sessions } = space();
+  const A = sessions[0];
+  A.state = 'working';
+  A.messages.push(
+    { id: 'dsp2', role: 'user', origin: 'naw-dispatch', dispatchItem: 'item3', dispatchPurpose: { kind: 'queue' }, text: '【NAW 派活】Write the doc.', time: 60 },
+    { id: 'a-1', role: 'assistant', status: 'complete', text: 'Plan: 1. input box 2. doc', time: 61 },
+    { id: 'a-tool2', role: 'tool', kind: 'tool', volatile: true, text: 'npm test', time: 62 },
+    { id: 'a-com2', role: 'assistant', kind: 'response', phase: 'commentary', status: 'complete', text: 'Reading files', time: 62.5 },
+    { id: 'a-2', role: 'assistant', kind: 'response', status: 'complete', text: 'Doc half written.', time: 63 },
+    { id: 'a-3', role: 'assistant', kind: 'response', status: 'streaming', text: 'Now the sec', time: 64 },
+  );
+  return { room, sessions };
+}
+const replies = (feed, id) => feed.filter(i => i.kind === 'reply' && i.fromId === id).map(i => i.text);
+
+test('a working member: every reply it finished is in the feed, the half-written one is not', () => {
+  const { room, sessions } = working(), feed = stream.spaceFeed(room, { sessions });
+  assert.deepEqual(replies(feed, 'A'), ['Doc half written.', 'Plan: 1. input box 2. doc', 'Fixed.\nREADY lane/x abc1234', 'Build passes.']);
+  assert.ok(!feed.some(i => /Now the sec|Reading files/.test(i.text ?? '')));
+});
+
+test('总览 「最后说的话」 is the newest reply the feed shows for that member', () => {
+  const { room, sessions } = working(), feed = stream.spaceFeed(room, { sessions });
+  assert.equal(stream.lastReply(sessions[0]).text, replies(feed, 'A')[0]);
+  sessions[0].state = 'idle';
+  assert.equal(stream.lastReply(sessions[0]).text, replies(stream.spaceFeed(room, { sessions }), 'A')[0]);
+});
+
+test('a member whose messages this window omits shows its last reply once, the same in 总览', () => {
+  const { room, sessions } = space(), B = sessions[1];
+  B.messageSummary = { lastAssistant: { id: 'b-last', role: 'assistant', status: 'complete', text: 'Icons drafted.', time: 54 } };
+  const feed = stream.spaceFeed(room, { sessions });
+  assert.deepEqual(replies(feed, 'B'), ['Icons drafted.']);
+  assert.equal(stream.lastReply(B).text, 'Icons drafted.');
+  B.messageSummary.lastAssistant = { id: 'b-com', role: 'assistant', phase: 'commentary', text: 'Looking', time: 56 };
+  assert.deepEqual(replies(stream.spaceFeed(room, { sessions }), 'B'), []);
+  assert.equal(stream.lastReply(B), null);
+});
+
+test('the phone keeps each turn\'s last reply: speechStream without every is unchanged', () => {
+  const { room, sessions } = working();
+  assert.ok(!stream.speechStream(room, { sessions }).some(i => i.text === 'Plan: 1. input box 2. doc'));
+});
+
+// Review 1, F8: an answered wait is no longer 「等你」, and the question is not shown twice.
+test('the wait line carries the question once; the member\'s reply that asked it is not repeated', () => {
+  const { room, sessions } = space(), B = sessions[1];
+  B.messagesOmitted = false;
+  B.messages = [{ id: 'b-ask', role: 'assistant', status: 'complete', text: '需要你决定：线框还是实心？推荐线框\n理由：和侧栏一致。', time: 54 }];
+  const feed = stream.spaceFeed(room, { sessions });
+  assert.deepEqual(feed.filter(i => i.fromId === 'B' && /线框还是实心/.test(i.text ?? '')).map(i => i.kind), ['wait']);
+  assert.match(feed.find(i => i.kind === 'wait').body, /理由：和侧栏一致/);
+});
+
+test('a wait the person answered is a 「已处理」 line, not 「等你」; only the newest wait of an open item waits', () => {
+  const { room } = space();
+  room.queue[1].status = 'sent';
+  let feed = stream.spaceFeed(room, { sessions: [] });
+  assert.deepEqual(feed.filter(i => i.itemId === 'item2' && ['wait', 'answered'].includes(i.kind)).map(i => i.kind), ['answered']);
+  assert.ok(!stream.feedMatches(feed.find(i => i.kind === 'answered'), { group: 'wait' }));
+  room.queue[1].status = 'waiting';
+  room.events.push(notice('q5', 58, 'notice.queue.waiting', { text: 'Pick the icon style', name: 'B' }, { sessionId: 'B', itemId: 'item2' }));
+  feed = stream.spaceFeed(room, { sessions: [] });
+  assert.deepEqual(feed.filter(i => i.itemId === 'item2' && ['wait', 'answered'].includes(i.kind)).map(i => i.kind), ['wait', 'answered']);
+});

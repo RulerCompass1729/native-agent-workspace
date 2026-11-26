@@ -209,7 +209,7 @@ let roomSession = '', selectionRevision = 0, pendingMode;
 // R248: a space's four fixed views. 'overview' is the 网格, or the 成员 view when roomSession names a member.
 const ROOM_SURFACES = ['summary', 'stream', 'overview'];
 let roomSurface = 'summary', roomOverview;
-let activityStream, speechStream, spaceFeed, spaceSummary;
+let activityStream, spaceFeed, spaceSummary;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
@@ -929,21 +929,11 @@ function orderedMembers(id = spaceId) {
   return people.map((record, index) => ({ record, rank: ranks.get(record.id) ?? fallback + index }))
     .sort((a, b) => a.rank - b.rank).map(item => item.record);
 }
-// R247/R248: a row under a space, or a member of the open space, opens that member in its space's 成员 view;
-// any other row opens its session as before.
-function openSidebarRow(id, group) {
-  const space = group || (selected === 'room' && members().some(s => s.id === id) ? spaceId : '');
-  return space ? openSpaceMember(space, id) : select(id);
-}
-async function openSpaceMember(space, id) {
-  if (selected !== 'room' || spaceId !== space) await selectSpace(space);
-  return revealSpaceMember(id);
-}
-// R248: a left member row opens that member's view in the main area; the left list and the tabs stay.
-async function revealSpaceMember(id) {
-  if (selected !== 'room' || !members().some(s => s.id === id)) return;
-  if (focusedRoomMember() && roomSession === id) return;
-  openRoomMember(id);
+// R248: a member of the open space opens in its 成员 view, the left list and the tabs staying; R247: any other
+// row, also one under a space in 按空间分组 outside it, opens its session alone as before.
+function openSidebarRow(id) {
+  if (selected !== 'room' || !members().some(s => s.id === id)) return select(id);
+  if (!focusedRoomMember() || roomSession !== id) openRoomMember(id);
 }
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
@@ -1888,15 +1878,16 @@ function captureRoomView() {
 }
 function restoreRoomView() {
   const view = roomViews[spaceId] ||= {};
-  $('shared-input').value = view.sharedDraft || ''; roomSession = view.roomSession || '';
+  // R248: a space opens on its 总览; each member's own view stays in roomMemberViews for its 成员 tab.
+  $('shared-input').value = view.sharedDraft || ''; roomSession = '';
   roomMention = view.roomMention ? { ...view.roomMention } : null;
   pendingRoomFilter = view.roomFilter || ''; $('room-filter').value = pendingRoomFilter; $('room-search').value = view.roomSearch || '';
-  roomThread = view.roomThread || ''; roomReplyTo = view.roomReplyTo || ''; roomSurface = ROOM_SURFACES.includes(view.roomSurface) ? view.roomSurface : 'summary';
+  roomThread = view.roomThread || ''; roomReplyTo = view.roomReplyTo || ''; roomSurface = 'summary';
   roomRecordScope = view.roomRecordScope || ''; roomRecordReturn = view.roomRecordReturn || null; roomFilterHistory = view.roomFilterHistory || null;
   roomDraftRevision = view.draftRevision || 0; roomSubmitting = view.submitting || null;
   roomMentionHistory = roomHistories.get(spaceId) || nativeWorkspaceMentions.editHistory(); roomHistories.set(spaceId, roomMentionHistory);
   normalizeRoomMention(); populateSelect($('recipient'), members()); $('recipient').value = roomRecipient();
-  if (roomSurface === 'overview' && roomSession) restoreRoomMemberView(roomSession); else mode = 'chat';
+  mode = 'chat';
 }
 function persistedRoomViews() {
   return Object.fromEntries(Object.entries(roomViews).map(([id, value]) => [id, Object.fromEntries(roomViewFields.filter(k => value[k] !== undefined).map(k => [k, value[k]]))]));
@@ -4702,7 +4693,7 @@ function renderSessions() {
     let row = sessionRows.get(key);
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id; element.dataset.occurrence = key;
-      const link = button('', () => attempt(() => openSidebarRow(record.id, group)), 'session-link'); link.dataset.sessionId = record.id;
+      const link = button('', () => attempt(() => openSidebarRow(record.id)), 'session-link'); link.dataset.sessionId = record.id;
       // The butler's row is not reordered and not dragged into a space.
       if (steward) element.classList.add('steward-row'); else { draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group); }
       const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
@@ -5173,15 +5164,6 @@ async function openOriginal(target) {
   if (!target.messageId || !pointToMessage($('messages'), record.id, target.messageId)) toastMessage('stream.openedSession');
   return true;
 }
-function getSpeechStream() {
-  if (!window.nativeWorkspaceSpeechStream || !window.nativeWorkspaceTaskStream) return null;
-  return speechStream ||= window.nativeWorkspaceSpeechStream.bind({
-    document, text: uiText, language: () => ui.language.getSnapshot().active, attempt,
-    original: openOriginal, mount: panel => $('room-record-view').insertBefore(panel, $('room-composer')), room: () => state.room,
-    members: () => orderedMembers(), butlerId: () => state.steward?.sessionId || '',
-    visible: () => false,
-  });
-}
 // The member a space's 成员 tab opens: the one open now, else the one last opened there, else the first member.
 function roomMemberChoice() {
   const people = orderedMembers(), chosen = focusedRoomMember() ? roomSession : roomViews[spaceId]?.roomMemberChoice;
@@ -5197,8 +5179,8 @@ function getSpaceFeed() {
     document, text: uiText, language: () => ui.language.getSnapshot().active, attempt,
     mount: panel => $('room-record-view').insertBefore(panel, $('room-composer')), room: () => state.room,
     rooms: allSpaces, roomName: spaceName, butlerId: () => state.steward?.sessionId || '',
-    // Other spaces' members are not shown sessions here: their lines come from their space's own records.
-    membersOf: id => id === spaceId ? orderedMembers() : orderedMembers(id).map(s => s.messagesOmitted ? s : { ...s, messages: [], messagesOmitted: true }),
+    // Every space's members as this window holds them: what it already shows, never more (R249 19:09).
+    membersOf: id => orderedMembers(id),
     displayText: (text, notice) => ui.displayText(text, notice), label: row => row ? roomMessageLabel(row) : '',
     visible: () => selected === 'room' && roomSurface === 'stream',
     original: openOriginal, answer: item => answerFeedItem(item),
@@ -8587,7 +8569,8 @@ attempt(async () => {
   terminalSplit = Number.isFinite(state.viewState.terminalSplit) && state.viewState.terminalSplit >= 0.2 && state.viewState.terminalSplit <= 0.8 ? state.viewState.terminalSplit : 0.5; applySplit();
   readingPositions = state.viewState.readingPositions || {};
   if (state.viewState.panorama) panoramaView = structuredClone(state.viewState.panorama);
-  roomSession = typeof savedRoomView.roomSession === 'string' ? savedRoomView.roomSession : '';
+  // R248 (「每次进空间应该都是列表界面…而不是保留在上次进入的状态」): a restart opens a space on its 总览 too.
+  roomSession = '';
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof savedRoomView.sharedDraft === 'string' ? savedRoomView.sharedDraft : '';
@@ -8598,7 +8581,7 @@ attempt(async () => {
   const savedRecipient = savedRoomView.roomRecipient;
   const savedMention = savedRoomView.roomMention;
   if (savedMention && nativeWorkspaceMentions.validView(savedMention, $('shared-input').value, savedRecipient)) roomMention = savedMention;
-  roomSurface = ROOM_SURFACES.includes(savedRoomView.roomSurface) ? savedRoomView.roomSurface : 'summary';
+  roomSurface = 'summary';
   normalizeRoomMention();
   if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
     // Older views have a draft but no recipient: require an explicit choice.

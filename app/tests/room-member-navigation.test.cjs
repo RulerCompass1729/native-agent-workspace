@@ -39,7 +39,7 @@ function fixture() {
   context.roomOverview = { key: id => `collaboration:shared:${id}`, focus: id => context.focusRoomMember(id, context.roomSession, `collaboration:shared:${id}`) };
   const fields = source.match(/const roomViewFields = (\[[^;]+\]);/); assert.ok(fields);
   const surfaces = source.match(/const ROOM_SURFACES = (\[[^;]+\]);/); assert.ok(surfaces);
-  vm.runInContext(`const roomViewFields = ${fields[1]};\nconst ROOM_SURFACES = ${surfaces[1]};\n` + ['roomRecentPreview', 'roomMemberChoice', 'showRoomSurface', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews'].map(actualFunction).join('\n'), context);
+  vm.runInContext(`const roomViewFields = ${fields[1]};\nconst ROOM_SURFACES = ${surfaces[1]};\n` + ['roomRecentPreview', 'roomMemberChoice', 'showRoomSurface', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'openSidebarRow'].map(actualFunction).join('\n'), context);
   return { context, element, events, nativeCalls, notices, feedPeople };
 }
 
@@ -82,7 +82,8 @@ test('existing roomViews persistence round-trips the open view and independent m
   const f = fixture(), c = f.context; c.showRoomRecords(true); const stored = plain(c.persistedRoomViews());
   assert.equal(validViews([{ owner: 'window', roomViews: stored }]), true);
   const restored = fixture(), next = restored.context; next.roomViews = stored; next.roomSession = ''; next.restoreRoomView();
-  assert.equal(next.roomSurface, 'stream'); assert.equal(next.roomSession, ''); assert.equal(next.roomMemberChoice().id, 'a');
+  // R248 (review 1, F7): a space opens on its 总览, also after a restart; the member's own view stays saved.
+  assert.equal(next.roomSurface, 'summary'); assert.equal(next.roomSession, ''); assert.equal(next.roomMemberChoice().id, 'a');
   assert.equal(next.roomReplyTo, 'reply-original');
   next.openRoomMember('a'); assert.equal(next.mode, 'terminal'); assert.equal(next.roomSession, 'a'); assert.deepEqual(restored.nativeCalls, []);
   next.spaceId = 'other'; next.roomViews.other = {}; next.restoreRoomMemberView('a'); assert.equal(next.mode, 'chat', 'the other space cannot borrow this space mode');
@@ -106,13 +107,25 @@ test('new persisted navigation fields reject malformed or unbounded content befo
   ]) assert.equal(validViews([{ owner: 'window', roomViews: { shared: { ...good, ...bad } } }]), false);
 });
 
-test('restoring a second space restores its member mode before a later selection can save the old space mode', () => {
+test('restoring a second space opens its 总览, and the old space mode never reaches its member view', () => {
   const f = fixture(), c = f.context;
   c.spaceId = 'other'; c.state.sessions[0].roomId = 'other';
   c.roomViews.other = { roomSession: 'a', roomSurface: 'overview', roomMemberViews: { a: { mode: 'chat', terminalLayout: 'hidden', nativeId: 'native-a' } } };
   c.mode = 'terminal'; c.terminalLayout = 'maximized'; c.restoreRoomView();
-  assert.equal(c.mode, 'chat'); assert.equal(c.terminalLayout, 'hidden');
-  c.captureRoomView(); assert.equal(c.roomViews.other.roomMemberViews.a.mode, 'chat'); assert.deepEqual(f.nativeCalls, []);
+  assert.equal(c.roomSurface, 'summary'); assert.equal(c.roomSession, ''); assert.equal(c.mode, 'chat');
+  c.captureRoomView(); assert.equal(c.roomViews.other.roomMemberViews.a.mode, 'chat');
+  c.openRoomMember('a'); assert.equal(c.mode, 'chat'); assert.equal(c.terminalLayout, 'hidden'); assert.deepEqual(f.nativeCalls, []);
+});
+
+// R247 (review 1, F5): outside a space a row opens its session alone, also under a space in 按空间分组; in a space a
+// member opens in its 成员 view and any other row opens alone.
+test('a left row opens a member of the open space in its 成员 view and any other session alone', () => {
+  const f = fixture(), c = f.context, opened = [];
+  c.select = id => opened.push(id);
+  c.selected = 'b'; c.roomSession = ''; c.openSidebarRow('a'); assert.deepEqual(opened, ['a']); assert.equal(c.roomSession, '');
+  c.selected = 'room'; c.roomSurface = 'summary'; c.openSidebarRow('b'); assert.equal(c.roomSession, 'b'); assert.equal(c.roomSurface, 'overview');
+  c.state.sessions.push({ id: 'z', nativeId: 'native-z', roomId: 'elsewhere' }); c.openSidebarRow('z'); assert.deepEqual(opened, ['a', 'z']);
+  assert.deepEqual(f.nativeCalls, []);
 });
 
 test('valid native IDs up to the existing512-character contract do not block member-view or return persistence', () => {

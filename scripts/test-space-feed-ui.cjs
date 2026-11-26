@@ -40,7 +40,8 @@ function spaceRecords({ pm, a, b }) {
   const queue = [
     item(1, '【NAW 派活】修输入框：中文输入时光标跳到行尾。', 'done', { sentTo: a, sentAt: at(48), finishedAt: at(20), ready: { branch: 'lane/input-fix', commit: 'abc1234def' } }),
     item(2, '【NAW 派活】图标风格定一下', 'waiting', { sentTo: b, sentAt: at(39), reply: '需要你决定：线框还是实心？推荐线框，因为和现有侧栏一致。' }),
-    item(3, '设置页文案', 'queued', {}),
+    // Held for the busy PM, so no idle member takes it mid-test (review 1: Claude A did once).
+    item(3, '设置页文案', 'queued', { assignee: pm }),
     item(4, '【NAW 派活】写文档：信息流的说明。', 'sent', { sentTo: pm, sentAt: at(7), tag: 'tag-pm-doc' }),
   ];
   const [one, two, , four] = queue.map(q => q.id);
@@ -72,7 +73,9 @@ async function main() {
   }
   await fixture('feedWorking', ids.pm);
   fs.writeFileSync(path.join(profile, 'room-state.json'), JSON.stringify(spaceRecords(ids)), { mode: 0o600 });
-  fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'human-view', active: true, selected: 'room', mode: 'chat', spaceId: 'shared' }]), { mode: 0o600 });
+  // F7: the window last showed this space's 信息流 and then Claude B; a restart still opens the space on 总览.
+  fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'human-view', active: true, selected: 'room', mode: 'chat', spaceId: 'shared', roomSession: ids.b,
+    roomViews: { shared: { roomSurface: 'stream', roomSession: ids.b } } }]), { mode: 0o600 });
   app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_UI_LANGUAGE: 'zh' }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message));
   // The startup window becomes the main window; under load that can take longer than revealDefaultSpace's first wait.
@@ -92,10 +95,10 @@ async function main() {
     console.log('SHOT', file);
   }
 
-  // R248 decision A: a space opens on its 总览.
-  if (!await page.locator('#room-summary').isVisible()) await page.locator('#room-nav').click();
+  // R248 decision A: a space opens on its 总览, also after a restart that left it on another view.
   await page.locator('#space-summary').waitFor();
   assert.deepEqual(await current(), ['#room-summary']);
+  assert.ok(await page.locator('#space-summary').isVisible() && !await page.locator('#space-feed').isVisible());
   for (const id of TABS) assert.ok(await page.locator(id).isVisible(), id + ' is shown');
   assert.equal(await page.locator('#room-member').textContent(), '成员 · 项目经理');
   await until(async () => (await page.locator('#space-summary .summary-row').count()) === 3, 'Three members in the summary');
@@ -104,9 +107,10 @@ async function main() {
   assert.match(await page.locator('#space-summary .summary-queue').textContent(), /队列 · 待派 1：设置页文案/);
   const pmRow = page.locator('#space-summary .summary-row[data-session-id="' + ids.pm + '"]');
   await until(async () => /正在工作.*写文档：信息流的说明.*文档写到一半/.test(await pmRow.textContent()), 'The PM row shows its item and last words: ' + await pmRow.textContent());
+  const lastWordsPM = await pmRow.locator('.summary-last').textContent();
   assert.equal(await page.locator('#room-stream-waiting').textContent(), '1');
   assert.ok(!await page.locator('#collaboration-overview').isVisible());
-  record('entering a space lands on 总览: waits, one row per member with its item and last words, and the queue line');
+  record('a restart and entering a space land on 总览: waits, one row per member with its item and last words, and the queue line');
   const boxes = await tabBoxes();
 
   // R247: the left list keeps the other space and the independent session; the open space's members are marked.
@@ -128,7 +132,11 @@ async function main() {
   const all = await feedRows();
   for (const kind of ['say', 'reply', 'dispatch', 'ready', 'wait']) assert.ok(all.some(r => r.startsWith(kind + ' |')), 'A ' + kind + ' line');
   assert.ok(!all.some(r => r.includes('npm test')), 'Tool output is not a line');
-  assert.equal(all[0].split(' | ')[0], 'dispatch', 'Newest first');
+  // F1 (R249 19:09): the working PM's finished replies are both lines; the newest is what 总览 showed as its last words.
+  const pmReplies = all.filter(r => r.startsWith('reply | 项目经理 | '));
+  assert.deepEqual(pmReplies.map(r => r.split(' | ')[2].slice(0, 6)), ['文档写到一半', '排好了：1.'], 'Both PM replies: ' + all.join(' / '));
+  assert.equal(all[0], pmReplies[0], 'Newest first');
+  assert.ok(lastWordsPM.startsWith(pmReplies[0].split(' | ')[2]), '总览 and 信息流 agree: ' + lastWordsPM);
   const wait = page.locator('#space-feed .feed-row.feed-waiting');
   assert.equal(await wait.count(), 1); assert.ok(await wait.locator('.feed-answer').isVisible());
   assert.ok(await page.locator('#room-composer').isVisible());
@@ -162,6 +170,8 @@ async function main() {
 
   await page.locator('#space-feed [data-scope="all"]').click();
   await until(async () => (await feedRows()).some(r => r.includes('设计 A')), 'Other space lines');
+  // F1: another space's member's own reply, not copied into its space's record, is a line too.
+  assert.ok((await feedRows()).some(r => r === 'reply | 设计 A | 标签宽度也对齐了。'), 'Other space member reply: ' + (await feedRows()).join(' / '));
   assert.ok(await page.locator('#space-feed .feed-space:visible', { hasText: '设计' }).count() > 0);
   await shot('stream-all-spaces-light-1280');
   await page.locator('#space-feed [data-scope="space"]').click();
@@ -179,8 +189,17 @@ async function main() {
   assert.ok(!(await page.locator('#header .header-identity').innerText()).includes('Claude B'));
   for (const id of ['#member-open-session', '#session-header-more', '#usage-button']) assert.ok(await page.locator('#session-toolbar ' + id).isVisible(), id + ' in the member toolbar');
   assert.ok(!await page.locator('#session-toolbar .membership-menu-only').isVisible(), 'Leaving stays in the menu');
+  // F3: the open member's row is painted as the selected row; the other members keep the space's tint.
+  const paint = await page.evaluate(list => {
+    const bg = id => getComputedStyle(document.querySelector(`#session-list .session-row[data-session-row="${id}"]`)).backgroundColor;
+    const probe = document.createElement('div'); probe.style.background = 'var(--selected)'; document.querySelector('#session-list').append(probe);
+    const selected = getComputedStyle(probe).backgroundColor; probe.remove();
+    return { open: bg(list[0]), others: list.slice(1).map(bg), selected };
+  }, [ids.b, ids.pm, ids.a]);
+  assert.equal(paint.open, paint.selected, 'Open member painted as selected: ' + JSON.stringify(paint));
+  assert.ok(paint.others.every(c => c === paint.others[0] && c !== paint.open), 'Other members keep the tint: ' + JSON.stringify(paint));
   await shot('member-b-light-1280');
-  record('去回答 opens that member in the 成员 tab; header, tabs and left list stay; its controls are in its toolbar');
+  record('去回答 opens that member in the 成员 tab; header, tabs and left list stay; its controls are in its toolbar; its left row looks selected');
 
   // R248: a left member row switches the main area to it.
   await page.locator(`#session-list .session-row[data-session-row="${ids.a}"] .session-link`).click();
@@ -207,15 +226,22 @@ async function main() {
   assert.ok((await sidebarRows()).includes(ids.pm));
   record('another space lands on its 总览; the left list keeps every row');
 
-  // Grouped view: the open space's group is highlighted; a member under another space opens there.
+  // Grouped view: the open space's group is highlighted. F5 (R247, the left list as before): a row that is not a
+  // member of the open space, and any row outside a space, opens its session alone.
   await page.locator('#sessions-grouped').click();
   await until(() => page.locator('.session-space-group.current-space').count().then(n => n === 1), 'Current group');
   await shot('grouped-light-1280');
-  await page.locator(`.session-space-group[data-session-group="shared"] .session-row[data-session-row="${ids.b}"] .session-link`).click();
-  await until(() => page.locator('#room-member').textContent().then(t => t === '成员 · Claude B'), 'Member B in shared');
-  assert.equal(await page.locator('.session-space-group.current-space').getAttribute('data-session-group'), 'shared');
-  record('grouped view: the open space\'s group is highlighted; a member under a space opens in that space');
+  const grouped = id => page.locator(`.session-space-group[data-session-group="shared"] .session-row[data-session-row="${id}"] .session-link`);
+  const alone = async id => (await grouped(id).getAttribute('aria-current')) === 'page' && !(await page.locator('#room-member').isVisible());
+  await grouped(ids.b).click();
+  await until(() => alone(ids.b), 'Claude B opens alone from 设计');
+  assert.equal(await page.locator('.session-space-group.current-space').count(), 0);
+  await grouped(ids.a).click();
+  await until(() => alone(ids.a), 'Claude A opens alone outside a space');
+  record('grouped view: the open space\'s group is highlighted; a row outside the open space, or any row outside a space, opens its session alone');
   await page.locator('#sessions-flat').click();
+  await page.locator('#workspace-group .room-row', { hasText: '共同工作' }).locator('.room-nav').click();
+  await until(async () => (await current()).join() === '#room-summary', 'Back in 共同工作');
 
   for (const scheme of ['dark']) { await page.emulateMedia({ colorScheme: scheme }); await page.locator('#room-stream').click(); await delay(300); await shot(`stream-${scheme}-1280`); }
   await page.emulateMedia({ colorScheme: 'light' });

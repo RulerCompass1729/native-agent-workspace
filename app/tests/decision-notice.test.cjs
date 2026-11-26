@@ -120,13 +120,19 @@ test('record navigation validates before changing views, including archived and 
   const source=fs.readFileSync(require.resolve('../renderer/search-view.js'),'utf8');
   const calls=[],nodes=new Map(), $=id=>{if(!nodes.has(id))nodes.set(id,{value:'draft'});return nodes.get(id);};
   let current={events:[{id:'event'}],messages:[{id:'message'}]};
-  const c={getActivityStream:()=>null,spaceRecord:()=>current,toast:x=>calls.push(x),uiText:x=>x,$,
+  // R248: a record opens on its 信息流 line (review 1, F4); one the feed does not show opens where it came from.
+  let lines=new Set(['event']),sought='';
+  const feed={reveal:id=>{sought=id;calls.push('reveal:'+id);},render:()=>{},shown:()=>lines.has(sought)};
+  const c={getSpaceFeed:()=>feed,spaceRecord:()=>current,toast:x=>calls.push(x),uiText:x=>x,$,showRoomSurface:x=>calls.push(x),
+    window:{nativeWorkspaceTaskStream:require('../task-stream.js')},openOriginal:async t=>{calls.push('original:'+t.sessionId);return true;},
     selectSpace:async id=>calls.push(id),selectRoom:async()=>{},roomReadingKey:()=>'',pointToMessage:(_el,_key,id)=>calls.push(id)};
   vm.createContext(c);vm.runInContext(section(source,'async function showRoomRecord(', '\nasync function returnToReading('),c);
   for(const [room,id] of [[null,'event'],[{archived:true,events:[{id:'event'}]},'event'],[current,'missing'],[current,42]]){
     current=room;calls.length=0;assert.equal(await c.showRoomRecord('shared',id),false);assert.deepEqual(calls,['search.sharedRemoved']);
   }
-  current={events:[{id:'event'}],messages:[]};calls.length=0;await c.showRoomRecord('shared','event');assert.deepEqual(calls,['shared','event']);
+  current={events:[{id:'event'}],messages:[]};calls.length=0;assert.equal(await c.showRoomRecord('shared','event'),true);assert.deepEqual(calls,['shared','reveal:event','stream']);
+  current={events:[],messages:[{id:'tool',role:'tool',sessionId:'A',text:'npm test'}]};calls.length=0;await c.showRoomRecord('shared','tool');
+  assert.deepEqual(calls,['shared','reveal:tool','stream','original:A']);
 });
 for (const language of ['zh', 'en']) test(`background confirmation uses B1 one-shot notification and exact session target: ${language}`, async () => {
   const h = harness(language), record = { id: 'operation', at: Date.now(), state: 'confirmation-required', actor: { id: 'agent', nativeId: 'native-agent', name: 'Agent', provider: 'claude' }, command: { method: 'openLocalFile', arguments: [], paths: ['/synthetic/PRIVATE'] } };

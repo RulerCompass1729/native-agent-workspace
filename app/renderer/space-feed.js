@@ -2,7 +2,7 @@
 // Both read existing state only (task-stream.js); neither calls a model nor asks the service for more sessions.
 (function (root) {
   const PAGE = 50;
-  const KINDS = ['say', 'reply', 'dispatch', 'ready', 'wait', 'done', 'queue', 'join', 'space'];
+  const KINDS = ['say', 'reply', 'dispatch', 'ready', 'wait', 'answered', 'done', 'queue', 'join', 'space'];
   const GROUPS = ['all', 'say', 'work', 'wait'];
   const validTime = time => Number.isFinite(time) && time > 0 && Math.abs(time) <= 8640000000000000;
 
@@ -20,7 +20,7 @@
     const { doc, el, button, clock, day } = tools(host);
     const t = (key, params) => host.text('feed.' + key, params);
     const scopes = new Map(), cache = new Map();
-    let roomId = '', group = 'all', people = new Set(), limit = PAGE, signature = '', inputKey = '', items = [], preferred = '';
+    let roomId = '', group = 'all', people = new Set(), limit = PAGE, signature = '', inputKey = '', items = [], preferred = '', seeking = '', found = '';
     const panel = el('section', 'space-feed'); panel.id = 'space-feed'; panel.hidden = true;
     const bar = el('div', 'feed-tools');
     const scopeGroup = el('div', 'feed-seg'); scopeGroup.setAttribute('role', 'group');
@@ -55,9 +55,10 @@
         (r.queue || []).map(i => [i.id, i.status, i.sentTo]), host.membersOf(r.id).map(s => [s.id, s.name, s.state, Boolean(s.messagesOmitted), tail(s.messages)])])]);
     }
     function collect(rooms) {
-      // Only the open space's members are shown sessions; other spaces read from their own records (no new pushes).
+      // What this window already holds for each space's members (no new pushes); a member in two spaces says a line once.
+      const seen = new Set();
       return rooms.flatMap(r => model.spaceFeed(r, { sessions: host.membersOf(r.id) }))
-        .sort((a, b) => b.time - a.time);
+        .sort((a, b) => b.time - a.time).filter(item => !seen.has(item.id) && seen.add(item.id));
     }
     const speaker = item => item.fromKind === 'person' ? t('you') : item.fromKind === 'naw' ? host.text('notice.queue.senderName')
       : item.fromName ? item.fromName + (item.unverified ? host.text('speech.unverified') : '') : '';
@@ -129,6 +130,7 @@
       if (!room || room.id !== roomId) return;
       const rooms = scopedRooms(), key = readKey(rooms);
       if (key !== inputKey) { inputKey = key; items = collect(rooms); signature = ''; }
+      if (seeking) seek(rooms);
       drawNames();
       const all = scope() === 'all', query = search.value.trim();
       const shown = items.filter(item => model.feedMatches(item, { group, people: [...people], query, words }));
@@ -160,20 +162,39 @@
       if (anchor?.isConnected) list.scrollTop += anchor.getBoundingClientRect().top - top - offset;
       if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
       for (const id of cache.keys()) if (!kept.has(id)) cache.delete(id);
+      const target = found && cache.get(found);
+      if (target) {
+        found = '';
+        for (const n of list.querySelectorAll('[data-search-target]')) delete n.dataset.searchTarget;
+        target.row.dataset.searchTarget = 'true'; target.row.scrollIntoView({ block: 'center' }); target.summary.focus({ preventScroll: true });
+      }
+    }
+    // A record searched for or named elsewhere: the line that shows it, with every filter cleared and its page drawn.
+    function seek(rooms) {
+      const id = seeking, row = rooms.flatMap(r => [...(r.messages || []), ...(r.events || [])]).find(m => m?.id === id);
+      const keys = new Set(['room:' + id, 'record:' + id, row?.sessionId && row.nativeMessageId ? `reply:${row.sessionId}:${row.nativeMessageId}` : '']);
+      const at = items.findIndex(item => keys.has(item.id));
+      seeking = '';
+      if (at < 0) return;
+      found = items[at].id; group = 'all'; people = new Set(); search.value = '';
+      limit = Math.max(PAGE, Math.ceil((at + 1) / PAGE) * PAGE); signature = '';
     }
     function render() {
       const room = host.room(), visible = host.visible() && Boolean(room);
       panel.hidden = !visible;
-      if (!visible) return;
+      // Built only while shown: a hidden feed keeps its filters, not its lines.
+      if (!visible) { if (inputKey) { items = []; inputKey = ''; signature = ''; cache.clear(); list.replaceChildren(); } return; }
       if (room.id !== roomId) { roomId = room.id; group = 'all'; people = new Set(); search.value = ''; limit = PAGE; signature = ''; inputKey = ''; cache.clear(); list.scrollTop = 0; }
       if (preferred) { people = new Set([preferred]); group = 'all'; preferred = ''; reset(); }
       draw();
     }
     // A member's 「相关记录」: the stream opens on that member's lines.
     const showPerson = id => { preferred = id || ''; };
+    // Whether a record is a line here: reveal(id) before the next render, then shown() after it.
+    const reveal = id => { seeking = id || ''; found = ''; for (const n of list.querySelectorAll('[data-search-target]')) delete n.dataset.searchTarget; };
     // Open waits in the open space, for the tab's count.
     const waiting = room => room ? model.roomTasks(room).tasks.filter(task => model.NEEDS_YOU.includes(task.status)).length : 0;
-    return { render, waiting, showPerson, panel };
+    return { render, waiting, showPerson, reveal, shown: () => Boolean(list.querySelector('[data-search-target]')), panel };
   }
 
   function bindSummary(host) {
@@ -193,7 +214,7 @@
     let signature = '';
     const firstLine = text => String(text ?? '').trim().split(/\r?\n/u)[0].replace(/\*\*/gu, '').trim();
     function lastWords(s) {
-      const last = Array.isArray(s.messages) && !s.messagesOmitted ? s.messages.findLast(m => m?.role === 'assistant' && !m.kind && typeof m.text === 'string' && m.text.trim() && m.phase !== 'commentary') : s.messageSummary?.lastAssistant;
+      const last = model.lastReply(s);
       return last ? { text: firstLine(last.text), time: last.time } : { text: '', time: 0 };
     }
     function draw() {
