@@ -166,7 +166,7 @@ function spaceMidturnText(roomName, sender, text) {
   return `${head}\n${text}`;
 }
 class Workspace extends EventEmitter {
-  constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
+  constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces'), { readOnly = false } = {}) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
     // Open connections per view owner, and how many are pages a person sees. A window the person closed and
     // the hidden window an agent's request runs in are pageless: they hold no session against a window that
@@ -185,8 +185,10 @@ class Workspace extends EventEmitter {
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.saved = null; // the JSON of both files as last saved (its parts) and the files that save left: unchanged()
-    this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
-    this.deadlineTimer.unref();
+    if (!readOnly) {
+      this.deadlineTimer = setInterval(() => { for (const room of this.rooms.values()) this.expireRun(room.run); this.tickCapacity(); this.tickToolWait(); }, 1000);
+      this.deadlineTimer.unref();
+    }
     this.forwards = new Map(); this.pendingDrafts = new Map();
     // Keys the person typed into each session's native terminal (not saved): see ownControl.
     this.terminalKeys = new Map();
@@ -198,8 +200,10 @@ class Workspace extends EventEmitter {
     this.preflightFailures = new WeakMap();
     this.progress = new Map(); this.observedTerminals = new Map();
     this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
-    fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-    wake.initialize(this);
+    if (!readOnly) {
+      fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+      wake.initialize(this);
+    }
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
       this.savedGoalContinuation = stored.goalContinuation;
@@ -263,6 +267,10 @@ class Workspace extends EventEmitter {
     this.operator = new OperatorControl(this);
     this.goalContinuation = new GoalContinuation(this, this.savedGoalContinuation);
     delete this.savedGoalContinuation;
+  }
+  static recordedSnapshot(dataDir) {
+    const workspace = new Workspace({ binaries: {} }, dataDir, undefined, { readOnly: true });
+    return workspace.snapshot();
   }
   usageFor(s) {
     if (s.provider !== 'codex') return s.usage;

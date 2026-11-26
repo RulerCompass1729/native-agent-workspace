@@ -8450,6 +8450,19 @@ $('confirm-share').onclick = () => attempt(async () => {
   } finally { sharePending = null; updateSharingControls(); }
 });
 $('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTrust); $('quit-service').onclick = () => attempt(() => api.quitService());
+$('retire-history-backends').onclick = () => attempt(async () => {
+  const control = $('retire-history-backends'), status = $('retire-history-status');
+  if (control.disabled) return;
+  control.disabled = true;
+  try {
+    const result = await api.retireHistoryBackends();
+    if (result) ui.display.text(status, result.retired || result.skipped ? 'privacy.retiredBackends' : 'privacy.noIdleBackends', result);
+  } catch (error) {
+    ui.showError(status, error);
+  } finally {
+    control.disabled = false;
+  }
+});
 $('privacy-source').onclick = () => attempt(() => api.openExternal('https://github.com/RulerCompass1729/native-agent-workspace/blob/main/docs/privacy.md'));
 $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(async () => {

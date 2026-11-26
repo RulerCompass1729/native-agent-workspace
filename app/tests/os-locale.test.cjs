@@ -74,14 +74,23 @@ function osOptions(language, codex = true, prefix = 'os.decision') {
     words: require('../integrator-words.cjs').personWords({ reason: 'lock-held:RAW 中文 owner', count: 2 }),
     // Daily discoveries: the notify callback's own count parameter.
     count: 3,
+    candidates: [{ entry: { state: { runtimeVersion: 'synthetic-1' } }, pid: 314 }],
   })) }));
 }
 // The two surfaces of the records bell and the daily discoveries notice, set aside where the checks below count positions.
 const ordinary = (list, language) => list.filter(option => option.value.title !== locale.format(language, 'records.export.chooseTitle') &&
   option.value.message !== locale.format(language, 'records.delete.question', { count: 'RAW 中文 backend names'.length }) &&
+  option.value.message !== locale.format(language, 'os.retireHistoryTitle', { count: 1 }) &&
   option.value.title !== locale.format(language, 'discoveries.title'));
 test('all existing OS option groups use the chosen language while raw names, picker scope and cancel safeguards stay intact', () => {
-  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 24);
+  const zh = osOptions('zh'), en = osOptions('en'); assert.equal(en.length, 25);
+  for (const [list, language] of [[en, 'en'], [zh, 'zh']]) {
+    const index = list.findIndex(option => option.value.message === locale.format(language, 'os.retireHistoryTitle', { count: 1 }));
+    assert.ok(index >= 0);
+    const { type, value } = list.splice(index, 1)[0];
+    assert.deepEqual([type, value.defaultId, value.cancelId], ['showMessageBox', 0, 0]);
+    assert.match(value.detail, /synthetic-1 · PID 314/u);
+  }
   // Daily discoveries (regular popup): one notice carrying only a count, never candidate text.
   for (const [list, title, body] of [[en, 'Daily discoveries', '3 new discoveries today. Read when you have time.'], [zh, '每日发现', '今天有3项新发现，有空再看。']]) {
     const found = list.filter(option => option.value.title === title); assert.equal(found.length, 1);

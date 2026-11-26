@@ -10,7 +10,7 @@ if (app.isPackaged === false && !fs.existsSync(path.join(__dirname, 'dsh', 'clie
   process.exit(1);
 }
 const { randomUUID } = require('node:crypto');
-const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
+const { ensureService, connect, connectService, connectProfileBackend, continuationStatus, continueService, canRetire, retireHistoryService } = require('./service-client.cjs');
 const { createReconnector, createEventLog } = require('./service-reconnect.cjs');
 const { createStatePush } = require('./state-push.cjs');
 const backendSwitch = require('./backend-switch.cjs');
@@ -1727,13 +1727,13 @@ function register(name, handler) {
     finally { if (hurries) try { context.statePush?.flushNow(); } catch { /* lost, as any failed send */ } }
   });
 }
-async function replaceBackendSockets(key) {
+async function replaceBackendSockets(key, connectOne = (owner, opts) => connectService(path.join(dataDir, key), owner, opts)) {
   // Replace only the updated backend's sockets. Other live transports and every
   // renderer DOM/IME stay intact; reopening a window is unnecessary.
   const replacements = [];
   try {
     for (const context of windows.values()) if (!context.win.isDestroyed()) {
-      const client = await connectService(path.join(dataDir, key), context.view.owner, { page: !context.background });
+      const client = await connectOne(context.view.owner, { page: !context.background });
       const replacement = { context, client }; replacements.push(replacement);
       replacement.state = await client.call('initial');
     }
@@ -1756,7 +1756,7 @@ function noticeDisconnected(context) { const notice = uiError('error.warning.ser
 function reconnectClosed(context, client) {
   reconnector ||= createReconnector({
     connect: async (target, key) => {
-      const service = await connectService(path.join(dataDir, key), target.view.owner, { page: !target.background });
+      const service = await connectProfileBackend(dataDir, key, target.view.owner, { page: !target.background });
       try { return { client: service, state: await service.call('initial') }; }
       catch (error) { service.close(); throw error; }
     },
@@ -1772,6 +1772,51 @@ function reconnectClosed(context, client) {
   });
   return reconnector(context, client);
 }
+async function retireHistoryBackends(c) {
+  if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  const client = c.client, candidates = [];
+  for (const entry of client.entries) {
+    if (entry === client.active || entry.closed || entry.closing || !canRetire(entry.state, client.active.state)) continue;
+    const lock = require('./service-lock.cjs').readLock(path.join(dataDir, entry.key, 'service.lock'));
+    if (!lock?.started || lock.pid !== entry.state.servicePid) continue;
+    candidates.push({ entry, pid: lock.pid, started: lock.started, sessions: entry.state.sessions.map(backendSwitch.maintenanceProof),
+      guard: client.operationGuard(entry) });
+  }
+  if (!candidates.length) return { retired: 0, skipped: 0 };
+  const answer = await showDialog(c, 'message', {
+    type: 'question', message: displayText('os.retireHistoryTitle', { count: candidates.length }),
+    detail: [displayText('os.retireHistoryDetail'), ...candidates.map(({ entry, pid }) =>
+      `${entry.state.runtimeVersion || displayText('version.unreported')} · PID ${pid}`)].join('\n'),
+    buttons: [displayText('common.cancel'), displayText('os.retireHistoryConfirm')], defaultId: 0, cancelId: 0,
+  });
+  if (answer.response !== 1) return null;
+  if (!isCurrentHumanContext(c) || c.client !== client || client.closing || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  let retired = 0, skipped = 0;
+  backendSwitching = candidates[0].entry.key;
+  try {
+    for (const target of candidates) {
+      let finish, serviceRetired = false;
+      try {
+        target.guard();
+        const key = target.entry.key;
+        backendSwitching = key;
+        finish = client.maintainService(key);
+        if (!await retireHistoryService(dataDir, key, target)) { skipped++; continue; }
+        serviceRetired = true;
+        retired++;
+        await replaceBackendSockets(key, (owner, options) => connectProfileBackend(dataDir, key, owner, options));
+      } catch (error) {
+        if (serviceRetired) throw error;
+        skipped++;
+      } finally { finish?.(); }
+    }
+    return { retired, skipped };
+  } finally {
+    backendSwitching = null;
+    broadcastRoom().catch(() => {});
+  }
+}
+
 let backendSwitching = null, switchRecords = {};
 const autoSwitchFailed = new Set();
 // Sessions a move ended (or left disconnected or in error) that are still not live with the same native
@@ -3076,6 +3121,7 @@ async function boot() {
     switchRecords = backendSwitch.readRecords(dataDir);
     return { auto: settings.auto, migrate: settings.migrate, interrupted: endedByMove(roomState.apply(snapshot).sessions).map(value => value.name) };
   });
+  register('retireHistoryBackends', retireHistoryBackends);
   register('switchBackend', async (c, expected) => {
     await c.client.refresh();
     const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.backendKey === expected?.backendKey);

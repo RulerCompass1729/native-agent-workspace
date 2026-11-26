@@ -59,6 +59,40 @@ function fixture(settings = { auto: true, migrate: false }) {
   const f = { old, active, control, client, context, scope, events, notices, handlers, answer: () => { throw Error('automatic continuation must not ask for confirmation'); } };
   return f;
 }
+test('backend release requires the current desktop and confirmation of the same candidate', async () => {
+  for (const mode of ['background', 'cancel', 'stale', 'release']) {
+    const f = fixture(), { old, context, scope, events, control } = f;
+    old.state.servicePid = 518;
+    Object.assign(scope, { path: require('node:path'), isCurrentHumanContext: value => !value.background,
+      require: name => { assert.equal(name, './service-lock.cjs'); return { readLock: () => ({ pid: 518, started: 'synthetic start' }) }; },
+      canRetire: state => state === old.state,
+      retireHistoryService: async (_path, key, target) => {
+        assert.equal(control.maintenance.has(key), true);
+        assert.deepEqual([key, target.pid, target.started, target.sessions[0].nativeId], ['old', 518, 'synthetic start', 'native-ended']);
+        events.push('retire');
+        return true;
+      },
+    });
+    vm.runInContext(source('retireHistoryBackends'), scope);
+    f.answer = () => {
+      if (mode === 'stale') control.generations.set('old', 1);
+      return { response: mode === 'cancel' ? 0 : 1 };
+    };
+    if (mode === 'background') {
+      context.background = true;
+      await assert.rejects(scope.retireHistoryBackends(context));
+      assert.deepEqual(events, []);
+      continue;
+    }
+    const result = await scope.retireHistoryBackends(context);
+    if (mode === 'cancel') { assert.equal(result, null); assert.deepEqual(events, ['dialog']); }
+    if (mode === 'stale') { assert.deepEqual([result.retired, result.skipped], [0, 1]); assert.deepEqual(events, ['dialog', 'guard', 'broadcast']); }
+    if (mode === 'release') {
+      assert.deepEqual([result.retired, result.skipped], [1, 0]);
+      assert.deepEqual(events, ['dialog', 'guard', 'maintain:old', 'retire', 'sockets:old', 'finish:old', 'broadcast']);
+    }
+  }
+});
 test('ready all-ended backends use guarded continuation under either automatic setting, without stopping sessions or prompting', async () => {
   for (const settings of [{ auto: true, migrate: false }, { auto: false, migrate: true }]) {
     const f = fixture(settings);
