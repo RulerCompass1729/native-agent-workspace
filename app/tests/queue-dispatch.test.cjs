@@ -3097,6 +3097,20 @@ test('a handoff cannot mark the old session done while native stop is unconfirme
   assert.ok(entries().some(entry => entry.event === 'waiting' && entry.reason === 'stop-unproven'));
 });
 
+test('a disconnected Codex thread has no native end receipt for a rotation', async t => {
+  const old = member('a', { provider: 'codex' });
+  const { client, dispatcher } = dispatcherSetup(t, [old]);
+  dispatcher.client = client;
+  const call = client.call.bind(client);
+  client.call = async (method, ...args) => {
+    if (method !== 'maintenanceStop') return call(method, ...args);
+    const expected = args[1];
+    return { stopped: true, expected, stoppedState: { ...expected, controlRevision: (expected.controlRevision || 0) + 1,
+      connectionRevision: (expected.connectionRevision || 0) + 1, state: 'disconnected' } };
+  };
+  assert.equal(await dispatcher.stopUnchanged(old.id, old), 'stop-unproven');
+});
+
 // A Claude stop the service refuses its own receipt for (seen on the real 2.1.319 window, 2026-11-14): the
 // session settled ended with nothing else changed, so the rotation is done. Anything else moved: not proven.
 for (const refusal of ['own receipt', 'other change']) test(`a refused Claude stop receipt ${refusal === 'own receipt' ? 'that the settled session proves finishes the rotation' : 'with another change is not taken as done'}`, async t => {

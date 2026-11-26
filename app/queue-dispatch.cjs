@@ -4700,7 +4700,7 @@ class QueueDispatcher {
       const stopped = { ...plan.stop, controlRevision: (plan.stop.controlRevision || 0) + 1,
         connectionRevision: (plan.stop.connectionRevision || 0) + 1 };
       if (receipt?.stopped !== true || !sameStop(receipt.expected, plan.stop) || !sameStop(receipt.stoppedState, stopped) ||
-          !['ended', 'recoverable', ...(plan.stop.provider === 'codex' ? ['disconnected'] : [])].includes(receipt.stoppedState.state)) {
+          receipt.stoppedState.state !== 'ended') {
         return 'stop-unproven';
       }
     } catch (error) {
