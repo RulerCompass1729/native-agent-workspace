@@ -110,8 +110,8 @@ test('R254: the role moves at a confirmed handoff, while the person keeps using 
   }
   // No label: the successor's own name.
   assert.throws(() => role.creator(oldActor, ROOM_A, null, records, new Map()), handedOver('Session next'));
-  // Another space's queue is refused as before.
-  assert.throws(() => role.creator(oldActor, ROOM_B, null, [session('manager', [ROOM_A, ROOM_B])], labels), key('error.queue.managerOnly'));
+  // Another space's queue is refused; ROOM_B never had a manager, so the answer is the vacant one (R220.2).
+  assert.throws(() => role.creator(oldActor, ROOM_B, null, [session('manager', [ROOM_A, ROOM_B])], labels), key('error.queue.managerVacant'));
 });
 
 test('R254: a kept rotation moves the role too; a branch does not, and a successor gone before the end gives it back', t => {
