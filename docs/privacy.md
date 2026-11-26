@@ -499,10 +499,10 @@ NAW's loopback egress proxy, which passes only `api.deepseek.com:443`. Any other
 connection by any process of the session (a command that downloads, for instance) is
 refused, recorded, and stops the session. Name lookups are refused as well.
 
-Because pi runs commands without asking, the sandbox also closes the ways a command
-could reach the network through a program outside it. Apple Events, LaunchServices
-(through which `open` hands a URL to the browser), background URL sessions and new
-launchd jobs are refused, and so are `open`, `osascript`, `automator`, `shortcuts` and
+Because pi runs commands without asking, the profile also has rules against the ways a
+command could reach the network through a program outside the sandbox: Apple Events,
+LaunchServices (through which `open` hands a URL to the browser), background URL
+sessions, new launchd jobs, and running `open`, `osascript`, `automator`, `shortcuts` and
 `launchctl`. Writes are allowed only in the working folder, pi's own folder, the
 temporary folders and `/dev`. The rest of NAW's data folder, the pi runtime,
 `~/Library` (launch agents included), `~/.ssh`, `~/.config` and the shell startup files
@@ -511,12 +511,13 @@ sandbox later runs; hard links to files there are refused as well. These refusal
 quiet: the command fails and the session goes on.
 
 `scripts/pi-tui-sandbox-check.cjs` tests on this machine, each against a control without
-the sandbox: the writes and hard links, the named programs at their system paths, each
+the sandbox: the writes and hard links, the five programs at their system paths, each
 refused service lookup, other connections and name lookups. It also shows that macOS
-stops copies of those programs, sandbox or not, and that the system `launchctl` cannot
-submit a job from the sandbox even with the program rule taken out (without a control,
-which would create a job). The Apple Events rule is not tested on its own: that needs
-another app to receive one, and macOS would ask the person first.
+stops copies of the five programs, sandbox or not. Two rules are not shown to have an
+effect of their own. Apple Events: a test needs another app to receive one, and macOS
+would ask the person first. launchd jobs: `launchctl` creates no job from the sandbox
+even under a profile without that rule, and a program other than `launchctl` that
+submits one was not tried.
 
 What stays open: other programs later use what pi writes in the working folder, or in
 the temporary folders every program shares, as it is (a git hook, a project script, a

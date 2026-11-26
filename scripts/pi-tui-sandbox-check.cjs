@@ -148,7 +148,15 @@ async function main() {
     }
 
     // Programs that hand work to processes outside the sandbox. Each command is harmless if it ran.
-    for (const [label, argv] of [['open', ['/usr/bin/open', '--help']], ['osascript', ['/usr/bin/osascript', '-e', 'return 1']], ['launchctl', ['/bin/launchctl', 'version']]]) {
+    const handOffs = [
+      ['open', '/usr/bin/open', ['--help']],
+      ['osascript', '/usr/bin/osascript', ['-e', 'return 1']],
+      ['automator', '/usr/bin/automator', [path.join(work, `none-${tag}.workflow`)]],
+      ['shortcuts', '/usr/bin/shortcuts', ['--help']],
+      ['launchctl', '/bin/launchctl', ['version']],
+    ];
+    for (const [label, program, args] of handOffs) {
+      const argv = [program, ...args];
       const control = run(null, argv);
       check(`control: ${label} runs without the sandbox`, !/not permitted/i.test(control.out) && control.status !== 126, `exit ${control.status}`);
       const inside = run(profile, ['/bin/sh', '-c', '"$@"', 'probe', ...argv]);
@@ -169,14 +177,14 @@ async function main() {
     }
 
     // macOS stops copies of these programs, sandbox or not, so a copy does not get past the rule above.
-    for (const [label, from, args] of [['open', '/usr/bin/open', ['--help']], ['osascript', '/usr/bin/osascript', ['-e', 'return 1']], ['launchctl', '/bin/launchctl', ['version']]]) {
+    for (const [label, from, args] of handOffs) {
       const copy = path.join(work, `${label}-${tag}`);
       fs.copyFileSync(from, copy);
       fs.chmodSync(copy, 0o755);
       const outside = run(null, [copy, ...args]);
       const inside = run(profile, [copy, ...args]);
       fs.unlinkSync(copy);
-      check(`a copy of ${label} does not run, with or without the sandbox`, outside.status !== 0 && inside.status !== 0, `${outside.signal || outside.status}/${inside.signal || inside.status}`);
+      check(`a copy of ${label} is stopped by macOS, with or without the sandbox`, outside.signal === 'SIGKILL' && inside.signal === 'SIGKILL', `${outside.signal || outside.status}/${inside.signal || inside.status}`);
     }
 
     // Each refused service on its own. The reachable one shows the lookup itself works in the sandbox.
@@ -192,13 +200,14 @@ async function main() {
       check(`control: ${REACHABLE_SERVICE} is found in the sandbox`, inside.includes(`${REACHABLE_SERVICE} found`));
     }
 
-    // launchd: even with the program rule taken out, the system launchctl cannot submit a job.
+    // launchd: launchctl creates no job from the sandbox. This also holds without the profile's launchd
+    // rule, so it shows the route is closed, not that the rule closes it.
     const label = `naw-pi-probe-${tag}`;
     const loose = profile.split('\n').filter(line => !line.startsWith('(deny process-exec')).join('\n');
     const submitted = run(loose, ['/bin/launchctl', 'submit', '-l', label, '--', '/usr/bin/true']);
     const listed = run(null, ['/bin/launchctl', 'list', label]).status === 0;
     if (listed) run(null, ['/bin/launchctl', 'remove', label]);
-    check('submit a launchd job from the sandbox: refused', submitted.status !== 0 && !listed, `exit ${submitted.status}`);
+    check('launchctl submits no launchd job from the sandbox', submitted.status !== 0 && !listed, `exit ${submitted.status}`);
 
     // LaunchServices: lsappinfo asks the same service `open` would.
     const front = run(null, ['/usr/bin/lsappinfo', 'front']).out.trim();

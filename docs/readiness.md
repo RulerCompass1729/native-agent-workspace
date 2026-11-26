@@ -1668,7 +1668,7 @@ What it can do:
   terminal changes it.
 - Checked: `scripts/pi-tui-offline-check.cjs` (27 checks: a turn through the proxy to a
   loopback stand-in, reopening, a refused host, a lost witness, no key in pi's files),
-  `scripts/pi-tui-sandbox-check.cjs` (44 checks of the sandbox, refusals against
+  `scripts/pi-tui-sandbox-check.cjs` (50 checks of the sandbox, refusals against
   controls without it), and two synthetic turns on `deepseek-flash` against the real
   service: a reply, then pi's bash tool writing a file and running `ls` in the working
   folder; the proxy saw only `api.deepseek.com:443` and nothing was refused.
