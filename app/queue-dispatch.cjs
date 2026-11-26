@@ -312,7 +312,8 @@ function readHeld(value) {
 }
 // Which session the person addressed and from which window (view owner): where the words go back if they cannot go.
 function heldItem(item) {
-  return { at: item.at, text: item.text, ...(validId(item.session) ? { session: item.session } : {}), ...(typeof item.from === 'string' && item.from ? { from: item.from } : {}) };
+  return { at: item.at, text: item.text, ...(validId(item.session) ? { session: item.session } : {}), ...(typeof item.from === 'string' && item.from ? { from: item.from } : {}),
+    ...(typeof item.name === 'string' ? { name: item.name } : {}) };
 }
 // Words being given back to the person's window, one copy each (main.cjs giveBackHeld).
 function readReturning(value) {
@@ -4462,7 +4463,7 @@ class QueueDispatcher {
       const session = usable(entry.to) || usable({ id: oldId });
       const text = entry.items.map(item => item.text).join('\n\n');
       if (!session) {
-        this.returnHeld(oldId, entry);
+        this.returnHeld(oldId, entry, null);
         continue;
       }
       // It is itself being rotated now: the words wait for that one.
@@ -4485,7 +4486,7 @@ class QueueDispatcher {
         continue;
       }
       if (entry.blockedSince !== undefined && this.now() - entry.blockedSince >= HELD_RETURN_MS) {
-        this.returnHeld(oldId, entry);
+        this.returnHeld(oldId, entry, session);
         continue;
       }
       if (this.now() - (entry.tried ?? -Infinity) < HELD_RETRY_MS) continue;
@@ -4536,21 +4537,25 @@ class QueueDispatcher {
   }
 
   // Not a silent retry, and only to the person (11-25 review: a space is read by its agents): each message goes back
-  // as a copy of the draft of the session they addressed, in the window they sent it from. It leaves the held words
-  // at once, so a new handoff of that session starts with none.
-  returnHeld(oldId, entry) {
-    this.returning.push(...entry.items.map(item => ({ ...item, session: item.session || oldId })));
+  // as a draft copy in their window, on the session that should have taken it (an old session after a done handoff is
+  // archived), else the one they addressed. It leaves the held words at once, so a new handoff starts with none.
+  returnHeld(oldId, entry, receiver) {
+    const name = receiver ? this.label(receiver.id, receiver.name || entry.name || '') : this.label(oldId, entry.name || '');
+    this.returning.push(...entry.items.map(item => ({ ...item, session: receiver?.id || item.session || oldId, name })));
     delete this.held[oldId];
     this.save();
-    try { Promise.resolve(this.notify('heldReturned', { name: this.label(oldId, entry.name) })).catch(() => {}); } catch { /* Kept on disk. */ }
     this.giveBackReturning();
   }
 
-  // What could not be put back yet (its window closed) is tried again each pass, never dropped.
+  // What could not be put back yet (no window open) is tried again each pass, never dropped. The person is told once
+  // a copy is there.
   giveBackReturning() {
+    const placed = new Set();
     const left = this.returning.filter(item => {
       try {
-        return !this.giveBack(item.from, item.session, item.text);
+        if (!this.giveBack(item.from, item.session, item.text, item.name || '')) return true;
+        placed.add(item.name || '');
+        return false;
       } catch {
         return true;
       }
@@ -4558,6 +4563,9 @@ class QueueDispatcher {
     if (left.length === this.returning.length) return;
     this.returning = left;
     this.save();
+    for (const name of placed) {
+      try { Promise.resolve(this.notify('heldReturned', { name })).catch(() => {}); } catch { /* The copy is there. */ }
+    }
   }
 
   untouched(old, record, reply) {

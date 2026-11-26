@@ -6844,10 +6844,10 @@ const disposers = [
   api.onState(next => { updateState(next); stateArrived(); render(); }),
   api.onStewardWake(status => { if (state) state.stewardWakeStatus = status; renderStewardWakeWarning(status); }),
   // Words kept during a handoff that NAW could not send, back here only (main.cjs giveBackHeld).
-  api.onDraftRecovery(({ id, copies }) => {
+  api.onDraftRecovery(({ id, copies, name }) => {
     draftRecoveries.set(id, copies);
     if (activeSessionId() === id) renderDraftRecovery(id);
-    toastMessage('toast.rotationHeldReturned');
+    toastMessage('toast.rotationHeldReturned', { name: name || '' });
   }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);

@@ -55,7 +55,7 @@ const { roomId: validRoomId, roomIds, isMember, untouchedDefault, placementRevis
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { PersonActions, asker } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
-const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy } = require('./view-drafts.cjs');
+const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
 const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
@@ -1339,17 +1339,15 @@ function windowClientOf(owner) {
   }
   return null;
 }
-// Held words NAW could not send (queue-dispatch.cjs returnHeld): a copy of that session's draft in the window they were
-// sent from, which only the person sees. False while it is closed; asked again.
-function giveBackHeld(owner, sessionId, text) {
-  for (const context of windows.values()) {
-    if (context.background || context.win.isDestroyed() || owner !== undefined && context.view?.owner !== owner) continue;
-    const copies = returnCopy(context.view, sessionId, text);
-    saveViews();
-    sendToPage(context, 'workspace:draft-recovery', { id: sessionId, copies });
-    return true;
-  }
-  return false;
+// Held words NAW could not send (queue-dispatch.cjs returnHeld): a copy of that session's draft in a window of the
+// person's, the one they were sent from when it is open. False with no window open; asked again.
+function giveBackHeld(owner, sessionId, text, name) {
+  const context = returnWindow([...windows.values()].filter(c => !c.background && !c.win.isDestroyed()), owner);
+  if (!context) return false;
+  const copies = returnCopy(context.view, sessionId, text);
+  saveViews();
+  sendToPage(context, 'workspace:draft-recovery', { id: sessionId, copies, name });
+  return true;
 }
 function personClient() {
   for (const context of windows.values()) {

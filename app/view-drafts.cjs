@@ -50,4 +50,9 @@ function returnCopy(view, id, text) {
   if (!Object.hasOwn(records, id)) Object.defineProperty(records, id, { value: { text: '', acknowledged: true, recoveries: [] }, enumerable: true, writable: true, configurable: true });
   return retainRecovery(view, id, text);
 }
-module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy };
+// The open window they were sent from, else any open window of the person's: a closed window's owner never returns
+// (main.cjs gives a new window a new one). Agents' views are not passed in.
+function returnWindow(contexts, owner) {
+  return contexts.find(context => context.view?.owner === owner) || contexts[0] || null;
+}
+module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow };

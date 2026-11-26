@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy } = require('../view-drafts.cjs');
+const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow } = require('../view-drafts.cjs');
 
 test('legacy window drafts are retained as unconfirmed copies, including after serialization', () => {
   const view = { draft: { id: 'session', text: 'older private draft' } };
@@ -59,4 +59,11 @@ test('words given back after a handoff become a copy of that session\'s draft, a
   assert.equal(Object.hasOwn(backups(view), '__proto__'), false);
   assert.deepEqual(returnCopy(view, '__proto__', 'x'), ['x']);
   assert.equal(Object.getPrototypeOf(backups(view)), Object.prototype, 'an id is never a prototype');
+});
+
+test('words go back to the open window they came from, else to another open one: a closed window never returns', () => {
+  const a = { view: { owner: 'owner-a' } }, b = { view: { owner: 'owner-b' } };
+  assert.equal(returnWindow([a, b], 'owner-b'), b);
+  assert.equal(returnWindow([a], 'owner-b'), a, 'from a window that was closed');
+  assert.equal(returnWindow([], 'owner-b'), null, 'no window open: asked again');
 });

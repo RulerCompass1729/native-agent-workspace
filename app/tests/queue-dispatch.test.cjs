@@ -1548,7 +1548,8 @@ test('with no window that controls the receiver, the words go back after ten min
   f.advance(10 * 60 * 1000);
   await passes(f.dispatcher, 2);
   assert.deepEqual(first, []);
-  assert.deepEqual(gave, [['owner-b', 'a', '先回答这个']]);
+  assert.deepEqual(gave.map(args => args.slice(0, 3)), [['owner-b', 'a', '先回答这个']]);
+  assert.match(gave[0][3], /^Agent a（/, 'named for the toast');
   assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned']);
   assert.equal(rotationTexts(f.room.value.events).some(text => text.includes('先回答这个')), false, 'the agents of a space never read it');
   assert.deepEqual([f.dispatcher.held, f.dispatcher.returning], [{}, []]);
@@ -1565,16 +1566,37 @@ test('with nothing left to take them, the words go back at once; while that wind
   f.client.state.sessions[0].state = 'ended';
   await passes(f.dispatcher, 3);
   assert.deepEqual(first, []);
-  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned']);
+  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), [], 'not told before a copy is there');
   assert.equal(f.dispatcher.held.a, undefined, 'no given-back entry left for new words to fall into');
   assert.deepEqual(f.dispatcher.returning.map(item => [item.from, item.session, item.text]), [['owner-b', 'a', '先回答这个']]);
   const stored = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'), 'utf8'));
   assert.equal(stored.returning.length, 1, 'kept on disk while its window is closed');
   open = true;
   await passes(f.dispatcher, 1);
-  assert.deepEqual(gave, [['owner-b', 'a', '先回答这个']]);
+  assert.deepEqual(gave.map(args => args.slice(0, 3)), [['owner-b', 'a', '先回答这个']]);
   assert.deepEqual(f.dispatcher.returning, []);
-  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned'], 'told once');
+  assert.deepEqual(f.notices.filter(kind => kind === 'heldReturned'), ['heldReturned'], 'told once, when it is there');
+});
+
+test('words for the old session that the successor could not take go back on the successor, not on the archived old one (11-25 review)', async t => {
+  const gave = [];
+  const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })],
+    { window: true, ownerClient: () => null, giveBack: (...args) => { gave.push(args); return true; } });
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  advance(1000);
+  assert.deepEqual(dispatcher.holdMessage('a', '给旧会话的', undefined, 'owner-a'), { held: true });
+  client.reply('a', '交接：分支 abc。');
+  await dispatcher.schedule();
+  const newId = client.state.sessions[1].id;
+  client.state.sessions[1].queueAvailable = true;
+  await passes(dispatcher, 6, () => dispatcher.held.a?.blockedSince !== undefined);
+  assert.equal(dispatcher.held.a?.to?.id, newId, 'confirmed: it was for the successor');
+  advance(10 * 60 * 1000);
+  await passes(dispatcher, 2);
+  assert.deepEqual(gave.map(args => args.slice(0, 3)), [['owner-a', newId, '给旧会话的']]);
 });
 
 test('words held while the last were being sent stay for their own rotation, and a send whose answer was lost is not sent twice (11-25 review)', async t => {
