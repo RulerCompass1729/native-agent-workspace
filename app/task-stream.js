@@ -173,8 +173,11 @@
         items.push({ id: `room:${m.id}`, fromKind: 'person', fromId: '', fromName: '', to, text: m.text, time, target });
       } else if (m.kind === 'agent-wake' && m.wake) {
         const w = m.wake;
+        // Anything short of native receipt keeps the record's own words, which say what happened to the delivery.
+        const kept = m.wakeStatus && m.wakeStatus !== 'submitted' && said(m);
         items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: w.senderId || '', fromName: nameOf(w.senderId, w.senderName),
-          to: [{ id: w.recipientId || '', name: nameOf(w.recipientId, w.recipientName) }], text: String(w.body ?? ''), time, target });
+          to: [{ id: w.recipientId || '', name: nameOf(w.recipientId, w.recipientName) }], text: kept ? m.text : String(w.body ?? ''), time, target,
+          ...(kept && m.uiMessage ? { uiMessage: m.uiMessage } : {}) });
       } else if (m.kind === 'agent-peer' && m.peerMessage) {
         const p = m.peerMessage, body = m.uiMessage?.params?.body ?? String(m.text || '').split('\n').slice(1).join('\n');
         items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: p.senderId || '', fromName: p.senderId ? nameOf(p.senderId, p.senderName) : p.senderName ? `「${p.senderName}」` : '',
@@ -312,14 +315,15 @@
     const byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
     const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
     const stamp = value => Number.isFinite(value) && Math.abs(value) <= 8640000000000000 ? value : 0;
-    const items = [], spoken = new Set();
+    const items = [], spoken = new Set(), rowOf = new Map((Array.isArray(room.messages) ? room.messages : []).filter(Boolean).map(m => [`room:${m.id}`, m]));
     for (const s of speechStream(room, { sessions, every: true })) {
       if (s.id.startsWith('room:')) spoken.add(s.id.slice(5));
       // NAW's dispatch input is the dispatch record below, with its item.
       if (s.fromKind === 'dispatch') continue;
       items.push({ id: s.id, roomId: room.id, kind: s.fromKind === 'agent' && !s.to.length ? 'reply' : 'say', time: s.time, fromKind: s.fromKind,
         fromId: s.fromId, fromName: s.fromName, unverified: Boolean(s.unverified), to: s.to, text: s.text, body: s.text, target: s.target || null,
-        involved: [s.fromId, ...s.to.map(t => t.id)].filter(Boolean) });
+        involved: [s.fromId, ...s.to.map(t => t.id)].filter(Boolean), ...(s.uiMessage ? { uiMessage: s.uiMessage } : {}),
+        ...(s.fromKind === 'person' && rowOf.has(s.id) ? { request: rowOf.get(s.id) } : {}) });
     }
     const tasks = roomTasks(room, { nameOf }), taskOf = new Map(), lastWait = new Map();
     for (const task of tasks.tasks) for (const event of task.history) {

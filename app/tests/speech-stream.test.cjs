@@ -139,3 +139,25 @@ test('a saved space view may reopen on the conversation, and other surfaces stay
   assert.equal(validViews(view('records')), true);
   assert.equal(validViews(view('bogus')), false);
 });
+
+// R248 ② follow-up 4, gap 1: workspace.cjs wakeView marks a wake whose original the sender no longer has.
+function missingOriginal() {
+  const warning = { version: 1, key: 'notice.wake.senderRemoved', params: { body: 'B, synthetic check.' } };
+  const wake = { id: 'w1', senderId: 'A', recipientId: 'B', senderName: 'A', recipientName: 'B', body: 'B, synthetic check.' };
+  return { warning, room: { id: 'r1', messages: [
+    { id: 'w1', role: 'system', kind: 'agent-wake', text: '无法核对发送方的原消息，投递结果未确认。\nB, synthetic check.', uiMessage: warning, wakeStatus: 'unknown', time: 5, wake },
+    { id: 'w2', role: 'system', kind: 'agent-wake', text: '发给原会话的自动消息：原生已接收。\nB, second check.', wakeStatus: 'submitted', time: 6, wake: { ...wake, id: 'w2', body: 'B, second check.' } },
+    { id: 'w3', role: 'system', kind: 'agent-wake', text: '自动消息接收结果未确认；不会重发。\nB, third check.', uiMessage: { version: 1, key: 'notice.wake.restored', params: { body: 'B, third check.' } },
+      wakeStatus: 'unconfirmed', time: 7, wake: { ...wake, id: 'w3', body: 'B, third check.' } }] } };
+}
+test('a wake whose original cannot be verified keeps the warning, in both languages; a verified one reads as its body', () => {
+  const { warning, room } = missingOriginal(), locale = require('../ui-locale.js');
+  const [missing, verified, unconfirmed] = stream.speechStream(room, { sessions: [] });
+  assert.equal(unconfirmed.text, room.messages[2].text); assert.equal(unconfirmed.uiMessage.key, 'notice.wake.restored');
+  assert.equal(missing.text, room.messages[0].text); assert.deepEqual(missing.uiMessage, warning);
+  assert.equal(locale.format('en', missing.uiMessage.key, missing.uiMessage.params), "The sender's original message could not be verified; delivery is unconfirmed.\nB, synthetic check.");
+  assert.equal(locale.format('zh', missing.uiMessage.key, missing.uiMessage.params), room.messages[0].text);
+  assert.equal(verified.text, 'B, second check.'); assert.equal(Object.hasOwn(verified, 'uiMessage'), false);
+  const line = stream.spaceFeed(room, { sessions: [] }).find(i => i.id === 'room:w1');
+  assert.equal(line.text, room.messages[0].text); assert.deepEqual(line.uiMessage, warning);
+});

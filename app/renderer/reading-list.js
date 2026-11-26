@@ -39,6 +39,12 @@ function readingSpaceMessageStatus(message, room = false) {
   const status = receipts.length === 1 ? readingDeliveryStatusKey(message, receipts[0]) : 'delivery.unknown';
   return typeof status === 'string' ? status : 'delivery.unknown';
 }
+// A row's own delivery or run state, as its line says it; the space's 信息流 uses it for a request too.
+// Only Claude rows take queued input; native sends it once the agent is idle.
+function readingMessageStatusKey(m, room = false, session = null) {
+  const keys = { 'awaiting-native': m.inputMode === 'queue' ? m.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': m.deliveredInto ? 'reading.status.midturnPrivate' : 'reading.status.private' };
+  return typeof m.status === 'string' && Object.hasOwn(keys, m.status) ? keys[m.status] : undefined;
+}
 function readingSpaceMessageBody(message, room) {
   if (!room || readingSpaceMessageKind(message) !== 'wake') return null;
   const body = message.wake.body, text = ui.displayText(message.text, message.uiMessage);
@@ -935,8 +941,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (spaceStatus) { const fact = node('span', undefined, 'space-message-status'); ui.display.text(fact, spaceStatus); entry.heading.append(fact); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      // Only Claude rows take queued input; native sends it once the agent is idle.
-      const status = { 'awaiting-native': m.inputMode === 'queue' ? m.midturn ? 'delivery.queuedMidturn' : 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': m.deliveredInto ? 'reading.status.midturnPrivate' : 'reading.status.private' }[m.status];
+      const status = readingMessageStatusKey(m, room, session);
       delete entry.wakeLabel;
       if (wake) { entry.wakeLabel = node('span'); entry.heading.append(entry.wakeLabel); }
       else if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }

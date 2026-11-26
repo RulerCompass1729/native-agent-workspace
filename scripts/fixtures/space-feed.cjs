@@ -13,6 +13,11 @@ function seed({ pm, a, b, c, design }) {
     { id: 'h-pm', role: 'human', recipientId: pm, name: '你 → 项目经理', text: '把今天要做的三件事排一下。', time: yesterday, deliveries: [{ id: 'tag-pm', recipientId: pm, recipientName: '项目经理' }] },
     { id: 'pm-final', role: 'assistant', sessionId: pm, name: '项目经理', sharedStream: true, sourceTag: 'tag-pm', nativeMessageId: 'pm-reply', finalReply: true, status: 'complete',
       text: '排好了：1. 输入框修复（A）；2. 图标（B）；3. 文档（我）。', time: yesterday + 60000 },
+    // Follow-up 4: two requests whose delivery the space record settled otherwise.
+    { id: 'h-a-private', role: 'human', recipientId: a, name: '你 → Claude A', text: '合成请求：只回原会话。', status: 'reply-private', time: yesterday + 120000,
+      deliveries: [{ id: 'tag-a-private', recipientId: a, recipientName: 'Claude A' }] },
+    { id: 'h-b-failed', role: 'human', recipientId: b, name: '你 → Claude B', text: '合成请求：这条没送出。', status: 'failed', time: yesterday + 180000,
+      deliveries: [{ id: 'tag-b-failed', recipientId: b, recipientName: 'Claude B' }] },
     { id: 'w-pm-a', role: 'system', kind: 'agent-wake', name: '项目经理 → Claude A', text: '发给原会话的自动消息：原生已接收。\nA，先修输入框，再补测试。', time: at(45),
       wake: { id: 'wake-pm-a', senderId: pm, recipientId: a, senderName: '项目经理', recipientName: 'Claude A', body: 'A，先修输入框，再补测试。' } },
     { id: 'tool-a', role: 'tool', sessionId: a, sharedStream: true, text: 'npm test', time: at(29) },

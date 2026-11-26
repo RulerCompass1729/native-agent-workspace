@@ -243,6 +243,38 @@ async function main() {
   await page.locator('#workspace-group .room-row', { hasText: '共同工作' }).locator('.room-nav').click();
   await until(async () => (await current()).join() === '#room-summary', 'Back in 共同工作');
 
+  // R247–R249 follow-up 4: a request's line keeps its delivery state as the space record says it; a wake NAW could
+  // not verify keeps its warning; two members with one name carry their short ids, as in the left list (U22).
+  await page.locator('#room-stream').click();
+  await until(async () => (await feedRows()).length >= 8, 'Stream rows again');
+  const locale = require(path.join(root, 'app/ui-locale.js'));
+  const lineOf = id => page.locator(`#space-feed .feed-row[data-feed-id="${id}"]`);
+  const statusOf = id => lineOf(id).locator('.disclosure-end').evaluate(n => n.hidden ? '' : n.textContent);
+  ids.a2 = await client.call('create', { provider: 'claude', cwd: profile, name: 'Claude A', view: 'chat' });
+  await client.call('join', ids.a2, true);
+  await page.locator(`#space-feed .feed-person[data-person="${ids.a2}"]`).waitFor();
+  const shortOf = id => page.locator(`#session-list .session-row[data-session-row="${id}"] .session-short-id`).textContent();
+  const [shortA, shortA2] = [await shortOf(ids.a), await shortOf(ids.a2)];
+  assert.ok(shortA.length >= 6 && shortA2.length >= 6 && shortA !== shortA2, 'The left list has both short ids: ' + [shortA, shortA2]);
+  const seen = {
+    statuses: [await statusOf('room:h-a-private'), await statusOf('room:h-b-failed'), await statusOf('room:h-pm')],
+    wake: (await lineOf('room:w-pm-a').locator('.feed-text').textContent()).startsWith('无法核对发送方的原消息，投递结果未确认。'),
+    buttons: (await page.locator('#space-feed .feed-person').allTextContents()).sort(),
+    request: await lineOf('room:h-a-private').locator('.feed-who').textContent(),
+    reply: await page.locator(`#space-feed .feed-row[data-feed-id^="reply:${ids.a}:"] .feed-who`).first().textContent(),
+    wakeTo: await lineOf('room:w-pm-a').locator('.feed-who').textContent(),
+    plain: await lineOf('room:h-b-failed').locator('.feed-who').textContent(),
+  };
+  assert.deepEqual(seen, {
+    statuses: [locale.format('zh', 'reading.status.private'), locale.format('zh', 'reading.status.failed'), ''],
+    wake: true,
+    buttons: ['你', '项目经理', `Claude A ${shortA}`, `Claude A ${shortA2}`, 'Claude B'].sort(),
+    request: `你 → Claude A ${shortA}`, reply: `Claude A ${shortA}`, wakeTo: `项目经理 → Claude A ${shortA}`, plain: '你 → Claude B',
+  });
+  await shot('stream-same-name-light-1280');
+  record('a request line shows its delivery state; an unverified wake keeps its warning; same-name members carry short ids, a unique name stays plain');
+  await page.locator('#room-summary').click();
+
   for (const scheme of ['dark']) { await page.emulateMedia({ colorScheme: scheme }); await page.locator('#room-stream').click(); await delay(300); await shot(`stream-${scheme}-1280`); }
   await page.emulateMedia({ colorScheme: 'light' });
   await win.evaluate((w, [x, y]) => w.setContentSize(x, y), [850, 760]); await delay(500);

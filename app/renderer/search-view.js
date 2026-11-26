@@ -13,7 +13,7 @@ function openSearch(scope = 'all') {
   searchOpener = document.activeElement; searchNavigating = false;
   captureReadingViews();
   searchOrigin = { spaceId, selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
-    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread, roomRecordScope, roomRecordReturn: roomRecordReturn && { ...roomRecordReturn }, roomFilterHistory: roomFilterHistory && { ...roomFilterHistory } };
+    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread, roomRecordScope, roomRecordReturn: roomRecordReturn && { ...roomRecordReturn }, roomFilterHistory: roomFilterHistory && { ...roomFilterHistory }, feed: selected === 'room' && roomSurface === 'stream' && getSpaceFeed()?.filters() || null };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
   const focused = current();
@@ -178,6 +178,7 @@ async function returnToReading() {
   if (target.selected === 'room' && (!spaceRecord(target.spaceId || 'shared') || spaceRecord(target.spaceId || 'shared').archived)) { toast(uiText('search.roomUnavailable')); return; }
   searchReturn = null; $('return-reading').hidden = true;
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
+  getSpaceFeed()?.restore(target.feed);
   if (spaceId !== (target.spaceId || 'shared')) await selectSpace(target.spaceId || 'shared');
   $('room-search').value = target.roomSearch;
   roomThread = target.roomThread || '';
