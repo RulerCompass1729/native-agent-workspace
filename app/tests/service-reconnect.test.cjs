@@ -2,6 +2,8 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net'), vm = require('node:vm');
 const { fork } = require('node:child_process'), { once } = require('node:events');
 const { ServiceClient, connectService } = require('../service-connection.cjs');
+const { connectProfileBackend } = require('../service-client.cjs');
+const { writeLayout } = require('../service-layout.cjs');
 const { createWriter, readFrames } = require('../service-transport.cjs');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { uiError } = require('../ui-errors.cjs');
@@ -56,6 +58,7 @@ async function fixture(t, keys = ['.', 'backends/aaaaaaaaaaaaaaaaaaaa'], { capab
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
   for (const [index, key] of keys.entries()) backends.push(await backend(dataDir, key, 'session-' + index, capabilities));
+  writeLayout(dataDir, { format: 1, active: '.', entries: keys });
   // As main.cjs connects a window: one service client per backend, under the window's owner.
   const open = async ({ background = false } = {}) => {
     const view = { owner: 'owner-' + opened.length }, entries = [];
@@ -76,7 +79,7 @@ function mainWiring(dataDir, { delays, tried = [] } = {}) {
   const block = end < 0 ? '' : main.slice(start, end);
   // delays: the app's own wiring over shorter intervals. tried: each place it connected to, in order.
   const context = vm.createContext({ path, dataDir, uiError, displayState: state => state, omitHidden: display => display,
-    connectService: (dir, ...rest) => { tried.push(dir); return connectService(dir, ...rest); },
+    connectProfileBackend: (dir, key, ...rest) => { tried.push(path.join(dir, key)); return connectProfileBackend(dir, key, ...rest); },
     sendToPage: (target, channel, ...data) => { if (!target.background && !target.win.isDestroyed()) target.page.push([channel, ...data]); },
     createReconnector: delays ? options => reconnectModule.createReconnector({ ...options, delays }) : reconnectModule?.createReconnector, createEventLog: reconnectModule?.createEventLog });
   return vm.runInContext(`${block}\n(function wire(context) { const client = context.client; const send = (channel, ...data) => { if (context.client === client) sendToPage(context, channel, ...data); };${handler.replace(/\n\}\n$/, '\n')} })`, context);
