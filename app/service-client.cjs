@@ -2,7 +2,9 @@ const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { EventEmitter } = require('node:events');
+const { execFileSync, spawn } = require('node:child_process');
+const backgroundOperation = require('./background-operation.cjs');
 const { readLayout, writeLayout, DSH_INHERIT_ATTEMPTS } = require('./service-layout.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
@@ -10,13 +12,107 @@ const { lockIdentity, readLock, createLock, releaseLock, ownerMayBeAlive } = req
 
 const dshCopy = require('./dsh-copy.cjs');
 const serviceBinding = require('./service-binding.cjs');
+const { sessionPlan, sameStop, maintenanceProof, readRecords } = require('./backend-switch.cjs');
+const { Workspace } = require('./workspace.cjs');
+
+const retiredStates = new Map();
+const openingRetired = new Map();
+function retiredState(directory) {
+  const workspace = fs.lstatSync(path.join(directory, 'workspace.json'));
+  if (!workspace.isFile() || workspace.uid !== process.getuid() || (workspace.mode & 0o077)) throw uiError('error.service.invalidLayout');
+  const files = ['room-records.json', 'operator-records.json'].map(name => {
+    try { return fs.lstatSync(path.join(directory, name)); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  });
+  const stamp = [workspace, ...files].map(stat => stat ? [stat.dev, stat.ino, stat.ctimeMs, stat.mtimeMs, stat.size].join(':') : '').join('/');
+  const cached = retiredStates.get(directory);
+  const cachedState = cached?.stamp === stamp ? cached.state.deref() : null;
+  if (cachedState) return cachedState;
+  const stored = Workspace.recordedSnapshot(directory);
+  if (stored.storageWarning || !stored.sessions.every(session => ['ended', 'recoverable'].includes(session.state))) throw uiError('error.service.invalidLayout');
+  const state = { ...stored, protocol: 1, capabilities: ['collaborationSpacesV1', 'clearSharedHistory', 'resume', 'operatorControl1a'],
+    storageRetryable: false, wakePolicy: undefined };
+  retiredStates.set(directory, { stamp, state: new WeakRef(state) });
+  return state;
+}
+
+async function openRetired(scope, key, directory) {
+  let opening = openingRetired.get(directory);
+  if (!opening) {
+    opening = ensureService(scope, process.execPath, key);
+    openingRetired.set(directory, opening);
+  }
+  try { await opening; }
+  finally { if (openingRetired.get(directory) === opening) openingRetired.delete(directory); }
+  retiredStates.delete(directory);
+}
+
+class RetiredClient extends EventEmitter {
+  constructor(scope, key, owner, options, state) {
+    super();
+    Object.assign(this, { scope, key, owner, options, state, socket: { destroyed: false } });
+    this.directory = path.join(scope, key);
+  }
+  async liveClient() {
+    if (this.closed || this.socket.destroyed) throw uiError('error.client.serviceNotConnected');
+    if (this.live) return this.live;
+    this.opening ||= (async () => {
+      if (openingRetired.has(this.directory) || readLayout(this.scope).retired?.includes(this.key)) {
+        await openRetired(this.scope, this.key, this.directory);
+      }
+      const client = await connectService(this.directory, this.owner, this.options);
+      try {
+        const state = await client.call('initial');
+        if (this.closed || this.socket.destroyed) throw uiError('error.client.serviceNotConnected');
+        for (const event of ['state', 'terminal', 'progress', 'scopedOutbox', 'closed']) client.on(event, value => this.emit(event, value));
+        this.live = client;
+        this.state = null;
+        this.socket = client.socket;
+        this.emit('state', state);
+        return client;
+      } catch (error) { client.close(); throw error; }
+    })();
+    try { return await this.opening; } finally { this.opening = null; }
+  }
+  get lastState() { return this.live?.lastState; }
+  get closeReason() { return this.live?.closeReason; }
+  get priorClose() { return this.live?.priorClose; }
+  receivedOrder(value) { return this.live?.receivedOrder(value); }
+  async call(method, ...args) {
+    if (this.closed) throw uiError('error.client.serviceNotConnected');
+    if (this.live) return this.live.call(method, ...args);
+    if (readLock(path.join(this.directory, 'service.lock')) !== undefined) return (await this.liveClient()).call(method, ...args);
+    if (method === 'initial') return { ...(this.state = retiredState(this.directory)), owner: this.owner };
+    if (method === 'operatorAction' && args[0] === null && args[1] === 'enabled') {
+      if (readLock(path.join(this.scope, 'services.lock'))?.pid !== process.pid || backgroundOperation.current()) throw uiError('error.operator.desktopOnly');
+      return Workspace.setDormantOperatorEnabled(this.directory, args[2]);
+    }
+    if (method === 'claim' && args[2] === 'free') return false;
+    if (['leave', 'pause', 'observe', 'unobserve', 'shutdown'].includes(method) || method === 'spaceAction' && args[1] === 'pause') return true;
+    if (backgroundOperation.current() && !backgroundOperation.request()?.maintenanceApproved) throw uiError('error.client.connectionUpdatingNoInput');
+    return (await this.liveClient()).call(method, ...args);
+  }
+  close() {
+    this.closed = true;
+    if (this.live) this.live.close();
+    else this.socket.destroyed = true;
+  }
+}
+
 const { ServiceClient, connectService, eachBackend } = require('./service-connection.cjs');
+async function connectProfileBackend(dataDir, key, owner, options, layout = readLayout(dataDir)) {
+  if (!layout.entries.includes(key)) throw uiError('error.service.connectionOutsideWorkspace');
+  const directory = path.join(dataDir, key);
+  if (!layout.retired?.includes(key)) return connectService(directory, owner, options);
+  const snapshot = readLock(path.join(directory, 'service.lock')) === undefined ? retiredState(directory) : null;
+  return new RetiredClient(dataDir, key, owner, options, snapshot);
+}
 async function connect(dataDir, owner, options) {
   const layout = readLayout(dataDir);
   const opening = [];
   try {
     const entries = await eachBackend(layout.entries, async key => {
-      const opened = connectService(path.join(dataDir, key), owner, options); opening.push(opened);
+      const opened = connectProfileBackend(dataDir, key, owner, options, layout); opening.push(opened);
       const client = await opened, entry = { key, client, state: await client.call('initial') };
       serviceBinding.assertBinding(entry.state.serviceBinding);
       return entry;
@@ -113,6 +209,56 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
 function emptyService(state) {
   return state && !state.storageWarning && state.sessions.length === 0 && state.room.messages?.length === 0 && !state.room.run;
 }
+function canRetire(state, active) {
+  const policy = state?.operatorPolicy;
+  return Boolean(state?.capabilities?.includes('conditionalMaintenanceStopV1') && !state.storageWarning &&
+    !policy?.error && !policy?.domains?.length && !policy?.placements?.length && !policy?.successions?.length &&
+    !policy?.enabled && !active?.operatorPolicy?.enabled &&
+    [state.room, ...(state.rooms || [])].every(room => !room?.run) &&
+    state.sessions.every(session => !session.operatorEnabled && ['ended', 'recoverable'].includes(session.state) && sessionPlan(session, session.state).carry));
+}
+async function retireHistoryService(dataDir, key, expected) {
+  const file = path.join(dataDir, 'services.lock'), lock = createLock(file, 'startup', dataDir);
+  let active, service;
+  try {
+    const layout = readLayout(dataDir);
+    if (key === layout.active || !layout.entries.includes(key) || layout.retired?.includes(key) || layout.pending ||
+        readRecords(dataDir)[key] || !Number.isSafeInteger(expected?.pid)) return false;
+    const directory = path.join(dataDir, key);
+    active = await connectService(path.join(dataDir, layout.active), 'retire-active-check', { page: false });
+    const activeState = await active.call('initial');
+    service = await connectService(directory, 'retire-history', { page: false });
+    const current = await service.call('initial');
+    const stored = readLock(path.join(directory, 'service.lock')), identity = lockIdentity(current.servicePid);
+    if (!identity || !stored || stored.pid !== expected.pid || identity.pid !== expected.pid ||
+        stored.started !== expected.started || identity.started !== expected.started ||
+        !canRetire(current, activeState)) return false;
+    if (!Array.isArray(expected.sessions) || current.sessions.length !== expected.sessions.length ||
+        !current.sessions.every(row => expected.sessions.some(proof => proof.state === row.state && sameStop(proof, row)))) return false;
+    if (!hasDshRuntime(path.join(dataDir, layout.active)) && hasDshRuntime(directory)) return false;
+    // Validate the display path while the service still owns its store.
+    retiredState(directory);
+    const parents = execFileSync('/bin/ps', ['-axo', 'ppid='], { encoding: 'utf8', timeout: 1000 });
+    if (!parents.trim() || parents.trim().split(/\s+/).includes(String(identity.pid))) return false;
+    await service.call('maintenanceShutdown', current.sessions.map(maintenanceProof));
+    await waitForShutdown(service, directory, identity);
+    retiredStates.delete(directory);
+    layout.retired = [...(layout.retired || []), key];
+    try { writeLayout(dataDir, layout); }
+    catch (error) {
+      await ensureServiceAt(directory, process.execPath, process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace'));
+      throw error;
+    }
+    return true;
+  } finally {
+    service?.close();
+    active?.close();
+    releaseLock(file, lock);
+  }
+}
+function hasDshRuntime(directory) {
+  return fs.existsSync(require('./dsh-tui.cjs').paths(directory).root);
+}
 function emptyStore(directory) {
   try {
     const stored = JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8'));
@@ -133,13 +279,26 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     const layout = readLayout(dataDir), states = new Map();
     const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
     if (endedServiceKey !== null) {
+      const retired = layout.retired?.includes(endedServiceKey);
       if (!layout.entries.includes(endedServiceKey)) throw uiError("error.service.connectionOutsideWorkspace");
       // Explicit continuation owns exactly one store. Do not bootstrap, pause,
       // retire or replace any peer while its existing windows remain connected.
       await ensureServiceAt(path.join(dataDir, endedServiceKey), executablePath, defaultWorkspace, true);
+      if (retired) {
+        layout.retired = layout.retired.filter(key => key !== endedServiceKey);
+        writeLayout(dataDir, layout);
+      }
       return;
     }
-    for (const key of layout.entries) states.set(key, await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace));
+    for (const key of layout.entries) {
+      const directory = path.join(dataDir, key);
+      if (layout.retired?.includes(key) && readLock(path.join(directory, 'service.lock')) === undefined) continue;
+      states.set(key, await ensureServiceAt(directory, executablePath, defaultWorkspace));
+    }
+    if (layout.retired?.some(key => states.has(key))) {
+      layout.retired = layout.retired.filter(key => !states.has(key));
+      writeLayout(dataDir, layout);
+    }
     const dsh = require('./dsh-tui.cjs'), version = process.env.NAW_APP_VERSION, retryVersion = version || 'development';
     const targetWarnings = ensureService.targetWarnings ||= new Map(), warningLimit = 64;
     const trimWarnings = () => { while (targetWarnings.size > warningLimit) targetWarnings.delete(targetWarnings.keys().next().value); };
@@ -212,14 +371,18 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     if (layout.pending || (version && states.get(layout.active).runtimeVersion !== version)) {
       // Reuse a confirmed all-ended slot before adding another service. Its
       // own history stays in its store; no session is replayed or migrated.
-      let key = layout.pending || layout.entries.find(entry => states.get(entry).runtimeVersion === version && states.get(entry).sessions.every(s => s.state === 'ended')) || layout.entries.find(entry => states.get(entry).runtimeVersion === version);
+      let key = layout.pending || layout.entries.find(entry => states.get(entry)?.runtimeVersion === version && states.get(entry).sessions.every(s => s.state === 'ended')) || layout.entries.find(entry => states.get(entry)?.runtimeVersion === version);
       if (!key) {
         const hash = crypto.createHash('sha256').update(version).update(fs.readFileSync(path.join(__dirname, 'daemon.cjs'))).update(fs.readFileSync(path.join(__dirname, 'adapters.cjs'))).update(fs.readFileSync(path.join(__dirname, 'codex-terminal-bridge.cjs'))).update(fs.readFileSync(path.join(__dirname, 'workspace.cjs'))).digest('hex').slice(0, 20);
         key = `backends/${hash}`;
         fs.mkdirSync(path.join(dataDir, key), { recursive: true, mode: 0o700 });
         // Publish ownership before launching. A crash or failed activation can
         // leave a pending slot, but never an unrecorded detached service.
-        if (!layout.entries.includes(key)) { layout.pending = key; writeLayout(dataDir, layout); }
+        if (!layout.entries.includes(key)) {
+          layout.pending = key;
+          if (layout.retired) layout.retired = layout.retired.filter(retired => retired !== key);
+          writeLayout(dataDir, layout);
+        }
       }
       await inheritDsh(key);
       let next = states.get(key) || await ensureServiceAt(path.join(dataDir, key), executablePath, defaultWorkspace);
@@ -227,7 +390,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       // Global human choices and slot activation share services.lock. Only a slot new to the layout takes its setting
       // here, on if every other backend is on. A slot in use keeps its own: off may be only another slot's default, and
       // writing it would revoke this slot's creation grants without asking.
-      if (!states.has(key) && next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
+      if (!layout.entries.includes(key) && next.capabilities?.includes('operatorControl1a') && !next.operatorPolicy?.error) {
         const enabled = states.size > 0 && [...states.values()].every(state => state.capabilities?.includes('operatorControl1a') &&
           state.operatorPolicy?.enabled === true && !state.operatorPolicy.error);
         if (next.operatorPolicy?.enabled !== enabled) {
@@ -241,21 +404,22 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
           } finally { client.close(); }
         }
       }
-      for (const old of layout.entries) {
+      for (const old of states.keys()) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
         // Collaboration runs stop here. Messages on their way and what a running turn may send are the sessions' own.
         try { await client.call('pause'); } finally { client.close(); }
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
+      if (layout.retired) layout.retired = layout.retired.filter(retired => retired !== key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);
     } else if (!hasDsh(layout.active)) {
       await inheritDsh(layout.active);
     }
     const runtimeMissing = !hasDsh(layout.active);
-    // Retire only truly empty inactive services. Ended sessions, shared replies,
-    // orphan drafts and unreadable stores all retain their service and records.
+    // Bootstrap only removes empty slots; retiring a history store needs a separate confirmation.
     for (const key of [...layout.entries]) {
-      if (key === layout.active || !emptyService(states.get(key)) || !emptyStore(path.join(dataDir, key))) continue;
+      const directory = path.join(dataDir, key);
+      if (key === layout.active || !emptyService(states.get(key)) || !emptyStore(directory)) continue;
       // Preserve unattempted sources and the one remaining transient retry.
       const failure = failures.find(row => row.source === key && row.target === layout.active);
       if (runtimeMissing && hasDsh(key) && (!failure || retryable(failure))) continue;
@@ -265,7 +429,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
         if (!emptyService(current)) continue;
         const identity = lockIdentity(current.servicePid) || { pid: current.servicePid };
         await client.call('shutdown');
-        await waitForShutdown(client, path.join(dataDir, key), identity);
+        await waitForShutdown(client, directory, identity);
       } finally { client.close(); }
       layout.entries = layout.entries.filter(entry => entry !== key);
       failures = failures.filter(row => row.source !== key && row.target !== key); saveDsh(true);
@@ -303,4 +467,4 @@ async function continueService(dataDir, executablePath, id) {
     return { key };
   } finally { fresh.close(); }
 }
-module.exports = { ServiceClient, connect, connectService, ensureService, continuationStatus, continueService, ensureServiceAt };
+module.exports = { ServiceClient, connect, connectService, connectProfileBackend, ensureService, continuationStatus, continueService, ensureServiceAt, canRetire, retireHistoryService };
