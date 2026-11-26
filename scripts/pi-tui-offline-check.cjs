@@ -11,6 +11,11 @@
 // 2. Again: the same record opens the same pi session.
 // 3. Block: a CONNECT to another host through the same proxy reports that target and stops the session.
 // 4. Lost: the witness's log reader ending stops the session.
+// 5. Confirm: the stand-in asks for tool calls. A command, a write, an edit and a read outside the
+//    working folder each wait for the person in pi's terminal: declined, it does not run; allowed, it
+//    does. A read inside the working folder runs without asking.
+// 6. No gate: a gate that fails to load stops pi; one that loads but turns nothing on leaves the model
+//    without tools.
 // After each session no process of the runtime remains.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -54,6 +59,24 @@ function makeCertificate(dir) {
   return { key, cert };
 }
 
+// Tool calls the stand-in answers with, by the person's message.
+const TOOL_CALLS = {
+  'go-bash': () => ['bash', { command: 'echo ran > ran-by-bash.txt' }],
+  'go-write': () => ['write', { path: 'made-by-write.txt', content: 'written\n' }],
+  'go-edit': () => ['edit', { path: 'edit-me.txt', edits: [{ oldText: 'before', newText: 'after' }] }],
+  'go-read': () => ['read', { path: 'inside.txt' }],
+  'go-read-outside': options => ['read', { path: options.outsideFile }],
+};
+const TOOL_DONE = 'FAKE-TOOL-DONE';
+const INSIDE_MARKER = 'NAW-PI-INSIDE-MARKER';
+const OUTSIDE_MARKER = 'NAW-PI-OUTSIDE-MARKER';
+
+function messageText(message) {
+  if (typeof message?.content === 'string') return message.content;
+  if (Array.isArray(message?.content)) return message.content.map(part => part?.text || '').join('');
+  return '';
+}
+
 function chunk(delta, finish, usage) {
   const body = { id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'deepseek-flash', choices: [{ index: 0, delta, finish_reason: finish }] };
   if (usage) body.usage = usage;
@@ -62,8 +85,9 @@ function chunk(delta, finish, usage) {
 
 // A loopback stand-in for api.deepseek.com's OpenAI-compatible API. It keeps header names, the body's
 // field names, the model, whether the key arrived and whether a personal marker appears in the body.
-function startFakeDeepSeek(certificate) {
+function startFakeDeepSeek(certificate, script = {}) {
   const requests = [];
+  let callNumber = 0;
   const server = https.createServer({ key: fs.readFileSync(certificate.key), cert: fs.readFileSync(certificate.cert) }, (request, response) => {
     let body = '';
     request.on('data', part => {
@@ -85,10 +109,23 @@ function startFakeDeepSeek(certificate) {
         model: json?.model ?? null,
         fakeKeyArrived: request.headers.authorization === `Bearer ${FAKE_KEY}`,
         personal: PERSONAL_MARKERS.filter(marker => body.includes(marker)),
+        tools: Array.isArray(json?.tools) ? json.tools.map(tool => tool?.function?.name).sort() : [],
+        lastRole: Array.isArray(json?.messages) ? json.messages.at(-1)?.role ?? null : null,
+        body,
       });
       if (request.method === 'POST' && request.url === '/chat/completions') {
         response.writeHead(200, { 'content-type': 'text/event-stream' });
-        response.write(chunk({ role: 'assistant', content: REPLY }, null));
+        const last = Array.isArray(json?.messages) ? json.messages.at(-1) : null;
+        const wanted = last?.role === 'user' ? TOOL_CALLS[messageText(last).trim()] : null;
+        if (wanted) {
+          const [name, input] = wanted(script);
+          const call = { index: 0, id: `call_${++callNumber}`, type: 'function', function: { name, arguments: JSON.stringify(input) } };
+          response.write(chunk({ role: 'assistant', content: null, tool_calls: [call] }, null));
+          response.write(chunk({}, 'tool_calls', { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }));
+          response.end('data: [DONE]\n\n');
+          return;
+        }
+        response.write(chunk({ role: 'assistant', content: last?.role === 'tool' ? TOOL_DONE : REPLY }, null));
         response.write(chunk({}, 'stop', { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }));
         response.end('data: [DONE]\n\n');
         return;
@@ -144,14 +181,12 @@ class ProfileTerminal extends Terminal {
   }
 }
 
-function newSession(options, record) {
+function newSession(options, record, gateSource) {
   const events = { states: [], activities: [] };
   const host = { dataDir: options.dataDir, binaries: { pi: process.execPath } };
-  const session = new piTui.PiTui(record, host, {
-    Terminal: ProfileTerminal,
-    key: async () => FAKE_KEY,
-    testOnly: { route: () => ['127.0.0.1', options.fake.port], caFile: options.certificate.cert, execPath: process.execPath, model: MODEL },
-  });
+  const testOnly = { route: () => ['127.0.0.1', options.fake.port], caFile: options.certificate.cert, execPath: process.execPath, model: MODEL };
+  if (gateSource !== undefined) testOnly.gateSource = gateSource;
+  const session = new piTui.PiTui(record, host, { Terminal: ProfileTerminal, key: async () => FAKE_KEY, testOnly });
   session.on('state', state => events.states.push(state));
   session.on('activity', (...activity) => events.activities.push(activity));
   return { session, events };
@@ -289,12 +324,112 @@ async function checkLost(options, where) {
   await session.stop();
 }
 
+const DIALOG = /Allow (this command|writing this file|this edit|read outside the working folder)\?/;
+
+// One message that makes the stand-in ask for a tool call; resolves once a dialog shows or the tool's
+// result reached the stand-in (pi sends it on when the tool ran; a declined call ends the turn).
+async function askForTool(terminal, fake, message) {
+  const before = fake.requests.length;
+  terminal.input(message);
+  await wait(600);
+  terminal.input('\r');
+  const answered = () => fake.requests.slice(before).some(request => request.lastRole === 'tool');
+  await waitFor(() => fake.requests.length > before && (DIALOG.test(screenText(terminal)) || answered()), 30);
+  return { before, dialog: DIALOG.test(screenText(terminal)), answered };
+}
+
+// Enter on the first choice ("No"), or down then Enter for "Yes".
+async function choose(terminal, allow) {
+  if (allow) {
+    terminal.input('\x1b[B');
+    await wait(300);
+  }
+  terminal.input('\r');
+  await waitFor(() => !DIALOG.test(screenText(terminal)), 10);
+  await wait(1500);
+}
+
+async function checkConfirm(options, where) {
+  const fake = options.gateFake;
+  const work = options.gateWork;
+  const record = { id: 'offline-confirm', cwd: work };
+  const { session, events } = newSession({ ...options, fake }, record);
+  await session.start();
+  const terminal = session.openTerminal();
+  check('confirm: pi is ready', await waitFor(() => ready(terminal), 60));
+  await wait(1000);
+  const ranFile = path.join(work, 'ran-by-bash.txt');
+  const madeFile = path.join(work, 'made-by-write.txt');
+  const editFile = path.join(work, 'edit-me.txt');
+  const cases = [
+    ['a command', 'go-bash', () => fs.existsSync(ranFile)],
+    ['a write', 'go-write', () => fs.existsSync(madeFile)],
+    ['an edit', 'go-edit', () => fs.readFileSync(editFile, 'utf8').includes('after')],
+  ];
+  for (const [label, message, happened] of cases) {
+    const declined = await askForTool(terminal, fake, message);
+    check(`confirm: ${label} waits for the person`, declined.dialog && !happened(), declined.dialog ? 'dialog' : 'no dialog');
+    if (!declined.dialog) {
+      console.log(`--- screen ---\n${screenText(terminal)}\n--- end of screen ---`);
+      continue;
+    }
+    await choose(terminal, false);
+    check(`confirm: ${label} the person declines does not run`, !happened() && !declined.answered());
+    const allowed = await askForTool(terminal, fake, message);
+    check(`confirm: ${label} asks again the next time`, allowed.dialog && !happened());
+    if (!allowed.dialog) continue;
+    await choose(terminal, true);
+    await waitFor(() => happened() && allowed.answered(), 20);
+    check(`confirm: ${label} the person allows runs`, happened() && allowed.answered());
+  }
+  const declinedNote = fake.requests.some(request => request.body.includes('The person did not allow this bash call.'));
+  check('confirm: the model learns a call was not allowed', declinedNote);
+  const inside = await askForTool(terminal, fake, 'go-read');
+  await waitFor(() => inside.answered(), 20);
+  check('confirm: a read in the working folder runs without asking', !inside.dialog && inside.answered());
+  check('confirm: its content reached the model', fake.requests.slice(inside.before).some(request => request.body.includes(INSIDE_MARKER)));
+  const outside = await askForTool(terminal, fake, 'go-read-outside');
+  check('confirm: a read outside the working folder waits for the person', outside.dialog);
+  if (outside.dialog) await choose(terminal, false);
+  check('confirm: declined, the outside file never reaches the model', !fake.requests.some(request => request.body.includes(OUTSIDE_MARKER)));
+  const declared = [...new Set(fake.requests.flatMap(request => request.tools))].sort();
+  check('confirm: the model is offered pi\'s usual tools and ls', ['bash', 'edit', 'ls', 'read', 'write'].every(name => declared.includes(name)), declared.join(','));
+  check('confirm: no refusal was recorded', session.violations.length === 0, session.violations.map(item => item.target).join(',') || 'none');
+  await finish('confirm', session, events, terminal, where);
+}
+
+async function checkNoGate(options, where) {
+  const fake = options.gateFake;
+  const failing = newSession({ ...options, fake }, { id: 'offline-gate-fails', cwd: options.gateWork }, 'throw new Error("gate failed on purpose");\n');
+  await failing.session.start();
+  const failed = failing.session.openTerminal();
+  await waitFor(() => ready(failed) || !failed.alive, 60);
+  const refusal = /Failed to load extension .*gate failed on purpose/s.test(screenText(failed).replace(/\n/g, ''));
+  check('no gate: a gate that fails to load stops pi', !failed.alive && failing.events.states.includes('ended') && refusal, failing.events.states.join('>'));
+  await failing.session.stop();
+  await waitFor(() => runtimeProcesses(where).length === 0, 10);
+  const { session, events } = newSession({ ...options, fake }, { id: 'offline-no-gate', cwd: options.gateWork }, 'export default function () {}\n');
+  await session.start();
+  const terminal = session.openTerminal();
+  check('no gate: pi is ready', await waitFor(() => ready(terminal), 60));
+  await wait(1000);
+  const before = fake.requests.length;
+  terminal.input('say hi');
+  await wait(600);
+  terminal.input('\r');
+  await waitFor(() => fake.requests.length > before && screenText(terminal).includes(REPLY), 30);
+  const turns = fake.requests.slice(before);
+  check('no gate: the model is offered no tools', turns.length > 0 && turns.every(request => request.tools.length === 0), turns.map(request => request.tools.join(',')).join(' | '));
+  await finish('no gate', session, events, terminal, where);
+}
+
 async function main() {
   const { dataDir } = parseArguments(process.argv.slice(2));
   const where = await piTui.verifyRuntime(dataDir);
   console.log(`runtime verified: ${where.root}`);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-pi-tui-check-'));
   let fake = null;
+  let gateFake = null;
   try {
     const certificate = makeCertificate(dir);
     fake = await startFakeDeepSeek(certificate);
@@ -308,10 +443,20 @@ async function main() {
     await checkAgain(options, where, record, files);
     await checkBlock(options, where);
     await checkLost(options, where);
+    const gateWork = path.join(dir, 'gate-work');
+    fs.mkdirSync(gateWork);
+    fs.writeFileSync(path.join(gateWork, 'edit-me.txt'), 'before\n');
+    fs.writeFileSync(path.join(gateWork, 'inside.txt'), `${INSIDE_MARKER}\n`);
+    const outsideFile = path.join(dir, 'outside.txt');
+    fs.writeFileSync(outsideFile, `${OUTSIDE_MARKER}\n`);
+    gateFake = await startFakeDeepSeek(certificate, { outsideFile });
+    await checkConfirm({ ...options, gateFake, gateWork }, where);
+    await checkNoGate({ ...options, gateFake, gateWork }, where);
     const holding = filesHolding(piTui.paths(dataDir).base, FAKE_KEY);
     check('after: no file in pi\'s home or sessions holds the key', holding.length === 0, holding.join(',') || 'none');
   } finally {
     if (fake) await fake.close();
+    if (gateFake) await gateFake.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
   const failed = results.filter(item => !item.passed);

@@ -334,9 +334,9 @@ function ownFolder(where, dir, unsafe = homeUnsafe) {
 // name elsewhere (a hard link). The text goes into a new file of NAW's own,
 // which then takes the old one's place: whatever is put at `file` after the
 // check, a link included, is replaced and never written through.
-function writeOwnFile(file, text) {
+function writeOwnFile(file, text, unsafe = homeUnsafe) {
   const found = lstatOrNull(file);
-  if (found !== null && (!found.isFile() || found.nlink !== 1)) throw homeUnsafe();
+  if (found !== null && (!found.isFile() || found.nlink !== 1)) throw unsafe();
   const temporary = path.join(path.dirname(file), `.${path.basename(file)}.naw-${randomBytes(8).toString('hex')}`);
   // O_EXCL with O_CREAT: a new file, never one already there or a link.
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
@@ -731,6 +731,7 @@ module.exports = {
   launchSpec,
   readKey,
   ownFolder,
+  writeOwnFile,
   sbplString,
   sandboxViolation,
   DshTui,

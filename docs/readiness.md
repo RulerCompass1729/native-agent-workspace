@@ -1666,18 +1666,26 @@ What it can do:
   member opens the same pi session again.
 - pi starts with its default DeepSeek model (`deepseek-v4-pro`); `/model` in its
   terminal changes it.
-- Checked: `scripts/pi-tui-offline-check.cjs` (27 checks: a turn through the proxy to a
-  loopback stand-in, reopening, a refused host, a lost witness, no key in pi's files),
-  `scripts/pi-tui-sandbox-check.cjs` (50 checks of the sandbox, refusals against
-  controls without it), and two synthetic turns on `deepseek-flash` against the real
-  service: a reply, then pi's bash tool writing a file and running `ls` in the working
-  folder; the proxy saw only `api.deepseek.com:443` and nothing was refused.
+- Commands, file writes, edits, and reads or searches outside the working folder each
+  wait in pi's terminal for the person's Yes; reads inside the working folder do not
+  ([privacy](privacy.md#pi-members-2026-11-25), Approvals).
+- Checked: `scripts/pi-tui-offline-check.cjs` (54 checks: a turn through the proxy to a
+  loopback stand-in, reopening, a refused host, a lost witness, no key in pi's files;
+  a command, a write and an edit that wait, do not run when declined and run when
+  allowed, a read inside the working folder without asking and one outside that waits;
+  a gate that fails to load stops pi), `scripts/pi-tui-sandbox-check.cjs` (55 checks of
+  the sandbox, refusals against controls without it), and synthetic turns on
+  `deepseek-flash` against the real service: a reply, then pi's bash tool writing a
+  file and running `ls` in the working folder; the proxy saw only `api.deepseek.com:443`
+  and nothing was refused.
 
 Known limits:
 
 - It takes no messages from spaces, queues or other sessions, and sends none: NAW
   treats it as unreachable, as it does the DSH TUI. The person types in its terminal.
-- pi has no approvals: it runs the model's commands and edits without asking.
+- A search the model runs as a command (`grep`, `rg`, `find` in bash) asks like any
+  command; only pi's own `read`, `ls`, `grep` and `find` tools inside the working folder
+  do not. A dialog waiting in pi's terminal shows nowhere else in NAW.
 - Any connection other than DeepSeek, by pi or by a command it runs (a package
   install, a download), is refused and stops the session.
 - Commands it runs cannot open apps or URLs, send Apple Events, add launchd jobs, or
@@ -1687,8 +1695,11 @@ Known limits:
 - git commands that write (`add`, `commit`) fail when the repository's git folder is
   outside the working folder: in a git worktree, or below the repository's top folder.
   Opened at the repository's top, they work.
-- pi's `find` and `grep` tools need `fd` and `ripgrep`; when they are not installed pi
-  says so and, being offline, does not download them. Its other tools work.
+- pi's `find` and `grep` tools need `fd` and `ripgrep`; NAW turns them on only when
+  those programs are on its PATH. Being offline, pi does not download them.
+- Offline, pi uses the two DeepSeek models of its own 1.6.1 catalog (`deepseek-v4-pro`
+  and `deepseek-flash`) and never reports a newer pi. A DeepSeek model released later
+  appears once NAW pins a newer pi, or when added to `models.json` in pi's agent folder.
 - NAW shows no usage for it; pi's own footer does.
 
 Not verified: long conversations, context compaction, pi's `/login`, `/share` and

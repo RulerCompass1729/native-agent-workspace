@@ -212,6 +212,7 @@ async function build() {
       'operator-control.cjs',
       'peer-handoffs.cjs',
       'person-actions.cjs',
+      'pi-confirm.mjs',
       'pi-tui.cjs',
       'platform.cjs',
       'preflight.cjs',

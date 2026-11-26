@@ -76,10 +76,11 @@ test('the launch turns pi\'s own network and the person\'s files off and passes 
   const spec = piTui.launchSpec({ where, sessionId: 'abc-1', proxyPort: 40123, profile: '(version 1)\n', apiKey: 'sk-synthetic', execPath: '/synthetic/node', lang: 'zh_CN.UTF-8' });
   assert.deepEqual(spec.argv.slice(0, 6), ['/usr/bin/sandbox-exec', '-p', '(version 1)\n', '/synthetic/node', '--disable-sigusr1', where.cli]);
   for (const flag of ['--offline', '--no-context-files', '--no-skills', '--no-prompt-templates', '--no-extensions', '--no-mcp', '--no-approve']) assert.ok(spec.argv.includes(flag), flag);
-  assert.deepEqual(spec.argv.slice(-4), ['--session-dir', where.sessionDir, '--session-id', 'abc-1']);
+  assert.deepEqual(spec.argv.slice(-7), ['--no-builtin-tools', '--extension', where.gateFile, '--session-dir', where.sessionDir, '--session-id', 'abc-1']);
   assert.ok(!spec.argv.includes('--model'), 'pi chooses its own default model');
   assert.ok(!spec.argv.join(' ').includes('sk-synthetic'));
-  assert.deepEqual(Object.keys(spec.env).sort(), ['DEEPSEEK_API_KEY', 'HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'LANG', 'NODE_USE_ENV_PROXY', 'PATH', 'PI_CODING_AGENT_DIR', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TMPDIR']);
+  assert.deepEqual(Object.keys(spec.env).sort(), ['DEEPSEEK_API_KEY', 'HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'JITI_FS_CACHE', 'LANG', 'NODE_USE_ENV_PROXY', 'PATH', 'PI_CODING_AGENT_DIR', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TMPDIR']);
+  assert.equal(spec.env.JITI_FS_CACHE, 'false', 'no compiled gate is kept where the session can write');
   assert.equal(spec.env.HOME, where.home);
   assert.equal(spec.env.PI_CODING_AGENT_DIR, where.agentDir);
   assert.equal(spec.env.HTTPS_PROXY, 'http://127.0.0.1:40123');
@@ -129,8 +130,9 @@ test('commands pi runs cannot hand work to programs outside the sandbox or write
     '(allow file-write* (subpath "/synthetic/work") (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/dev"))',
     `(deny file-write* (subpath "/synthetic/person/Library") (subpath "/synthetic/person/.ssh") (subpath "/synthetic/person/.config") (subpath "/synthetic/data") ${piTui.STARTUP_FILES.map(name => `(literal "/synthetic/person/${name}")`).join(' ')})`,
     '(allow file-write* (subpath "/synthetic/data/backends/abc/pi-tui"))',
+    '(deny file-write* (subpath "/synthetic/data/backends/abc/pi-tui/gate"))',
     '(deny file-write* (subpath "/synthetic/data/pi-tui-runtime"))',
-  ], 'later rules win: pi\'s own folder is writable inside the NAW data folder, its runtime is not');
+  ], 'later rules win: pi\'s own folder is writable inside the NAW data folder, its tool gate and runtime are not');
 });
 
 test('the committed install lock names the pinned pi, all from the public registry', () => {
@@ -189,7 +191,10 @@ test('a start opens pi\'s session by NAW\'s id in an isolated terminal, with its
   assert.ok(terminal.argv[2].includes(`(with message "${guards.witness.nonce}")`));
   assert.match(guards.witness.nonce, /^naw-pi-[0-9a-f]{24}$/);
   assert.equal(record.nativeId, 'kept-id');
-  for (const dir of ['agentDir', 'tmp', 'sessionDir']) assert.ok(fs.lstatSync(piTui.paths(dataDir)[dir]).isDirectory(), dir);
+  for (const dir of ['agentDir', 'tmp', 'sessionDir', 'gateDir']) assert.ok(fs.lstatSync(piTui.paths(dataDir)[dir]).isDirectory(), dir);
+  const gateFile = piTui.paths(dataDir).gateFile;
+  assert.equal(fs.readFileSync(gateFile, 'utf8'), fs.readFileSync(path.join(__dirname, '..', 'pi-confirm.mjs'), 'utf8'));
+  assert.equal(terminal.argv[terminal.argv.indexOf('--extension') + 1], gateFile);
   const fresh = launched(t);
   await fresh.runtime.start();
   assert.match(fresh.record.nativeId, /^[0-9a-f-]{36}$/, 'a record without an id gets one');
@@ -304,4 +309,62 @@ test('a pi session is terminal-only on DeepSeek, refuses settings and bypass, an
   const restored = workspace.get(id);
   assert.equal(restored.nativeId, record.nativeId, 'the same pi session can open again');
   assert.equal(restored.state, 'recoverable');
+});
+
+test('the gate is written anew at each launch and refuses a link put in its place', async t => {
+  const { dataDir, where } = fakeRuntime(t);
+  piTui.prepareHome(where, 'first');
+  fs.writeFileSync(where.gateFile, 'changed');
+  piTui.prepareHome(where, 'second');
+  assert.equal(fs.readFileSync(where.gateFile, 'utf8'), 'second');
+  fs.rmSync(where.gateFile);
+  fs.symlinkSync(path.join(dataDir, 'elsewhere.mjs'), where.gateFile);
+  assert.throws(() => piTui.prepareHome(where, 'third'), error => error.code === 'pi-home-unsafe');
+  fs.rmSync(where.gateFile);
+  fs.rmSync(where.gateDir, { recursive: true });
+  fs.symlinkSync(dataDir, where.gateDir);
+  assert.throws(() => piTui.prepareHome(where, 'fourth'), error => error.code === 'pi-home-unsafe');
+});
+
+test('the gate asks before commands, writes, edits and reads outside the working folder, and not for reads inside it', async t => {
+  const gate = await import(path.join(__dirname, '..', 'pi-confirm.mjs'));
+  const base = fs.realpathSync(temporaryDirectory(t, 'naw-pi-gate-'));
+  const work = path.join(base, 'work');
+  fs.mkdirSync(path.join(work, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(work, 'sub', 'in.txt'), 'x');
+  fs.writeFileSync(path.join(base, 'out.txt'), 'x');
+  fs.symlinkSync(path.join(base, 'out.txt'), path.join(work, 'link-out.txt'));
+  assert.equal(gate.question('read', { path: 'sub/in.txt' }, work), null);
+  assert.equal(gate.question('read', { path: '@sub/in.txt' }, work), null, 'pi strips a leading @');
+  assert.equal(gate.question('read', { path: path.join(work, 'sub', 'in.txt') }, work), null);
+  assert.equal(gate.question('ls', {}, work), null, 'ls without a path lists the working folder');
+  assert.equal(gate.question('grep', { pattern: 'x', path: 'sub' }, work), null);
+  for (const outside of ['../out.txt', path.join(base, 'out.txt'), 'link-out.txt', 'missing.txt', '/']) {
+    const asked = gate.question('read', { path: outside }, work);
+    assert.equal(asked?.title, 'Allow read outside the working folder?', outside);
+  }
+  assert.equal(gate.question('find', { pattern: '*', path: '..' }, work)?.title, 'Allow find outside the working folder?');
+  assert.deepEqual(gate.question('bash', { command: 'ls' }, work), { title: 'Allow this command?', detail: 'ls' });
+  assert.deepEqual(gate.question('write', { path: 'a.txt', content: 'one\ntwo\n' }, work), { title: 'Allow writing this file?', detail: 'a.txt (2 lines)' });
+  assert.deepEqual(gate.question('edit', { path: 'a.txt', edits: [{}] }, work), { title: 'Allow this edit?', detail: 'a.txt (1 change)' });
+  assert.equal(gate.question('codemode', { script: 'x' }, work)?.title, 'Allow codemode?', 'a tool the gate does not know asks');
+  assert.equal(gate.visible('ok\u001b[2K‮\nnext\tend'), 'ok\\u001b[2K\\u202e\nnext\tend', 'escapes and direction marks are shown, not obeyed');
+});
+
+test('the gate turns on pi\'s usual tools and ls, and blocks what the person declines or cannot be asked', async () => {
+  const gate = await import(path.join(__dirname, '..', 'pi-confirm.mjs'));
+  const handlers = {};
+  let active = null;
+  gate.default({ on: (name, handler) => { handlers[name] = handler; }, setActiveTools: names => { active = names; } });
+  handlers.session_start();
+  for (const name of ['read', 'bash', 'edit', 'write', 'ls']) assert.ok(active.includes(name), name);
+  const asked = [];
+  const ctx = answer => ({ cwd: '/', hasUI: true, signal: undefined, ui: { select: async (text, choices) => { asked.push({ text, choices }); return answer; } } });
+  const call = { toolName: 'bash', input: { command: 'touch x' } };
+  assert.equal(await handlers.tool_call(call, ctx('Yes')), undefined);
+  assert.deepEqual(asked[0], { text: 'Allow this command?\ntouch x', choices: ['No', 'Yes'] });
+  for (const answer of ['No', undefined]) {
+    assert.deepEqual(await handlers.tool_call(call, ctx(answer)), { block: true, terminate: true, reason: 'The person did not allow this bash call.' });
+  }
+  assert.equal((await handlers.tool_call(call, { cwd: '/', hasUI: false }))?.block, true, 'no dialog, no run');
 });

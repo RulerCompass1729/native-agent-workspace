@@ -55,6 +55,8 @@ const READ = `try { require('fs').readFileSync(process.argv[1]); console.log('re
 const CONNECT = `const s = require('net').connect(Number(process.argv[1]), '127.0.0.1', () => { console.log('connected'); s.destroy(); }); s.on('error', e => console.log(e.code));`;
 const LISTEN = `const s = require('net').createServer().listen(0, '127.0.0.1', () => { console.log('listening'); s.close(); }); s.on('error', e => console.log(e.code));`;
 const LINK = `try { require('fs').linkSync(process.argv[1], process.argv[2]); console.log('linked'); } catch (e) { console.log(e.code); }`;
+const UNLINK = `try { require('fs').unlinkSync(process.argv[1]); console.log('removed'); } catch (e) { console.log(e.code); }`;
+const RENAME = `try { require('fs').renameSync(process.argv[1], process.argv[2]); console.log('renamed'); } catch (e) { console.log(e.code); }`;
 // bootstrap_look_up is how a process reaches a macOS service by name.
 const LOOKUP_SERVICE = [
   'import ctypes, sys',
@@ -104,7 +106,7 @@ async function main() {
   try {
     const dataDir = path.join(dir, 'data', 'backends', 'abc');
     const where = piTui.paths(dataDir);
-    for (const folder of [where.home, where.sessionDir, where.root, path.join(path.dirname(dataDir), 'other')]) fs.mkdirSync(folder, { recursive: true });
+    for (const folder of [where.home, where.sessionDir, where.gateDir, where.root, path.join(path.dirname(dataDir), 'other')]) fs.mkdirSync(folder, { recursive: true });
     const proxy = await listen();
     const other = await listen();
     servers.push(proxy, other);
@@ -122,12 +124,25 @@ async function main() {
       ['in the NAW data folder', path.join(path.dirname(path.dirname(dataDir)), `runtime-locations-${tag}.json`)],
       ['in another backend', path.join(path.dirname(dataDir), 'other', `probe-${tag}`)],
       ['in the pi runtime', path.join(where.root, `probe-${tag}`)],
+      ['in the tool gate\'s folder', path.join(where.gateDir, `probe-${tag}`)],
     ]) {
       const control = nodeProbe(null, WRITE, file).out.trim();
       removeIfThere(file);
       check(`control: write ${label} works without the sandbox`, control === 'written', control);
       probeWrite(profile, label, file, false);
     }
+
+    // The tool gate pi loads at its next start: neither replaced, removed nor moved aside from the sandbox.
+    fs.writeFileSync(where.gateFile, 'gate');
+    const gateWrite = nodeProbe(profile, WRITE, where.gateFile).out.trim();
+    const gateRemove = nodeProbe(profile, UNLINK, where.gateFile).out.trim();
+    const moved = path.join(where.base, `gate-${tag}`);
+    const gateMove = nodeProbe(profile, RENAME, where.gateDir, moved).out.trim();
+    const kept = fs.existsSync(where.gateFile) && fs.readFileSync(where.gateFile, 'utf8') === 'gate' && !fs.existsSync(moved);
+    check('replace the tool gate: refused', gateWrite === 'EPERM' && kept, gateWrite);
+    check('remove the tool gate: refused', gateRemove === 'EPERM' && kept, gateRemove);
+    check('move the tool gate\'s folder aside: refused', gateMove === 'EPERM' && kept, gateMove);
+    if (fs.existsSync(moved)) fs.renameSync(moved, where.gateDir);
 
     // The person's launch agents, caches and shell startup files: the control only tests access, the probe
     // file name is unique and removed if it appears.

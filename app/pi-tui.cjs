@@ -10,6 +10,9 @@
 // - Network: only the loopback egress proxy, which passes api.deepseek.com (dsh-egress.cjs). Any other
 //   attempt, by any process of the session, is refused, recorded and stops the session (dsh-witness.cjs).
 // - The DeepSeek key: the DSH TUI's Keychain item, into the child's environment only.
+// - Tool calls: NAW's gate (pi-confirm.mjs) asks the person in pi's terminal before commands, writes,
+//   edits and reads outside the working folder. pi starts without its built-in tools; the gate turns
+//   them on.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -24,6 +27,7 @@ const PI_VERSION = '1.6.1';
 const PI_INTEGRITY = 'sha512-+VSb95N4PB+G7TLceg7wkbJT31BEeIBnUT9500g9a1rOsCx78CUw1YFGtLcRhS6jj8pdfm0fFwrakrMLu6lVAQ==';
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 const MAX_VIOLATIONS = 200;
+const GATE_SOURCE = path.join(__dirname, 'pi-confirm.mjs');
 // pi's own rule for session ids.
 const SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$/;
 
@@ -47,6 +51,8 @@ function paths(dataDir) {
     home,
     agentDir: path.join(home, '.pi', 'agent'),
     sessionDir: path.join(base, 'sessions'),
+    gateDir: path.join(base, 'gate'),
+    gateFile: path.join(base, 'gate', 'confirm.mjs'),
     tmp: path.join(home, 'tmp'),
     pkg,
     ai: path.join(root, 'node_modules', AI_PACKAGE),
@@ -124,9 +130,11 @@ function homeUnsafe() {
 
 // The session's folders, each a real folder NAW made (dsh-tui.cjs ownFolder). NAW writes no pi
 // settings: what the person changes in pi's /settings stays, and the environment below overrides
-// what matters for privacy (PI_OFFLINE, PI_TELEMETRY, the proxy).
-function prepareHome(where) {
-  for (const dir of [where.agentDir, where.tmp, where.sessionDir]) dshTui.ownFolder(where, dir, homeUnsafe);
+// what matters for privacy (PI_OFFLINE, PI_TELEMETRY, the proxy). The gate is written anew at every
+// launch, where the sandbox lets nothing write.
+function prepareHome(where, gateSource = fs.readFileSync(GATE_SOURCE, 'utf8')) {
+  for (const dir of [where.agentDir, where.tmp, where.sessionDir, where.gateDir]) dshTui.ownFolder(where, dir, homeUnsafe);
+  dshTui.writeOwnFile(where.gateFile, gateSource, homeUnsafe);
 }
 
 // The real path, which sandbox rules match. A missing folder resolves through its nearest existing parent.
@@ -150,12 +158,12 @@ const STARTUP_FILES = Object.freeze(['.zshrc', '.zshenv', '.zprofile', '.zlogin'
 // macOS sandbox rules for the pi process tree. The last matching rule wins.
 // - Network as for the DSH TUI (dsh-tui.cjs sandboxProfile): outbound only IPv4 TCP to the egress
 //   proxy's loopback port, nothing listens, and each refusal reaches the unified log with the nonce.
-// - pi runs the model's commands without asking, so no command may reach the network through another
+// - A command the person allows runs here too, so no command may reach the network through another
 //   process either: Apple Events, LaunchServices, background URL sessions and launchd jobs are refused,
 //   and so are the programs that use them.
 // - Writes only in the working folder, pi's own folder, the temporary folders and /dev: nothing outside
 //   that a program outside the sandbox runs later (launch agents, shell startup files, NAW's data
-//   folder, this runtime).
+//   folder, this runtime), nor the gate pi loads at its next start.
 // - The person's agent homes and rule files stay unreadable even though HOME points elsewhere.
 // Refusals other than the network ones are quiet: the command fails and the session goes on.
 function sandboxProfile({ proxyPort, nonce, where, cwd, personHome = os.homedir() }) {
@@ -185,6 +193,7 @@ function sandboxProfile({ proxyPort, nonce, where, cwd, personHome = os.homedir(
     `(allow file-write* ${subpaths([realOrGiven(cwd), '/private/tmp', '/private/var/folders', '/dev'])})`,
     `(deny file-write* ${subpaths(kept)} ${literals(STARTUP_FILES.map(name => path.join(home, name)))})`,
     `(allow file-write* ${subpaths([realOrGiven(where.base)])})`,
+    `(deny file-write* ${subpaths([realOrGiven(where.gateDir)])})`,
     `(deny file-write* ${subpaths([realOrGiven(where.runtimeBase)])})`,
     `(deny file-read* file-write* ${subpaths(agentFolders)} ${literals(agentFiles)})`,
   ].join('\n');
@@ -205,7 +214,7 @@ function launchSpec({ where, sessionId, proxyPort, profile, apiKey, execPath, la
   if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) throw Error('pi: invalid session id');
   if (model !== null && !/^deepseek\/[a-z0-9.-]{1,64}$/.test(model)) throw Error('pi: invalid model');
   const argv = [SANDBOX_EXEC, '-p', profile, execPath, '--disable-sigusr1', where.cli, ...PRIVATE_FLAGS,
-    '--session-dir', where.sessionDir, '--session-id', sessionId];
+    '--no-builtin-tools', '--extension', where.gateFile, '--session-dir', where.sessionDir, '--session-id', sessionId];
   if (model !== null) argv.push('--model', model);
   const proxy = `http://127.0.0.1:${proxyPort}`;
   const env = {
@@ -219,6 +228,8 @@ function launchSpec({ where, sessionId, proxyPort, profile, apiKey, execPath, la
     PI_OFFLINE: '1',
     PI_SKIP_VERSION_CHECK: '1',
     PI_TELEMETRY: '0',
+    // jiti would otherwise keep the compiled gate in TMPDIR, which the session can write.
+    JITI_FS_CACHE: 'false',
     NODE_USE_ENV_PROXY: '1',
     HTTPS_PROXY: proxy,
     HTTP_PROXY: proxy,
@@ -236,8 +247,8 @@ function readKey() {
 // channel, as for the DSH TUI. Any refused connection, at the proxy or in the sandbox, is recorded and
 // stops the session.
 class PiTui extends EventEmitter {
-  // `testOnly` ({ route, caFile, execPath, model }) points a test at a fake DeepSeek or the cheapest
-  // model; NativeHost never passes it.
+  // `testOnly` ({ route, caFile, execPath, model, gateSource }) points a test at a fake DeepSeek or the
+  // cheapest model, or replaces the gate; NativeHost never passes it.
   constructor(record, host, { Terminal, key = readKey, egress = require('./dsh-egress.cjs'), witness = require('./dsh-witness.cjs'), testOnly = {} } = {}) {
     super();
     this.record = record;
@@ -268,7 +279,7 @@ class PiTui extends EventEmitter {
     await this.launch(where, execPath);
   }
   async launch(where, execPath) {
-    prepareHome(where);
+    prepareHome(where, this.testOnly.gateSource);
     // A record from before NAW chose pi's id gets one now; the same id opens the same session again.
     if (typeof this.record.nativeId !== 'string' || !SESSION_ID.test(this.record.nativeId)) this.record.nativeId = randomUUID();
     const apiKey = await this.key();

@@ -480,7 +480,8 @@ for DeepSeek and with two synthetic turns against the real service.
 
 **Who receives its content.** DeepSeek (`api.deepseek.com`, pi's built-in DeepSeek
 provider) receives the member's prompts, the files it reads, its command and tool
-output. Each request also carries pi's
+output. Files in the working folder are read without asking; others only once the
+person allows it (see Approvals). Each request also carries pi's
 system prompt, which names the working folder and the path of pi's own documentation
 inside NAW's data folder (both usually contain the account name), and the OpenAI SDK's
 request headers (operating system, architecture and Node.js version). NAW records the
@@ -488,7 +489,7 @@ session with vendor `deepseek` and shell `pi`.
 
 **What does not leave.** pi starts with `--offline` (no install report, version check,
 model catalog or tool download), `PI_TELEMETRY=0`, and without context files, skills,
-prompt templates, extensions or MCP: otherwise pi would put every `AGENTS.md` and
+prompt templates, MCP or any extension but NAW's tool gate: otherwise pi would put every `AGENTS.md` and
 `CLAUDE.md` from the working folder up to `/`, and the person's skills, into each
 request. Its HOME, settings and sessions are NAW's own folders under the backend's data
 folder, and the macOS sandbox keeps the person's `~/.pi`, `~/.claude`, `~/.codex`,
@@ -499,8 +500,8 @@ NAW's loopback egress proxy, which passes only `api.deepseek.com:443`. Any other
 connection by any process of the session (a command that downloads, for instance) is
 refused, recorded, and stops the session. Name lookups are refused as well.
 
-Because pi runs commands without asking, the profile also has rules against the ways a
-command could reach the network through a program outside the sandbox: Apple Events,
+A command the person allows still runs in the sandbox, so the profile also has rules
+against the ways a command could reach the network through a program outside the sandbox: Apple Events,
 LaunchServices (through which `open` hands a URL to the browser), background URL
 sessions, new launchd jobs, and running `open`, `osascript`, `automator`, `shortcuts` and
 `launchctl`. Writes are allowed only in the working folder, pi's own folder, the
@@ -536,8 +537,20 @@ committed lockfile from `registry.npmjs.org` with npm, using no npm configuratio
 person's and running no package scripts. npm sends its usual request headers, whose
 user agent names the npm and Node.js versions, the operating system and architecture.
 
-**Approvals.** pi has no per-tool approvals: it runs the model's commands and edits in
-the working folder without asking. NAW therefore offers no permission choice for it.
+**Approvals.** pi itself has no per-tool approvals, so NAW loads its own gate
+(`app/pi-confirm.mjs`) into pi. Each command, file write, edit, read or search outside
+the working folder, and call of any other tool, waits in pi's terminal for the person
+to choose Yes; "No" is the first choice, so a stray Enter declines. A declined call does
+not run, and pi tells the model the person did not allow it and ends the turn. Reading,
+listing and searching inside the working folder (by the real path, so a link out of it
+asks) run without asking. Control and text-direction characters in the dialog are shown
+as escapes, so it shows what runs.
+
+pi starts without its built-in tools and the gate turns them on: a gate that fails to
+load stops pi, and one that loads without turning them on leaves the model none. NAW
+writes the gate anew at each start into a folder the sandbox lets nothing write, replace,
+remove or move, and turns off jiti's compiled-file cache, which would otherwise sit in a
+folder the session can write. NAW offers no permission choice for pi; Yes allows one call.
 
 **Not audited.** DeepSeek's handling and retention follow DeepSeek's own terms; this
 section discloses a recipient and is not a claim that the content stays private.
