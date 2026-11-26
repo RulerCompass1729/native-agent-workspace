@@ -512,7 +512,8 @@ class Workspace extends EventEmitter {
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     // A DSH TUI session is terminal-only for now (its conversation view comes later). It keeps
     // DSH's own approvals and default route, so bypass and per-session settings are refused.
-    if (provider === 'dsh') {
+    // pi likewise: it has no approvals to bypass, and its settings are its own (/model, /settings).
+    if (provider === 'dsh' || provider === 'pi') {
       if (skipPermissions != null || settings != null) throw uiError("error.workspace.invalidSettings");
       view = 'terminal';
     }
@@ -528,8 +529,8 @@ class Workspace extends EventEmitter {
     if (worktreePlan != null && (fork || newDirectory)) throw uiError("error.workspace.gitModeConflict");
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
-    if (!['claude', 'codex', 'dsh', 'agy'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
-    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH', agy: 'Antigravity' }[provider];
+    if (!['claude', 'codex', 'dsh', 'agy', 'pi'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw uiError("error.workspace.selectAgentDirectory");
+    const providerLabel = { claude: 'Claude', codex: 'Codex', dsh: 'DSH', agy: 'Antigravity', pi: 'pi' }[provider];
     const sessionName = name ? cleanText(name, 60) : `${providerLabel} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`;
     if (worktreePlan != null) {
       if (this.closed || this.storageWarning) throw uiError("error.workspace.gitBackendUnavailable");
@@ -557,7 +558,7 @@ class Workspace extends EventEmitter {
     }
     const id = randomUUID();
     const now = Date.now();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}), ...(typeof profileProvider === 'string' ? { modelProvider: profileProvider } : {}), ...(provider === 'dsh' ? { modelProvider: 'deepseek' } : {}) };
+    const record = { id, nativeId: provider === 'claude' || provider === 'pi' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}), ...(typeof profileProvider === 'string' ? { modelProvider: profileProvider } : {}), ...(provider === 'dsh' || provider === 'pi' ? { modelProvider: 'deepseek' } : {}) };
     if (fork) record.forkPicker = true;
     if (worktreePlan) {
       record.worktreePreparation = { ...worktreePlan, status: 'preparing' };
@@ -982,7 +983,7 @@ class Workspace extends EventEmitter {
     // A tool call's activity and its state 'working', and usage, touch no messages: they name their own session.
     on('activity', (text, uiMessage) => { setActivity(s, text, uiMessage); this.changed(s.id); });
     on('dshWitnessGap', gap => {
-      if (s.provider !== 'dsh' || !gap || !['at', 'from', 'to', 'missing', 'elapsedMs'].every(key =>
+      if (!['dsh', 'pi'].includes(s.provider) || !gap || !['at', 'from', 'to', 'missing', 'elapsedMs'].every(key =>
         Number.isSafeInteger(gap[key]) && gap[key] >= 0) || gap.missing < 1 || gap.to < gap.from) return;
       (s.dshWitnessGaps ||= []).push({ at: gap.at, from: gap.from, to: gap.to, missing: gap.missing, elapsedMs: gap.elapsedMs });
       if (s.dshWitnessGaps.length > 200) s.dshWitnessGaps.shift();

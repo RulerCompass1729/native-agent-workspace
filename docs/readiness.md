@@ -1650,6 +1650,42 @@ records no acceptance run with the real one. Sign-in, permission prompts, subage
 long conversations, context compaction and physical input in this terminal have no
 record either.
 
+## pi terminal members (2026-11-25)
+
+pi 1.6.1 on DeepSeek runs as a terminal-only member. This section states what NAW's
+source does and what was run; [privacy](privacy.md#pi-members-2026-11-25) states who
+receives its content and what stays on this machine.
+
+What it can do:
+
+- Offered in the create window only once `node scripts/install-pi-tui.cjs --data-dir
+  <NAW data folder>` has installed the pinned runtime there (once per data folder;
+  every backend uses it). It opens in the terminal; there is no conversation view,
+  history picker, branch, model or permission choice.
+- NAW chooses pi's session id when it creates the member, so after a restart the same
+  member opens the same pi session again.
+- pi starts with its default DeepSeek model (`deepseek-v4-pro`); `/model` in its
+  terminal changes it.
+- Checked: `scripts/pi-tui-offline-check.cjs` (26 checks: a turn through the proxy to a
+  loopback stand-in, reopening, a refused host, a lost witness), and two synthetic
+  turns on `deepseek-flash` against the real service: a reply, and `ls` run by pi's bash
+  tool in the sandbox; the proxy saw only `api.deepseek.com:443` and nothing was refused.
+
+Known limits:
+
+- It takes no messages from spaces, queues or other sessions, and sends none: NAW
+  treats it as unreachable, as it does the DSH TUI. The person types in its terminal.
+- pi has no approvals: it runs the model's commands and edits without asking.
+- Any connection other than DeepSeek, by pi or by a command it runs (a package
+  install, a download), is refused and stops the session.
+- pi's `find` and `grep` tools need `fd` and `ripgrep`; when they are not installed pi
+  says so and, being offline, does not download them. Its other tools work.
+- NAW shows no usage for it; pi's own footer does.
+
+Not verified: long conversations, context compaction, pi's `/login`, `/share` and
+package commands (they need the network, which the sandbox refuses), and physical input
+in the installed app.
+
 ## Current priority: a dependable single conversation
 
 Use the installed product for real Claude/Codex development. Preserve the native

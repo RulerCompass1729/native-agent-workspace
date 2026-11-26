@@ -315,7 +315,7 @@ function lstatOrNull(file) {
 // (0700). A symlink or a file anywhere on the way refuses the launch: the
 // TUI and its tools can write in this home, and nothing NAW writes or
 // replaces here may land outside it.
-function ownFolder(where, dir) {
+function ownFolder(where, dir, unsafe = homeUnsafe) {
   const parts = path.relative(where.base, dir).split(path.sep).filter(part => part !== '');
   let current = where.base;
   for (const part of ['', ...parts]) {
@@ -325,7 +325,7 @@ function ownFolder(where, dir) {
       fs.mkdirSync(current, { mode: 0o700 });
       continue;
     }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw homeUnsafe();
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw unsafe();
   }
 }
 
@@ -534,13 +534,13 @@ function launchSpec({ where, proxyPort, profile, apiKey, execPath, lang = proces
 // for the launch; a missing item refuses the session rather than letting the
 // TUI's own setup save a key to disk. `program` is replaced only in tests,
 // which never read the real Keychain.
-function readKey({ program = SECURITY } = {}) {
+function readKey({ program = SECURITY, missing = 'error.dsh.keyMissing', code = 'dsh-key-missing' } = {}) {
   return new Promise((resolve, reject) => {
     const args = ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'];
     execFile(program, args, { timeout: 10000, maxBuffer: 64 * 1024 }, (error, stdout) => {
       const key = String(stdout || '').replace(/\r?\n$/, '');
       if (error || key === '') {
-        reject(Object.assign(uiError('error.dsh.keyMissing'), { code: 'dsh-key-missing' }));
+        reject(Object.assign(uiError(missing), { code }));
         return;
       }
       resolve(key);
@@ -730,5 +730,8 @@ module.exports = {
   runCanary,
   launchSpec,
   readKey,
+  ownFolder,
+  sbplString,
+  sandboxViolation,
   DshTui,
 };

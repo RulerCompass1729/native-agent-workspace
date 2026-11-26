@@ -469,3 +469,42 @@ option; and, with the hook's answer, its interactive screen, MCP tools it loads 
 and other versions. Antigravity's handling and retention follow
 its own terms; this section discloses a recipient and is not a claim that the content
 stays private.
+
+## pi members (2026-11-25)
+
+A pi member is pi (`@earendil-works/pi-coding-agent` 1.6.1, MIT) on DeepSeek, running
+in NAW's terminal. NAW offers it only once `scripts/install-pi-tui.cjs` has installed
+that exact version from the committed lockfile into the NAW data folder; NAW never
+updates it. This section was read from pi's source and checked with a loopback stand-in
+for DeepSeek and with two synthetic turns against the real service.
+
+**Who receives its content.** DeepSeek (`api.deepseek.com`, pi's built-in DeepSeek
+provider) receives the member's prompts, the files it reads, its command and tool
+output, and whatever a space or queue routes to it. Each request also carries pi's
+system prompt, which names the working folder and the path of pi's own documentation
+inside NAW's data folder (both usually contain the account name), and the OpenAI SDK's
+request headers (operating system, architecture and Node.js version). NAW records the
+session with vendor `deepseek` and shell `pi`.
+
+**What does not leave.** pi starts with `--offline` (no install report, version check,
+model catalog or tool download), `PI_TELEMETRY=0`, and without context files, skills,
+prompt templates, extensions or MCP: otherwise pi would put every `AGENTS.md` and
+`CLAUDE.md` from the working folder up to `/`, and the person's skills, into each
+request. Its HOME, settings and sessions are NAW's own folders under the backend's data
+folder, and the macOS sandbox keeps the person's `~/.pi`, `~/.claude`, `~/.codex`,
+`~/.agents`, `~/.dsh`, `~/.dsh-tui`, `~/CLAUDE.md` and `~/AGENTS.md` unreadable.
+
+**Network.** As for the DSH TUI: the sandbox lets the pi process tree connect only to
+NAW's loopback egress proxy, which passes only `api.deepseek.com:443`. Any other
+attempt by any process of the session (a command that downloads, for instance) is
+refused, recorded, and stops the session.
+
+**The key.** pi uses the DSH TUI's Keychain item (`NAW DSH TUI DeepSeek API key`,
+account `deepseek`). NAW reads it at each start and hands it only to the session's
+environment; it is not on a command line and not written to pi's folders.
+
+**Approvals.** pi has no per-tool approvals: it runs the model's commands and edits in
+the working folder without asking. NAW therefore offers no permission choice for it.
+
+**Not audited.** DeepSeek's handling and retention follow DeepSeek's own terms; this
+section discloses a recipient and is not a claim that the content stays private.
