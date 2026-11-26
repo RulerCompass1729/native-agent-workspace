@@ -252,3 +252,19 @@ test('a decision moved to a successor keeps its question, answers the successor,
   const late = f.room.queueFind('shared', third);
   assert.deepEqual([late.status, late.sentTo, late.sentNative], ['done', 'a', 'native-a']);
 });
+
+// The phone 「等你」 list needs the desktop's order and its ended-session rule; the phone cannot see archived sessions itself.
+test('a waiting queue item carries its time and whether the session it went to has ended', async t => {
+  const f = fixture(t), itemId = f.room.queueAdd('Synthetic waiting task', 'a');
+  f.room.queueMarkSent('shared', itemId, 'a', 'Synthetic A', 50, false, 'native-a');
+  f.room.queueSettle('shared', itemId, 'waiting', '', 'Synthetic A', '', 'Which synthetic option?');
+  const item = async () => (await f.adapter.read(f.client, f.grant, f.scopes)).rooms[0].queue.find(i => i.id === itemId);
+  const open = await item();
+  assert.equal(open.ownerEnded, false); assert.ok(open.time >= 50);
+  f.source.sessions[0].state = 'ended';
+  assert.equal((await item()).ownerEnded, true);
+  f.source.sessions[0].state = 'idle'; f.source.sessions[0].archived = true;
+  assert.equal((await item()).ownerEnded, true);
+  const queued = f.room.queueAdd('Synthetic queued task', 'a'), other = (await f.adapter.read(f.client, f.grant, f.scopes)).rooms[0].queue.find(i => i.id === queued);
+  assert.deepEqual([other.ownerEnded, other.time], [undefined, undefined]);
+});

@@ -78,6 +78,37 @@
     function forget(row) { if (!terminal(row.status)) throw Error('MOBILE_ACTION_UNCONFIRMED'); state.pending = state.pending.filter(p => p !== row); save(); changed(); }
     return { state, act, receipt, forget, answerDraft, clearAnswerDraft };
   }
+  // The desktop 「等你」 strip (task-stream.js waitingItems/taskStatus) over what the phone already holds.
+  // Not here: the butler's own 「需要你决定」 reply, since the summary carries no message bodies.
+  const UNHELD_WAITING = ['person-intervened', 'no-reply', 'input-purpose-unconfirmed'];
+  const WAITING_RANK = { decide: 0, 'background-confirmation': 2, approval: 4, question: 5, look: 6 };
+  function waitingList(view) {
+    const list = [], sessions = view?.sessions || [], spacesOf = s => (view.rooms || []).filter(r => s.roomIds?.includes(r.id)).map(r => r.name);
+    for (const room of view?.rooms || []) {
+      for (const item of room.queue || []) {
+        if (item.status !== 'waiting') continue;
+        const kind = UNHELD_WAITING.includes(item.reason) ? 'look' : 'decide', owner = item.sentTo || item.assignee;
+        if (kind === 'decide' && item.ownerEnded === true) continue;
+        list.push({ kind, title: item.question || item.text, actor: (room.members || []).find(m => m.id === owner)?.name || sessions.find(s => s.id === owner)?.name || '',
+          spaces: [room.name], roomId: room.id, itemId: item.id, time: item.time || 0 });
+      }
+    }
+    const grouped = new Set();
+    for (const card of view?.confirmations || []) {
+      if (card.actionable !== true || grouped.has(card.id)) continue;
+      // One row per batch, as the phone draws a batch as one card.
+      const members = card.batch ? view.confirmations.filter(c => c.batch === card.batch) : [card];
+      for (const m of members) grouped.add(m.id);
+      const owner = sessions.find(s => s.id === card.sessionId);
+      list.push({ kind: 'background-confirmation', card, cards: members.length > 1 ? members : null, actor: card.actorName || owner?.name || '',
+        spaces: owner ? spacesOf(owner) : [], time: card.time || 0 });
+    }
+    for (const s of sessions) {
+      const kind = s.state === 'approval' ? 'approval' : s.question ? 'question' : null;
+      if (kind) list.push({ kind, title: s.name, actor: '', spaces: spacesOf(s), sessionId: s.id, time: 0 });
+    }
+    return list.sort((a, b) => WAITING_RANK[a.kind] - WAITING_RANK[b.kind] || b.time - a.time);
+  }
   const words = {
     zh: { home: '工作台', chat: '对话', space: '空间', queue: '队列', confirm: '确认操作', reminders: '提醒', sessions: '会话', members: '成员', connected: '已连接 NAW', synced: '上次同步', refresh: '刷新', manage: '管理', close: '关闭', send: '发送 ↑', message: '输入消息…', draft: '草稿仅在此浏览器保存', idle: '空闲', working: '进行中', needs: '等你', queued: '待派发', done: '已完成', cancelled: '已取消', all: '全部', add: '添加任务', task: '任务', assignee: '指定成员', any: '任意空闲成员', cancelTask: '取消任务', handled: '标为已处理', openSession: '打开会话', review: '查看确认卡', noScope: '本次配对未授权此范围，请在 Mac 重新选择。', noData: '当前没有记录', terminal: '原生终端', interrupt: '中断', takeover: '接管', mac: '此操作目前请回 Mac 完成。不会新建或替换原生会话。', pair: '配对手机', pairLabel: 'Mac 显示的配对口令', pairHelp: '仅显示 Mac 明确授权的会话和空间。', logout: '撤销此手机并退出', locked: '尚未配对或授权已失效', offline: '连接未确认；保留草稿，刷新核对。不会自动重发。', complete: '操作已完成', 'not-sent': '未执行，输入已保留', unconfirmed: '结果未确认，请查原回执，勿重复发送', receipt: '查询原回执', oldPair: '旧配对的回执，请回 Mac 核对', pending: '待你批准', approve: '批准本次', deny: '拒绝', scope: '范围', action: '操作', from: '来源', duration: '有效期', expired: '已过期 · 未执行', verifyMac: '手机敏感批准尚未启用，请在 Mac 验证本人并确认。', verifyDeadline: '由 Mac 核验', back: '回原会话', terminalOnly: '原生终端目前仅在 Mac 可用。', answer: '提交回答', question: '当前原生问题', ack: '知道了', export: '导出', sameBell: '和桌面小铃铛同一份提醒。', bellNote: '数量包含有效待确认和等你处理的提醒；敏感批准仍在 Mac 上完成。', operations: '操作记录', steward: '大管家记录', age: '块记录早于 30 天', size: '记录总量超过提醒线', unreadable: '记录暂时无法读取', unavailable: '记录源当前不可用', source: '同一份 NAW 状态', omit: '较早消息未显示，请回 Mac 查看完整历史或附件。', unchanged: '取消保留任务历史。', skip: '跳到内容', butler: '大管家', butlerNotSelected: '这次手机访问没选它', butlerNotSelectedHelp: '这次是在 Mac 上挑了部分会话给手机，大管家不在其中。要在手机上和它对话，请在 Mac 的手机访问里选上它。', butlerUnavailable: '暂时打不开', butlerUnavailableHelp: '大管家会话现在不能在手机上打开，例如正在交接给新会话。请稍后刷新，或在 Mac 上查看。', butlerNone: 'Mac 上还没有指定', butlerNoneHelp: '在 Mac 上把一个会话指定为大管家后，这里就能打开它、和它对话。', command: '原生命令请回 Mac 输入；草稿已保留。', storage: '此浏览器未能保存输入，发送已暂停。', newSession: '新建会话', newSpace: '新建空间', noNative: '请在 Mac 处理此原生问题。' },
     en: { home: 'Workspace', chat: 'Chat', space: 'Spaces', queue: 'Queue', confirm: 'Confirm action', reminders: 'Reminders', sessions: 'Sessions', members: 'Members', connected: 'Connected to NAW', synced: 'Last synced', refresh: 'Refresh', manage: 'Manage', close: 'Close', send: 'Send ↑', message: 'Write a message…', draft: 'Draft stays in this browser', idle: 'Idle', working: 'Working', needs: 'Needs you', queued: 'Queued', done: 'Done', cancelled: 'Cancelled', all: 'All', add: 'Add task', task: 'Task', assignee: 'Assign to', any: 'Any available member', cancelTask: 'Cancel task', handled: 'Mark handled', openSession: 'Open session', review: 'Review confirmation', noScope: 'This scope was not granted. Select it again on the Mac.', noData: 'No records to show', terminal: 'Native terminal', interrupt: 'Interrupt', takeover: 'Take over', mac: 'Please complete this action on the Mac for now. No native session is created or replaced.', pair: 'Pair this phone', pairLabel: 'Pairing code shown on your Mac', pairHelp: 'Only sessions and spaces explicitly granted on the Mac are shown.', logout: 'Revoke this phone and sign out', locked: 'Not paired or authorization expired', offline: 'Connection unconfirmed. Keep your draft and refresh to check. Nothing is resent automatically.', complete: 'Action completed', 'not-sent': 'Not executed; input retained', unconfirmed: 'Outcome unconfirmed. Query the original receipt; do not resend.', receipt: 'Query original receipt', oldPair: 'Receipt from an old pairing. Check on the Mac.', pending: 'Awaiting your approval', approve: 'Approve once', deny: 'Deny', scope: 'Scope', action: 'Action', from: 'From', duration: 'Expires', expired: 'Expired · Not executed', verifyMac: 'Sensitive approval on this phone is not enabled. Verify yourself and confirm on the Mac.', verifyDeadline: 'Verified by the Mac', back: 'Back to original session', terminalOnly: 'The native terminal is currently available on the Mac.', answer: 'Submit answer', question: 'Current native question', ack: 'Got it', export: 'Export', sameBell: 'The same reminders as the desktop bell.', bellNote: 'The count includes valid confirmations and reminders awaiting you. Sensitive approvals still use the Mac.', operations: 'Operation records', steward: 'Butler records', age: 'record blocks are over 30 days old', size: 'Record total exceeds the reminder line', unreadable: 'Record cannot currently be read', unavailable: 'Record source unavailable', source: 'The same NAW state', omit: 'Earlier messages are omitted. Open the Mac for full history or attachments.', unchanged: 'Cancelling keeps task history.', skip: 'Skip to content', butler: 'Butler', butlerNotSelected: 'Not chosen for this phone', butlerNotSelectedHelp: 'This phone was given a chosen set of sessions on the Mac, and the butler is not one of them. To talk to it here, choose it under Phone access on the Mac.', butlerUnavailable: 'Not available right now', butlerUnavailableHelp: 'The butler session cannot be opened on the phone right now, for example while it hands over to a new session. Refresh later or check on the Mac.', butlerNone: 'None chosen on the Mac', butlerNoneHelp: 'Choose a session as the butler on the Mac, then open it here to talk to it.', command: 'Use the Mac for native commands. Your draft is retained.', storage: 'This browser could not save the input. Sending is paused.', newSession: 'New session', newSpace: 'New space', noNative: 'Please handle this native question on the Mac.' },
@@ -97,6 +128,9 @@
   Object.assign(words.en, { submitted: 'The session received it', 'reply-written': 'Answer written', 'awaiting-native': 'Not yet confirmed that the session received it', prepared: 'Prepared, not submitted', unknown: 'Unknown', ended: 'Ended', failed: 'Failed', removeReceipt: 'Remove confirmed receipt', invalidated: 'No longer valid · Not executed', replaced: 'Replaced by a new confirmation' });
   Object.assign(words.zh, { standingOn: '「允许大管家直接整理本机工作」：大管家打开的', standingOff: '「允许大管家直接整理本机工作」：大管家关掉的', standingOffOpen: '「允许大管家直接整理本机工作」：大管家关掉的（它可以再打开）' });
   Object.assign(words.en, { standingOn: '“Let the butler organize work on this Mac”: turned on by the butler,', standingOff: '“Let the butler organize work on this Mac”: turned off by the butler,', standingOffOpen: '“Let the butler organize work on this Mac”: turned off by the butler (it can turn it on again),' });
+  // The desktop 「等你」 strip's words (ui-messages.js stream.*); the question tag is shortened for the phone.
+  Object.assign(words.zh, { needsYou: '等你', 'waiting-decide': '等你决定', 'waiting-look': '要你看看', 'waiting-approval': '待你批准', 'waiting-question': '问题', 'waiting-background-confirmation': '待你确认' });
+  Object.assign(words.en, { needsYou: 'Needs you', 'waiting-decide': 'Decision', 'waiting-look': 'Take a look', 'waiting-approval': 'Approval', 'waiting-question': 'Question', 'waiting-background-confirmation': 'Confirmation' });
   Object.assign(words.zh, { sendReceipt: '发送消息', answerReceipt: '回答原生问题', inspectInput: '查看原输入' });
   Object.assign(words.en, { sendReceipt: 'Send message', answerReceipt: 'Answer native question', inspectInput: 'View original input' });
   Object.assign(words.zh, { queueAnswer: '你的答复 · 给', answerAndHandle: '答复并标为已处理', handleOnly: '仅标为已处理（不附答复）',
@@ -342,8 +376,27 @@
       entry.append(avatar({}), body, node('span', '›', 'chev'));
       el('content').append(entry);
     }
+    // A push 「有事等你决定」 opens this page: each row opens the place that already acts on it.
+    function waiting() {
+      // A card whose deadline passed here waits for the Mac's answer on its own page, not in this list.
+      const items = waitingList(view).filter(item => !item.card || !cardExpired(item.card));
+      if (!items.length) return;
+      const list = section(t('needsYou'), items.length), box = node('div', undefined, 'box');
+      list.id = 'waiting';
+      for (const item of items) {
+        const path = item.itemId ? 'queue/' + encodeURIComponent(item.roomId) + '/' + encodeURIComponent(item.itemId)
+          : item.card ? item.cards ? batchPath(item.cards) : 'confirm/' + encodeURIComponent(item.card.id) : 'chat/' + encodeURIComponent(item.sessionId);
+        const title = item.card ? item.cards ? batchTitle(item.cards) : item.card.titles?.[lang] || item.card.title : item.title;
+        const a = link('', path, 'row waiting-row'), main = node('div', undefined, 'row-main');
+        a.dataset.waitingKind = item.kind;
+        main.append(node('strong', title), node('p', [item.actor, ...item.spaces].filter(Boolean).join(' · ')));
+        a.append(main, node('span', t('waiting-' + item.kind), 'tag'));
+        box.append(a);
+      }
+      list.append(box);
+    }
     function home() {
-      heading('home'); butlerEntry();
+      heading('home'); waiting(); butlerEntry();
       const butler = butlerSession(), others = view.sessions.filter(s => s !== butler);
       const sessions = section(t('sessions'), others.length, 'newSession'), box = node('div', undefined, 'box');
       for (const s of others) { const a = link('', 'chat/' + encodeURIComponent(s.id), 'row'), main = node('div', undefined, 'row-main'); main.append(node('strong', s.name), node('p', providerName(s.provider))); a.append(avatar(s), main, stateTag(s)); box.append(a); }
@@ -482,6 +535,13 @@
       } if (!list.childElementCount) list.append(node('p', t('noData'), 'quiet')); }
       for (const key of ['all', 'working', 'queued']) filters.append(button(t(key), () => show(key)));
       el('content').append(filters, list, button('+ ' + t('add'), () => addTask(r), 'primary'), node('p', t('unchanged'), 'small-note')); show('all'); receipts(el('content'), { roomId: r.id });
+    }
+    // Once per visit, after the page has its data; later refreshes keep the reader's place.
+    function focusItem() {
+      const card = [...el('content').querySelectorAll('.queue-card')].find(c => c.dataset.itemId === route.item);
+      if (!card) return;
+      card.scrollIntoView?.({ block: 'center' }); card.classList.add('flash');
+      global.setTimeout(() => card.classList.remove('flash'), 1600);
     }
     async function resolveQueueAnswer(row) {
       if (!row || row.deviceId !== client.state.session?.deviceId || row.status !== 'submitted' || !row.queueTarget) return;
@@ -974,7 +1034,8 @@
         if (ticket !== navigation) return;
         const parts = global.location.hash.slice(1).split('/'); lang = parts[0] === 'en' ? 'en' : 'zh';
         route = { page: ['home', 'chat', 'space', 'queue', 'confirm', 'reminders'].includes(parts[1]) ? parts[1] : 'home', id: parts[2] ? decodeURIComponent(parts[2]) : null, nativeId: parts[1] === 'confirm' && parts[2] === 'native' ? decodeURIComponent(parts[3] || '') : null,
-          batch: parts[1] === 'confirm' && parts[2] === 'batch' && parts[3] ? parts[3].split(',').map(decodeURIComponent) : null };
+          batch: parts[1] === 'confirm' && parts[2] === 'batch' && parts[3] ? parts[3].split(',').map(decodeURIComponent) : null,
+          item: parts[1] === 'queue' && parts[3] ? decodeURIComponent(parts[3]) : null };
         d.documentElement.dataset.page = route.page;
         d.documentElement.dataset.route = global.location.hash;
         if (view) {
@@ -991,6 +1052,7 @@
         if (ticket === navigation) paint();
         // A chat opens at its newest message, as on the Mac; later refreshes keep the reader's place.
         if (ticket === navigation && route.page === 'chat') scrollToLatest();
+        if (ticket === navigation && route.page === 'queue' && route.item) focusItem();
         if (ticket === navigation && route.page === 'space' && el('content').querySelector('.speech-names')) global.scrollTo?.(0, d.documentElement.scrollHeight);
       } catch {
         if (ticket === navigation) { disconnected = true; paint(); toast('offline'); }
@@ -1015,7 +1077,7 @@
     return { client, actions, refresh, navigate, dispose() { hide(); global.clearInterval(timerClock); d.removeEventListener('visibilitychange', wake);
       global.removeEventListener('online', wake); global.removeEventListener('offline', offline); global.removeEventListener('pagehide', hide); global.removeEventListener('pageshow', show); global.removeEventListener('hashchange', scheduleNavigate); } };
   }
-  const exported = { createWorkspaceActions, ACTION_KEY, mount, receiptVisible };
+  const exported = { createWorkspaceActions, ACTION_KEY, mount, receiptVisible, waitingList };
   if (typeof module === 'object' && module.exports) module.exports = exported;
   else { global.NAWMobileWorkspace = exported; global.nawPhone = mount(); }
 })(globalThis);

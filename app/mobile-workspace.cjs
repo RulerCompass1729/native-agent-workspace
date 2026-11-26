@@ -213,6 +213,10 @@ class MobileWorkspace {
       id: r.id, name: r.name, queue: (r.queue || []).map(i => ({ id: i.id, text: i.text, status: i.status,
         assignee: i.assignee, sentTo: i.sentTo, reply: i.reply, reason: i.reason, ...questions.get(i.id),
         ...(i.answer ? { answer: { text: i.answer.text, deliveredAt: i.answer.deliveredAt } } : {}),
+        // For the 「等你」 list: the desktop's order (task-stream.js roomTasks time) and its rule that a decision whose
+        // session was archived or ended is not waiting (endedSession); the phone cannot see those sessions.
+        ...(i.status === 'waiting' ? { time: Math.max(i.finishedAt || 0, i.sentAt || 0, i.createdAt || 0),
+          ownerEnded: (state.sessions || []).some(s => s.id === (i.sentTo || i.assignee) && (s.archived || s.state === 'ended')) } : {}),
         canAnswer: i.status === 'waiting' && permitted.get(i.sentTo)?.nativeId === i.sentNative &&
           scopes.some(s => s.sessionId === i.sentTo && s.nativeId === i.sentNative && s.actions.includes('send')) })),
       members: state.sessions.filter(s => !s.archived && roomIds(s).includes(r.id)).map(s => ({ id: s.id, name: s.name, provider: s.provider, state: s.state })),
