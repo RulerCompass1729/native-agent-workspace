@@ -46,6 +46,10 @@ function successor(selected, entries) {
 // A space's project manager moves at the confirmed handoff (R254), and at a kept or finished one, to the one successor;
 // a handoff that failed afterwards gives it back. Every session the role passed through, the current one last.
 function handoffChain(selected, entries) {
+  return handoffSteps(selected, entries).map(({ sessionId, nativeId }) => ({ sessionId, nativeId }));
+}
+// The same, each step marked `final` when no later failure can give it back: reached through kept or done lines only.
+function handoffSteps(selected, entries) {
   const edges = new Map(), parents = new Map();
   for (const entry of entries) {
     if (!validId(entry?.old?.id)) continue;
@@ -70,17 +74,18 @@ function handoffChain(selected, entries) {
     if (!parents.has(to)) parents.set(to, new Set());
     parents.get(to).add(from);
   }
-  let current = identity(selected);
-  const chain = [current], seen = new Set();
+  let current = identity(selected), final = true;
+  const chain = [{ ...current, final }], seen = new Set();
   while (true) {
-    if (seen.has(current.sessionId)) return [identity(selected)];
+    if (seen.has(current.sessionId)) return [{ ...identity(selected), final: true }];
     seen.add(current.sessionId);
     const next = edges.get(current.sessionId);
     if (!next || next.size !== 1) return chain;
-    const [to, { entry, mixed }] = next.entries().next().value;
+    const [to, { entry, mixed, handedOnly }] = next.entries().next().value;
     if (mixed || parents.get(to).size !== 1 || entry.old.nativeId !== current.nativeId || !validId(entry.new?.id) || !validId(entry.new?.nativeId)) return chain;
     current = { sessionId: entry.new.id, nativeId: entry.new.nativeId };
-    chain.push(current);
+    final &&= !handedOnly;
+    chain.push({ ...current, final });
   }
 }
 
@@ -204,4 +209,4 @@ function author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly')
 function usableRecord(actor, records) {
   return records.find(record => record.id === actor?.id && record.nativeId === actor?.nativeId && !record.archived && !record.nativeContextPending && !['ended', 'background'].includes(record.state)) || null;
 }
-module.exports = { QueueSecretary, successor, handoffChain, follow, rotationEdges, usableRecord, author };
+module.exports = { QueueSecretary, successor, handoffChain, handoffSteps, follow, rotationEdges, usableRecord, author };

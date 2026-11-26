@@ -49,3 +49,60 @@ The person, 2026-11-25: 「项目经理交接失败,这也是个 bug」, then �
   - No conflict with R220.2 (889caf97). `creator()` gets its check before the `if` that R220.2 changes inside, and the message keys sit two lines apart.
   - R253 (lane/newreq-pm-wake-20261125) conflicts in `CLAUDE.md` only, because the two edits touch adjacent lines.
     The fix is to keep both: this rule first, then R253's sentence at the end of the same paragraph.
+
+## Increment 2: the butler's three acceptance items (queue item 4f0c8c68)
+
+The person, 2026-11-25 21:48, on the 21:42 handover of 〔新需求〕's manager: 「感觉没地方改,这个 bug 很关键,一定要修」. The label and the hover card named 续2 as manager, its menu offered only 「撤销项目经理」, while `space-managers.json` still named the archived session (last written 21:16) and the space had no line saying the role had moved.
+
+### What the records showed (read only)
+
+- In the daily data, the rotation log has `done eca0dbcb -> 8091f4fb` at 21:42:14. The record still names eca0dbcb, the person's pick at 19:47.
+- On alpha.307, `successor()` follows that `done` line, so `all()` already gave 8091f4fb. The label (`activeManagers` in `main.cjs`) and the permission (`creator` -> `roomOf` -> `designated` -> `all()`) read that one source.
+- PM 续2 confirmed it by a real call on the board at 21:58: at 21:57 its `spaceAction queueAdd` returned complete, item e51a9b84.
+- The confusion came from a record that keeps the person's pick while the holder is derived, with no line in the space.
+
+### ① The record names the successor, and the label and the permission read one source
+
+- `SpaceManagers.settle()` writes, for each space, the last step of the chain reached through `kept` or `done` lines only. It returns `{ roomId, from, to }`, and `apply: false` only reports.
+  - A step reached through a `handed` line only is followed but not written. A later `failed` line gives it back, and a record with a source field could not be read by older builds: `identity()` accepts exactly two keys.
+  - A branch writes nothing. A successor that another space's record already reaches is left as it is, because one session manages one space.
+- `handoffSteps()` in `queue-secretary.cjs` is `handoffChain()` with a `final` flag on each step. `handoffChain()` returns what it returned before.
+- `handedTo()` now walks from the caller itself, so the old session is still told who holds the role once the record names the successor.
+- `main.cjs` gains `settleManagers()`. It runs from the client's state handler, beside `retireSecretary`, at most every ten seconds, in `roomState.serial`. It writes the record and one space line, `notice.room.managerHanded`: 「{name} 接任这个空间的项目经理」.
+- On the first run after installation, a space whose role already moved through `kept` or `done` lines gets its record written and that one line.
+- `docs/space-project-manager.md` says when the record changes.
+
+### ② Shown by actual operation, not the label
+
+- `queue-space-action.test.cjs` drives main.cjs's own `settleManagers`, `activeManagers` and `spaceAction` handler, with a real `SpaceManagers` and `RoomState`. The rotation lines have the shape `appendLog` writes.
+  - After `handed`: the label names the successor, the record is unchanged, and the old session's `queueAdd` is refused with the successor's name.
+  - After `done`: the record and the label both name the successor, and the space has one `managerHanded` line.
+  - The successor's `queueAdd` lands with itself as creator. The old session is still refused, and a fresh `SpaceManagers` reads the same holder.
+  - On the old source this test failed with `settleManagers is not a function`.
+- The real-dispatcher R254 test in `queue-dispatch.test.cjs`:
+  - while the handoff waits, `settle()` writes nothing;
+  - after `done`, it writes the successor, the successor adds, and the ended old session adds nothing (`managerOnly`, as before).
+- `space-managers.test.cjs`:
+  - handed only, then failed: nothing is written, and the role is back with the old session;
+  - a `kept` step in the middle (the panel's 10:28 case), then `done`, then `handed`: the record is written up to the last final step and the role continues to the waiting successor;
+  - when that waiting step fails, the role returns to where the record now starts;
+  - each earlier session is told the holder's name;
+  - a branch, or a successor another space already names, writes nothing.
+- In the daily app, PM 续2's 21:57 `queueAdd` on alpha.307 is real evidence for the `done` case. The `handed`-only case and the new record writing need the next installed version.
+
+### ③ `recipient-identity-changed` is a different cause
+
+- The key is thrown in `app/session-wake.cjs` only: at :301 (`relocate`, after a backend move, when the native id differs), :765 (`recipientIssue`, `same(s, intent.targetProof)`) and :831 (`receive`, when the identity changes while the message is taken).
+- The proof (`peer-handoffs.cjs` `identity`) holds `nativeId`, `owner`, `memberRevision`, `controlRevision`, `connectionRevision`, `peerRevision` and the backend's pid and start time.
+  - R238 subtracts only the recipient's ordinary input from these.
+  - The note at `session-wake.cjs:148-150` says a reconnect, and another agent's background queue or steer, still withdraw a message.
+- Nothing in this path reads `space-managers.json` or the rotation log; a manager refusal is `error.wake.managerSpace`. So it is not R254's bug.
+- Leaving a named space does not change `memberRevision`: `collaboration-spaces.cjs:68` changes it only for the default space. So a rotation taking 35d97763 out of 〔新需求〕 does not explain its 21:49 refusal either.
+- Which field changed in each of the three refusals is unknown. A recipient-side refusal records no field names, while `source-identity-changed` does (`session-wake.cjs:213`). Suggested as its own number: record the changed field names on `recipient-identity-changed`, then decide from the next case.
+
+### Checks
+
+- 43 related test files: the 42 besides `queue-dispatch.test.cjs` first ran 966/967.
+  - The one failure was `state-push.test.cjs`, whose wiring fixture lists each call of the state handler. It had no `settleManagers` stub; with the stub, that file passes 33/33.
+- `queue-dispatch.test.cjs`: 627/627 on the same source, run alone (1123 s). None skipped.
+- Not run: the full suite, a real rotation in the daily app with this version, or a model turn.

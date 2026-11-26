@@ -6464,6 +6464,7 @@ test('R254: a manager whose old session the person keeps using hands the role ov
     assert.throws(() => managers.creator(oldActor, 'shared', null, records(), labels),
       error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes('经理已经交给 Manager next'));
     assert.deepEqual([...managers.activeIds(records())], [f.newId], 'one manager in the space');
+    assert.deepEqual(managers.settle(), [], 'confirmed only: followed, not yet written into the record');
     await f.pass(29);
   }
   assert.equal(f.stopped('a'), false); assert.equal(f.asks().length, 0); assert.deepEqual(eventsOf(f), [], 'still waiting: nothing done or kept');
@@ -6473,6 +6474,11 @@ test('R254: a manager whose old session the person keeps using hands the role ov
   await f.pass(31);
   await supplemented(f); finished(f);
   assert.equal(managers.current('shared').sessionId, f.newId);
+  // R254 ①: finished, the record names the successor itself; the ended old session adds nothing.
+  assert.deepEqual(managers.settle().map(move => [move.from.sessionId, move.to.sessionId]), [['a', f.newId]]);
+  assert.equal(JSON.parse(fs.readFileSync(managers.file, 'utf8')).managers.shared.sessionId, f.newId);
+  assert.equal(managers.creator({ id: f.newId, nativeId: f.session(f.newId).nativeId }, 'shared', null, records(), labels).sessionId, f.newId);
+  assert.throws(() => managers.creator(oldActor, 'shared', null, records(), labels), error => error.uiMessage?.key === 'error.queue.managerOnly');
 });
 
 test('R254: a handoff line that could not be written is written on the next pass, once', async t => {

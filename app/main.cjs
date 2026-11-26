@@ -951,6 +951,22 @@ async function retireSecretary(snapshot) {
     if (result.status === 'retired') await broadcastRoom();
   });
 }
+// R254 ①: a manager's finished rotation is written into the record, and the space says who took the role over. Looked
+// at with a state at most every ten seconds; the role itself already follows the log in between.
+let settleManagersAt = 0;
+async function settleManagers(snapshot) {
+  if (!spaceManagers || spaceManagers.failed || Date.now() < settleManagersAt) return;
+  settleManagersAt = Date.now() + 10000;
+  if (!spaceManagers.settle({ apply: false }).length) return;
+  await roomState.serial(async () => {
+    const sessions = roomState.apply(snapshot).sessions;
+    const moves = spaceManagers.settle();
+    for (const { roomId, to } of moves) try {
+      roomState.noteManager(roomId, 'notice.room.managerHanded', { name: sessionLabels.labels.get(to.sessionId) || sessions.find(s => s.id === to.sessionId)?.name || to.sessionId }, to.sessionId);
+    } catch { /* The role is the record. */ }
+    if (moves.length) await broadcastRoom();
+  });
+}
 // Where the role counts now: { roomId: { sessionId, nativeId } }, members of their own space only. A manager that is
 // handing over leaves its space a moment before its successor takes the role: it counts until then.
 function activeManagers(sessions) {
@@ -1161,6 +1177,7 @@ function bindClient(context) {
     if (!context.background) placeOpened(client, data).catch(() => {});
     if (!context.background) carryGrants(client, data).catch(() => {});
     if (!context.background) retireSecretary(data).catch(() => {});
+    if (!context.background) settleManagers(data).catch(() => {});
   });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));

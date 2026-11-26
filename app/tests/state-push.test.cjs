@@ -356,7 +356,7 @@ test('the actual client wiring forwards state, terminal and progress to a page a
       notifyCapacity() {},
       observePersonActions: snapshot => { assert.ok(Array.isArray(snapshot.sessions)); personSamples++; },
       // The state listener's record and placement steps have their own suites (stuck-records, open-placement).
-      placeOpened: async () => {}, carryGrants: async () => {}, retireSecretary: async () => {},
+      placeOpened: async () => {}, carryGrants: async () => {}, retireSecretary: async () => {}, settleManagers: async () => {},
       uiError: () => ({ message: 'disconnected', uiMessage: null }),
       // A closed connection goes to the reconnection (service-reconnect.test.cjs), which tells the page when it fails.
       reconnectClosed: async (target, closed) => { reconnects.push(target === context && closed === client); },

@@ -148,6 +148,53 @@ test('R254: a kept rotation moves the role too; a branch does not, and a success
   assert.deepEqual(role.current(ROOM_A), manager);
 });
 
+// R254 ① (the butler, 2026-11-25 21:51, after the person's 「感觉没地方改」): the label named the successor while the
+// stored record still named the archived session.
+test('R254: the record is written once nothing can give the role back; a step reached by a handed line is followed, not written', t => {
+  const { dir, role, log } = setup(t);
+  const stored = () => JSON.parse(fs.readFileSync(role.file, 'utf8')).managers[ROOM_A];
+  const third = { sessionId: 'third', nativeId: 'native-third' };
+  const gone = (from, to) => ({ ...done(from, to, 'failed'), reason: 'successor-gone' });
+  role.set(ROOM_A, manager);
+  log([done(manager, next, 'handed')]);
+  assert.deepEqual(role.settle(), []);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [manager, next]);
+  log([done(manager, next, 'handed'), gone(manager, next)]);
+  assert.deepEqual(role.settle(), []);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [manager, manager], 'given back, and nothing was written that would keep it away');
+  // A kept step in the middle (the panel's 10:28 case), a finished one, then a confirmed one still waiting.
+  const chain = [done(manager, next, 'kept'), done(next, third), done(third, other, 'handed')];
+  log(chain);
+  assert.deepEqual(role.settle({ apply: false }), [{ roomId: ROOM_A, from: manager, to: third }]);
+  assert.deepEqual(stored(), manager, 'apply false writes nothing');
+  assert.deepEqual(role.settle(), [{ roomId: ROOM_A, from: manager, to: third }]);
+  assert.deepEqual([stored(), role.current(ROOM_A)], [third, other]);
+  assert.deepEqual(new SpaceManagers(dir).current(ROOM_A), other, 'a fresh reader agrees');
+  assert.deepEqual(role.settle(), [], 'written once');
+  const records = ['manager', 'next', 'third', 'other'].map(id => session(id, [ROOM_A]));
+  for (const id of ['manager', 'next', 'third']) {
+    assert.throws(() => role.creator({ id, nativeId: `native-${id}` }, ROOM_A, null, records, new Map()), handedOver('Session other'), `${id} is told who has it now`);
+  }
+  assert.equal(role.creator({ id: 'other', nativeId: 'native-other' }, ROOM_A, null, records, new Map()).sessionId, 'other');
+  log([...chain, gone(third, other)]);
+  assert.deepEqual(role.current(ROOM_A), third, 'the waiting step that failed is given back to where the record now starts');
+  assert.throws(() => role.creator({ id: 'next', nativeId: 'native-next' }, ROOM_A, null, records, new Map()), handedOver('Session third'));
+});
+
+test('R254: a branch writes nothing, nor a successor that another space\'s record already names', t => {
+  const branch = setup(t), stored = value => JSON.parse(fs.readFileSync(value.role.file, 'utf8')).managers;
+  branch.role.set(ROOM_A, manager);
+  branch.log([done(manager, next), done(manager, other)]);
+  assert.deepEqual(branch.role.settle(), []);
+  assert.deepEqual(stored(branch)[ROOM_A], manager);
+  const shared = setup(t);
+  shared.role.set(ROOM_A, manager);
+  shared.role.set(ROOM_B, next);
+  shared.log([done(manager, next)]);
+  assert.deepEqual(shared.role.settle(), []);
+  assert.deepEqual(stored(shared), { [ROOM_A]: manager, [ROOM_B]: next });
+});
+
 test("R254: only the manager follows a handoff before it is done; the butler's and the integrator's rule is as it was", t => {
   const { successor, rotationEdges } = require('../queue-secretary.cjs');
   const { dir, log } = setup(t);

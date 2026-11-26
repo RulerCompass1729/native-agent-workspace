@@ -10,7 +10,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { uiError } = require('./ui-errors.cjs');
 const { roomId: validRoomId, roomIds, isMember } = require('./collaboration-spaces.cjs');
-const { handoffChain, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
+const { handoffChain, handoffSteps, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
 
 const RECORD_MAX = 256 * 1024;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -71,25 +71,31 @@ class SpaceManagers {
       this.failed = error.code !== 'ENOENT';
     }
   }
-  // Each space's designated sessions, from the one the person chose to the one that holds the role now.
+  // The rotation log's lines a manager follows.
+  entries() {
+    if (this.failed) {
+      throw uiError('error.manager.state');
+    }
+    try {
+      return rotationEdges(this.logFile, { handoffs: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw uiError('error.manager.state');
+      }
+      return [];
+    }
+  }
+  // Each space's designated sessions, from the one recorded to the one that holds the role now; each step says
+  // whether a later failure could still give it back (`final` false).
   chains() {
     if (this.failed) {
       throw uiError('error.manager.state');
     }
-    let entries = [];
-    if (this.managers.size) {
-      try {
-        entries = rotationEdges(this.logFile, { handoffs: true });
-      } catch (error) {
-        if (error.code !== 'ENOENT') {
-          throw uiError('error.manager.state');
-        }
-      }
-    }
+    const entries = this.managers.size ? this.entries() : [];
     const chains = new Map();
     for (const [roomId, selected] of this.managers) {
       if (selected) {
-        chains.set(roomId, handoffChain(selected, entries));
+        chains.set(roomId, handoffSteps(selected, entries));
       }
     }
     return chains;
@@ -98,7 +104,8 @@ class SpaceManagers {
   all() {
     const current = new Map();
     for (const [roomId, chain] of this.chains()) {
-      current.set(roomId, chain.at(-1));
+      const { sessionId, nativeId } = chain.at(-1);
+      current.set(roomId, { sessionId, nativeId });
     }
     return current;
   }
@@ -128,15 +135,43 @@ class SpaceManagers {
     const roomId = this.secretaryRetired?.roomId;
     return roomId ? this.current(roomId) : null;
   }
-  // The session that manages this space now, when it took the role over from this one; or null.
+  // The session that manages this space now, when it took the role over from this one; or null. Walked from this
+  // session, since the record names the successor itself once the rotation is finished (settle).
   handedTo(record, roomId) {
-    const chain = this.chains().get(roomId) || [];
-    const at = chain.findIndex(value => value.sessionId === record.id && value.nativeId === record.nativeId);
-    if (at < 0 || at === chain.length - 1) {
+    const holder = this.current(roomId);
+    if (!holder || !validId(record?.id) || !validId(record?.nativeId)) {
       return null;
     }
-    const holder = chain.at(-1);
+    const chain = handoffChain({ sessionId: record.id, nativeId: record.nativeId }, this.entries());
+    const last = chain.at(-1);
+    if (chain.length < 2 || last.sessionId !== holder.sessionId || last.nativeId !== holder.nativeId) {
+      return null;
+    }
     return this.designated({ id: holder.sessionId, nativeId: holder.nativeId }) === roomId ? holder : null;
+  }
+  // R254 ①: once nothing can give it back (kept or done), the record names the successor itself, so the record, the
+  // label and the permission agree. A step reached through a handed line only is still followed, not written: a failed
+  // handoff gives it back, and an older build cannot read a record that says where it came from.
+  // `apply` false: only what would be written. Returns { roomId, from, to } for each space written.
+  settle({ apply = true } = {}) {
+    const moves = [], managers = new Map(this.managers), now = this.all();
+    for (const [roomId, chain] of this.chains()) {
+      const at = chain.findLastIndex(step => step.final);
+      if (at < 1) {
+        continue;
+      }
+      const to = { sessionId: chain[at].sessionId, nativeId: chain[at].nativeId };
+      // One space per session: a successor another space's record already reaches stays as it is.
+      if ([...now].some(([other, value]) => other !== roomId && value.sessionId === to.sessionId)) {
+        continue;
+      }
+      managers.set(roomId, to);
+      moves.push({ roomId, from: { sessionId: chain[0].sessionId, nativeId: chain[0].nativeId }, to });
+    }
+    if (apply && moves.length) {
+      this.save(managers, this.secretaryRetired);
+    }
+    return moves;
   }
   // Every session that manages a space now.
   activeIds(sessions) {
