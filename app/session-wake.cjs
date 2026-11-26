@@ -356,8 +356,17 @@ function undelivered(w, s, r, args, error) {
   try { w.changed?.(s?.id); } catch { /* Shown with the next state. */ }
   return true;
 }
-// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4).
-function unbound(w, s, r, recipientId) { return undelivered(w, s, r, { recipient_id: recipientId }, { sourceIssue: 'root-turn-unbound' }); }
+// Its own plugin refused the call before any of this saw it: no root turn of its own (register.js, r4). `butler` is kept
+// as the butler's session, which is what butler-ingress.cjs observeWakeUndelivered looks for.
+function unbound(w, s, r, recipientId) {
+  let to = { recipient_id: recipientId };
+  try {
+    to = addressed(w, to);
+  } catch {
+    // No butler now: kept as it was written.
+  }
+  return undelivered(w, s, r, to, { sourceIssue: 'root-turn-unbound' });
+}
 // R253 (the person, 2026-11-25: 「说明你和大管家之间的交流不畅」): a space's manager is shown no butler and the board
 // names it by eight characters, so `butler` addresses the butler the person designated, as it is now.
 const BUTLER = 'butler';

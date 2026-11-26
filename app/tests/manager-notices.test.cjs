@@ -92,7 +92,7 @@ for (const window of [false, true]) {
   });
 }
 
-test('an item the manager added is told when it is sent and when it comes back with READY; the person\'s item is not', async t => {
+test('an item the manager added is told when it is sent and when it comes back with READY; the person\'s and the butler\'s too', async t => {
   const f = await fixture(t);
   await f.elapse(12000);
   f.rooms.queueAdd('Write the parser', null, f.space, { kind: 'secretary', name: 'PM', sessionId: 'pm' });
@@ -110,16 +110,181 @@ test('an item the manager added is told when it is sent and when it comes back w
   assert.equal(f.told().length, 2);
   assert.match(f.told()[1][2], new RegExp(`- 你加的队列项 ${out.id}「Write the parser」：Worker 交付了：READY lane/parser abc1234`, 'u'));
   f.client.set('pm', { state: 'idle' });
-  f.rooms.queueAdd('Person task', 'worker', f.space);
-  f.rooms.queueAdd('Butler task', 'worker', f.space, { kind: 'secretary', name: 'Butler', sessionId: 'butler' }, 'steward');
+  // The review of 8f89855a: the acceptance names the queue's sends and deliveries in the space, whoever added them.
+  const person = f.rooms.queueAdd('Person task', 'worker', f.space);
+  const butler = f.rooms.queueAdd('Butler task', 'worker', f.space, { kind: 'secretary', name: 'Butler', sessionId: 'butler' }, 'steward');
   f.dispatcher.dirty = true;
   await f.elapse(90000);
-  assert.equal(f.rooms.queueItems(f.space).find(item => item.text === 'Person task').status, 'sent');
-  f.rooms.queueSettle(f.space, f.rooms.queueItems(f.space).find(item => item.text === 'Person task').id, 'done', '', 'Worker', 'Done.');
+  assert.equal(f.rooms.queueItems(f.space).find(item => item.id === person).status, 'sent');
+  assert.equal(f.told().length, 3);
+  assert.match(f.told()[2][2], new RegExp(`- 人加的队列项 ${person}「Person task」：派给了 Worker`, 'u'));
+  assert.doesNotMatch(f.told()[2][2], /Butler task/u, 'still in the queue: not news yet');
+  f.client.set('pm', { state: 'idle' });
+  f.rooms.queueSettle(f.space, person, 'done', '', 'Worker', 'Done.');
   f.client.set('worker', { state: 'idle' });
   await f.elapse(90000);
-  assert.equal(f.rooms.queueItems(f.space).find(item => item.text === 'Butler task').status, 'sent');
-  assert.equal(f.told().length, 2, 'not an item the manager did not add, the person\'s or the butler\'s');
+  assert.equal(f.rooms.queueItems(f.space).find(item => item.id === butler).status, 'sent');
+  const later = f.told().slice(3).map(call => call[2]).join('\n');
+  assert.match(later, new RegExp(`- 人加的队列项 ${person}「Person task」：Worker 做完了`, 'u'));
+  assert.match(later, new RegExp(`- 大管家加的队列项 ${butler}「Butler task」：派给了 Worker`, 'u'));
+});
+
+// Review of 8f89855a, B1: a member's backend restarting, moving or updating takes it out of the list for a moment; the
+// manager was told it left and then that it joined, a model turn each, for a move that never happened.
+test('a member missing from the list for a moment is no news; one archived, or missing for long, has left', async t => {
+  const f = await fixture(t);
+  await f.elapse(12000);
+  const away = id => {
+    f.client.state.sessions = f.client.state.sessions.filter(s => s.id !== id);
+    f.client.emit('state', f.client.snapshot());
+  };
+  const worker = f.client.session('worker');
+  away('worker');
+  await f.elapse(75000);
+  f.client.state.sessions.push(worker);
+  f.client.emit('state', f.client.snapshot());
+  await f.elapse(150000);
+  assert.deepEqual(f.told(), [], 'missing once and back: nothing owed');
+  assert.equal(f.dispatcher.hasOpenWork(), false);
+  // Archived in the space record (RoomState.apply sets each listed session's `archived` from it).
+  f.rooms.update({ archivedSessions: [...f.rooms.value.archivedSessions, 'worker'] });
+  f.client.emit('state', f.client.snapshot());
+  await f.elapse(75000);
+  assert.equal(f.told().length, 1);
+  assert.match(f.told()[0][2], /- Worker（worker）离开了空间/u, 'listed and archived: gone now');
+  f.client.set('pm', { state: 'idle' });
+  f.join('newcomer', f.space);
+  await f.elapse(75000);
+  assert.equal(f.told().length, 2);
+  f.client.set('pm', { state: 'idle' });
+  away('newcomer');
+  await f.elapse(notices.ABSENT_MS - 60000);
+  assert.equal(f.told().length, 2, 'missing for less than the absence limit: not yet');
+  await f.elapse(150000);
+  assert.equal(f.told().length, 3);
+  assert.match(f.told()[2][2], /- Newcomer（newcomer）离开了空间/u, 'missing for long: gone');
+});
+
+// The store alone, for what the dispatcher-level tests above cannot reach in a few passes.
+const A = '22222222-2222-4222-8222-222222222222', B = '33333333-3333-4333-8333-333333333333';
+const PM = { sessionId: 'pm', nativeId: 'native-pm' };
+const member = (id, roomIds, extra = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), nativeId: 'native-' + id, roomIds, ...extra });
+function store() {
+  const clock = { now: NOW }, n = new notices.ManagerNotices({ now: () => clock.now });
+  const messages = [];
+  const deliver = () => {
+    for (const target of n.due(clock.now)) {
+      const told = n.take(target);
+      messages.push(notices.managerText(told));
+      n.sent(target, told);
+    }
+  };
+  return { clock, n, messages, deliver };
+}
+
+test('a member out of the space and back before it was told: nothing owed', () => {
+  const { clock, n } = store();
+  const sessions = [member('pm', [A]), member('worker', [A])], rooms = [{ id: A, name: 'Plans', queue: [] }];
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  sessions[1].roomIds = [];
+  clock.now += 3000;
+  assert.equal(n.observe(rooms, sessions, { [A]: PM }, clock.now), true);
+  sessions[1].roomIds = [A];
+  clock.now += 3000;
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  assert.equal(n.waiting(), false);
+});
+
+test('one manager of two spaces hears each space\'s changes under that space\'s name', () => {
+  const { clock, n, messages, deliver } = store();
+  const sessions = [member('pm', [A, B]), member('worker', [A])];
+  const rooms = [{ id: A, name: 'Plans', queue: [] }, { id: B, name: 'Ops', queue: [] }], managers = { [A]: PM, [B]: PM };
+  n.observe(rooms, sessions, managers, clock.now);
+  sessions[1].roomIds = [B];
+  clock.now += 3000;
+  n.observe(rooms, sessions, managers, clock.now);
+  clock.now += 15000;
+  deliver();
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /^【NAW 空间变动】你管的 2 个空间有变动：\n「Plans」：\n- Worker（worker）离开了空间\n「Ops」：\n- Worker（worker）进了空间\n/u);
+});
+
+test('a manager revoked or replaced before its message went is not told about that space', () => {
+  for (const after of [{}, { [A]: { sessionId: 'other', nativeId: 'native-other' } }]) {
+    const { clock, n } = store();
+    const sessions = [member('pm', [A]), member('worker', [A]), member('newcomer', [])], rooms = [{ id: A, name: 'Plans', queue: [] }];
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+    sessions[2].roomIds = [A];
+    clock.now += 3000;
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+    assert.equal(n.waiting(), true);
+    clock.now += 3000;
+    n.observe(rooms, sessions, after, clock.now);
+    n.prune(sessions, clock.now);
+    assert.equal(n.waiting(), false, JSON.stringify(after));
+  }
+});
+
+test('the person\'s item sent to the manager itself is no news to it', () => {
+  const { clock, n } = store();
+  const sessions = [member('pm', [A]), member('worker', [A])];
+  const item = { id: 'item-1', text: 'Plan it', status: 'queued', creator: { kind: 'person', name: 'You', sessionId: null } };
+  const rooms = [{ id: A, name: 'Plans', queue: [item] }];
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  for (const change of [{ status: 'sent', sentTo: 'pm' }, { status: 'done' }]) {
+    Object.assign(item, change);
+    clock.now += 3000;
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  }
+  assert.equal(n.waiting(), false);
+});
+
+test('a long reason is cut like an item\'s text', () => {
+  const { clock, n, messages, deliver } = store();
+  const sessions = [member('pm', [A]), member('worker', [A])];
+  const item = { id: 'item-1', text: 'Parser', status: 'sent', sentTo: 'worker', creator: { kind: 'secretary', sessionId: 'pm' } };
+  const rooms = [{ id: A, name: 'Plans', queue: [item] }];
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  Object.assign(item, { status: 'waiting', reason: 'why '.repeat(200) });
+  clock.now += 3000;
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  clock.now += 15000;
+  deliver();
+  const line = messages[0].split('\n').find(text => text.includes('item-1'));
+  assert.ok(line.length < 120, line);
+  assert.match(line, /Worker 那边停下了，等人看（why why .*…）$/u);
+});
+
+test('an item NAW keeps sending and its member keeps refusing is told so often, then only how it ends', () => {
+  const { clock, n, messages, deliver } = store();
+  const sessions = [member('pm', [A]), member('worker', [A])];
+  const item = { id: 'item-1', text: 'Bounce', status: 'queued', creator: { kind: 'secretary', sessionId: 'pm' } };
+  const rooms = [{ id: A, name: 'Plans', queue: [item] }];
+  const look = () => n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  look();
+  for (let round = 0; round < 6; round += 1) {
+    Object.assign(item, { status: 'sent', sentTo: 'worker' });
+    clock.now += 5000;
+    look();
+    Object.assign(item, { status: 'queued', sentTo: null, reason: 'refused' });
+    clock.now += 5000;
+    look();
+    clock.now += 60000;
+    deliver();
+  }
+  assert.equal(messages.length, 3, 'not one a minute for as long as it goes on');
+  assert.match(messages.at(-1), /之后它再派出或退回不再告诉你/u);
+  assert.doesNotMatch(messages[0], /不再告诉你/u);
+  Object.assign(item, { status: 'sent', sentTo: 'worker' });
+  clock.now += 5000;
+  look();
+  Object.assign(item, { status: 'done' });
+  clock.now += 5000;
+  look();
+  clock.now += 60000;
+  deliver();
+  assert.equal(messages.length, 4);
+  assert.match(messages.at(-1), /- 你加的队列项 item-1「Bounce」：Worker 做完了/u);
 });
 
 test('a manager at work is told only after its turn, everything since in one message, a minute after the last one at least', async t => {

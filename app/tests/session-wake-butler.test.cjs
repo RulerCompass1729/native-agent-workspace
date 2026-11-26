@@ -100,3 +100,24 @@ test('an ordinary sender\'s call that registered nothing leaves the turn its one
   assert.equal(f.writes.filter(text => text.includes('Second try')).length, 1);
   assert.equal(f.writes.some(text => text.includes('A third one')), false);
 });
+
+// Review of 8f89855a: a call its own plugin refused (no root turn of its own) kept `butler` as written, and the butler
+// hears only of refusals addressed to its own session (butler-ingress.cjs observeWakeUndelivered).
+test('a refused call addressed to `butler` before NAW saw it reaches the designated butler\'s record', async t => {
+  const { ButlerLedger } = require('../butler-ledger.cjs'), { ButlerIngress } = require('../butler-ingress.cjs'), { RoomState } = require('../room-state.cjs');
+  const f = await fixture(t);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-wake-butler-ingress-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // Before the refusals: it tells of those since it started.
+  const ledger = new ButlerLedger(dir), ingress = new ButlerIngress(dir, { roomState: new RoomState(dir), ledger });
+  const record = f.source.get(f.a), runtime = f.source.runtimes.get(f.a);
+  assert.equal(wake.unbound(f.source, record, runtime, 'butler'), true);
+  f.designate();
+  assert.equal(wake.unbound(f.source, record, runtime, 'butler'), true);
+  const kept = f.source.snapshot().sessions.find(s => s.id === f.a);
+  assert.deepEqual(kept.wakeUndelivered.map(e => [e.recipientId, e.sourceIssue]), [['butler', 'root-turn-unbound'], [f.b, 'root-turn-unbound']],
+    'with no butler, as written; with one, its session');
+  ingress.observeWakeUndelivered([kept], { steward: () => ({ sessionId: f.b, nativeId: f.target.get(f.b).nativeId }) });
+  const events = ledger.snapshot().events.filter(e => e.eventId.startsWith('wake-undelivered:'));
+  assert.deepEqual(events.map(e => e.payload.outcome), ['not-sent:root-turn-unbound'], 'the butler is told once');
+});
