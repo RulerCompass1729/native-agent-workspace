@@ -112,13 +112,23 @@ test('a manager adds only to its own space, never to itself, under its trusted l
   assert.deepEqual(role.creator(actor, ROOM_A, 'worker', records, labels), { kind: 'secretary', name: 'Space lead', sessionId: 'manager' });
   assert.deepEqual(role.creator(actor, ROOM_A, null, records, new Map()), { kind: 'secretary', name: 'Session manager', sessionId: 'manager' });
   assert.throws(() => role.creator(actor, ROOM_A, 'manager', records, labels), key('error.queue.managerSelf'));
-  assert.throws(() => role.creator(actor, ROOM_B, null, records, labels), key('error.queue.managerOnly'));
+  assert.throws(() => role.creator(actor, ROOM_B, null, records, labels), key('error.queue.managerVacant'), 'ROOM_B has no manager at all: that is said, not "another space\'s manager"');
   assert.throws(() => role.creator({ id: 'worker', nativeId: 'native-worker' }, ROOM_A, null, records, labels), key('error.queue.managerOnly'));
   assert.throws(() => role.creator({ ...actor, nativeId: 'other' }, ROOM_A, null, records, labels), key('error.queue.managerOnly'));
   assert.throws(() => role.creator(null, ROOM_A, null, records, labels), key('error.queue.managerOnly'));
   for (const changes of [{ archived: true }, { nativeContextPending: true }, { state: 'ended' }, { state: 'background' }]) {
     assert.throws(() => role.creator(actor, ROOM_A, null, [session('manager', [ROOM_A], changes)], labels), key('error.queue.managerOnly'));
   }
+});
+
+test('a space with no usable manager says so, instead of calling the caller another space\'s manager (R220.2)', t => {
+  const { role } = setup(t);
+  const worker = { id: 'worker', nativeId: 'native-worker' };
+  const onlyWorker = [session('worker', [ROOM_A])];
+  assert.throws(() => role.creator(worker, ROOM_A, null, onlyWorker, new Map()), key('error.queue.managerVacant'), 'no manager was ever designated');
+  role.set(ROOM_A, manager);
+  const withManager = [session('worker', [ROOM_A]), session('manager', [ROOM_A])];
+  assert.throws(() => role.creator(worker, ROOM_A, null, withManager, new Map()), key('error.queue.managerOnly'), 'a live manager refuses another session in the ordinary way');
 });
 
 test('an unreadable record or log is an error, never nobody; choosing again keeps the damaged file aside', t => {
