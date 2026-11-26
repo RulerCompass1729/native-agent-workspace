@@ -1,6 +1,7 @@
 // Session rotation with a simulated person (R206, R211, R221): the real hidden desktop app, the real daemon and the real
-// Claude CLI against fixed local replies (every start of it, --version included, sandboxed to loopback with no key;
-// Codex and any other provider's CLI are stubs that must never be called). The person's keys and clicks go
+// Claude CLI against fixed local replies (every start of it, --version included, sandboxed to loopback with no key).
+// On the children's PATH claude, codex, agy, dsh, opencode, gemini and kimi are stubs, and so is codex in the runtime
+// locations (the only other key they accept); a stub must never be called. The person's keys and clicks go
 // through the hidden window's own input path (fixtures/simulated-person.cjs). Quiet times are shortened with the
 // dispatcher's own constructor options (fixtures/rotation-clock.cjs); no gate is removed.
 // Usage: node scripts/test-rotation-person.cjs <scenario> [--code <other checkout>] [--no-window]
@@ -129,7 +130,7 @@ async function start({ options = {}, env = {}, permissions = {} } = {}) {
   fixture.wrapper(binary, { file: shim, env: { CLAUDE_CONFIG_DIR: config, DISABLE_AUTO_COMPACT: '1' } });
   const version = execFileSync(shim, ['--version'], { encoding: 'utf8', timeout: 30000, env: { PATH: '/usr/bin:/bin', HOME: home } }).trim().split(' ')[0];
   assert.match(version, /^\d+\.\d+\.\d+$/, 'The Claude CLI');
-  for (const name of ['claude', 'codex', 'dsh', 'opencode', 'gemini', 'kimi'])
+  for (const name of ['claude', 'codex', 'agy', 'dsh', 'opencode', 'gemini', 'kimi'])
     fs.writeFileSync(path.join(stubs, name), `#!/bin/sh\necho "${name} $*" >> '${stubCalls}'\nexit 97\n`, { mode: 0o700 });
   assert.equal(spawnSync(path.join(stubs, 'codex'), ['--version']).status, 97);
   assert.equal(fs.readFileSync(stubCalls, 'utf8'), 'codex --version\n', 'A stub that is started says so'); fs.rmSync(stubCalls);
