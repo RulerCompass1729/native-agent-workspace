@@ -6497,6 +6497,44 @@ test('R254: a handoff line that could not be written is written on the next pass
   assert.equal(f.dispatcher.rotationEntries().filter(e => e.event === 'handed').length, 1, 'no line kept twice in memory either');
 });
 
+// Review N6 (R254 rework 1): a waiting record without the successor's native session (one restored from an older
+// version; a confirmation itself waits for it, rotation-handoff.cjs outcome) was marked as logged, with a line no
+// manager can follow, and never written again.
+test('R254 N6: no handed line without the successor\'s native session, and none marked as written', async t => {
+  const f = await handedOver(t, { butler: false });
+  const record = { ...f.dispatcher.rotations.a, handoffConfirmed: true, newNativeId: null };
+  const handed = () => ROWS(f).filter(e => e.event === 'handed').map(e => e.new.nativeId);
+  f.dispatcher.noteHanded('a', record);
+  assert.deepEqual([handed(), record.handedLogged], [[], undefined]);
+  record.newNativeId = f.session(f.newId).nativeId;
+  f.dispatcher.noteHanded('a', record);
+  assert.deepEqual([handed(), record.handedLogged], [[record.newNativeId], true]);
+});
+
+// Review N1 (R254 rework 1): the failed line that gives a manager its role back could not be written once and was
+// not tried again, so the role stayed with a successor that was gone.
+test('R254 N1: a successor gone after its handed line gives the work and the role back only with the failed line, tried again', async t => {
+  const f = await handedOver(t, { butler: false });
+  const managers = new SpaceManagers(f.dir);
+  managers.set('shared', { sessionId: 'a', nativeId: 'native-a' });
+  f.person(); await f.pass();
+  assert.equal(managers.current('shared').sessionId, f.newId);
+  const task = f.room.queueAdd('给继任的', f.newId);
+  const append = fs.appendFileSync; let refuse = true;
+  fs.appendFileSync = (file, ...rest) => { if (refuse && String(file).endsWith('rotation-log.jsonl')) throw Error('disk full'); return append(file, ...rest); };
+  t.after(() => { fs.appendFileSync = append; });
+  f.session(f.newId).serviceCapabilities = [];
+  f.room.update({ archivedSessions: [f.newId] });
+  await f.pass(1); await f.pass(1);
+  assert.ok(f.dispatcher.rotations.a, 'nothing given back while the line is unwritten');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, f.newId);
+  refuse = false; await f.pass(1);
+  assert.equal(f.dispatcher.rotations.a, undefined);
+  assert.deepEqual(eventsOf(f), ['failed'], 'one failed line');
+  assert.equal(managers.current('shared').sessionId, 'a', 'the role is back with the old session');
+  assert.equal(f.room.value.queue.find(i => i.id === task).assignee, 'a');
+});
+
 test('R206: more from the person while the addition is written is the next interruption, asked for once too', async t => {
   const f = await handedOver(t);
   f.person('一'); await f.pass(); await f.pass(31); assert.equal(f.asks().length, 1);

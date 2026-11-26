@@ -106,3 +106,51 @@ The person, 2026-11-25 21:48, on the 21:42 handover of 〔新需求〕's manager
   - The one failure was `state-push.test.cjs`, whose wiring fixture lists each call of the state handler. It had no `settleManagers` stub; with the stub, that file passes 33/33.
 - `queue-dispatch.test.cjs`: 627/627 on the same source, run alone (1123 s). None skipped.
 - Not run: the full suite, a real rotation in the daily app with this version, or a model turn.
+
+## Review 1 of e7e6f5a8 and rework 1 (queue item fb89f9cc)
+
+Review 1 (reviewer session saved with the private evidence) returned BLOCK on B1, with non-blocking N1–N7. PM 续2 8091f4fb decided B1: 「人手动设的那一位立刻生效，一直算数」. The decision can be reversed: if the person would rather 「拒绝设已交接的旧会话，并说明现在是谁」, that is the other way.
+
+### Findings, reproduced on e7e6f5a8 with the new tests
+
+- **B1:** after `handed` or `kept`, the person designates the old session again (`main.cjs` `designateManager`; `midRotation` checks only `newId`). The space says it is set, but `all()` still walks the earlier edge to the successor. After `kept`, `settle()` writes the successor back. The log only grows, so that designation can never hold. Red: label `next`, record `manager`.
+- **N1:** `dropSuccessor` deletes the rotation before its `failed` line, with no retry. A lost line leaves the role with a successor that is gone. Red: the rotation is gone while the line is unwritten.
+- **N2:** `handedTo()` walked forward from any session. A plain member that rotated into a later-designated session was told 「已经交给 Y」. Red: `managerHandedOver` instead of `managerOnly`.
+- **N3:** `settle()` wrote the last final step and named it in 「X 接任」, while a later handed step held the role. Red: notice 「Manager 续2」, label `third`.
+- **N4:** a docs clause said the record format had gained a source field.
+- **N5:** `settleManagers` runs only from a window's state handler (`!context.background`). With no window open, the record and the space line wait. The label and the permission read `all()` from the log in the meantime, so behaviour is right. Not changed.
+- **N6:** `noteHanded` marked a line without the successor's native id as written. A confirmation itself waits for that id (`rotation-handoff.cjs` `outcome`), so only a record restored without it reaches this. Red: `[null]` written and marked.
+- **N7:** increment 2 had only author-reported counts. This rework keeps raw red and green logs.
+
+### Change
+
+- **Designation line.**
+  - `SpaceManagers.set()` first appends a line to the rotation log: `{event: 'designated', spaces: [room], old: <pick>, new: null, before: <previous pick>}`. It opens with `O_APPEND|O_NOFOLLOW`, checks owner, mode and one link, and fsyncs. A line that cannot be written means no change (`error.manager.save`).
+  - The record file is unchanged, since `identity()` takes two keys.
+- **Designation cut.**
+  - `handoffSteps(selected, entries, since)` takes the place of that line (`designatedAt`).
+  - `handed` and `kept` lines out of the pick logged before it are not followed, nor later ones on the same edge. A `done` line is followed, before or after: the old session is ended, and an ended session holds nothing. (First written to cut `done` before the line too; `integrator-role.test.cjs:43` designates after a logged `done` chain and caught it, 972/973.)
+  - New edges are followed as in R254.
+- **Settled line.** `settle()` writes only when the chain's last step is final, so the record and 「X 接任」 name the holder (N3). It appends `{event: 'settled', spaces: [room], old: <from>, new: <to>}` before the record.
+- **Who is told the holder's name.**
+  - `handedTo()` asks `holders(room)`: the current pick's chain, plus for each `designated`/`settled` line the chain of the pick it replaced, read up to that line (N2).
+  - So a successor is told who has the role after the person re-designates the old session, also when the first record came from an older build with no line.
+- **Old readers.**
+  - `rotationEdges` returns the two new events only with `handoffs: true`.
+  - The dispatcher's `validLogEntry`, `successor()`, `follow()` and the butler record skip events they do not know, as older builds do.
+- **N1:** `dropSuccessor` writes the `failed` line first when a `handed` line was written. Until then it gives nothing back, and it is tried again on the next pass (gate `log-unwritten`).
+- **N6:** `noteHanded` writes nothing and marks nothing while `newNativeId` is not valid.
+- **Docs.** `docs/space-project-manager.md` and the `CLAUDE.md` sentence. No interface text changed.
+
+### Red and green
+
+- Red (code e7e6f5a8, new tests): `rework1-red-code-e7e6f5a8.log`.
+  - Nine new or changed R254 tests fail, each at the assertion its finding names: space-managers 5, queue-space-action 2, queue-dispatch 2. The changed N3 assertion in the existing settle test is one of the five.
+  - The R254 tests that did not change pass.
+- Green, on this commit's source, the same 43 related files as before (the list is kept with the logs):
+  - the 42 besides `queue-dispatch.test.cjs`, at concurrency 1: 973/973 (`rework1-green-rest42.log`);
+  - `queue-dispatch.test.cjs` alone: 629/629, 457 s (`rework1-green-queue-dispatch.log`).
+  - None skipped or cancelled.
+  - Taken with `fullsuite.lock`; the compressor stayed at or below 71.6% of its segment limit.
+- The first green run, before the `done` change above: 972/973 (`rework1-first-rest42-972of973.log`).
+- Not run: the full suite, a real rotation or designation in the daily app, or a model turn. In the daily app this needs the next installed version.

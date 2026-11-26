@@ -49,12 +49,22 @@ function handoffChain(selected, entries) {
   return handoffSteps(selected, entries).map(({ sessionId, nativeId }) => ({ sessionId, nativeId }));
 }
 // The same, each step marked `final` when no later failure can give it back: reached through kept or done lines only.
-function handoffSteps(selected, entries) {
-  const edges = new Map(), parents = new Map();
-  for (const entry of entries) {
+// `since`: the place in `entries` of the person's designation of `selected` (designatedAt). A handed or kept line of a
+// handoff of it logged before that line does not take the role from it; a done line does, before or after: its old
+// session is ended.
+function handoffSteps(selected, entries, since = -1) {
+  const edges = new Map(), parents = new Map(), earlier = new Set();
+  for (const [at, entry] of entries.entries()) {
     if (!validId(entry?.old?.id)) continue;
     const from = entry.old.id;
     const to = JSON.stringify([entry.new?.id, entry.new?.nativeId]);
+    if (from === selected?.sessionId && since >= 0 && entry.event !== 'done') {
+      if (at < since) {
+        earlier.add(to);
+        continue;
+      }
+      if (earlier.has(to)) continue;
+    }
     const edge = edges.get(from)?.get(to);
     if (entry.event === 'failed') {
       if (edge?.handedOnly) {
@@ -89,13 +99,19 @@ function handoffSteps(selected, entries) {
   }
 }
 
+// Where in `entries` the person last designated this session for this space (space-managers.cjs set), or -1.
+function designatedAt(entries, roomId, identity) {
+  return entries.findLastIndex(entry => entry?.event === 'designated' && entry.spaces?.[0] === roomId &&
+    entry.old?.id === identity?.sessionId && entry.old?.nativeId === identity?.nativeId);
+}
+
 // The rotation log's finished and kept replacements, the only lines the selection rule reads (the secretary, the
 // integrator and the butler designation all follow them). The log only grows, so each call reads only what was
 // added since the last one: a long log is read once, not on every call, and has no size past which the
 // designation is lost (it was 32 MB; review note 5, 2026-11-14). Memory is the kept lines and one read; every
 // line must still parse, as before, or the record is an error, never "nobody". `handoffs` adds the handed and failed
-// lines handoffChain reads.
-const EDGE_EVENTS = ['done', 'kept'], HANDOFF_EVENTS = ['done', 'kept', 'handed', 'failed'];
+// lines handoffChain reads, and the changes of a space manager's record (space-managers.cjs).
+const EDGE_EVENTS = ['done', 'kept'], HANDOFF_EVENTS = ['done', 'kept', 'handed', 'failed', 'designated', 'settled'];
 const LOG_READ = 4 * 1024 * 1024, LOG_LINE_MAX = 1024 * 1024, LOG_FILES = 8, LOG_MARK = 256;
 const logs = new Map();
 function rotationEdges(logFile, { handoffs = false } = {}) {
@@ -209,4 +225,4 @@ function author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly')
 function usableRecord(actor, records) {
   return records.find(record => record.id === actor?.id && record.nativeId === actor?.nativeId && !record.archived && !record.nativeContextPending && !['ended', 'background'].includes(record.state)) || null;
 }
-module.exports = { QueueSecretary, successor, handoffChain, handoffSteps, follow, rotationEdges, usableRecord, author };
+module.exports = { QueueSecretary, successor, handoffChain, handoffSteps, designatedAt, follow, rotationEdges, usableRecord, author };

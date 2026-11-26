@@ -5724,7 +5724,8 @@ class QueueDispatcher {
   // A confirmed handoff whose old session is kept waiting: one line, which a space's project manager follows at once
   // (R254: the person kept talking in the old one for two hours while its successor already had the manager's work).
   noteHanded(oldId, record) {
-    if (record.handedLogged) return;
+    // A line without the successor's native session names no one to follow; it is written once that is known (review N6).
+    if (record.handedLogged || !validId(record.newNativeId || '')) return;
     record.oldId ??= oldId;
     const entry = this.appendLog('handed', record);
     if (this.unlogged === entry) {
@@ -6071,6 +6072,18 @@ class QueueDispatcher {
   // The successor is gone before the old session could be ended: the old one has its work back, and is due again as
   // after any interruption.
   async dropSuccessor(oldId, record, old, holder, gone, now) {
+    // A manager that followed the handed line comes back only with this one: nothing is given back before it is
+    // written, and it is tried again on the next pass (review N1).
+    const failed = { ...record, oldId, reason: 'successor-gone' };
+    if (record.handedLogged && !record.failedLogged) {
+      const entry = this.appendLog('failed', failed, { reason: failed.reason });
+      if (this.unlogged === entry) {
+        this.log.splice(this.log.indexOf(entry), 1);
+        return this.noteGate(oldId, record, 'log-unwritten', now);
+      }
+      record.failedLogged = true;
+      this.save();
+    }
     const spaces = gone && old ? spacesOf(old) : [];
     // The spaces it left for a stop that did not go through.
     const home = old && spacesOf(old).every(id => record.roomIds.includes(id));
@@ -6093,8 +6106,7 @@ class QueueDispatcher {
     this.finishTried.delete(oldId);
     this.deferredAt.set(oldId, { at: now, due: record.reason });
     this.save();
-    const failed = { ...record, oldId, reason: 'successor-gone' };
-    this.appendLog('failed', failed, { reason: failed.reason });
+    if (!record.failedLogged) this.appendLog('failed', failed, { reason: failed.reason });
     this.failedEvent(record.roomIds, oldId, failed);
     this.notify('failed', failed);
     await this.broadcast();
