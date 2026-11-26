@@ -82,10 +82,10 @@ test('the button reads 任务板 · N 件等你 · 卡 m:ss and nothing else', (
     const f = setup(lang), need = f.host.querySelector('.task-status-need'), due = f.host.querySelector('.task-status-due');
     assert.equal(f.host.querySelector('.task-status-chips'), null); assert.equal(f.host.querySelector('.task-status-warning'), null);
     assert.equal(f.host.querySelector('.task-status-board').textContent, f.format('taskBoard.boardButton'));
-    assert.deepEqual([need.hidden, need.textContent], [false, f.format('taskBoard.need', { count: 1 })], 'a no-reply review waits for the person');
+    assert.deepEqual([need.hidden, need.textContent], [false, { zh: '1 件等你', en: '1 needs you' }[lang]], 'a no-reply review waits for the person; one is singular (N1)');
     assert.equal(due.hidden, true);
     f.board.setWaiting([card(f, 100)]);
-    assert.equal(need.textContent, f.format('taskBoard.need', { count: 2 }));
+    assert.equal(need.textContent, { zh: '2 件等你', en: '2 need you' }[lang]);
     assert.deepEqual([due.hidden, due.textContent], [false, f.format('taskBoard.cardDue', { time: '1:40' })]);
     assert.equal(f.button.getAttribute('aria-label'), [f.format('taskBoard.boardButton'), f.format('taskBoard.need', { count: 2 }), f.format('taskBoard.cardDueLabel', { time: '1:40' })].join(f.format('taskBoard.labelSeparator')));
     f.input.rooms[0].queue = [f.input.rooms[0].queue[0]]; f.board.setWaiting([]);
@@ -227,6 +227,82 @@ test('an open board changes only text; the next opening moves the row', () => {
   f.board.dispose();
 });
 
+test('English counts of one are singular on the board (N1)', () => {
+  const f = setup('en');
+  f.input.rooms[0].queue = [f.input.rooms[0].queue[0]]; f.board.update(f.input); f.board.open();
+  assert.equal(f.host.querySelector('.task-board-total').textContent, '1 task');
+  f.input.rooms[0].queue.push({ id: 'second', status: 'queued', text: 'Synthetic second', createdAt: f.now() }); f.board.update(f.input);
+  assert.equal(f.host.querySelector('.task-board-total').textContent, '2 tasks');
+  f.board.dispose();
+});
+
+const mode = (f, value) => f.host.querySelectorAll('.task-board-mode').find(b => b.dataset.grouping === value);
+const waitingItems = (f, n, from = 0) => Array.from({ length: n }, (_, i) => ({ id: 'wait' + (from + i), status: 'waiting', text: 'Synthetic decision ' + (from + i), sentTo: 'member', sentAt: f.now() - (from + i) * 1000 }));
+
+// N3: past eight waiting rows, one that arrives while the board is open is shown, not hidden behind 再显示.
+test('a waiting item that arrives on an open board is visible even past the first eight', () => {
+  const f = setup(), q = f.input.rooms[0].queue;
+  q.push(...waitingItems(f, 10)); f.board.update(f.input); f.board.open();
+  const waiting = () => f.groups().find(g => g.key === 'waiting').rows, more = () => f.host.querySelectorAll('.task-board-group').find(g => g.dataset.groupKey === 'waiting').querySelector('.task-board-more');
+  assert.equal(waiting().length, 8); assert.equal(more().textContent, f.format('taskBoard.more', { count: 3, total: 11 }));
+  q.push({ id: 'arrived', status: 'waiting', text: 'Synthetic new decision', sentTo: 'member', sentAt: f.now() });
+  f.board.update(f.input);
+  assert.equal(waiting().length, 9); assert.equal(waiting().at(-1), 'arrived', 'it joins the end of 等你, before 再显示');
+  assert.equal(more().textContent, f.format('taskBoard.more', { count: 3, total: 12 }), 'the older hidden rows stay folded');
+  q.push(...Array.from({ length: 12 }, (_, i) => ({ id: 'burst' + i, status: 'queued', text: 'Synthetic burst ' + i, createdAt: f.now() })));
+  f.board.update(f.input);
+  assert.equal(f.groups().find(g => g.key === 'queued').rows.length, 8, 'queued arrivals, not counted on the button, still page by eight');
+  more().fire('click');
+  assert.deepEqual(waiting().slice(-3), ['wait9', 'review', 'arrived'], 'the older rows fill in before it');
+  f.board.close(); f.board.open();
+  assert.equal(waiting()[0], 'arrived', 'the next opening sorts it among the others');
+  f.board.dispose();
+});
+
+// N2: a click outside hides the popover before its toggle event arrives; showing a waiting item then is a fresh opening (F).
+test('showing an item right after an outside click reopens by status with a new order', () => {
+  const f = setup(), q = f.input.rooms[0].queue;
+  f.board.open(); f.search('synthetic'); mode(f, 'agent').fire('click');
+  q[0] = { ...q[0], status: 'done', finishedAt: f.now() };
+  f.board.setWaiting([card(f, 100)]);
+  f.panel.popoverOpen = false;
+  f.board.show('actor:native:operation');
+  assert.equal(f.panel.matches(':popover-open'), true);
+  assert.equal(mode(f, 'status').getAttribute('aria-pressed'), 'true');
+  assert.equal(f.host.querySelector('.task-board-search').value, '');
+  assert.deepEqual(f.groups().map(g => g.key), ['waiting', 'done'], 'the finished item moved to its new group');
+  assert.equal(f.entry('actor:native:operation').getAttribute('aria-expanded'), 'true');
+  f.board.dispose();
+});
+
+// N10: a search or a new grouping starts the list at the top; an update keeps the reading place.
+test('a new search or grouping scrolls the list to the top, and an update does not', () => {
+  const f = setup(), list = f.host.querySelector('.task-board-list');
+  f.board.open(); list.scrollTop = 120;
+  f.input.rooms[0].queue.push({ id: 'late', status: 'queued', text: 'Synthetic late', createdAt: f.now() }); f.board.update(f.input);
+  assert.equal(list.scrollTop, 120);
+  f.search('synthetic'); assert.equal(list.scrollTop, 0);
+  list.scrollTop = 80; mode(f, 'space').fire('click'); assert.equal(list.scrollTop, 0);
+  f.board.dispose();
+});
+
+// N4 (replaces the deleted "ten rows grow to twenty" test): a status update on an open board keeps focus, scroll and a half-typed answer.
+test('a status update on an open board keeps focus, the scroll position and a half-typed answer', () => {
+  const textarea = e => e.querySelectorAll('*').find(n => n.tagName === 'TEXTAREA') || null, answer = () => textarea(f.host);
+  const f = setup('zh', { onWaiting: slot => { if (!textarea(slot.entry.actions)) slot.entry.actions.append(f.doc.createElement('textarea')); } });
+  const q = f.input.rooms[0].queue, list = f.host.querySelector('.task-board-list');
+  const question = { id: 'question:member:r1', kind: 'question', title: 'Synthetic question?', actorId: 'member', actorName: 'Synthetic member', sessionId: 'member', requestId: 'r1', time: f.now() };
+  q.push(...waitingItems(f, 10)); f.board.setWaiting([question]);
+  f.board.open(); f.entry('question:member:r1').fire('click');
+  const box = answer(); box.value = 'half-typed synthetic answer'; box.focus(); list.scrollTop = 200;
+  q.push(...waitingItems(f, 10, 10)); q[0] = { ...q[0], status: 'done', finishedAt: f.now() };
+  f.board.update(f.input); f.board.setWaiting([question]);
+  assert.equal(answer(), box, 'the same answer form'); assert.equal(box.value, 'half-typed synthetic answer');
+  assert.equal(f.doc.activeElement, box); assert.equal(list.scrollTop, 200);
+  assert.equal(f.host.querySelector('.task-board-total').textContent, '共 23 件');
+  f.board.dispose();
+});
+
 // A: what waits outside a queue is answered on the board, with the conversation's own card, form or creation card.
 test('cards, questions and creation permissions open in place through the existing renderers', () => {
   const seen = [], f = setup('zh', { onWaiting: (slot, item) => seen.push([item.kind, slot.entry.item === slot.box, slot.entry.actions.parentElement === slot.box, slot.question.parentElement === slot.box]) });
@@ -349,7 +425,7 @@ test('an unverifiable confirmation card is listed under 异常 for checking, wit
   const row = f.row('member:native-member:check'), sub = row.querySelector('.task-board-sub');
   assert.equal(row.querySelector('.task-board-task-title').textContent, f.format('taskBoard.confirmation'));
   assert.equal(sub.textContent, f.format('taskBoard.cardsUnverified')); assert.doesNotMatch(sub.textContent, /\d+:\d{2}/);
-  assert.equal(f.button.querySelector('.task-status-need').textContent, f.format('taskBoard.need', { count: 1 }), 'the fixture review only'); assert.equal(f.button.querySelector('.task-status-due').hidden, true);
+  assert.equal(f.button.querySelector('.task-status-need').textContent, f.format('taskBoard.needOne', { count: 1 }), 'the fixture review only'); assert.equal(f.button.querySelector('.task-status-due').hidden, true);
   f.entry('member:native-member:check').fire('click');
   assert.deepEqual(row.querySelectorAll('.task-board-action').map(b => b.dataset.action), ['openSessionOf']);
   row.querySelector('.task-board-action').fire('click');

@@ -166,7 +166,7 @@ const clean = scratch.cleanup(async () => {
   await until(async()=>(await page.locator('#agent-distribution [data-group="status:working"] .agent-group-count').textContent())==='4','Space members without queued tasks still count');
   check(true,'Native space work without queue items remains visible beside independent work');
   await fixture('state',ids[0],'approval');await until(async()=>(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('data-agent-status'))==='waiting','Native member needs a person');
-  await until(async()=>(await bar()).need===t('taskBoard.need',{count:1}),'Native approval counted').catch(()=>{});check((await bar()).need===t('taskBoard.need',{count:1}),'A native member approval with no queue is one item waiting on the button');
+  await until(async()=>(await bar()).need===t('taskBoard.needOne',{count:1}),'Native approval counted').catch(()=>{});check((await bar()).need===t('taskBoard.needOne',{count:1}),'A native member approval with no queue is one item waiting on the button');
   await fixture('state',ids[0],'disconnected');await until(async()=>(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('data-agent-status'))==='stuck','Disconnected member is shown as stuck or offline');
   check(!/(^|\s)0 /u.test((await bar()).text)&&(await page.locator(`#agent-distribution .agent-cell[data-session-id="${ids[0]}"]`).getAttribute('class')).includes('disconnected'),'A disconnected space member without a queue is never healthy zero and keeps its square');
   await fixture('state',ids[0],'working');

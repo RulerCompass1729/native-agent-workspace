@@ -148,7 +148,7 @@
       for (const node of [...parent.children]) if (!nodes.includes(node)) node.remove();
     };
     let input = { rooms: [], sessions: [], connected: true }, waiting = [], opened = false, disposed = false, signature = '';
-    let status = overview(input, now()), all = [], day = new Date(now()).toDateString(), grouping = 'status', term = '', expanded = '', frozen = null;
+    let status = overview(input, now()), all = [], day = new Date(now()).toDateString(), grouping = 'status', term = '', expanded = '', frozen = null, rewound = false;
     const folds = new Map(), shown = new Map(), views = new Map(), groupViews = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
     const board = make('span', 'task-status-board'), need = make('span', 'task-status-need'), due = make('span', 'task-status-due'), chevron = make('span', 'task-status-chevron');
@@ -219,18 +219,19 @@
         const first = k => byKey.get(groups.get(k)[0]), urgent = k => groups.get(k).some(key => byKey.get(key).group === 'waiting');
         order.sort((a, b) => urgent(b) - urgent(a) || (first(b) ? stamp(first(b)) : -1) - (first(a) ? stamp(first(a)) : -1));
       }
-      frozen = { grouping, term, order, groups, where: new Map() };
-      list.scrollTop = 0;
+      frozen = { grouping, term, order, groups, where: new Map(), arrived: new Set() };
+      rewound = true;
     }
     function arrange() {
       const byKey = new Map(all.filter(r => matches(r, term)).map(r => [r.key, r])), where = frozen.where;
       where.clear();
       for (const [k, keys] of frozen.groups) for (const key of keys) where.set(key, k);
-      // A task that arrived while the board was open goes to the end of its group.
+      // A task that arrived while the board was open goes to the end of its group; one that waits for the person,
+      // counted on the button, is never hidden behind 再显示 (N3).
       for (const r of byKey.values()) if (!where.has(r.key)) {
         const k = groupKey(r);
         if (!frozen.groups.has(k)) { frozen.groups.set(k, []); frozen.order.push(k); }
-        frozen.groups.get(k).push(r.key); where.set(r.key, k);
+        frozen.groups.get(k).push(r.key); where.set(r.key, k); if (r.group === 'waiting') frozen.arrived.add(r.key);
       }
       const down = new Set(unavailable().map(p => p.id));
       return frozen.order.map(k => ({ key: k, items: frozen.groups.get(k).map(key => byKey.get(key)).filter(Boolean), unavailable: grouping === 'space' && down.has(k) }))
@@ -265,6 +266,7 @@
     // Every opening starts grouped by status with 等你 first (F): no memory of the last choice.
     function open(options = {}) {
       if (disposed) return;
+      settle();
       if (!opened) { grouping = 'status'; term = ''; search.value = ''; folds.clear(); shown.clear(); expanded = ''; }
       if (!opened || typeof options.expand === 'string') relayout();
       opened = true; panel.hidden = false;
@@ -289,6 +291,8 @@
       if (v) { v.detail?.box.remove(); v.element.classList.remove('open'); attr(v.entry, 'aria-expanded', 'false'); }
       if ((restore || inside || doc.activeElement === doc.body) && toggle.isConnected && !doc.querySelector('dialog:modal')) toggle.focus({ preventScroll: true });
     }
+    // A click outside hides the popover before its toggle event reports it (N2): that board is already closed.
+    function settle() { if (opened && !panel.matches(':popover-open')) closed(); }
     function close(restore = true) { if (opened) { if (panel.matches(':popover-open')) panel.hidePopover(); closed(restore); } }
     panel.addEventListener('toggle', () => { if (!panel.matches(':popover-open')) closed(); });
     search.oninput = event => { if (!event.isComposing) { term = search.value.trim().toLowerCase(); relayout(); drawPanel(); } };
@@ -297,9 +301,9 @@
     function drawBar() {
       const count = waitingRows().length, cards = all.filter(r => r.expiresAt !== null), next = cards.reduce((v, r) => v === null || r.expiresAt < v ? r.expiresAt : v, null);
       const time = next === null ? '' : remaining(next);
-      set(board, f('boardButton')); set(need, count ? f('need', { count }) : ''); need.hidden = !count;
+      set(board, f('boardButton')); set(need, count ? f(count === 1 ? 'needOne' : 'need', { count }) : ''); need.hidden = !count;
       set(due, time ? f('cardDue', { time }) : ''); due.hidden = !time;
-      attr(toggle, 'aria-label', [f('boardButton'), count ? f('need', { count }) : '', time ? f('cardDueLabel', { time }) : ''].filter(Boolean).join(f('labelSeparator')));
+      attr(toggle, 'aria-label', [f('boardButton'), count ? f(count === 1 ? 'needOne' : 'need', { count }) : '', time ? f('cardDueLabel', { time }) : ''].filter(Boolean).join(f('labelSeparator')));
       attr(toggle, 'aria-expanded', String(opened)); host.hidden = false;
     }
     function go(row) {
@@ -392,9 +396,9 @@
       const session = grouping === 'agent' && liveSession(g.key), goes = Boolean(session) || grouping === 'space' && knownSpace(g.key);
       set(v.goTo, goes ? f(grouping === 'agent' ? 'openSession' : 'openQueue') : ''); v.goTo.hidden = !goes;
       set(v.note, g.unavailable ? f('spaceUnavailable') : '');
-      const rows = closedNow ? [] : g.items.slice(0, limit).map(view);
+      const rows = closedNow ? [] : g.items.filter((r, i) => i < limit || frozen.arrived.has(r.key)).map(view);
       move(v.rows, rows);
-      const left = closedNow ? 0 : g.items.length - Math.min(limit, g.items.length);
+      const left = closedNow ? 0 : g.items.length - rows.length;
       set(v.more, left ? f('more', { count: Math.min(PAGE, left), total: g.items.length }) : '');
       move(v.element, [v.head, ...(g.unavailable ? [v.note] : []), ...(rows.length ? [v.rows] : []), ...(left ? [v.more] : [])]);
       return v.element;
@@ -412,10 +416,11 @@
       const keys = new Set(all.map(r => r.key));
       for (const key of [...views.keys()]) if (!keys.has(key)) views.delete(key);
       const found = groups.reduce((n, g) => n + g.items.length, 0);
-      set(total, term ? f('found', { count: found }) : f('total', { count: all.length }));
+      set(total, term ? f('found', { count: found }) : f(all.length === 1 ? 'totalOne' : 'total', { count: all.length }));
       const notes = [status.stale ? f('stale') : '', ...(grouping === 'space' ? [] : unavailable().map(p => f('spaceUnavailableNamed', { name: p.name }))), status.cardsAvailable ? '' : f('cardsUnavailable')].filter(Boolean);
       set(availability, notes.join(' · ')); availability.hidden = !notes.length;
-      list.scrollTop = scroll;
+      // A new order (opening, search, grouping) starts at the top; an update keeps the reading place (N10).
+      list.scrollTop = rewound ? 0 : scroll; rewound = false;
       if (focused?.isConnected && doc.activeElement !== focused) focused.focus({ preventScroll: true });
     }
     function refreshRows() {
@@ -445,7 +450,7 @@
       if (new Date(now()).toDateString() !== day || cards.some(r => r.expiresAt <= now())) { update(); return; }
       if (cards.length) { drawBar(); for (const r of cards) { const v = views.get(r.key); if (v) set(v.sub, subText(r)); } }
     }
-    function show(id) { if (opened && term) { term = ''; search.value = ''; } open({ expand: JSON.stringify(['waiting', id]) }); }
+    function show(id) { settle(); if (opened && term) { term = ''; search.value = ''; } open({ expand: JSON.stringify(['waiting', id]) }); }
     const visible = () => { if (!doc.hidden) update(); }, resize = () => { drawBar(); if (opened) positionPanel(); };
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     translate(); drawBar();

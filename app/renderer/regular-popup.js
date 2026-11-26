@@ -12,9 +12,9 @@
     // Clicking outside closes it (R252 ①); the unsaved settings draft stays for the next opening (E).
     const dialog = make('dialog', 'discoveries-dialog'), dialogHeading = make('header'), dialogTitles = make('div'), dialogTitle = make('h2'), summary = make('p', 'discoveries-summary');
     const summaryText = make('span'), status = make('span', 'discoveries-notice'), tools = make('div', 'discoveries-tools');
-    const settingsButton = make('button', 'discoveries-settings-toggle'), settingsWord = make('span'), unsaved = make('span', 'discoveries-unsaved'), dismiss = make('button', 'discoveries-x');
+    const settingsButton = make('button', 'discoveries-settings-toggle'), settingsWord = make('span'), settingsMark = make('span', 'discoveries-settings-mark'), unsaved = make('span', 'discoveries-unsaved'), dismiss = make('button', 'discoveries-x');
     settingsButton.type = 'button'; settingsButton.setAttribute('aria-controls', 'discoveries-settings'); settingsButton.onclick = () => { settingsOpen = !settingsOpen; drawSettings(); };
-    settingsButton.append(settingsWord, unsaved); dismiss.type = 'button'; dismiss.onclick = () => dialog.close(); dismiss.textContent = '×';
+    settingsMark.setAttribute('aria-hidden', 'true'); settingsButton.append(settingsWord, settingsMark, unsaved); dismiss.type = 'button'; dismiss.onclick = () => dialog.close(); dismiss.textContent = '×';
     dialog.setAttribute('closedby', 'any'); dialog.setAttribute('aria-labelledby', 'discoveries-dialog-title'); dialogTitle.id = 'discoveries-dialog-title';
     summary.append(summaryText, status); dialogTitles.append(dialogTitle, summary); tools.append(settingsButton, dismiss); dialogHeading.append(dialogTitles, tools);
     const settings = make('section', 'discoveries-settings'); settings.id = 'discoveries-settings'; settings.hidden = true;
@@ -69,7 +69,7 @@
     function prune(cache, nodes) { for (const [key, value] of cache) if (!nodes.includes(value.node)) cache.delete(key); }
     function drawSettings() {
       settings.hidden = !settingsOpen; settingsButton.setAttribute('aria-expanded', String(settingsOpen));
-      set(settingsWord, f('settings') + (settingsOpen ? ' ⌃' : ' ⌄')); set(unsaved, dirty ? f('unsaved') : ''); unsaved.hidden = !dirty;
+      set(settingsWord, f('settings')); set(settingsMark, settingsOpen ? ' ⌃' : ' ⌄'); set(unsaved, dirty ? f('unsaved') : ''); unsaved.hidden = !dirty;
     }
     function translate() {
       activate.dataset.label = current?.config.enabled ? 'deactivate' : 'activate';

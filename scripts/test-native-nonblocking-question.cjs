@@ -97,7 +97,7 @@ function ledger() {
   checks.push({ name: 'native turn status while the question is open', ok: true, detail: s.state });
   await board.need().waitFor();
   const need = await board.need().innerText();
-  check('等你 +1', need === locale.format('zh', 'taskBoard.need', { count: 1 }), need);
+  check('等你 +1', need === locale.format('zh', 'taskBoard.needOne', { count: 1 }), need);
   const viewForm = page.locator('#approval .question-form');
   check('the session view form is answerable', await viewForm.count() === 1 && await viewForm.locator('input[type=radio]').first().isEnabled());
   check('the phone home row says it needs you', (await phone()).question === true);

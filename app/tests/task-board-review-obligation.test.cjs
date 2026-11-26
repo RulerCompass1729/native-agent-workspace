@@ -23,7 +23,7 @@ for(const mode of ['human','control'])for(const language of ['zh','en'])test(mod
   // The board has no state help since R250 (11-25): the row itself must still say the person is needed.
   const head=f.host.querySelector('.task-board-group');assert.equal(head.dataset.groupKey,'waiting');
   const entry=f.host.querySelector('.task-board-entry');assert.equal(entry.dataset.itemId,'task');assert.equal(f.host.querySelector('.task-board-sub').textContent,locale.format(language,'taskBoard.status.review'));
-  assert.equal(f.host.querySelector('.task-status-need').textContent,locale.format(language,'taskBoard.need',{count:1}));
+  assert.equal(f.host.querySelector('.task-status-need').textContent,locale.format(language,'taskBoard.needOne',{count:1}));
   entry.fire('click');assert.equal(f.host.querySelector('.task-board-reason').textContent,locale.format(language,'taskBoard.reasonIntervened'));assert.equal(f.host.querySelector('.task-board-action').dataset.action,'checkIn');
   assert.doesNotMatch(f.host.textContent,/不要求你回复|No reply is requested/,'An actual unanswered decision is hidden behind an unconditional no-reply promise');} finally {b.dispose();}
 });

@@ -46,6 +46,9 @@ test('the dialog closes on an outside click or ×, and shows content before its 
   assert.deepEqual(f.dialog.children.map(e => e.tagName + '.' + e.className), ['HEADER.', 'SECTION.discoveries-settings', 'DIV.discoveries-content', 'FOOTER.discoveries-footer']);
   assert.equal(f.settings.hidden, true, 'a running source opens to its content');
   assert.equal(f.toggle.getAttribute('aria-expanded'), 'false'); assert.equal(f.toggle.textContent, '设置 ⌄');
+  // aria-expanded names the state, so a screen reader hears 设置 without the arrow (N7).
+  const mark = f.toggle.querySelector('.discoveries-settings-mark');
+  assert.equal(mark.getAttribute('aria-hidden'), 'true'); assert.equal(f.toggle.children[0].textContent, '设置');
   assert.equal(f.host.querySelector('.discoveries-summary').textContent, 'GitHub Trending · 每日 · 每天 09:00 · 已开启');
   f.toggle.fire('click');
   assert.equal(f.settings.hidden, false); assert.equal(f.toggle.textContent, '设置 ⌃');
@@ -61,7 +64,8 @@ test('a source that is off opens with its settings, and privacy and budget read 
   await f.open();
   assert.equal(f.settings.hidden, false);
   const terms = f.host.querySelectorAll('.discoveries-privacy');
-  assert.equal(terms.length, 1); assert.match(terms[0].textContent, /DeepSeek/); assert.match(terms[0].textContent, /\$0\.01/);
+  assert.equal(terms.length, 1); assert.match(terms[0].textContent, /DeepSeek/); assert.match(terms[0].textContent, /预算每天 \$0\.01/, 'the budget is daily (N6)');
+  assert.match(locale.format('en', 'discoveries.terms'), /\$0\.01 daily budget; it stops when the budget is exceeded or the usage is unclear\./);
   assert.equal(f.host.querySelector('.discoveries-location'), null);
   assert.equal(f.host.querySelector('.discoveries-empty').hidden, false);
   f.view.dispose();
