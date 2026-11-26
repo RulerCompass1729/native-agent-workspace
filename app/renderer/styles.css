@@ -1174,7 +1174,7 @@ main.settings-panel-open{margin-inline-end:340px}
 
 /* Focused member: preserve type sizes and all existing actions, using less
    padding and one scrollable member strip. Full peer state remains one click away. */
-.room-invite-compact, #header-actions .membership-menu-only { display: none; }
+.room-invite-compact, #header-actions .membership-menu-only, #session-toolbar .membership-menu-only { display: none; }
 #room-overview { background:transparent;border-color:transparent;box-shadow:none;font-weight:600; }
 #member-open-session { white-space:nowrap;color:var(--ink); }
 #room-member-status-dialog { width: 490px; max-height: 75vh; overflow: auto; padding: 20px; }
@@ -1193,6 +1193,7 @@ main.settings-panel-open{margin-inline-end:340px}
   .focused-member #header-actions { flex: none; gap: 4px; }
   .focused-member #header-actions button { padding: 4px 7px; min-height: 28px; }
   .focused-member #header-actions > .header-secondary:not(#usage-button) { display: none; }
+  .focused-member-surface #session-toolbar > .header-secondary:not(#usage-button) { display: none; }
   #header.focused-member #session-header-more { display: block; }
   .focused-member-surface #room-tabs { flex-wrap: wrap; gap: 4px; min-width: 0; padding: 4px 10px; }
   .focused-member-surface #room-tabs > button { flex: none; padding: 4px 6px; min-height: 28px; }

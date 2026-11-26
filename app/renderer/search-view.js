@@ -164,14 +164,13 @@ async function showRoomRecord(roomId, messageId, query = '') {
     toast(uiText('search.sharedRemoved')); return false;
   }
   await selectSpace(roomId);
-  const stream = getActivityStream();
-  if (stream) { stream.open(roomId, '', messageId); return true; }
-  roomRecordScope = ''; roomRecordReturn = null;
-  $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
-  roomSurface = 'records';
-  await selectRoom();
-  if (messageId) pointToMessage($('room-messages'), roomReadingKey(), messageId, query);
-  return true;
+  // R248: the shared record is the 信息流 now; a record it does not show as a line opens where it came from.
+  const feed = getSpaceFeed();
+  if (!feed) return false;
+  feed.reveal(messageId); showRoomSurface('stream'); feed.render();
+  if (!messageId || feed.shown()) return true;
+  const row = records.find(m => m.id === messageId), target = window.nativeWorkspaceTaskStream.originalTarget(row);
+  return target ? openOriginal(target) : true;
 }
 async function returnToReading() {
   const target = searchReturn; if (!target) return;

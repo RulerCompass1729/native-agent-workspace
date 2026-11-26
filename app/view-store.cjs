@@ -9,11 +9,12 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const text = (value, limit) => typeof value === 'string' && value.length <= limit;
 function validRoomView(view, id) {
   if (!object(view)) return false;
-  for (const key of ['roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo']) if (view[key] !== undefined && !text(view[key], 100)) return false;
+  for (const key of ['roomSession', 'roomMemberChoice', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo']) if (view[key] !== undefined && !text(view[key], 100)) return false;
   if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
   if (view.draftRevision !== undefined && (!Number.isSafeInteger(view.draftRevision) || view.draftRevision < 0)) return false;
   if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
-  if (view.roomSurface !== undefined && !['overview', 'records', 'conversation'].includes(view.roomSurface)) return false;
+  // 'records' and 'conversation' are views saved before R248; the page opens them as the 总览.
+  if (view.roomSurface !== undefined && !['summary', 'stream', 'overview', 'records', 'conversation'].includes(view.roomSurface)) return false;
   if (view.roomRecordScope !== undefined && !text(view.roomRecordScope, 100)) return false;
   if (view.roomRecordReturn !== undefined && view.roomRecordReturn !== null && (!object(view.roomRecordReturn) ||
       Object.keys(view.roomRecordReturn).some(key => !['id', 'nativeId'].includes(key)) || !text(view.roomRecordReturn.id, 100) || !view.roomRecordReturn.id || !text(view.roomRecordReturn.nativeId, 512))) return false;

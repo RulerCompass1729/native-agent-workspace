@@ -236,7 +236,7 @@ test('the actual overview measures column heights after its final header and sha
     roomOverview: { toolbar: {}, update() { context.applyColumnTerminalHeight(binding, 112); } },
     renderHeaderLayout() { limits.max = 64; }, current: () => null, selected: 'room',
     // T-163: the header's row is fitted once the page has shown or hidden the overview's own controls in it.
-    fitRoomTabs() { calls.fittedWithToolbar = context.roomOverview.toolbar.hidden; },
+    fitRoomTabs() { calls.fittedWithToolbar = context.roomOverview.toolbar.hidden; }, markRoomTabs() {},
     $: element,
   });
   const refresh = renderer.indexOf('function fitColumnTerminalWidth(');
@@ -245,7 +245,8 @@ test('the actual overview measures column heights after its final header and sha
   vm.runInContext(renderer.slice(begin, renderer.indexOf('const nativeUsable =', begin)), context);
   context.renderRoomOverview();
   assert.equal(binding.nativeHost.style.height, '64px', 'Late layout must replace the earlier 96px budget');
-  assert.equal(calls.fittedWithToolbar, false, 'The header row is fitted after the layout controls are shown, not before');
+  // R248: a space has no 列表/简化信息 controls; the row is fitted once they are hidden.
+  assert.equal(calls.fittedWithToolbar, true, 'The header row is fitted after the layout controls are hidden, not before');
   assert.equal(binding.terminalHeight, 64);
   assert.deepEqual(calls.fit, [], 'Passive layout never resizes the native grid');
   assert.equal(calls.persist, 0, 'Passive layout keeps the saved preference');

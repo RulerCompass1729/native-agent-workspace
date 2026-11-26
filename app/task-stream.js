@@ -95,12 +95,21 @@
   // each member's last reply of a turn. NAW's own records (queue, delivery, timers, cards, tools, thinking,
   // automatic input) are left out. room: the space's record; sessions: its members' display sessions (a member's
   // replies and the words sent to it outside the space are read from its messages when shown).
+  // every (信息流, R249 19:09): each reply a member finished, also inside a turn still running. The phone's 「对话」 omits it.
   const WAKE_HEADER = /^\[Workspace message from [^\n]*\]\n/u;
   const PERSON_ORIGINS = ['human', 'human-mobile', 'room'];
   const said = m => typeof m?.text === 'string' && m.text.trim() !== '';
   const NOTIFICATION = /<task-notification>[\s\S]*?<\/task-notification>/g;
   const onlyNotifications = text => Boolean(text.match(NOTIFICATION)) && !text.replace(NOTIFICATION, '').trim();
-  function speechStream(room, { sessions = [] } = {}) {
+  // A finished reply: a native response block or a plain reply, not progress commentary, not still being written.
+  const UNSAID = ['streaming', 'running', 'awaiting-native'];
+  const spokenReply = m => m?.role === 'assistant' && (!m.kind || m.kind === 'response') && !m.volatile && said(m) && m.phase !== 'commentary' && !UNSAID.includes(m.status);
+  // 总览 「最后说的话」: the newest reply the feed shows for this member.
+  function lastReply(s) {
+    if (Array.isArray(s?.messages) && !s.messagesOmitted) return s.messages.findLast(spokenReply) || null;
+    return spokenReply(s?.messageSummary?.lastAssistant) ? s.messageSummary.lastAssistant : null;
+  }
+  function speechStream(room, { sessions = [], every = false } = {}) {
     const items = [], byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
     const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
     const stamp = value => Number.isFinite(value) ? value : 0;
@@ -126,7 +135,8 @@
         if (!m) continue;
         time = stamp(m.time) || time;
         if (m.role === 'assistant') {
-          if (!m.kind && !m.volatile && said(m) && m.status !== 'streaming' && m.phase !== 'commentary') last = m;
+          if (every ? spokenReply(m) : !m.kind && !m.volatile && said(m) && m.status !== 'streaming' && m.phase !== 'commentary') last = m;
+          if (every) reply();
           continue;
         }
         if (m.role !== 'user') continue;
@@ -169,10 +179,19 @@
         const p = m.peerMessage, body = m.uiMessage?.params?.body ?? String(m.text || '').split('\n').slice(1).join('\n');
         items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: p.senderId || '', fromName: p.senderId ? nameOf(p.senderId, p.senderName) : p.senderName ? `「${p.senderName}」` : '',
           to: [{ id: p.recipientId || '', name: nameOf(p.recipientId, p.recipientName) }], text: body, time, target, unverified: true });
-      } else if (m.role === 'assistant' && !m.kind && typeof m.sessionId === 'string' && said(m) && (m.finalReply || !m.sharedStream && m.status !== 'streaming')) {
+      } else if (typeof m.sessionId === 'string' && (every ? spokenReply(m) && (m.finalReply || m.status === 'complete' || !m.sharedStream)
+        : m.role === 'assistant' && !m.kind && said(m) && (m.finalReply || !m.sharedStream && m.status !== 'streaming'))) {
         if (time >= (shownSince.get(m.sessionId) ?? Infinity)) continue;
         items.push({ id: `room:${m.id}`, fromKind: 'agent', fromId: m.sessionId, fromName: nameOf(m.sessionId, m.name), to: [], text: m.text, time, target });
       }
+    }
+    // A member whose messages this window omits still has its last reply here, as in 总览; nothing beyond it.
+    if (every) for (const s of byId.values()) {
+      if (shownSince.has(s.id)) continue;
+      const last = lastReply(s);
+      if (!last || items.some(i => i.fromId === s.id && i.target?.messageId === last.id)) continue;
+      items.push({ id: `reply:${s.id}:${last.id}`, fromKind: 'agent', fromId: s.id, fromName: nameOf(s.id), to: [], text: last.text, time: stamp(last.time),
+        target: { sessionId: s.id, nativeId: s.nativeId || '', messageId: last.id } });
     }
     const seen = new Set();
     return items.filter(i => !seen.has(i.id) && seen.add(i.id)).map((item, order) => ({ item, order }))
@@ -279,7 +298,87 @@
     return { sessionId, nativeId: row.nativeId || '', messageId: row.sharedStream ? row.nativeMessageId || '' :
       row.role === 'human' ? row.deliveries?.find(d => d.recipientId === sessionId)?.id || row.id || '' : '' };
   }
-  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, endedSession, roomTasks, speechStream, speechInvolves, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget };
+  // R249 信息流: one line per thing that happened in a space, newest first: what was said, each turn's last reply,
+  // dispatches, deliveries, waits for the person, completions, joins and leaves. Records the speech stream already
+  // shows appear once; every other record of the space stays, as 「空间」, so nothing the shared record showed is lost.
+  // room: one space's record; sessions: its members' display sessions (a member without messages reads from the mirror).
+  const FEED_GROUP = { say: 'say', reply: 'say', dispatch: 'work', ready: 'work', done: 'work', queue: 'work', wait: 'wait', answered: 'work', join: 'other', space: 'other' };
+  const QUEUE_KIND = {
+    'notice.queue.dispatched': 'dispatch', 'notice.queue.ready': 'ready', 'notice.queue.readyUnnamed': 'ready',
+    'notice.queue.waiting': 'wait', 'notice.queue.lookAt': 'wait', 'notice.queue.resolved': 'done', 'notice.queue.resolvedBySteward': 'done',
+  };
+  function spaceFeed(room, { sessions = [] } = {}) {
+    if (!room) return [];
+    const byId = new Map(sessions.filter(Boolean).map(s => [s.id, s]));
+    const nameOf = (id, fallback = '') => plainName(byId.get(id)?.name || fallback);
+    const stamp = value => Number.isFinite(value) && Math.abs(value) <= 8640000000000000 ? value : 0;
+    const items = [], spoken = new Set();
+    for (const s of speechStream(room, { sessions, every: true })) {
+      if (s.id.startsWith('room:')) spoken.add(s.id.slice(5));
+      // NAW's dispatch input is the dispatch record below, with its item.
+      if (s.fromKind === 'dispatch') continue;
+      items.push({ id: s.id, roomId: room.id, kind: s.fromKind === 'agent' && !s.to.length ? 'reply' : 'say', time: s.time, fromKind: s.fromKind,
+        fromId: s.fromId, fromName: s.fromName, unverified: Boolean(s.unverified), to: s.to, text: s.text, body: s.text, target: s.target || null,
+        involved: [s.fromId, ...s.to.map(t => t.id)].filter(Boolean) });
+    }
+    const tasks = roomTasks(room, { nameOf }), taskOf = new Map(), lastWait = new Map();
+    for (const task of tasks.tasks) for (const event of task.history) {
+      taskOf.set(event, task);
+      if (QUEUE_KIND[event.uiMessage?.key] === 'wait') lastWait.set(task.id, event);
+    }
+    for (const row of [...(Array.isArray(room.messages) ? room.messages : []), ...(Array.isArray(room.events) ? room.events : [])]) {
+      // A mirror of a member's own stream (its tools and partial replies) is read through the speech stream.
+      if (!row || row.volatile || row.sharedStream || spoken.has(row.id)) continue;
+      // Members' words and replies are in the speech stream above; a mirrored part of a reply is not a record.
+      if (!row.uiMessage && !row.kind && (row.role === 'assistant' || row.role === 'human')) continue;
+      if (row.kind === 'agent-wake' || row.kind === 'agent-peer') continue;
+      const key = row.uiMessage?.key || '', params = row.uiMessage?.params || {}, task = taskOf.get(row), ownerId = row.sessionId || task?.ownerId || '';
+      const base = { id: `record:${row.id ?? items.length}`, roomId: room.id, time: stamp(row.time), row, itemId: task?.id || row.itemId || '',
+        taskStatus: task?.status || '', target: originalTarget(row, task?.item), involved: [ownerId].filter(Boolean) };
+      let kind = QUEUE_KIND[key] || (row.monitor?.kind === 'done' ? 'done' : row.kind === 'join' || row.kind === 'leave' ? 'join' : row.kind === 'queue' ? 'queue' : 'space');
+      const name = nameOf(ownerId, params.name || row.name);
+      if (kind === 'dispatch') {
+        items.push({ ...base, kind, fromKind: 'naw', fromId: '', fromName: '', to: ownerId || name ? [{ id: ownerId, name }] : [], text: params.text || '', body: task?.text || params.text || '' });
+      } else if (kind === 'ready') {
+        const title = task?.title || params.text || '';
+        items.push({ ...base, kind, fromKind: 'agent', fromId: ownerId, fromName: name, to: [], text: `READY ${params.branch || ''} ${params.commit || ''}`.trim() + (title ? ` · ${title}` : ''), body: task?.text || title });
+      } else if (kind === 'wait') {
+        const question = task?.item?.reply ? decisionQuestion(task.item.reply) || firstLine(task.item.reply) : '';
+        // Only the newest wait of an item still waiting is 「等你」; one the person answered is a record of it.
+        if (task && !(NEEDS_YOU.includes(task.status) && lastWait.get(task.id) === row)) kind = 'answered';
+        items.push({ ...base, kind, fromKind: 'agent', fromId: ownerId, fromName: name, to: [], text: question || params.text || '',
+          body: [task?.item?.reply || '', task?.text || ''].filter(Boolean).join('\n\n') || params.text || '', look: key === 'notice.queue.lookAt',
+          question: task?.item?.reply ? decisionQuestion(task.item.reply) : '' });
+      } else if (kind === 'done') {
+        items.push({ ...base, kind, fromKind: ownerId ? 'agent' : '', fromId: ownerId, fromName: name, to: [], text: row.text || params.text || task?.title || '', body: task?.text || row.text || params.text || '' });
+      } else {
+        // Joins, leaves, other queue records and the space's own records read as the shared record showed them.
+        if (kind === 'queue' && !key) kind = 'space';
+        items.push({ ...base, kind, fromKind: ownerId ? 'agent' : '', fromId: ownerId, fromName: kind === 'join' ? name : '', to: [], text: null, body: null });
+      }
+    }
+    // The member's reply that asked the person is the wait line's text already: one line, with the whole reply in it.
+    const asked = new Set();
+    for (const wait of items) {
+      if (!wait.question) continue;
+      const reply = items.findLast(i => i.kind === 'reply' && i.fromId === wait.fromId && !asked.has(i.id) && decisionQuestion(i.text) === wait.question);
+      if (!reply) continue;
+      asked.add(reply.id);
+      wait.body = [reply.text, wait.row && taskOf.get(wait.row)?.text || ''].filter(Boolean).join('\n\n');
+    }
+    const seen = new Set();
+    return items.filter(i => !asked.has(i.id) && !seen.has(i.id) && seen.add(i.id)).map((item, order) => ({ item, order }))
+      .sort((a, b) => b.item.time - a.item.time || b.order - a.order).map(({ item }) => item);
+  }
+  // One feed line passes the chosen kind group, the chosen people (any of them) and the words searched for.
+  function feedMatches(item, { group = 'all', people = [], query = '', words = () => '' } = {}) {
+    if (group !== 'all' && FEED_GROUP[item.kind] !== group) return false;
+    if (people.length && !people.some(id => item.involved.includes(id) || id === '@person' && item.fromKind === 'person')) return false;
+    if (!query) return true;
+    const needle = query.toLocaleLowerCase();
+    return [item.fromName, ...item.to.map(t => t.name), item.text ?? '', item.body ?? '', words(item)].join('\n').toLocaleLowerCase().includes(needle);
+  }
+  const api = { ENDED, NEEDS_YOU, RANK, UNHELD_WAITING, DECISION_MARKERS, FEED_GROUP, shortText, firstLine, plainName, taskTitle, decisionQuestion, taskStatus, endedSession, roomTasks, speechStream, spokenReply, lastReply, speechInvolves, needsApproval, openQuestions, butlerQuestion, waitingItems, records, originalTarget, spaceFeed, feedMatches };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.nativeWorkspaceTaskStream = api;
 })(globalThis);

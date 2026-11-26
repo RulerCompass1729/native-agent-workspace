@@ -496,7 +496,7 @@
         const bubble = node('div', i.text, 'bubble'); if (i.textOmitted) bubble.append(node('p', t('omit'), 'small-note'));
         const s = view.sessions.find(s => s.id === i.fromId) || {};
         body.append(author, bubble);
-        // Same threshold as the Mac (speech-stream.js folds); the open ones stay open across repaints.
+        // Long: over 600 characters or 10 lines (the Mac's former 「对话」 rule); the open ones stay open across repaints.
         if (i.text.length > 600 || i.text.split('\n').length > 10) {
           const open = speechOpen.has(i.id), toggle = button(t(open ? 'speechCollapse' : 'speechExpand'), () => {
             const top = article.getBoundingClientRect().top;

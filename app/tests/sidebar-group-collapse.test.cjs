@@ -45,18 +45,17 @@ test('T-132: in the narrow rail a folded group keeps its open session menu and f
 });
 test('T-132: every real way of opening a space keeps the same rows in the flat and the grouped list',async()=>{
  const h=harness(),ctx=h.ctx,elements={};
- Object.assign(ctx,{sidebarView:'flat',sidebarSessions:()=>h.records.slice(),$:id=>elements[id]??=(id==='session-list'?h.list:new h.Element('div')),spaceRecord:id=>id==='shared'?{id}:h.rooms.find(r=>r.id===id),captureReadingViews(){},captureRoomView(){},closeMentions(){},suspendColumnInputs(){},roomOverview:null,spaceId:'shared',state:{},projectSpace:s=>s,restoreRoomView(){},runPreview:null,shareRevision:0,lastRoomMessages:'',lastMessages:'',roomSession:'',selectRoom:()=>{},attempt:fn=>fn()});
+ Object.assign(ctx,{sidebarView:'flat',sidebarSessions:()=>h.records.slice(),$:id=>elements[id]??=(id==='session-list'?h.list:new h.Element('div')),spaceRecord:id=>id==='shared'?{id}:h.rooms.find(r=>r.id===id),captureReadingViews(){},captureRoomView(){},closeMentions(){},suspendColumnInputs(){},focusedRoomMember:()=>false,rememberRoomMemberView(){},roomOverview:null,spaceId:'shared',state:{},projectSpace:s=>s,restoreRoomView(){},runPreview:null,shareRevision:0,lastRoomMessages:'',lastMessages:'',roomSession:'',selectRoom:()=>{},attempt:fn=>fn()});
  // The list as renderSessions builds it, the real selectSpace, and the three real click handlers that open a space.
- vm.runInContext('function renderList(){\n'+section(source,"  const visible = selected === 'room'",'\n  const keys = new Set(')+'\n  lastOccurrences = occurrences;\n}\n'+section(source,'async function selectSpace(','\nfunction renderSpaceNavigation')+'\n'+source.match(/^\$\('room-nav'\)\.onclick = .*$/m)[0],ctx);
+ vm.runInContext('function renderList(){\n'+section(source,"  const visible = sidebarSessions()",'\n  const keys = new Set(')+'\n  lastOccurrences = occurrences;\n}\n'+section(source,'async function selectSpace(','\nfunction renderSpaceNavigation')+'\n'+source.match(/^\$\('room-nav'\)\.onclick = .*$/m)[0],ctx);
  const spaceNav=vm.runInContext('(room => '+source.match(/nav = button\('', (\(\) => selectSpace\(room\.id[^)]*\)), 'room-nav'\)/)[1]+')',ctx);
  const rows=()=>{ctx.renderList();return Array.from(ctx.lastOccurrences,row=>row.key);};
  for(const view of ['flat','grouped']){
   ctx.sidebarView=view;const before=rows();
   for(const open of [()=>spaceNav({id:A})(),()=>elements['room-nav'].onclick(),...(view==='grouped'?[()=>h.group(B).title.onclick()]:[]),()=>spaceNav({id:A})()]){await open();assert.deepEqual(rows(),before,`${view} list after opening ${ctx.spaceId}`);}
   assert.deepEqual(new Set(Array.from(ctx.lastOccurrences,row=>row.record.id)),new Set(h.records.map(r=>r.id)));
-  // 11-23 requirement change: inside the space view the left list is that space's members (one list, on the left);
-  // leaving it brings back the same rows, so no filter outlives the space (what T-132 fixed).
-  ctx.orderedMembers=(id=ctx.spaceId)=>h.records.filter(r=>spaces.isMember(r,id));ctx.selected='room';assert.deepEqual(rows(),[`member:${A}:${h.record.id}`]);ctx.selected='';assert.deepEqual(rows(),before);
+  // R247 (11-25): inside a space the left list keeps the same rows; the open space is only highlighted.
+  ctx.selected='room';assert.deepEqual(rows(),before);ctx.selected='';assert.deepEqual(rows(),before);
  }
  assert.equal(ctx.spaceId,A);
 });

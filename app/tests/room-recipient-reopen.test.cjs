@@ -33,7 +33,7 @@ function fixture(records, spaceId) {
   };
   const context = vm.createContext({
     state: { sessions: plain(records), rooms: [{ id: 'shared' }, { id: otherSpace }] }, spaceId,
-    selected: 'room', mode: 'chat', terminalLayout: 'split', roomSession: '', roomSurface: 'overview',
+    selected: 'room', mode: 'chat', terminalLayout: 'split', roomSession: '', roomSurface: 'overview', ROOM_SURFACES: ['summary', 'stream', 'overview'],
     roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null,
     roomThread: '', roomReplyTo: '', pendingRoomFilter: '', roomDraftRevision: 0, roomSubmitting: null,
     roomViews: {}, roomHistories: new Map(), roomMention: null, roomMentionHistory: mentions.editHistory(),
