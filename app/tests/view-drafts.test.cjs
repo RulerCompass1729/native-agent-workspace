@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('../view-drafts.cjs');
+const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow } = require('../view-drafts.cjs');
 
 test('legacy window drafts are retained as unconfirmed copies, including after serialization', () => {
   const view = { draft: { id: 'session', text: 'older private draft' } };
@@ -46,4 +46,27 @@ test('unresolved recovery copies survive later normal editing/sending and only e
   assert.deepEqual(retainRecovery(restored, 'b', 'memory ack only'), [], 'Late state/ACK cannot revive the same discarded edit');
   beginDraft(restored, 'b', 'memory ack only');
   assert.deepEqual(retainRecovery(restored, 'b', 'memory ack only'), ['memory ack only'], 'A new actual edit can independently need recovery even when text is identical');
+});
+
+test('words given back after a handoff become a copy of that session\'s draft, also for a session never typed into here, once each', () => {
+  const view = {};
+  assert.deepEqual(returnCopy(view, 'b', 'held words'), ['held words']);
+  assert.deepEqual(returnCopy(view, 'b', 'held words'), ['held words'], 'given back twice, kept once');
+  assert.equal(backups(view).b.text, '', 'the draft itself is left as it was');
+  beginDraft(view, 'a', 'typing');
+  assert.deepEqual(returnCopy(view, 'a', 'older'), ['older']);
+  assert.equal(backups(view).a.text, 'typing');
+  assert.equal(Object.hasOwn(backups(view), '__proto__'), false);
+  assert.deepEqual(returnCopy(view, '__proto__', 'x'), ['x']);
+  assert.equal(Object.getPrototypeOf(backups(view)), Object.prototype, 'an id is never a prototype');
+});
+
+test('words go back to the open window they came from, else to another open one: a closed window never returns', () => {
+  const a = { view: { owner: 'owner-a' } }, b = { view: { owner: 'owner-b' } };
+  assert.equal(returnWindow([a, b], 'owner-b'), b);
+  assert.equal(returnWindow([a], 'owner-b'), a, 'from a window that was closed');
+  assert.equal(returnWindow([], 'owner-b'), null, 'no window open: asked again');
+  const closing = { view: { owner: 'owner-b', active: false } }, agent = { background: true, view: { owner: 'owner-b' } };
+  assert.equal(returnWindow([closing, a], 'owner-b'), a, 'a closing window is not restored at start');
+  assert.equal(returnWindow([agent], 'owner-b'), null, 'never an agent’s view');
 });

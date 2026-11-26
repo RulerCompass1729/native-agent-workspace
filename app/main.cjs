@@ -55,7 +55,7 @@ const { roomId: validRoomId, roomIds, isMember, untouchedDefault, placementRevis
 const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { PersonActions, asker } = require('./person-actions.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
-const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
+const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow } = require('./view-drafts.cjs');
 const { createOutboxBroker } = require('./computer-use-outbox-broker.cjs');
 const { bindOriginalOutbox, bindClaudeOutbox, bindOriginalControl, bindClaudeControl } = require('./computer-use-outbox-owner.cjs');
 const { createStockOutboxView } = require('./computer-use-outbox-view.cjs');
@@ -1256,6 +1256,8 @@ async function startQueueDispatcher() {
       dataDir,
       // Prefer a window's client: its state is already held and kept current.
       clients: personClient,
+      ownerClient: windowClientOf,
+      giveBack: giveBackHeld,
       // A connection of its own is no page a person sees: what it creates is the person's window's to use.
       connect: owner => connect(dataDir, owner, { page: false }),
       // A rename replaces the Map of names, and a retried start what holds it: each name is read when it is asked for.
@@ -1328,6 +1330,24 @@ async function startQueueDispatcher() {
     // Optional: the app and every native session keep working without it.
     queueDispatcher = null;
   }
+}
+// The person's window that controls this session: only it may send there as the person (workspace.cjs send).
+function windowClientOf(owner) {
+  for (const context of windows.values()) {
+    const usable = !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed;
+    if (usable && context.view?.owner === owner) return context.client;
+  }
+  return null;
+}
+// Held words NAW could not send (queue-dispatch.cjs returnHeld): a copy of that session's draft in a window of the
+// person's, the one they were sent from when it is open. False with no window open; asked again.
+function giveBackHeld(owner, sessionId, text, name) {
+  const context = returnWindow([...windows.values()].filter(c => !c.win.isDestroyed()), owner);
+  if (!context) return false;
+  const copies = returnCopy(context.view, sessionId, text);
+  saveViews();
+  sendToPage(context, 'workspace:draft-recovery', { id: sessionId, copies, name });
+  return true;
 }
 function personClient() {
   for (const context of windows.values()) {
@@ -2901,7 +2921,9 @@ async function boot() {
   register('landing', c => { if (c.background || landingOwner === null || c.view?.owner !== landingOwner) return false; landingOwner = null; return true; });
   for (const method of ['send', 'queue', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
-    const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
+    // The person's words while this session's handoff is written wait for it (queue-dispatch.cjs holdMessage).
+    const held = isCurrentHumanContext(c) ? queueDispatcher?.holdMessage(id, text, nativeId, c.view?.owner) : null;
+    const result = held || await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
     if (!result?.contextChanged && acceptSentDraft(c.view, id, draft, text)) {
@@ -3486,7 +3508,7 @@ function notifyButlerQuit(key) {
 }
 // A session rotation is announced to the person; the space record and log keep the ids.
 function notifyRotation(outcome, record) {
-  const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody', needsTrust: 'os.rotationNeedsTrustBody', trustTimedOut: 'os.rotationTrustTimedOutBody', trustTimeoutUnconfirmed: 'os.rotationTrustTimeoutUnconfirmedBody', trustCleanupUnconfirmed: 'os.rotationTrustCleanupUnconfirmedBody', trustStateInvalid: 'os.rotationTrustStateInvalidBody', trustStateUnknown: 'os.rotationTrustStateUnknownBody' };
+  const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody', needsTrust: 'os.rotationNeedsTrustBody', trustTimedOut: 'os.rotationTrustTimedOutBody', trustTimeoutUnconfirmed: 'os.rotationTrustTimeoutUnconfirmedBody', trustCleanupUnconfirmed: 'os.rotationTrustCleanupUnconfirmedBody', trustStateInvalid: 'os.rotationTrustStateInvalidBody', trustStateUnknown: 'os.rotationTrustStateUnknownBody', heldReturned: 'os.rotationHeldReturnedBody' };
   // The reason in the person's language, never its code (queueRules.rotationCauseKey; the 11-14 drill).
   const cause = queueRules.rotationCause(record);
   const notice = { key: keys[outcome], params: outcome === 'trustStateUnknown' ? {} : { old: record.name, new: record.newName || record.name, reason: cause ? displayText(cause.uiMessage.key, cause.uiMessage.params) : record.reason } };

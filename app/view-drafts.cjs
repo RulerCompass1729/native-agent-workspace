@@ -44,4 +44,16 @@ function discardRecovery(view, id, text) {
   if (entry.text === text) entry.discarded = true;
   return entry.recoveries;
 }
-module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery };
+// Words NAW kept during a handoff and could not send (queue-dispatch.cjs returnHeld), back as a copy of this session's draft.
+function returnCopy(view, id, text) {
+  const records = backups(view);
+  if (!Object.hasOwn(records, id)) Object.defineProperty(records, id, { value: { text: '', acknowledged: true, recoveries: [] }, enumerable: true, writable: true, configurable: true });
+  return retainRecovery(view, id, text);
+}
+// The open window they were sent from, else any open window of the person's: a closed window's owner never returns
+// (main.cjs gives a new window a new one), and one closing is already inactive, not restored at start. Never an agent's.
+function returnWindow(contexts, owner) {
+  const open = contexts.filter(context => !context.background && context.view && context.view.active !== false);
+  return open.find(context => context.view.owner === owner) || open[0] || null;
+}
+module.exports = { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery, returnCopy, returnWindow };

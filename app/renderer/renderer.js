@@ -573,6 +573,7 @@ async function submitSession(binding) {
   }
   const fresh = state.sessions.find(s => s.id === id);
   if (!receipt?.contextChanged && fresh?.owner === owner && fresh?.nativeId === nativeId && !fresh.nativeContextPending && draftRevisions.get(id) === revision && binding.ui.input.value === text) binding.ui.setValue('');
+  if (receipt?.held) toastMessage('toast.rotationHeld');
 }
 async function sessionComposerAction(binding) {
   if (!composerCurrent(binding) || binding.ui.send.disabled) return;
@@ -6842,6 +6843,12 @@ const disposers = [
   // Waiters resume in a microtask, after this render has updated the buttons.
   api.onState(next => { updateState(next); stateArrived(); render(); }),
   api.onStewardWake(status => { if (state) state.stewardWakeStatus = status; renderStewardWakeWarning(status); }),
+  // Words kept during a handoff that NAW could not send, back here only (main.cjs giveBackHeld).
+  api.onDraftRecovery(({ id, copies, name }) => {
+    draftRecoveries.set(id, copies);
+    if (activeSessionId() === id) renderDraftRecovery(id);
+    toastMessage('toast.rotationHeldReturned', { name: name || '' });
+  }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
