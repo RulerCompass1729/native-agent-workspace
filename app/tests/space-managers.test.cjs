@@ -63,6 +63,24 @@ test('the role follows a finished rotation and stays put on a branch, per space'
   assert.deepEqual(role.current(ROOM_A), manager);
 });
 
+test('the seat a finished rotation hands over is the one the successor adds with; a kept or branched one adds nothing (R220.2)', t => {
+  const other = { sessionId: 'other', nativeId: 'native-other' };
+  const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('other', [ROOM_A])];
+  const adds = (role, actor) => role.creator({ id: actor.sessionId, nativeId: actor.nativeId }, ROOM_A, null, records, new Map());
+  const kept = setup(t);
+  kept.role.set(ROOM_A, manager); kept.log([done(manager, next, 'kept')]);
+  assert.equal(adds(kept.role, manager).sessionId, 'manager', 'a kept replacement leaves the seat where it was');
+  assert.throws(() => adds(kept.role, next), key('error.queue.managerOnly'), 'a kept successor does not add');
+  const finished = setup(t);
+  finished.role.set(ROOM_A, manager); finished.log([done(manager, next)]);
+  assert.equal(adds(finished.role, next).sessionId, 'next', 'a finished rotation hands the seat to the successor that joined the space');
+  assert.throws(() => adds(finished.role, manager), key('error.queue.managerOnly'), 'the session that went away adds nothing');
+  const branch = setup(t);
+  branch.role.set(ROOM_A, manager); branch.log([done(manager, next), done(manager, other)]);
+  assert.throws(() => adds(branch.role, next), key('error.queue.managerOnly'), 'neither side of a branch adds');
+  assert.throws(() => adds(branch.role, other), key('error.queue.managerOnly'), 'neither side of a branch adds');
+});
+
 test('the role counts only while the very native session is a member of its space', t => {
   const { role } = setup(t);
   role.set(ROOM_A, manager);
