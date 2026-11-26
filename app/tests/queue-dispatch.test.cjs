@@ -786,7 +786,7 @@ class FakeClient extends EventEmitter {
           itemId, nativeId: session.nativeId, epoch: session.rotationEpisode?.nativeId === session.nativeId ? session.rotationEpisode.epoch : null } });
       session.state = 'working';
       // Older journeys model a successful handoff; submission alone no longer proves it.
-      if (args[3]?.startsWith('rotation-handoff:')) {
+      if (itemId?.startsWith('rotation-handoff:')) {
         Object.assign(session.messages.at(-1), { nativeId: session.nativeId, turnId: `turn-${tag}` });
         session.messages.push({ id: `boundary-${tag}`, role: 'system', kind: 'turn', nativeId: session.nativeId, turnId: `turn-${tag}`, status: 'complete' });
       }
@@ -1006,7 +1006,7 @@ test('another member is sent its item while one member\'s model is being changed
   const f = changeDuringSend(t, [member('a'), member('b')]);
   const held = f.room.queueAdd('for a', 'a'), sent = f.room.queueAdd('for b', 'b');
   await f.dispatcher.start();
-  assert.deepEqual(f.client.sends().map(call => call[4]), [sent]);
+  assert.deepEqual(f.client.sends().map(call => call[4].itemId), [sent]);
   assert.equal(f.room.queueFind('shared', held).status, 'queued');
 });
 test('a list of model changes that is not a list holds no send, as it holds nothing in the plan', async t => {
@@ -6224,8 +6224,8 @@ async function handedOver(t, { butler = true, extra = {}, others = [] } = {}) {
   f.pass = async (minutes = 0) => { f.advance(minutes * MINUTE); f.dispatcher.dirty = true; await f.dispatcher.schedule(); };
   f.session = id => f.client.state.sessions.find(s => s.id === id);
   f.stopped = id => f.client.calls.some(call => call[0] === 'stop' && call[1] === id);
-  f.asks = () => f.client.sends('a').filter(call => call[4].startsWith('rotation-supplement:'));
-  f.tells = id => f.client.sends(id ?? f.newId).filter(call => call[4].startsWith('rotation-handoff:a:'));
+  f.asks = () => f.client.sends('a').filter(call => (call[4]?.itemId ?? call[4]).startsWith('rotation-supplement:'));
+  f.tells = id => f.client.sends(id ?? f.newId).filter(call => (call[4]?.itemId ?? call[4]).startsWith('rotation-handoff:a:'));
   // What the backend does with the person's message: the row, the control revision, and the turn it starts.
   f.person = (text = 'one more thing', state = 'idle') => {
     const n = old.messages.length;
@@ -6302,7 +6302,7 @@ for (const [name, fail] of [
     const call = f.client.call.bind(f.client);
     f.client.call = async (method, ...args) => {
       const tag = await call(method, ...args), target = f.client.state.sessions.find(s => s.id === args[0]);
-      if (method === 'dispatch' && args[3]?.startsWith('rotation-handoff:')) { target.messages.at(-1).status = 'failed'; target.state = 'error'; }
+      if (method === 'dispatch' && (args[3]?.itemId ?? args[3])?.startsWith('rotation-handoff:')) { target.messages.at(-1).status = 'failed'; target.state = 'error'; }
       return tag;
     };
   }],
@@ -6480,7 +6480,7 @@ for (const state of ['working', 'ended']) test(`R206: a successor turn on the ad
   const f = await handedOver(t), call = f.client.call.bind(f.client), hold = state === 'working' ? null : 'failed';
   f.client.call = async (method, ...args) => {
     const result = await call(method, ...args);
-    if (method === 'dispatch' && args[3].startsWith('rotation-handoff:a:')) {
+    if (method === 'dispatch' && (args[3]?.itemId ?? args[3]).startsWith('rotation-handoff:a:')) {
       const rows = f.session(f.newId).messages;
       if (hold) { rows.at(-1).status = hold; f.session(f.newId).state = 'idle'; } else f.late = rows.pop();
     }
@@ -6503,7 +6503,7 @@ for (const at of ['waiting', 'asked', 'asking', 'ready', 'sending', 'sent']) tes
   f.person(); await f.pass(); if (at === 'waiting') await f.restart();
   if (at === 'asking' || at === 'sending') f.client.call = async (method, ...args) => {
     const result = await call(method, ...args);
-    if (method === 'dispatch' && args[3].startsWith(at === 'asking' ? 'rotation-supplement:' : 'rotation-handoff:a:')) {
+    if (method === 'dispatch' && (args[3]?.itemId ?? args[3]).startsWith(at === 'asking' ? 'rotation-supplement:' : 'rotation-handoff:a:')) {
       f.client.call = call;
       f.onDisk = JSON.parse(fs.readFileSync(path.join(f.dir, 'queue-dispatch.json'), 'utf8')).rotations.a.supplement?.state;
       throw Error('synthetic lost answer');
@@ -6619,7 +6619,7 @@ test('R206: the butler is woken again when its addition is held up at a successo
 test('R206: an addition whose sends leave nothing behind holds the two back once, not at every try', async t => {
   const f = await handedOver(t, { butler: false }), call = f.client.call.bind(f.client); let tries = 0;
   f.client.call = async (method, ...args) => {
-    if (method === 'dispatch' && args[3].startsWith('rotation-handoff:a:')) { tries += 1; throw Error('send-timeout'); }
+    if (method === 'dispatch' && (args[3]?.itemId ?? args[3]).startsWith('rotation-handoff:a:')) { tries += 1; throw Error('send-timeout'); }
     return call(method, ...args);
   };
   f.person(); await f.pass(); await f.pass(31); f.client.reply('a', '补。'); await f.pass(); assert.equal(tries, 1);
@@ -7058,8 +7058,8 @@ async function askedSetup(t, { butler = false, extra = {}, others = [], options 
   f.session = id => f.client.state.sessions.find(s => s.id === id);
   f.created = () => f.client.calls.filter(call => call[0] === 'create').length;
   f.stopped = id => f.client.calls.some(call => call[0] === 'stop' && call[1] === id);
-  f.asks = () => f.client.sends('a').filter(call => call[4].startsWith('rotation-supplement:'));
-  f.tells = id => f.client.sends(id ?? f.newId).filter(call => call[4].startsWith('rotation-handoff:a:'));
+  f.asks = () => f.client.sends('a').filter(call => (call[4]?.itemId ?? call[4]).startsWith('rotation-supplement:'));
+  f.tells = id => f.client.sends(id ?? f.newId).filter(call => (call[4]?.itemId ?? call[4]).startsWith('rotation-handoff:a:'));
   f.lines = event => fs.readFileSync(path.join(f.dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(e => e.event === event);
   f.row = (id = 'a') => f.dispatcher.rotationRows[id];
   f.now = async (id = 'a', by) => { await f.dispatcher.requestRotation(id, by); await f.dispatcher.schedule(); };
