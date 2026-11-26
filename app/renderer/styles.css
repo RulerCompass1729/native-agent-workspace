@@ -1011,12 +1011,14 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-quota-card .operator-bypass { color:var(--approval-ink); font-weight:700; }
 .operator-quota-fields, .operator-quota-usage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .operator-quota-usage { padding-block:8px; font-weight:600; }
-.operator-grants-toggle { margin-left:auto; white-space:nowrap; }
 .operator-quota-card .operator-quota-form { display:grid; gap:12px; }
 .operator-quota-card { padding-top:8px; overflow-wrap:anywhere; }
 .operator-new-grant { border-top:1px solid var(--border); padding-top:10px; }
 @media(max-width:600px) { .operator-grant-fields { grid-template-columns:1fr; } }
 .operator-cancel-warning { flex-basis:100%; }
+.setup-grants { margin-top:16px; padding-top:12px; border-top:1px solid var(--border); }
+.setup-grants h3 { margin:0 0 8px; font-size:14px; }
+.setup-grants h3 small { font-weight:400; color:var(--muted); }
 /* Compact setup dialog: preserve existing controls, labels and lifecycle. */
 #setup-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
 #setup-dialog .setup-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:-20px;z-index:1;background:var(--surface);padding:8px 0;margin-bottom:12px}

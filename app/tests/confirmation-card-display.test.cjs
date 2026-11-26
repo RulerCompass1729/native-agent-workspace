@@ -109,19 +109,7 @@ test('a card that changes a model names the session and the value, in words for 
   assert.equal(change({ model: 'x', effort: 'low' }, 'agent').target, 'Butler');
   assert.equal(require('../steward-standing.cjs').localAction({ method: 'changeModel', arguments: ['agent', { model: 'x', effort: 'low' }], paths: [] }) || null, null, 'No standing authorization covers it');
 });
-test('the permanent strip counts confirmations separately from decisions and picture reviews', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../renderer/activity-stream.js'), 'utf8');
-  const sandbox = vm.createContext({}); vm.runInContext(source, sandbox);
-  const label = (language, kinds) => sandbox.nativeWorkspaceActivityStream.waitingLabel(kinds.map(kind => ({ kind })),
-    (key, params) => locale.format(language, 'stream.' + key, params));
-  for (const [language, only, mixed, other] of [['zh', '有 2 件等你确认', '有 2 件等你确认 · 1 件待你处理 · 1 件待查看', '1 件待你处理 · 1 件待查看'],
-    ['en', '2 actions need your confirmation', '2 actions need your confirmation · 1 to handle · 1 to review', '1 to handle · 1 to review']]) {
-    assert.equal(label(language, ['background-confirmation', 'background-confirmation']), only);
-    assert.equal(label(language, ['background-confirmation', 'decide', 'background-confirmation', 'look']), mixed);
-    assert.equal(label(language, ['decide', 'look']), other);
-    assert.equal(label(language, ['background-confirmation']), language === 'zh' ? '有 1 件等你确认' : '1 action needs your confirmation');
-  }
-});
+// The waiting strip and its combined label left with R251 (11-25); task-waiting-classification.test.cjs checks that the board names cards, decisions and reviews apart.
 test('every way a new session is let off asking is marked; a stricter mode is not', () => {
   const risks = (options, method = 'create') => operation.operationSummary({ method, arguments: method === 'create' ? [options] : ['history-id', options] }, {}).risks;
   assert.deepEqual(risks({ provider: 'claude', settings: { permissionMode: 'bypassPermissions' } }), ['skipPermissions']);

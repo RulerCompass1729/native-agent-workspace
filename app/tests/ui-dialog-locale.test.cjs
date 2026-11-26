@@ -336,7 +336,7 @@ test('the actual setup view repaints known report and pending errors while prese
   assert.deepEqual(f.$('setup-status').children, rows); assert.equal(report.textContent, 'Custom program locations could not be read. Check the local data file in Settings.');
   assert.equal(f.document.activeElement, choose); assert.equal(JSON.stringify(f.state), before); assert.deepEqual(f.calls, []);
   let reject, reads = 0; f.context.api = { preflight() { reads++; return new Promise((_resolve, no) => reject = no); } };
-  f.context.renderInterfaceLanguage = () => {}; f.context.createReadiness = () => {};
+  f.context.renderInterfaceLanguage = () => {}; f.context.createReadiness = () => {}; f.context.renderSetupGrants = () => {};
   const loading = f.context.showSetup(); assert.equal(reads, 1); assert.equal(typeof reject, 'function'); f.switch('zh'); reject(error); await loading;
   assert.equal(f.context.setupFailure.message, error.message); f.switch('en'); f.context.renderSetupPrograms(true);
   assert.ok(f.$('setup-status').textContent.includes('Custom program locations could not be read.')); assert.equal(reads, 1);

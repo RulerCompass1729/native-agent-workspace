@@ -78,7 +78,6 @@
 /* The task board's chips and the waiting strip share one urgency order: card countdown, needs you, to verify, board. */
 :is(.compact-session,.compact-room) #task-board,:is(.compact-session,.compact-room) .task-status-chips{display:contents}
 :is(.compact-session,.compact-room) .task-status-card-time{order:4}
-#header>#stream-waiting{order:5}
 :is(.compact-session,.compact-room) .task-status-warning{order:6}
 :is(.compact-session,.compact-room) .task-board-toggle{order:7;flex:none}
 .compact-session #header-actions,.compact-room #header-actions{order:8;flex:none}
@@ -113,15 +112,3 @@
 .task-status-board{color:var(--muted);font-size:12px}
 
 /* The needs-you strip (activity-stream.js) as one header chip: count, who and what first, every item under ⌄. */
-#header>.stream-waiting{flex:0 1 auto;min-width:0;max-width:min(420px,100%);min-height:28px;padding:0 2px 0 10px;gap:2px;border:0;border-radius:14px;background:color-mix(in srgb,var(--agent-waiting) 10%,transparent);z-index:30}
-#header>.stream-waiting[hidden]{display:none}
-#header>.stream-waiting .stream-waiting-lead{flex:0 1 auto;flex-wrap:nowrap;gap:6px;padding:2px 0;font-size:12px;color:var(--ink)}
-#header>.stream-waiting .stream-waiting-count{font-size:12px;font-weight:650;color:color-mix(in srgb,var(--approval-ink) 80%,var(--ink))}
-#header>.stream-waiting .stream-waiting-lead>strong:not(.stream-waiting-count){font-weight:500;white-space:nowrap}
-#header>.stream-waiting .stream-waiting-title{flex:0 1 auto;max-width:16em;color:var(--muted)}
-#header>.stream-waiting .stream-waiting-lead{min-height:28px;padding:2px 6px;border-radius:8px;cursor:pointer}
-#header>.stream-waiting .stream-waiting-lead::after{content:'⌄';font-size:12px;color:var(--muted)}
-#header>.stream-waiting .stream-waiting-lead[aria-expanded=true]::after{transform:rotate(180deg)}
-#header>.stream-waiting .stream-waiting-lead:is(:hover,[aria-expanded=true]){background:var(--hover)}
-#header>.stream-waiting .stream-waiting-list{right:0;width:min(580px,calc(100vw - 32px));font-size:12px}
-@container naw-header (max-width:1400px){#header>.stream-waiting .stream-waiting-lead>:not(.stream-waiting-count){display:none}}
