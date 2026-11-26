@@ -31,7 +31,7 @@ function fixture(t, { butler = {}, others = [], windows = [quietWindow(['butler'
     call: async (method, ...args) => {
       if (method === 'initial') return client.snapshot();
       if (method !== 'dispatch') return undefined;
-      sent.push({ id: args[0], itemId: args[3], at: clock.now });
+      sent.push({ id: args[0], itemId: args[3]?.itemId ?? args[3], at: clock.now });
       const s = sessions.find(x => x.id === args[0]); s.state = 'working'; s.lastActivityAt = clock.now;
       return `tag-${sent.length}`;
     } });
@@ -129,7 +129,7 @@ test('an act that is no answer on the butler\'s card passes no other gate', asyn
     ['automatic messages off', f => { f.client.state.wakePolicy = { enabled: false }; }, 'automatic-messages-off'],
     ['the butler paused by the person', f => { f.butler.wakeDisabled = true; }, 'paused'],
     ['the person just used it', f => f.dispatcher.noteHuman('butler'), 'person-recent'],
-    ['the person is typing in it', f => { f.butler.liveDraft = 'SYNTHETIC PRIVATE DRAFT'; }, 'person-typing'],
+    ['the person is typing in it', f => { f.butler.liveDraft = 'SYNTHETIC PRIVATE DRAFT'; f.dispatcher.noteHuman('butler', 'draft'); }, 'person-recent'],
     ['at work', f => { f.butler.state = 'working'; f.butler.backgroundStale = true; }, 'not-idle'],
     ['a background command', f => { f.butler.background = 1; }, 'background-work'],
     ['an unconfirmed background report', f => { f.butler.backgroundStale = true; }, 'background-unconfirmed'],
@@ -231,7 +231,8 @@ test('a window that opens between the pass and the send still holds an ordinary 
 });
 
 test('at work with a click waiting, what will still hold it after the turn is said, not the window', async t => {
-  for (const [extra, reason] of [[{}, 'not-idle'], [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }, 'person-typing']]) {
+  for (const [extra, reason] of [[{}, 'not-idle'], [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT' }, 'not-idle'],
+    [{ liveDraft: 'SYNTHETIC PRIVATE DRAFT', serviceCapabilities: ['queueDispatchV1'] }, 'person-typing']]) {
     const f = fixture(t, { butler: { state: 'working', backgroundStale: true, pendingTag: 'tag-of-this-turn', ...extra } });
     f.click(); await f.dispatcher.schedule();
     assert.equal(f.held()?.reason, reason); assert.deepEqual(f.sent, []);

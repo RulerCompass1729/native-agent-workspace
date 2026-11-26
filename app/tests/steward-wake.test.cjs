@@ -344,7 +344,7 @@ test('actual dispatcher skip branches become visible and recorded without sendin
     ['identity-unavailable', { nativeId: 'other-native' }],
     ['in-space', { roomIds: ['shared'], roomId: 'shared' }],
     ['backend-update-needed', { serviceCapabilities: [] }],
-    ['person-typing', { liveDraft: 'SYNTHETIC PRIVATE DRAFT' }],
+    ['person-typing', { liveDraft: 'SYNTHETIC PRIVATE DRAFT', serviceCapabilities: ['queueDispatchV1'] }],
     ['model-unknown', { model: null }],
     ['model-excluded', { model: 'deepseek-v4-pro' }],
     ['engaged', {}, env => { env.holding = ['butler']; }],
@@ -375,8 +375,9 @@ test('actual dispatcher skip branches become visible and recorded without sendin
 
 // 2026-11-23 21:32Z–02:05Z: a draft in the butler's composer held every wake for 258 minutes. Each of its own turns
 // showed not-idle, the only time it could read the block, so the stall was taken for a state that never settled.
+// A draft holds it only on a backend before the checked input (2026-11-25); there this still reads as before.
 test('while the butler works, the block it reads is what still holds it once the turn ends', async t => {
-  const env = passes(t, butler({ state: 'working', liveDraft: 'SYNTHETIC PRIVATE DRAFT' }));
+  const env = passes(t, butler({ state: 'working', liveDraft: 'SYNTHETIC PRIVATE DRAFT', serviceCapabilities: ['queueDispatchV1'] }));
   env.wake.set(true); env.ledger.ingest(failure(1)); env.dispatcher.client = env.client;
   const session = env.client.state.sessions[0];
   const pass = async (state, liveDraft) => {
@@ -435,8 +436,9 @@ test('the dispatcher wakes the butler only once it is idle and settled, through 
   await env.pass();
   const sent = env.client.dispatches();
   assert.equal(sent.length, 1, 'one message for both events');
-  const [, id, text, nativeId, itemId] = sent[0];
+  const [, id, text, nativeId, packet] = sent[0], itemId = packet.itemId;
   assert.deepEqual([id, nativeId], ['butler', 'native-butler']);
+  assert.deepEqual(Object.keys(packet.expectedInput).sort(), ['connectionRevision', 'controlRevision', 'draftRevision', 'nativeId'], 'the input it read goes with it');
   assert.equal(text, wakeText(null), 'the record was empty when it was turned on: from the start');
   assert.match(itemId, /^steward-wake:[0-9a-f-]{36}$/u);
   assert.equal(env.client.calls.some(call => ['send', 'queue', 'claim', 'input'].includes(call[0])), false, 'no human send, no takeover');
@@ -457,7 +459,7 @@ test('the dispatcher does not wake a butler the person just used, one in a space
     ['on DeepSeek', butler({ provider: 'codex', model: null, nativeSettings: { model: 'deepseek-v4-pro' } }), () => {}],
     ['model unknown', butler({ model: null }), () => {}],
     ['automatic messages off', butler(), env => { env.client.state.wakePolicy = { enabled: false }; env.client.emit('state', env.client.snapshot()); }],
-    ['a draft the person is typing', butler({ liveDraft: 'half a sentence' }), () => {}],
+    ['a draft the person is typing', butler({ liveDraft: 'half a sentence' }), env => env.dispatcher.noteHuman('butler', 'draft')],
     ['another native session under the id', butler({ nativeId: 'native-other' }), () => {}],
   ];
   for (const [name, session, arrange] of cases) {

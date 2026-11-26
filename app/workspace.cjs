@@ -1618,14 +1618,25 @@ class Workspace extends EventEmitter {
     if (dispatch && terminalDialogPrompt(s, runtime)) throw uiError("error.queue.terminalDialog");
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
     if (forward && !wakeTicket && text) text = originalText;
-    // A NAW queue item sent under the person's automatic-message switches: never a
-    // takeover, never human input, refused while the person has a draft (queue-dispatch.cjs).
+    // A NAW queue item sent under the person's automatic-message switches: never a takeover, never human input.
+    // With expectedInput (queue items, the butler wake) it goes beside a composer draft it never touches, refused if the
+    // input changed since the dispatcher read it; without it (rotation, notices, integrator) any draft refuses it.
+    const checkedInput = Boolean(dispatch) && Object.hasOwn(dispatch, 'expectedInput'), originalInput = dispatch?.expectedInput;
+    if (checkedInput && (!originalInput || typeof originalInput !== 'object' || Array.isArray(originalInput) ||
+        Object.keys(originalInput).sort().join(',') !== 'connectionRevision,controlRevision,draftRevision,nativeId' ||
+        typeof originalInput.nativeId !== 'string' || !originalInput.nativeId ||
+        !['draftRevision', 'controlRevision', 'connectionRevision'].every(k => Number.isSafeInteger(originalInput[k]) && originalInput[k] >= 0))) throw uiError('error.queue.invalid');
+    const expectedInput = checkedInput ? { ...originalInput } : null;
+    const sameInput = () => !checkedInput || expectedInput.nativeId === s.nativeId &&
+      expectedInput.draftRevision === (this.draftRevisions.get(id) ?? 0) && expectedInput.controlRevision === (s.controlRevision ?? 0) &&
+      expectedInput.connectionRevision === (s.connectionRevision ?? 0);
     const dispatchAllowed = () => { try { return s.nativeId === nativeId && (episode ? s.rotationEpisode === episode && episode.state === 'open' :
-      !rotationBlocked(s) && rotationEpoch(s) === inputEpoch) && !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled && !(this.drafts.get(id) || '').trim(); } catch { return false; } };
+      !rotationBlocked(s) && rotationEpoch(s) === inputEpoch) && !codexQuotaBlock(s) && wake.enabled(this) && !s.wakeDisabled &&
+      sameInput() && (checkedInput || !(this.drafts.get(id) || '').trim()); } catch { return false; } };
     if (dispatch && (route || forward || sourceMessage || recovery || wakeTicket || mobile || images)) throw uiError("error.queue.invalid");
     if (mobile) { mobile.human(); wake.cause(s, 'input'); wake.recipientInput(s, { control: 1, peer: 1 }); }
     else if (dispatch) {
-      if ((this.drafts.get(id) || '').trim()) throw uiError("error.queue.personTyping");
+      if (!sameInput() || !checkedInput && (this.drafts.get(id) || '').trim()) throw uiError("error.queue.personTyping");
       if (!dispatchAllowed()) throw uiError("error.backgroundMessagesDisabled");
       this.pauseParticipant(id, 'NAW 派活；原协作交接保持暂停', true, uiActivity('notice.run.queueDispatch')[1]);
     } else if (wakeTicket) {
@@ -1700,6 +1711,7 @@ class Workspace extends EventEmitter {
       // Preserve a proven pre-authorization dialog refusal across IPC.
       // An uncertain or already authorized send must never be relabelled.
       if (terminalDialogBlocked && error.notSent === true) error = uiError('error.queue.terminalDialog');
+      if (checkedInput && !sameInput() && error.notSent === true) error = uiError('error.queue.personTyping');
       const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
       const unchangedControl = sameControl();
       this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认', uiActivity('notice.sharing.receiptUnconfirmed')[1]);

@@ -44,7 +44,7 @@ test('a pass an agent\'s queueAdd started sends with no agent attached', async t
     serviceCapabilities: [rules.CAPABILITY], chatAvailable: true, background: 0, scheduled: 0, messages: [], fleet: [], liveDraft: '', cwd: dir,
     createdAt: Date.now() - 3600000, lastActivityAt: Date.now() - 3600000 };
   const c = client(() => ({ sessions: [member], rooms: [] }), async (...args) => {
-    seen.push({ to: args[0], item: args[3], actor: background.current() });
+    seen.push({ to: args[0], item: typeof args[3] === 'object' ? args[3].itemId : args[3], actor: background.current() });
     member.state = 'working';
     return 'receipt-1';
   });
@@ -67,8 +67,8 @@ test('the member\'s reply to that item settles done, not as waiting for the pers
     roomIds: ['shared'], serviceCapabilities: [rules.CAPABILITY, 'nativeInputIsolation', 'rotationControlEpochV1'], background: 0, scheduled: 0 };
   const r = new Codex(s, host);
   w.sessions.set(s.id, s); w.runtimes.set(s.id, r); w.bind(s, r);
-  const c = client(() => w.snapshot(), (id, text, _nativeId, itemId, control) =>
-    w.send(id, text, 'naw-dispatcher', null, null, null, null, null, null, null, { itemId, control }));
+  const c = client(() => w.snapshot(), (id, text, _nativeId, packet, control) =>
+    w.send(id, text, 'naw-dispatcher', null, null, null, null, null, null, null, typeof packet === 'object' ? { ...packet } : { itemId: packet, control }));
   // A change in the service reaches the window as a state event (service-connection.cjs).
   w.on('change', () => c.emit('state'));
   const d = dispatcher(t, dir, roomState, c);

@@ -22,7 +22,9 @@ const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction
 const { sessionPlan, endedByThisStop, readRecords } = require('./backend-switch.cjs');
 const { successor, rotationEdges } = require('./queue-secretary.cjs');
 
-const CAPABILITY = 'queueDispatchV1';
+const CAPABILITY = 'queueDispatchInputV1';
+// Backends before the checked-input packet: lifecycle and integrator sends only, which keep the draft gate.
+const LEGACY_CAPABILITY = 'queueDispatchV1';
 const ROTATION_CAPABILITY = 'rotationControlEpochV1';
 const ITEM_TEXT_LIMIT = 6000;
 const SEND_TEXT_LIMIT = 16000;
@@ -179,6 +181,7 @@ function automaticInput(message) {
 }
 // Refusals raised before the backend wrote anything: the item is still unsent.
 const NATIVE_DRAFT_KEY = 'error.submission.nativeDraft';
+const PERSON_TYPING_KEY = 'error.queue.personTyping';
 // A terminal that is no longer open: only its owner may reopen it, and nothing unsent remains.
 const TERMINAL_CLOSED_KEY = 'error.workspace.takeTerminalControlBeforeReconnect';
 const NOT_SENT_KEYS = [
@@ -575,14 +578,16 @@ function trimQueue(queue) {
   return result;
 }
 
-function sessionReady(session, wakePolicy) {
+// allowDraft: a queue item or butler wake, sent beside an unchanged composer draft (workspace.cjs expectedInput).
+function sessionReady(session, wakePolicy, allowDraft = false) {
   if (!session) {
     return { ready: false, reason: 'missing' };
   }
   if (session.archived) {
     return { ready: false, reason: 'archived' };
   }
-  if (!Array.isArray(session.serviceCapabilities) || !session.serviceCapabilities.includes(CAPABILITY)) {
+  if (!Array.isArray(session.serviceCapabilities) || !(session.serviceCapabilities.includes(CAPABILITY) ||
+      !allowDraft && session.serviceCapabilities.includes(LEGACY_CAPABILITY))) {
     return { ready: false, reason: 'backend-update-needed' };
   }
   if (!wakePolicy || wakePolicy.enabled !== true) {
@@ -618,7 +623,7 @@ function sessionReady(session, wakePolicy) {
       return { ready: false, reason: 'background-work' };
     }
   }
-  if (typeof session.liveDraft === 'string' && session.liveDraft.trim()) {
+  if (!allowDraft && typeof session.liveDraft === 'string' && session.liveDraft.trim()) {
     return { ready: false, reason: 'person-typing' };
   }
   if (session.provider === 'codex' && session.nativeGoal && session.nativeGoal.status === 'active') {
@@ -649,8 +654,8 @@ const ownTurn = (session, reason) => reason === 'not-settled' ||
 // each of its own turns). busy stays not-idle: an approval or question flagged on the session belongs to the turn (a
 // native permission prompt sets no flag). So do its own delivery and Claude's background report, stale until the turn
 // ends (workspace.cjs 'working'); R198: they hid a quiet window.
-function heldReason(session, wakePolicy) {
-  const reason = sessionReady(session, wakePolicy).reason;
+function heldReason(session, wakePolicy, allowDraft = false) {
+  const reason = sessionReady(session, wakePolicy, allowDraft).reason;
   if (reason !== 'not-idle') {
     return reason;
   }
@@ -661,7 +666,7 @@ function heldReason(session, wakePolicy) {
       Object.assign(ended, { backgroundStale: false, background: 0, scheduled: 0 });
     }
   }
-  const after = sessionReady(ended, wakePolicy).reason;
+  const after = sessionReady(ended, wakePolicy, allowDraft).reason;
   return after && after !== 'busy' ? after : reason;
 }
 
@@ -1240,7 +1245,7 @@ function queueVacancies(input) {
     const candidates = !room.archived && !(room.queue || []).some(item => item.status === 'queued' || holdsMember(item))
       ? (input.sessions || []).filter(session => !busy.has(session.id) && roomIds(session).includes(room.id) &&
         !carriedOn(session.id, input.handedOff, members, byId) &&
-        sessionReady(session, input.wakePolicy).ready &&
+        sessionReady(session, input.wakePolicy, true).ready &&
         !humanRecent(session.id, input.humanAt || new Map(), input.now, input.humanQuietMs ?? HUMAN_QUIET_MS))
       : [];
     const candidateIds = candidates.map(session => session.id).sort();
@@ -1318,7 +1323,7 @@ function planDispatch(input) {
     byId.set(session.id, session);
   }
   function available(session) {
-    if (!sessionReady(session, input.wakePolicy).ready) {
+    if (!sessionReady(session, input.wakePolicy, true).ready) {
       return false;
     }
     if (!settled(session.id, idleSince, now, settleMs)) {
@@ -1399,7 +1404,7 @@ function planDispatch(input) {
   // one (`readiness`, sessionReady's reason) when that is so too; a member held by an item it was sent and not yet
   // settled waits on the same readiness.
   function waitOf(id) {
-    const ready = sessionReady(byId.get(id), input.wakePolicy);
+    const ready = sessionReady(byId.get(id), input.wakePolicy, true);
     if (busy.has(id)) return ready.ready ? { sessionId: id, reason: why.get(id) } : { sessionId: id, reason: why.get(id), readiness: ready.reason };
     if (!ready.ready) return { sessionId: id, reason: ready.reason };
     if (!settled(id, idleSince, now, settleMs)) return { sessionId: id, reason: 'settling' };
@@ -1601,11 +1606,13 @@ function planDispatch(input) {
       }
       hold(target.id, 'took-item');
       const asked = requests.has(target.id);
+      // A member with a draft takes the item and is not rotated (R207): rotation keeps the strict readiness.
+      const strict = sessionReady(target, input.wakePolicy);
       const reason = asked ? null : rotationReason(target, now, rotationOptions, rotations, 0);
       if (!asked) {
-        stalled(target.id, reason ? 'no-slot' : rotationHold(target, rotationOptions, rotations));
+        stalled(target.id, !reason ? rotationHold(target, rotationOptions, rotations) : strict.ready ? 'no-slot' : strict.reason);
       }
-      if (reason && rotationSlots > 0) {
+      if (reason && strict.ready && rotationSlots > 0) {
         rotationSlots -= 1;
         actions.push(rotateAction(target.id, reason, rotationOptions));
         // The member is replaced before it takes more work; the item waits for that.
@@ -3559,7 +3566,7 @@ class QueueDispatcher {
         session.rotationEpisode.epoch === ownRequest.episodeEpoch
         ? { ...session, rotationEpisode: null } : session;
       // A quiet window keeps new work out (sessionReady); what its sessions finished is still settled.
-      if (['', 'quiet-window'].includes(sessionReady(timingSession, snapshot.wakePolicy).reason)) {
+      if (['', 'quiet-window'].includes(sessionReady(timingSession, snapshot.wakePolicy, true).reason)) {
         if (!this.idleSince.has(session.id)) {
           this.idleSince.set(session.id, now);
         }
@@ -3582,7 +3589,7 @@ class QueueDispatcher {
       let identity;
       try {
         if (this.roomState.value.archivedSessions?.includes(session.id) ||
-            !sessionReady(session, snapshot.wakePolicy).ready || humanRecent(session.id, this.humanAt, now, this.humanQuietMs)) {
+            !sessionReady(session, snapshot.wakePolicy, true).ready || humanRecent(session.id, this.humanAt, now, this.humanQuietMs)) {
           this.vacancySince.delete(session.id); this.vacancyIdentity.delete(session.id); continue;
         }
         identity = JSON.stringify([session.nativeId, session.provider, session.connectionRevision || 0,
@@ -3817,6 +3824,9 @@ class QueueDispatcher {
         this.stewardWake.skip(reason, reason === 'quiet-window' ? this.quietWindows?.windowOf(steward.sessionId, current.now)?.deadline : undefined, ownTurn(session, reason));
       };
       if (!steward) return skip(this.stewardSession(current.snapshot.sessions) ? 'in-space' : 'identity-unavailable');
+      // The person's default (2026-11-25): woken beside an unchanged composer draft as a queue item is, where its backend
+      // checks the input (an older one keeps the draft hold); a click waits for the draft's two quiet minutes.
+      const beside = Boolean(listed?.serviceCapabilities?.includes(CAPABILITY));
       // The person's own act is told past a quiet window (R200), and their answer on its own card (R209) also past its
       // background work, the two minutes after they used it and the quiet a rotation waits for. The turn it starts makes
       // a move or rotation wait for its quiet again; a window's deadline stays, and it may close before. In a window its
@@ -3824,19 +3834,24 @@ class QueueDispatcher {
       // waits for the window without reading the backends.
       const as = click ? pastClick : event && listed.quietWindow && this.stewardWake.personActed() ? pastWindow : null, butler = as ? as(listed) : listed;
       const idle = this.idleSince.has(steward.sessionId) && !listed.quietWindow ? settled(steward.sessionId, this.idleSince, current.now, this.settleMs)
-        : Boolean(as) && sessionReady(butler, policy).ready && quietFor(butler, new Map(), current.now, this.settleMs);
-      if (!idle) return skip(heldReason(butler, policy) || 'not-settled');
+        : Boolean(as) && sessionReady(butler, policy, beside).ready && quietFor(butler, new Map(), current.now, this.settleMs);
+      if (!idle) return skip(heldReason(butler, policy, beside) || 'not-settled');
       const rotations = Object.fromEntries(Object.entries(this.rotations).filter(([id]) => !this.faultedRotations.has(id)));
       if (engagedSessions(rotations, current.snapshot.rooms).has(steward.sessionId) || Array.isArray(holding) && holding.includes(steward.sessionId)) return skip('engaged');
       if (!click && ['compact', 'person'].includes(quietPending?.get(steward.sessionId))) return skip('engaged');
-      const why = {}, fresh = await this.freshReady(steward.sessionId, click ? 0 : this.humanQuietMs, why, as);
+      const why = {}, fresh = await this.freshReady(steward.sessionId, click ? 0 : this.humanQuietMs, why, as, beside);
       if (!fresh) return skip(why.reason || 'state-unavailable', why.session);
+      if (click && beside && String(fresh.session.liveDraft ?? '').trim() &&
+          humanRecent(steward.sessionId, this.humanAt, fresh.now, this.humanQuietMs)) return skip('person-recent');
       // Keys typed in its terminal may be an input on its way that no draft shows.
       if (click && humanRecent(steward.sessionId, this.typedAt, fresh.now, Math.min(this.humanQuietMs, ANSWER_QUIET_MS))) return skip('person-recent');
       if (this.stewardOutside(fresh.snapshot.sessions)?.sessionId !== steward.sessionId || fresh.session.nativeId !== steward.nativeId) return skip('identity-changed');
       // Condition 4 needs the model: as the session reports it, or for Claude as its own transcript last recorded it.
       const model = reportedModel(fresh.session) || transcriptModel(fresh.session, this.transcriptRoot);
-      const send = (text, itemId) => this.send(fresh.session, text, itemId);
+      const send = (text, itemId) => this.send(fresh.session, text, itemId, beside).catch(error => {
+        if (errorKey(error) === PERSON_TYPING_KEY) this.humanAt.set(steward.sessionId, this.now());
+        throw error;
+      });
       if (event) await this.stewardWake.wake(fresh.session, model, send);
       else await this.stewardWake.patrol(fresh.session, model, send, work, minutes);
     } catch (error) {
@@ -4176,7 +4191,7 @@ class QueueDispatcher {
 
   // Read fresh state once, right before sending; skip if the member moved on (`why.reason` says how, when given).
   // `as`: the session as this send may see it, what does not hold it left out (wakeSteward).
-  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, as = null) {
+  async freshReady(sessionId, quietMs = this.humanQuietMs, why = {}, as = null, allowDraft = false) {
     const held = () => {
       if (this.isolation.unknown) return 'trust-unknown';
       if (Object.hasOwn(this.isolation.holds, sessionId)) return 'trust-hold';
@@ -4189,7 +4204,7 @@ class QueueDispatcher {
     why.reason = held();
     if (why.reason) return null;
     const session = why.session = current.snapshot.sessions.find(s => s.id === sessionId);
-    const ready = sessionReady(as ? as(session) : session, current.snapshot.wakePolicy);
+    const ready = sessionReady(as ? as(session) : session, current.snapshot.wakePolicy, allowDraft);
     if (!ready.ready) {
       why.reason = ready.reason;
       return null;
@@ -4208,9 +4223,11 @@ class QueueDispatcher {
   }
 
   // The member's backend can take a NAW input and its connection is not being replaced.
-  preflight(session) {
+  // checked: the send carries the input version it was read at, which only the current capability accepts.
+  preflight(session, checked = false) {
     const entry = this.client.route(session.id);
-    if (!entry.state.capabilities || !entry.state.capabilities.includes(CAPABILITY)) {
+    if (!entry.state.capabilities || !(entry.state.capabilities.includes(CAPABILITY) ||
+        !checked && entry.state.capabilities.includes(LEGACY_CAPABILITY))) {
       throw Object.assign(Error('backend-update-needed'), { notSent: true });
     }
     if (this.client.operationGuard) {
@@ -4220,7 +4237,8 @@ class QueueDispatcher {
   }
 
   // The backend's own NAW input: no takeover, no human-input semantics.
-  async send(session, text, itemId) {
+  // checked: a queue item or butler wake beside a draft; the backend refuses it if the input changed since `session` was read.
+  async send(session, text, itemId, checked = false) {
     if (this.isolation.unknown) throw Object.assign(Error('directory-trust-identity-unknown'), { notSent: true });
     if (Object.hasOwn(this.isolation.holds, session.id)) {
       // Other automatic senders use this same boundary. Only the rotation's
@@ -4231,7 +4249,7 @@ class QueueDispatcher {
         this.isolation.holds[session.id].receiptId === (record.trustNoticeId || null));
       if (!handoff) throw Object.assign(Error('directory-trust-successor-held'), { notSent: true });
     }
-    const entry = this.preflight(session);
+    const entry = this.preflight(session, checked);
     const record = this.rotations[session.id];
     let control;
     if (itemId === `rotation:${session.id}`) {
@@ -4239,8 +4257,10 @@ class QueueDispatcher {
         throw Object.assign(Error('backend-update-needed'), { notSent: true });
       control = { kind: 'rotation-request', epoch: record.episodeEpoch };
     }
+    const packet = checked && !control ? { itemId, expectedInput: { nativeId: session.nativeId, draftRevision: session.draftRevision ?? 0,
+      controlRevision: session.controlRevision ?? 0, connectionRevision: session.connectionRevision ?? 0 } } : itemId;
     const call = control ? entry.client.call('dispatch', session.id, text, session.nativeId, itemId, control)
-      : entry.client.call('dispatch', session.id, text, session.nativeId, itemId);
+      : entry.client.call('dispatch', session.id, text, session.nativeId, packet);
     let result;
     try { result = await withTimeout(call, CALL_TIMEOUT_MS, 'send-timeout'); }
     catch (error) {
@@ -4268,7 +4288,7 @@ class QueueDispatcher {
 
   async dispatch(action, waits = null) {
     const why = {};
-    const current = await this.freshReady(action.sessionId, this.humanQuietMs, why);
+    const current = await this.freshReady(action.sessionId, this.humanQuietMs, why, null, true);
     if (!current) {
       waits?.set(action.itemId, [{ sessionId: action.sessionId, reason: why.reason }]);
       return;
@@ -4288,7 +4308,7 @@ class QueueDispatcher {
     }
     try {
       this.roomState.assertAvailable(session.id, true, room.id);
-      this.preflight(session);
+      this.preflight(session, true);
     } catch (error) {
       // Nothing was recorded or sent; the next pass looks again. The refusal's key, never its text.
       const message = typeof error?.message === 'string' ? error.message : '';
@@ -4306,19 +4326,21 @@ class QueueDispatcher {
     const notes = notesDue(room, session);
     this.roomState.queueMarkSent(room.id, item.id, session.id, name, this.now(), action.afterDecision === true, session.nativeId || null, notes);
     try {
-      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : '', managers?.get(session.id) === room.id), item.id);
+      const tag = await this.send(session, dispatchText(room.name || '', item, notes ? room.notes : '', managers?.get(session.id) === room.id), item.id, true);
       if (this.stillSent(room.id, item.id)) this.roomState.queueSetDelivery(room.id, item.id, tag, session.controlRevision || 0);
     } catch (error) {
-      if (errorKey(error) === NATIVE_DRAFT_KEY) {
+      const personInput = [NATIVE_DRAFT_KEY, PERSON_TYPING_KEY].includes(errorKey(error));
+      if (personInput) {
         // Treated like the person typing: this member is left alone for a while.
         this.humanAt.set(session.id, this.now());
       }
       if (!this.stillSent(room.id, item.id)) {
         // Marked handled while the send was on its way: left as the person or the butler closed it.
       } else if (notSent(error)) {
-        // A prompt the person left unsent there does not use up the item's attempts: it waits.
+        if (errorKey(error) === PERSON_TYPING_KEY) waits?.set(item.id, [{ sessionId: session.id, reason: 'person-recent' }]);
+        // A prompt the person left unsent there, or their input since it was read, does not use up the item's attempts: it waits.
         let attempts = NOT_SENT_ATTEMPTS;
-        if ([NATIVE_DRAFT_KEY, 'error.queue.terminalDialog'].includes(errorKey(error))) {
+        if (personInput || errorKey(error) === 'error.queue.terminalDialog') {
           attempts = Infinity;
         }
         this.roomState.queueRequeue(room.id, item.id, error.message || 'not-sent', attempts, name);

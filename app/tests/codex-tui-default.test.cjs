@@ -73,7 +73,7 @@ process.stdin.on('data',data=>process.stdout.write('NATIVE_INPUT:'+data.toString
       if (method === 'create') { const o = args[0]; return w.create(o.provider, o.cwd, 'synthetic-window', o.name, o.view, o); }
       if (method === 'dispatch') {
         w.assertNativeContext(args[0], args[2]);
-        return w.send(args[0], args[1], 'naw-dispatcher', null, null, null, null, null, null, null, { itemId: args[3] });
+        return w.send(args[0], args[1], 'naw-dispatcher', null, null, null, null, null, null, null, (typeof args[3] === 'object' ? args[3] : { itemId: args[3] }));
       }
       throw Error('Unexpected successor operation: ' + method);
     },

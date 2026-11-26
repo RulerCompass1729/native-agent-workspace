@@ -52,6 +52,26 @@ function fixture() {
 }
 function descendants(el, cls) { return el.children.flatMap(child => [...(child.className?.split(' ').includes(cls) ? [child] : []), ...descendants(child, cls)]); }
 const own = record => ({ shared: { sessionId: record.id, nativeId: record.nativeId } });
+test('a queued row says why it waits for each member, in both languages, and nothing else from the wait', () => {
+  const f = fixture();
+  vm.runInContext(section('// Why a queued item has not gone out', '// `items`:'), f.c);
+  const row = f.c.queueRow({ id: 'held', text: 'Synthetic task', status: 'queued', wait: [
+    { sessionId: 'one', reason: 'person-recent' },
+    { sessionId: 'two', reason: 'space-run', readiness: 'not-idle' },
+    { sessionId: 'three', reason: 'error.submission.nativeDraft' },
+    { reason: 'no-members' },
+    { reason: 'private draft must not appear' },
+  ] }, new Set());
+  const outcome = descendants(row, 'queue-outcome')[0];
+  assert.ok(outcome, 'the wait is in the row, not only in the snapshot');
+  assert.match(outcome.textContent, /Recipient one · 正在给你最近的操作让路；Recipient two · 正在参与空间协作 · 会话尚未空闲；Recipient three · 原生终端有未发送输入，请先处理；空间没有成员；暂时无法派发/u);
+  assert.ok(!row.textContent.includes('private draft'));
+  f.l.setLanguage('en'); f.l.ui.display.refresh(row);
+  assert.match(outcome.textContent, /Recipient one · Yielding to your recent activity; Recipient two · Taking part in a space collaboration · .+; Recipient three · The native terminal has unsent input; resolve it first; Space has no members; Dispatch is waiting/u);
+  assert.ok(!outcome.textContent.includes('private draft'));
+  const sent = f.c.queueRow({ id: 'out', text: 'Synthetic task', status: 'sent', wait: [{ reason: 'person-recent' }] }, new Set());
+  assert.equal(descendants(sent, 'queue-outcome').length, 0, 'only a queued item says it waits');
+});
 test("the existing session menu can designate, replace and revoke its space's project manager without confirmation", async () => {
   const f = fixture();
   f.c.openSessionMenu(f.record.id);

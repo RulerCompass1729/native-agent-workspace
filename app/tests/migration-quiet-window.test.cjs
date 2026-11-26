@@ -52,7 +52,8 @@ async function simulate(t, { cordon, minutes = 60, turns = [1, 2, 3, 4], turnMin
   client.state = { sessions, rooms: [{ id: 'shared', messages: [], run: null }], wakePolicy: { enabled: true }, capabilities: [CAPABILITY] };
   client.snapshot = () => structuredClone(client.state); client.refresh = async () => client.snapshot(); client.close = () => {};
   client.route = () => ({ client, state: { capabilities: [CAPABILITY] } });
-  client.call = async (method, id, text, nativeId, itemId) => {
+  client.call = async (method, id, text, nativeId, packet) => {
+    const itemId = typeof packet === 'object' ? packet.itemId : packet;
     if (method === 'initial') return client.snapshot();
     if (['pause', 'resumeRoom'].includes(method)) return undefined;
     assert.equal(method, 'dispatch');
@@ -223,12 +224,14 @@ test('what a session in the window finished is settled there with its own reply;
   assert.ok(log.dispatched.every(x => x.at === START || x.at >= START + 13 * MIN));
 });
 
-test('a session in the window with a draft or background work is not settled there either', async t => {
+test('a session in the window with background work is not settled there either; a composer draft does not hold it', async t => {
   for (const extra of [{ liveDraft: 'half typed' }, { background: 1 }, { backgroundStale: true }]) {
     const log = await simulate(t, { cordon: true, minutes: 8, from: 1, turns: [0, 0, 0, 0], turnMinutes: 3, each: (m, { sessions }) => { if (m === 2) Object.assign(sessions[0], extra); } });
     const own = log.dispatched.find(x => x.id === 'a').itemId;
-    assert.equal(log.items[7].find(i => i.id === own).status, 'sent', JSON.stringify(extra));
-    assert.equal(log.items[7].filter(i => i.status === 'done').length, 3);
+    // R42/R44: a draft is no longer read as the person at work, so the finished item settles like the others.
+    const draft = Object.hasOwn(extra, 'liveDraft');
+    assert.equal(log.items[7].find(i => i.id === own).status, draft ? 'done' : 'sent', JSON.stringify(extra));
+    assert.equal(log.items[7].filter(i => i.status === 'done').length, draft ? 4 : 3);
   }
 });
 

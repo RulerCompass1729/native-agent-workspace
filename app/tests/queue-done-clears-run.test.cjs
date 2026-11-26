@@ -28,9 +28,9 @@ class Client extends EventEmitter {
     this.calls.push([method, ...args]);
     if (method === 'wakeQueueDone') return this.answer(...args);
     assert.equal(method, 'dispatch', method);
-    const tag = `tag-${this.calls.length}`, session = this.state.sessions[0];
-    session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted', dispatchItem: args[3],
-      dispatchPurpose: { kind: 'queue', itemId: args[3], nativeId: session.nativeId, epoch: null } });
+    const tag = `tag-${this.calls.length}`, session = this.state.sessions[0], itemId = typeof args[3] === 'object' ? args[3].itemId : args[3];
+    session.messages.push({ id: tag, role: 'user', text: args[1], origin: 'naw-dispatch', status: 'submitted', dispatchItem: itemId,
+      dispatchPurpose: { kind: 'queue', itemId, nativeId: session.nativeId, epoch: null } });
     session.state = 'working';
     return tag;
   }
@@ -41,7 +41,7 @@ class Client extends EventEmitter {
     this.emit('state');
   }
   told() { return this.calls.filter(call => call[0] === 'wakeQueueDone').map(call => call[1]); }
-  sent() { return this.calls.filter(call => call[0] === 'dispatch').map(call => call[4]); }
+  sent() { return this.calls.filter(call => call[0] === 'dispatch').map(call => typeof call[4] === 'object' ? call[4].itemId : call[4]); }
 }
 function setup(t, capabilities = [QUEUE_DONE], steward = () => null) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-queue-done-'));

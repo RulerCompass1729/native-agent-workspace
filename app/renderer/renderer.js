@@ -7429,8 +7429,36 @@ function queueReasonKey(reason) {
   }
   return QUEUE_REASONS[reason] || '';
 }
+// Why a queued item has not gone out (queue-dispatch.cjs waits): a member's own hold reads as the butler's wake does.
+const QUEUE_WAITS = {
+  settling: 'queue.wait.settling', rotating: 'queue.wait.rotating', 'space-run': 'queue.wait.space-run',
+  integration: 'queue.wait.integration', 'space-archived': 'queue.wait.space-archived', 'not-member': 'queue.wait.not-member',
+  'no-members': 'queue.wait.no-members', 'send-unconfirmed': 'queue.wait.send-unconfirmed',
+  'sent-item-open': 'queue.wait.sent-item-open', 'took-item': 'queue.wait.sent-item-open', 'previous-item': 'queue.wait.previous-item',
+  'model-change': 'queue.wait.model-change', 'manager-item': 'queue.wait.manager-item', refused: 'queue.wait.refused',
+  'error.submission.nativeDraft': 'queue.wait.native-prompt-draft', 'error.queue.personTyping': 'stewardWake.reason.person-recent',
+  'error.queue.terminalDialog': 'stewardWake.reason.native-terminal-dialog',
+};
+const QUEUE_MEMBER_HOLDS = new Set(['missing', 'archived', 'backend-update-needed', 'automatic-messages-off', 'paused',
+  'waiting-provider', 'usage-limit-exceeded', 'rotation-control-unresolved', 'native-terminal-dialog', 'not-idle', 'busy',
+  'unavailable', 'background-unconfirmed', 'background-work', 'person-typing', 'person-recent', 'native-goal-active',
+  'team-running', 'quiet-window', 'trust-hold', 'trust-unknown', 'model-unknown', 'state-unavailable']);
+function queueWaitKey(code) {
+  if (Object.hasOwn(QUEUE_WAITS, code)) {
+    return QUEUE_WAITS[code];
+  }
+  return QUEUE_MEMBER_HOLDS.has(code) ? 'stewardWake.reason.' + code : 'queue.wait.other';
+}
 // What came back, or why it did not: the fact a settled row is read for.
 function queueOutcomeNode(item) {
+  if (item.status === 'queued' && Array.isArray(item.wait) && item.wait.length) {
+    const line = node('div', undefined, 'queue-outcome');
+    ui.display.computed(line, 'text', () => item.wait.map(wait => {
+      const why = [wait.reason, wait.readiness].filter(Boolean).map(code => uiText(queueWaitKey(code))).join(' · ');
+      return wait.sessionId ? queueMemberName(wait.sessionId) + ' · ' + why : why;
+    }).join(uiText('queue.wait.separator')));
+    return line;
+  }
   const reasonKey = queueReasonKey(item.reason);
   if (reasonKey) {
     return uiNode('div', reasonKey, undefined, 'queue-outcome');
@@ -7573,7 +7601,7 @@ function renderQueue() {
     if (inSpace(record, queueSpace) && !record.archived) {
       members.push({ id: record.id, name: record.name, nativeTerminalDialog: record.nativeTerminalDialog || null });
       memberIds.add(record.id);
-      if (!(record.serviceCapabilities || []).includes('queueDispatchV1')) {
+      if (!(record.serviceCapabilities || []).includes('queueDispatchInputV1')) {
         needUpdate.push(record.name);
       }
     }
