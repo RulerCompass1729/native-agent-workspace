@@ -322,13 +322,16 @@ test('R207: what the person releases by hand does not come back as their request
   assert.deepEqual([f.dispatcher.rotations, f.dispatcher.requests], [{}, {}]);
 });
 
-test('R207: one that came due by itself, its handoff turn interrupted, fails as before', async t => {
+// 11-25: no longer as before (failed, resting): a cut turn is half a handoff whichever way it was asked for.
+test('R207: one that came due by itself, its handoff turn interrupted, is let go and told, then asked again once quiet', async t => {
   const f = await fixture(t);
   await f.ask('person');
   delete f.dispatcher.rotations.a.person;
   f.cut();
   await f.pass(); await f.pass(61000);
-  assert.deepEqual([f.dispatcher.rotations.a.phase, f.dispatcher.rotations.a.reason, f.s.rotationEpisode.state], ['failed', 'handoff-missing', 'invalid']);
+  assert.deepEqual([f.dispatcher.rotations, f.s.rotationEpisode.state, f.notices], [{}, 'released', ['failed']]);
+  assert.deepEqual(f.log().filter(e => e.event === 'failed').map(e => e.reason), ['handoff-interrupted']);
+  assert.ok(f.dispatcher.deferredAt.has('a'), 'asked again once quiet');
 });
 
 test('R207: a turn interrupted after the person took the rotation back, or after their Esc, is theirs and not a failure', async t => {

@@ -11,6 +11,8 @@ Change:
 
 Not covered: keys typed in the native terminal, the phone, and @ messages in a space still reach the old session, and the supplement step tells the successor about them (R207).
 
-Tests (`app/tests/queue-dispatch.test.cjs`): new ones for a look/click/keys not stopping one that came due, the cut turn, held messages to the successor (queued while it works), back to the old session after a stop, and reading `held` back. Red on `905d5c44`: the look/click test (no successor made) and the cut-turn test (the half handoff was taken). Updated to the new behavior: the two pause tests now pause on Esc; the two B2 trust-wait tests and the task-notification test no longer expect person-active.
+Tests (`app/tests/queue-dispatch.test.cjs`): new ones for a look/click/keys not stopping one that came due, the cut turn, held messages to the successor (queued while it works), back to the old session after a stop, and reading `held` back. Red on `905d5c44`: the look/click test (no successor made) and the cut-turn test (the half handoff was taken). Updated to the new behavior: the two pause tests now pause on Esc; the two B2 trust-wait tests and the task-notification test no longer expect person-active. Three tests that held the old behavior on purpose now follow the new one: R207's "one that came due by itself, its handoff turn interrupted, fails as before" (`rotation-asked-stop.test.cjs`; its record said a rotation that came due "is as it was", a limit of that change's scope) now expects it let go, told and asked again once quiet; in `rotation-disposition.test.cjs` the two whose retirement came from the person typing now retire on an Esc.
+
+Full suite on the lane before those three: 11807 tests, 11804 pass, 3 fail (those three), 0 skipped. After: `rotation-asked-stop` and `rotation-disposition` 54 of 54; no source changed in between.
 
 Undo: drop this lane's commit.

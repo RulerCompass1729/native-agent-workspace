@@ -127,16 +127,16 @@ test('a lost deferral response retains a recoverable exact record and never repl
  await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.dispatcher.rotations[f.s.id],undefined);assert.equal(f.writes.length,1);
 });
 
-test('typing without submitting a new turn also retires the request and retains the same native identity',async t=>{
+test('an Esc without a new turn also retires the request and retains the same native identity (11-25: typing no longer does)',async t=>{
  const f=fixture(t),epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch));
- const record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'codex',cwd:f.dir,name:'Synthetic',roomIds:['shared']};f.dispatcher.rotations[f.s.id]=record;f.dispatcher.idleSince.set(f.s.id,NOW-60000);f.dispatcher.noteHuman(f.s.id);
+ const record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'codex',cwd:f.dir,name:'Synthetic',roomIds:['shared']};f.dispatcher.rotations[f.s.id]=record;f.dispatcher.idleSince.set(f.s.id,NOW-60000);f.dispatcher.noteHuman(f.s.id,'interrupt');
  await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.s.rotationEpisode.state,'released');assert.equal(f.s.nativeId,'native-a');assert.equal(f.writes.length,1);assert.equal(rules.sessionReady(f.snapshot(),AWAKE).ready,true);
 });
 
 test('the same standalone butler can be woken through the real dispatcher after its interrupted episode is retired',async t=>{
  const f=fixture(t);f.s.roomIds=[];f.s.roomId=null;f.s.provider='claude';f.s.model='claude-test-model';
  const epoch=randomUUID(),tag=await f.send('rotation:'+f.s.id,control(epoch)),record={phase:'requested',episodeEpoch:epoch,tag,oldId:f.s.id,oldNativeId:f.s.nativeId,oldControl:0,requestedAt:NOW-38000,reason:'compact',provider:'claude',cwd:f.dir,name:'Synthetic',roomIds:[]};
- f.dispatcher.rotations[f.s.id]=record;f.dispatcher.noteHuman(f.s.id);f.dispatcher.idleSince.set(f.s.id,NOW-60000);await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.s.rotationEpisode.state,'released');
+ f.dispatcher.rotations[f.s.id]=record;f.dispatcher.noteHuman(f.s.id,'interrupt');f.dispatcher.idleSince.set(f.s.id,NOW-60000);await f.dispatcher.advanceRotations(f.client.snapshot(),NOW);assert.equal(f.s.rotationEpisode.state,'released');
  const {ButlerLedger}=require('../butler-ledger.cjs'),{StewardWake}=require('../steward-wake.cjs'),ledger=new ButlerLedger(f.dir),identity={sessionId:f.s.id,nativeId:f.s.nativeId};
  f.dispatcher.now=()=>NOW+180000;f.dispatcher.steward=()=>identity;f.dispatcher.stewardWake=new StewardWake(f.dir,{ledger:()=>ledger,selected:()=>identity,now:f.dispatcher.now,record(){}});f.dispatcher.stewardWake.set(true);
  ledger.ingest({eventId:'synthetic-event',sourceRef:'synthetic-source',kind:'request',payload:{reason:'synthetic-action'}});
