@@ -216,7 +216,7 @@ test('switching to a left-out session waits for its messages; a later switch mea
 test('opening a space waits for its members\' messages; the current space stays meanwhile', async () => {
   const calls = [], spaces = new Set(['s1', 's2']);
   let answer;
-  const context = vm.createContext({ spaceId: 's1', state: {}, roomOverview: null, runPreview: null, shareRevision: 0, lastRoomMessages: '', lastMessages: '', roomSession: '',
+  const context = vm.createContext({ spaceId: 's1', state: {}, roomOverview: null, runPreview: null, shareRevision: 0, lastRoomMessages: '', lastMessages: '', roomSession: '', focusedRoomMember: () => false, rememberRoomMemberView() {},
     spaceRecord: id => spaces.has(id) ? { id } : null, members: id => [{ id: id + '-member' }], uiError: key => Error(key),
     ensureMessages: ids => { calls.push(['ensure', ...ids]); return new Promise(resolve => { answer = resolve; }); },
     captureReadingViews() {}, captureRoomView() {}, closeMentions() {}, suspendColumnInputs() {}, projectSpace: s => s, restoreRoomView() {},

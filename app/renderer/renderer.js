@@ -4661,7 +4661,7 @@ function renderSessions() {
       if (typeof renderSidebarSpaceCard === 'function') renderSidebarSpaceCard(entry, group);
       else ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: groupName(), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
-      const open = Boolean(group.id) && openSpace === group.id;
+      const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
       entry.element.classList.toggle('current-space', open);
       entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
       if (group.id) ui.display.attribute(entry.title, 'aria-label', 'sidebar.openSpace', () => ({ name: groupName() }));
