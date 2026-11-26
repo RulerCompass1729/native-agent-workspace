@@ -4,8 +4,9 @@
 // After a session rotation the record follows the written log to the one clear successor from the moment it confirms
 // the handoff (handoffChain, R254), not only once the old session is ended as the butler's and the integrator's do.
 // The person's own designation holds at once, against every handoff logged before it. The record itself takes no new
-// field (an older build would not read it): each change of it is a line in the rotation log, `designated` by the
-// person (set) or `settled` along a handoff (settle), with the session it named before. A record that cannot be read
+// field (an older build would not read it): a designation by the person (set) and a handoff written into it (settle)
+// are each first a line in the rotation log, `designated` or `settled`, with the session it named before. A revoke,
+// the other space a designation clears and the secretary's retirement write no line. A record that cannot be read
 // is an error, never "nobody".
 // It took the place of the one secretary for all of NAW (queue-secretary.cjs), whose file it reads once and never writes.
 const fs = require('node:fs');
