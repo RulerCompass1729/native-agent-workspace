@@ -37,6 +37,7 @@ let stewardStanding;
 const stewardRecords = require('./steward-record.cjs');
 const { StewardWake } = require('./steward-wake.cjs');
 const { AnswerNotices } = require('./answer-notices.cjs');
+const { ManagerNotices } = require('./manager-notices.cjs');
 const { VersionEvents, VersionNotices, RunMark } = require('./version-events.cjs');
 const { QuietWindows } = require('./quiet-windows.cjs');
 const { ButlerIngress, bindQueueOutcomes } = require('./butler-ingress.cjs');
@@ -92,6 +93,8 @@ function observePersonActions(snapshot) {
 // The person's answers on agents' confirmation cards, owed to the agent that asked until the dispatcher tells it.
 const answerNotices = new AnswerNotices();
 const versionNotices = new VersionNotices();
+// What changed in a space, owed to its project manager until the dispatcher tells it (R253).
+const managerNotices = new ManagerNotices();
 let butlerClosing = false, butlerQuitAttempted = false;
 let outboxBroker, outboxUnavailable = false, outboxClosing = false, outboxQuitFailed = false;
 
@@ -1281,6 +1284,8 @@ async function startQueueDispatcher() {
       answerNotices,
       // What this start brought, owed to the manager that took over from the secretary (version-events.cjs).
       versionNotices,
+      // A space's manager, told who joined or left its space and what became of the items it added (manager-notices.cjs).
+      managerNotices,
       // Each space's project manager now (space-managers.cjs): what planning keeps from it.
       managers: sessions => activeManagers(sessions),
       // Sessions on a backend in a migration's quiet window get no new item or NAW message (quiet-windows.cjs).

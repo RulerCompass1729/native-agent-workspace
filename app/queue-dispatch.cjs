@@ -15,6 +15,7 @@ const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 const fleet = require('./renderer/fleet-observation.js');
 const { noticeText } = require('./answer-notices.cjs');
+const { managerText } = require('./manager-notices.cjs');
 const { codexQuotaBlock } = require('./native-usage.js');
 const { rotationBlocked, rotationEpoch, queuePurposeValid } = require('./submission-policy.cjs');
 const { detached } = require('./background-operation.cjs');
@@ -2784,6 +2785,8 @@ class QueueDispatcher {
     this.lastFullPass = 0;
     this.onState = snapshot => {
       this.dirty = true;
+      // Kept for the next tick to look at managers' spaces with (observeManagers): no snapshot read of its own.
+      if (this.managerNotices) this.stateSeen = snapshot;
       if (this.observePersonActions) this.observePersonActions(snapshot);
       if (this.observeQueueState) this.observeVacancyReadiness(snapshot, this.now());
     };
@@ -2817,6 +2820,8 @@ class QueueDispatcher {
     this.answerNotices = options.answerNotices || null;
     // What a restart brought, owed to the former secretary's space's manager (version-events.cjs), or null; sent as answers are.
     this.versionNotices = options.versionNotices || null;
+    // What changed in a space, owed to its project manager (manager-notices.cjs), or null; sent as answers are.
+    this.managerNotices = options.managerNotices || null;
     // Each space's project manager now: { roomId: { sessionId, nativeId } } (space-managers.cjs). It may throw.
     this.managers = options.managers || (() => ({}));
     // Migration quiet windows (quiet-windows.cjs), or null: their sessions get no new item or NAW message.
@@ -3468,6 +3473,9 @@ class QueueDispatcher {
     if (this.versionNotices && this.versionNotices.waiting()) {
       return true;
     }
+    if (this.managerNotices && this.managerNotices.waiting()) {
+      return true;
+    }
     const rooms = [this.roomState.value];
     for (const room of this.roomState.spaces.rooms) {
       rooms.push(room);
@@ -3649,12 +3657,14 @@ class QueueDispatcher {
         this.listen(this.client);
         const snapshot = this.client.snapshot();
         if (this.observePersonActions) this.observePersonActions(snapshot);
+        this.observeManagers(snapshot);
         this.idleSince.clear();
         return;
       }
       this.dropOwnClient();
       const watching = Boolean(windowClient);
       if (!watching || now - this.lastMaintenance < MAINTENANCE_MS) {
+        if (watching) this.observeManagers();
         if (!watching) {
           this.listen(null);
         }
@@ -3673,7 +3683,7 @@ class QueueDispatcher {
     const rotating = this.activeRotations().some(id => !waitingOld(this.rotations[id]));
     const recoveringTrust = Object.entries(this.rotations).some(([id, record]) => !this.faultedRotations.has(id) && (trustRecoveryPending(record) || failedHandoffPending(record)));
     const due = this.dirty || rotating || recoveringTrust || now - this.lastFullPass >= FULL_PASS_MS || this.settlingSoon(now) || now === this.lastMaintenance ||
-      this.answerSoon(now) || this.clickSoon();
+      this.answerSoon(now) || this.clickSoon() || Boolean(this.managerNotices?.endingSoon(now, this.tickMs * 2));
     if (!due) {
       return;
     }
@@ -3786,7 +3796,7 @@ class QueueDispatcher {
       actions, engaged, modelChanges: this.modelChanges(), handedOff, ...this.trustAdmission() }));
     if (this.integration && !this.closed) await this.integrate();
     if (this.stewardWake && !this.closed) await this.wakeSteward(current, engaged, quietPending);
-    if ((this.answerNotices || this.versionNotices) && !this.closed) await this.notifyAnswers(current, engaged);
+    if ((this.answerNotices || this.versionNotices || this.managerNotices) && !this.closed) await this.notifyAnswers(current, engaged);
   }
 
   // The designated butler, woken when NAW has recorded something new (steward-wake.cjs keeps the switch, the position,
@@ -3884,6 +3894,24 @@ class QueueDispatcher {
     // The version a restart brought and the backends still on an old one, owed to the former secretary's
     // space's manager (version-events.cjs): the same send, after the two minutes queue work waits for the person.
     if (this.versionNotices && !this.closed) await this.notifyOwed(this.versionNotices, told => this.versionNotices.text(told), 'version-notice', this.humanQuietMs, current, holding);
+    // What changed in a manager's space: read as the record is after this pass sent and settled its items.
+    if (this.managerNotices && !this.closed) {
+      this.observeManagers(this.client.snapshot());
+      await this.notifyOwed(this.managerNotices, managerText, 'manager-notice', this.humanQuietMs, current, holding);
+    }
+  }
+
+  // Between full passes too, from the last state event's snapshot (at most once a tick, only after an event): a session
+  // joining a space with no queued work is a change.
+  observeManagers(snapshot = this.stateSeen) {
+    this.stateSeen = null;
+    if (!this.managerNotices || !Array.isArray(snapshot?.sessions)) return;
+    try {
+      const view = this.roomState.apply(snapshot);
+      if (this.managerNotices.observe(view.rooms, view.sessions, this.managers(view.sessions), this.now())) this.dirty = true;
+    } catch {
+      // A space or manager record that cannot be read now: looked at again on the next pass.
+    }
   }
 
   async notifyOwed(notices, text, kind, quietMs, current, holding) {
