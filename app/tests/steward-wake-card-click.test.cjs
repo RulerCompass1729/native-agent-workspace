@@ -191,6 +191,23 @@ test('a draft left for two minutes does not hold a click: woken at once beside i
   assert.equal(f.butler.liveDraft, 'SYNTHETIC PRIVATE DRAFT');
 });
 
+test('a click held by a native dialog is said once, the page told once a minute, and the wake follows when it closes', async t => {
+  const f = fixture(t);
+  f.push({ nativeTerminalDialog: { kind: 'synthetic' } }); await f.run(MIN);
+  f.click(); await f.run(6 * SEC);
+  assert.deepEqual(f.sent, []);
+  assert.deepEqual([f.desk()?.reason, f.desk()?.card], ['native-terminal-dialog', true]);
+  assert.deepEqual(f.blockedLines(), ['native-terminal-dialog']); assert.ok(f.shown() > 0);
+  const told = f.shown();
+  await f.run(5 * MIN);
+  assert.deepEqual(f.blockedLines(), ['native-terminal-dialog'], 'one line for one reason'); assert.deepEqual(f.sent, []);
+  assert.ok(f.shown() - told <= 6, 'the page is told once a minute, not each pass');
+  const before = f.shown();
+  f.push({ nativeTerminalDialog: null }); const at = f.clock.now;
+  await f.run(30 * SEC);
+  soon(f, at, 12 * SEC); assert.equal(f.desk(), null); assert.ok(f.shown() > before, 'the page is told it is over');
+});
+
 test('an ordinary event goes beside a draft once the person has been quiet two minutes', async t => {
   const d = fixture(t, { butler: { liveDraft: 'x' } });
   d.dispatcher.noteHuman('butler', 'draft'); const used = d.clock.now;

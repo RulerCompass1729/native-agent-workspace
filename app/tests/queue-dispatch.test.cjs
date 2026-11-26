@@ -5562,7 +5562,7 @@ test('the dispatcher shows why a queued item waits, in memory only, and drops it
   client.emit('state');
   await dispatcher.schedule();
   await dispatcher.schedule();
-  assert.equal(client.sends().length, 1, 'sent after the quiet period with the static slash preserved');
+  assert.equal(client.sends().length, 1, 'sent after the quiet period while the slash draft is there');
   assert.equal(waiting().status, 'sent');
   assert.equal(waiting().wait, undefined);
 });

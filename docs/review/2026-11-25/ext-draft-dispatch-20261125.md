@@ -15,7 +15,7 @@ Queue items. `sessionReady(..., allowDraft)` in `app/queue-dispatch.cjs` lets a 
 The butler. This follows the person's default of 2026-11-25. An event wake or a patrol goes beside an unchanged draft through the same packet, once the person has been quiet for 2 minutes. A click on its card with a draft also waits for those 2 minutes; without a draft a click still wakes it at once (R209). On a backend before the checked input, the draft still holds it, as before. Undo: the `beside` hunk in `wakeSteward` and `heldReason`'s third parameter.
 
 Native prompts are unchanged.
-- The Claude native prompt still refuses an item while the person has unsent text there (`app/claude-submit.cjs`, status `draft`). The item waits and the row says so.
+- The Claude native prompt still refuses an item while the person has unsent text there (`app/claude-submit.cjs`, status `draft`). The item waits, but the row shows only the general wait 「正在给你最近的操作让路」 (person-recent, from the refusal setting the person's last act); the specific 'native-prompt-draft' wait is never produced. Follow-up: name the native prompt draft on the row.
 - The agy TUI refuses unless its editor is empty.
 - Codex receives the item as an app-server `turn/start` with the item text only (`app/adapters.cjs`). NAW cannot read the Codex TUI composer, and that path is unchanged.
 - dsh takes no queue items.
