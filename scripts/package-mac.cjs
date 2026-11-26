@@ -176,6 +176,7 @@ async function build() {
       'local-pages.cjs',
       'main.cjs',
       'managed-outbox-transport.cjs',
+      'manager-notices.cjs',
       'mobile-access.cjs',
       'mobile-broker.cjs',
       'mobile-carrier.cjs',

@@ -101,7 +101,9 @@ or start paid model runs as a side effect of editing documents.
   fails afterwards gives the role back, and branching successors do not
   transfer it. The session the person designates holds the role at once: a
   handoff logged before that designation moves it only once that old session
-  is ended (`done`). No automatic heartbeat or routing model is added.
+  is ended (`done`). No automatic heartbeat or routing model is added. NAW tells an idle
+  manager who joined or left its space and what became of the items in its queue,
+  whoever added them, only after such a change and at most once a minute (R253).
 - NAW-owned collaboration tools and provider-native execution tools remain
   separate. Task ownership does not grant native session control, permission,
   model/budget changes, publication, spending or access to another user's draft.

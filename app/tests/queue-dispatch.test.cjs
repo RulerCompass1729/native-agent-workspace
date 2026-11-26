@@ -4461,7 +4461,7 @@ async function mainNames(sandbox) {
   const from = main.indexOf('async function startQueueDispatcher()'), end = main.indexOf('async function broadcastRoom()', from);
   let handed = null;
   Object.assign(sandbox, { queueDispatcher: null, dataDir: '', process: { env: {} }, backgroundTest: false, roomState: {}, personClient() {}, broadcastRoom() {}, notifyRotation() {},
-    creationDefaults: {}, observePersonActions() {}, stewardWake: null, answerNotices: null, versionNotices: null, quietWindows: null,
+    creationDefaults: {}, observePersonActions() {}, stewardWake: null, answerNotices: null, versionNotices: null, managerNotices: null, quietWindows: null,
     QueueDispatcher: class { constructor(options) { handed = options.labels; } async start() {} } });
   vm.createContext(sandbox);
   await vm.runInContext(main.slice(from, end) + '\nstartQueueDispatcher()', sandbox);
