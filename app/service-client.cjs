@@ -239,7 +239,7 @@ async function retireHistoryService(dataDir, key, expected) {
     // Validate the display path while the service still owns its store.
     retiredState(directory);
     const parents = execFileSync('/bin/ps', ['-axo', 'ppid='], { encoding: 'utf8', timeout: 1000 });
-    if (!parents.trim() || parents.trim().split(/\s+/).includes(String(identity.pid))) return false;
+    if (!parents.trim() || parents.split('\n').some(parent => parent.trim() === String(identity.pid))) return false;
     await service.call('maintenanceShutdown', current.sessions.map(maintenanceProof));
     await waitForShutdown(service, directory, identity);
     retiredStates.delete(directory);

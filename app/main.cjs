@@ -3121,7 +3121,6 @@ async function boot() {
     switchRecords = backendSwitch.readRecords(dataDir);
     return { auto: settings.auto, migrate: settings.migrate, interrupted: endedByMove(roomState.apply(snapshot).sessions).map(value => value.name) };
   });
-  register('retireHistoryBackends', retireHistoryBackends);
   register('switchBackend', async (c, expected) => {
     await c.client.refresh();
     const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.backendKey === expected?.backendKey);
@@ -3437,6 +3436,7 @@ async function boot() {
   register('expandImage', (c, token) => imagesFor(c).expand(token));
   register('copyImage', (c, token) => imagesFor(c).copy(token, c.background ? { writeImage: image => { c.clipboardImage = image; c.clipboardText = ''; c.clipboardRevision = randomUUID(); } } : clipboard));
   register('releaseImage', (c, token) => c.imagePreviews?.release(token));
+  register('retireHistoryBackends', retireHistoryBackends);
   updateApplicationMenu();
   }
   const restore = views.filter(v => v.active);
