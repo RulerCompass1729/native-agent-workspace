@@ -42,3 +42,34 @@ Review 1: a headless reviewer session (not the author) read `8f89855a` and retur
   - Fix: the sandbox defines `managerNotices` as null, as it already does for the other notice stores. No other test uses that sandbox, and the test now passes.
 
 Undo: drop this lane's rework commit.
+
+## R253 review 2 (BLOCK on a4a10840) and its rework
+
+The same reviewer session as review 1 returned BLOCK B1b, with six notes that do not block.
+
+### B1b (blocking): a member not yet listed at the first look was later told as "joined"
+- Trigger: a member's backend comes up after the dispatcher's first look at its space, as when NAW starts. The absence window covered only members recorded at a previous look, so this member was later reported as having joined.
+- Reproduced: a dispatcher test keeps the worker out of the list at the start and lists it 15 s later. On `a4a10840` the manager was told 「Worker（worker）进了空间」. The store-level test fails the same way.
+- Fix (the reviewer's second option, keyed on the session itself):
+  - Each watched space remembers when it was first looked at under this manager, and which sessions were seen outside it.
+  - A session first listed as a member is told as joined only if it was seen outside the space or was opened (`createdAt`) after that first look.
+  - Otherwise it was there all along. A session with no `createdAt` counts as there all along.
+  - A real join is still told: a listed session moving in, or one opened since and placed in the space.
+
+### Non-blocking notes
+- 1, fixed:
+  - A session listed with `backendUnavailable` or `transportDisconnected` and not archived is no longer judged. It keeps what it was at the last look, member or not, with no absence clock, and is judged again when it is back.
+  - The dispatcher no longer reads a list marked `unavailable` (`observeManagers`).
+  - Tests: a member listed away without its spaces neither leaves nor comes back; an unavailable list with the worker out of the space tells nothing.
+- 2, decided by the PM: items the person added are still told. The person asked that the manager notice changes in its space, and the one-a-minute limit bounds the cost.
+- 3, fixed: the absence limit is now `queue-dispatch.cjs` `INTEGRATOR_ABSENT_MS`, read when a store is made, because `queue-dispatch.cjs` requires this module. `ABSENT_MS` is no longer exported. A test checks that the two values are equal.
+- 4 (an archived space's last notice) and 6 (wording of the CLAUDE.md summary): unchanged.
+- 5, fixed: `error.wake.noButler` now reads 「现在没有指定的大管家（或指定记录读不出来），这条没有发出。要请人决定，在本轮最后一条回复的第一行写「需要你决定：」。」. The English text matches.
+
+### Evidence (private evidence directory `newreq-pm-wake-20261125/`)
+- `rework2-red.log`: on `a4a10840`, 13 of 18 pass. Each of the five new tests fails on its own assertion.
+- `rework2-green-notices.log`: 18 of 18.
+- `rework2-green-related.log`: 836 of 836. It covers the notices, wake, answer-notice, sandbox, integrator, queue-space, manager, locale and boot tests.
+- `rework2-queue-dispatch-subset.log`: the queue-dispatch tests matching manager, butler, R253 or the renamed-successor sandbox, 51 of 51. The whole file was not rerun: two other agents were running it at the time, and this change touches only `observeManagers` there.
+
+Not in this rework: directed runs (`addressed-handoffs.cjs`) still do not resolve `butler`.

@@ -13,8 +13,9 @@
 const { roomIds } = require('./collaboration-spaces.cjs');
 
 const HOLD_MS = 10 * 1000, GAP_MS = 60 * 1000, RETRY_MS = 60 * 1000, MAX_AGE_MS = 24 * 60 * 60 * 1000, MAX_EVENTS = 20, TEXT_MAX = 40;
-// As long as queue-dispatch.cjs INTEGRATOR_ABSENT_MS: a backend restarting, moving or updating is away for a moment.
-const ABSENT_MS = 10 * 60 * 1000;
+// A backend restarting, moving or updating is away for a moment, as long as integrationView allows. Read when a store
+// is made: queue-dispatch.cjs requires this file.
+const absentLimit = () => require('./queue-dispatch.cjs').INTEGRATOR_ABSENT_MS;
 // An item NAW sends and its member refuses goes out and back each pass; the manager hears that so often, then its end.
 const BOUNCES = 3;
 const ENDS = new Set(['done', 'waiting', 'failed', 'cancelled']);
@@ -40,10 +41,10 @@ function adder(item, manager) {
 }
 
 class ManagerNotices {
-  constructor({ now = Date.now, holdMs = HOLD_MS, gapMs = GAP_MS, retryMs = RETRY_MS, maxAgeMs = MAX_AGE_MS, absentMs = ABSENT_MS } = {}) {
+  constructor({ now = Date.now, holdMs = HOLD_MS, gapMs = GAP_MS, retryMs = RETRY_MS, maxAgeMs = MAX_AGE_MS, absentMs = absentLimit() } = {}) {
     Object.assign(this, { now, holdMs, gapMs, retryMs, maxAgeMs, absentMs });
-    // Space → what was seen there last: its manager, its other members (and since when each unlisted one is missing),
-    // its items, and how often each item's going out and back was told.
+    // Space → what was seen there last: its manager and since when, its other members (and since when each unlisted one
+    // is missing), the sessions seen outside it, its items, and how often each item's going out and back was told.
     this.seen = new Map();
     // Space → its manager's key at the last look; null before the first.
     this.managing = null;
@@ -73,10 +74,11 @@ class ManagerNotices {
       }
       watched.add(roomId);
       const k = key(manager.sessionId, manager.nativeId);
-      const before = this.seen.get(roomId);
-      const members = new Map(), absent = new Map();
+      const before = this.seen.get(roomId)?.manager === k ? this.seen.get(roomId) : null;
+      const members = new Map(), absent = new Map(), outside = new Set(), judged = new Set();
       for (const s of list) {
-        if (!s || s.archived || s.id === manager.sessionId) {
+        // One whose backend is away is listed from what NAW last had, possibly without its spaces: judged when back.
+        if (!s || s.id === manager.sessionId || !s.archived && (s.backendUnavailable || s.transportDisconnected)) {
           continue;
         }
         let ids;
@@ -85,32 +87,43 @@ class ManagerNotices {
         } catch {
           continue;
         }
-        if (ids.includes(roomId)) {
+        judged.add(s.id);
+        if (!s.archived && ids.includes(roomId)) {
           members.set(s.id, s.name || s.id);
+        } else {
+          outside.add(s.id);
         }
       }
       // A member missing from the list is gone only once missing for absentMs, as integrationView counts it. One in the
       // list is the record's to judge: archived or out of the space is gone now.
       for (const [id, name] of before?.members || []) {
-        if (members.has(id) || listed.has(id)) {
+        if (judged.has(id)) {
           continue;
         }
-        const since = before.absent.get(id) ?? now;
-        if (now - since < this.absentMs) {
+        const since = listed.has(id) ? null : before.absent.get(id) ?? now;
+        if (since === null || now - since < this.absentMs) {
           members.set(id, name);
-          absent.set(id, since);
+          if (since !== null) absent.set(id, since);
         }
+      }
+      for (const id of before?.outside || []) {
+        if (!judged.has(id)) outside.add(id);
       }
       const items = (Array.isArray(room.queue) ? room.queue : []).filter(item => typeof item?.id === 'string');
       const present = new Set(items.map(item => item.id));
       const bounced = new Map([...(before?.bounced || [])].filter(([id]) => present.has(id)));
-      this.seen.set(roomId, { manager: k, members, absent, items: new Map(items.map(item => [item.id, stateOf(item)])), bounced });
-      if (!before || before.manager !== k) {
+      const since = before?.since ?? now;
+      this.seen.set(roomId, { manager: k, since, members, absent, outside, items: new Map(items.map(item => [item.id, stateOf(item)])), bounced });
+      if (!before) {
         continue;
       }
       const events = [];
+      const created = new Map(list.map(s => [s?.id, s?.createdAt]));
       for (const [id, name] of members) {
-        if (!before.members.has(id)) events.push(['m:' + id, { kind: 'joined', id, name }]);
+        // First listed since the first look: in the space all along (its backend came up late, as when NAW starts),
+        // unless it was seen outside or opened since.
+        const opened = Number.isFinite(created.get(id)) && created.get(id) > since;
+        if (!before.members.has(id) && (before.outside.has(id) || opened)) events.push(['m:' + id, { kind: 'joined', id, name }]);
       }
       for (const [id, name] of before.members) {
         if (!members.has(id)) events.push(['m:' + id, { kind: 'left', id, name }]);
@@ -275,4 +288,4 @@ function managerText(events) {
     'NAW 只告诉你发生了什么，不替你做任何事；要不要接着安排照你项目经理的职责来，没有要做的就直接结束本轮。'].join('\n');
 }
 
-module.exports = Object.freeze({ ManagerNotices, managerText, HOLD_MS, GAP_MS, MAX_EVENTS, ABSENT_MS, BOUNCES });
+module.exports = Object.freeze({ ManagerNotices, managerText, HOLD_MS, GAP_MS, MAX_EVENTS, BOUNCES });

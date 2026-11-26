@@ -46,12 +46,15 @@ test('main.cjs keeps one store of what is owed to managers and gives it to the d
   assert.match(dispatcher, /\n {6}managerNotices,\n/);
 });
 
-async function fixture(t, { window = false, managed = true, manager = {} } = {}) {
+async function fixture(t, { window = false, managed = true, manager = {}, late = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-manager-notice-')); fs.chmodSync(dir, 0o700);
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const clock = { now: NOW }, now = () => clock.now;
   const rooms = new RoomState(dir), space = rooms.create('Plans');
   const client = new FakeClient([agent('pm', 'PM', [space], manager), agent('worker', 'Worker', [space]), agent('newcomer', 'Newcomer', [])]);
+  // `late`: listed only once a backend comes up, after the dispatcher's first look.
+  const pending = client.state.sessions.filter(s => late.includes(s.id));
+  client.state.sessions = client.state.sessions.filter(s => !late.includes(s.id));
   const designation = { [space]: { sessionId: 'pm', nativeId: 'native-pm' } };
   const dispatcher = new rules.QueueDispatcher({ roomState: rooms, dataDir: dir, connect: async () => client, now, settleMs: 8000, tickMs: 3000,
     transcriptRoot: path.join(dir, 'none'), observePersonActions: () => {}, ...(window ? { clients: () => client } : {}),
@@ -62,7 +65,8 @@ async function fixture(t, { window = false, managed = true, manager = {} } = {})
   const elapse = async ms => { for (let left = ms; left > 0; left -= 3000) { clock.now += Math.min(3000, left); await pass(); } };
   const told = () => client.calls.filter(call => call[0] === 'dispatch' && /^manager-notice:/u.test(call[4]));
   const join = (id, ...ids) => client.set(id, { roomIds: ids });
-  return { clock, client, rooms, space, dispatcher, pass, elapse, told, join };
+  const listLate = () => { client.state.sessions.push(...pending); client.emit('state', client.snapshot()); };
+  return { clock, client, rooms, space, dispatcher, pass, elapse, told, join, listLate };
 }
 
 for (const window of [false, true]) {
@@ -158,11 +162,38 @@ test('a member missing from the list for a moment is no news; one archived, or m
   assert.equal(f.told().length, 2);
   f.client.set('pm', { state: 'idle' });
   away('newcomer');
-  await f.elapse(notices.ABSENT_MS - 60000);
+  await f.elapse(rules.INTEGRATOR_ABSENT_MS - 60000);
   assert.equal(f.told().length, 2, 'missing for less than the absence limit: not yet');
   await f.elapse(150000);
   assert.equal(f.told().length, 3);
   assert.match(f.told()[2][2], /- Newcomer（newcomer）离开了空间/u, 'missing for long: gone');
+});
+
+// Review 2 of a4a10840, B1b: at NAW's start a member's backend may come up after the first look at its space.
+test('a member not yet listed at the first look, listed later, is no news; a session joining since still is', async t => {
+  const f = await fixture(t, { late: ['worker'] });
+  await f.elapse(15000);
+  f.listLate();
+  await f.elapse(150000);
+  assert.deepEqual(f.told(), [], 'it was in the space all along');
+  f.join('newcomer', f.space);
+  await f.elapse(75000);
+  assert.equal(f.told().length, 1);
+  assert.match(f.told()[0][2], /- Newcomer（newcomer）进了空间/u);
+  assert.doesNotMatch(f.told()[0][2], /Worker/u);
+});
+
+test('a list NAW marks unavailable is not read: nobody is told to have left', async t => {
+  const f = await fixture(t);
+  await f.elapse(15000);
+  f.client.state.unavailable = true;
+  f.join('worker');
+  await f.elapse(150000);
+  assert.deepEqual(f.told(), []);
+  delete f.client.state.unavailable;
+  f.join('worker', f.space);
+  await f.elapse(150000);
+  assert.deepEqual(f.told(), [], 'back as it was');
 });
 
 // The store alone, for what the dispatcher-level tests above cannot reach in a few passes.
@@ -193,6 +224,48 @@ test('a member out of the space and back before it was told: nothing owed', () =
   clock.now += 3000;
   n.observe(rooms, sessions, { [A]: PM }, clock.now);
   assert.equal(n.waiting(), false);
+});
+
+test('a session first listed after the first look: a member all along unless opened since', () => {
+  const { clock, n, messages, deliver } = store();
+  const sessions = [member('pm', [A])], rooms = [{ id: A, name: 'Plans', queue: [] }];
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  clock.now += 3000;
+  sessions.push(member('worker', [A], { createdAt: NOW - 3600000 }), member('legacy', [A]));
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  assert.equal(n.waiting(), false, 'older than the first look, or of unknown age: it was there');
+  clock.now += 3000;
+  sessions.push(member('fresh', [A], { createdAt: clock.now - 1000 }));
+  assert.equal(n.observe(rooms, sessions, { [A]: PM }, clock.now), true);
+  clock.now += 60000; deliver();
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /- Fresh（fresh）进了空间/u);
+  assert.doesNotMatch(messages[0], /Worker|Legacy/u);
+});
+
+test('a member whose backend is away, listed without its spaces, has neither left nor come back', () => {
+  const { clock, n } = store();
+  const sessions = [member('pm', [A]), member('worker', [A]), member('other', [])], rooms = [{ id: A, name: 'Plans', queue: [] }];
+  n.observe(rooms, sessions, { [A]: PM }, clock.now);
+  for (const away of ['backendUnavailable', 'transportDisconnected']) {
+    Object.assign(sessions[1], { roomIds: [], [away]: true });
+    Object.assign(sessions[2], { roomIds: [A], [away]: true });
+    clock.now += 3000;
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+    clock.now += 20 * 60 * 1000;
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+    assert.equal(n.waiting(), false, away);
+    Object.assign(sessions[1], { roomIds: [A], [away]: false });
+    Object.assign(sessions[2], { roomIds: [], [away]: false });
+    clock.now += 3000;
+    n.observe(rooms, sessions, { [A]: PM }, clock.now);
+    assert.equal(n.waiting(), false, away + ', back');
+  }
+});
+
+test('the absence limit is the dispatcher\'s own', () => {
+  assert.equal(new notices.ManagerNotices().absentMs, rules.INTEGRATOR_ABSENT_MS);
+  assert.equal(Object.hasOwn(notices, 'ABSENT_MS'), false, 'not a copy');
 });
 
 test('one manager of two spaces hears each space\'s changes under that space\'s name', () => {

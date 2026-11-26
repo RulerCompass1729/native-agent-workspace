@@ -3905,7 +3905,8 @@ class QueueDispatcher {
   // joining a space with no queued work is a change.
   observeManagers(snapshot = this.stateSeen) {
     this.stateSeen = null;
-    if (!this.managerNotices || !Array.isArray(snapshot?.sessions)) return;
+    // A list marked unavailable says nothing about who is in a space.
+    if (!this.managerNotices || !Array.isArray(snapshot?.sessions) || snapshot.unavailable) return;
     try {
       const view = this.roomState.apply(snapshot);
       if (this.managerNotices.observe(view.rooms, view.sessions, this.managers(view.sessions), this.now())) this.dirty = true;
