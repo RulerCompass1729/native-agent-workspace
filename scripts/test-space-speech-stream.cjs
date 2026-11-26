@@ -88,12 +88,14 @@ async function main() {
 
   // Only what was said, newest first: no tool, commentary, recovery, timer or NAW dispatch input lines.
   await page.locator('#space-feed [data-group="say"]').click();
+  // The fixture's wakes have no sender original, so the 信息流 keeps the record's warning (R247–R249 follow-up 4).
+  const unverified = '无法核对发送方的原消息，投递结果未确认。 ';
   const said = [
     'reply | Claude B | 一半了，今晚交。',
     'say | 大管家 → Claude B | B，文档进度怎么样？',
     'reply | Claude B | 文档写好了，等审查。',
     'reply | Claude A | ' + LONG.replace(/\s+/gu, ' ').trim(),
-    'say | 项目经理 → Claude A | A，先修输入框，再补测试。',
+    'say | 项目经理 → Claude A | ' + unverified + 'A，先修输入框，再补测试。',
     'reply | 项目经理 | 排好了：1. 输入框修复（A）；2. 文档（B）；3. 安装检查（大管家）。',
     'say | 你 → 项目经理 | 把今天要做的三件事排一下。',
   ];
@@ -172,7 +174,7 @@ async function main() {
     return { id: first.dataset.feedId, offset: Math.round(first.getBoundingClientRect().top - top) };
   });
   await fixture('speechAdd', { pm: ids.pm, a: ids.a, text: '往下翻时的新消息' });
-  await until(async () => (await rows())[0] === 'say | 项目经理 → Claude A | 往下翻时的新消息', 'New line on top');
+  await until(async () => (await rows())[0] === 'say | 项目经理 → Claude A | ' + unverified + '往下翻时的新消息', 'New line on top');
   const moved = await page.evaluate(id => {
     const list = document.querySelector('#space-feed .feed-list'), n = list.querySelector(`[data-feed-id="${CSS.escape(id)}"]`);
     return n ? Math.round(n.getBoundingClientRect().top - list.getBoundingClientRect().top) : null;
