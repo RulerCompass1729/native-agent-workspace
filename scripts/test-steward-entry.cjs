@@ -141,7 +141,15 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // 4. Its menus: change and revoke are offered on it; reordering and spaces are not. On another session,
   //    "make it the butler" stands above the integrator's item; a space member is not offered it.
   await page.locator('#session-header-more').click(); let items = await menuItems(); await shot('zh-1280-butler-menu'); await closeMenu();
-  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.integratorSet')], 'No space to join; its model, its record, change and revoke');
+  assert.deepEqual(items, [say('header.share'), say('header.usage'), say('menu.changeModel', { model: '原生默认' }), say('menu.stewardToCodex'), say('menu.stewardRecord'), say('menu.stewardChange'), say('menu.stewardRevoke'), say('menu.integratorSet')], 'No space to join; its model, a new Codex butler, its record, change and revoke');
+  // M82: 「大管家换成新的 Codex 会话…」 opens the chooser on a new Codex session with Codex's own defaults; cancelling changes nothing.
+  const codexBox = () => page.evaluate(() => { const $ = id => document.getElementById(id);
+    return { chosen: document.querySelector('#steward-list input:checked')?.value, codex: $('steward-new-provider-codex').checked, model: $('steward-new-model').value, effort: $('steward-new-effort').value,
+      locked: $('steward-new-model').disabled && $('steward-new-effort').disabled, note: $('steward-new-codex').getClientRects().length > 0 ? $('steward-new-codex').textContent : null }; });
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: say('menu.stewardToCodex'), exact: true }).click(); await page.locator('#steward-dialog').waitFor({ state: 'visible' });
+  assert.deepEqual(await codexBox(), { chosen: 'new', codex: true, model: '', effort: '', locked: true, note: say('steward.new.codex') });
+  await shot('zh-1280-switch-codex'); await page.locator('#steward-cancel').click(); await page.locator('#steward-dialog').waitFor({ state: 'hidden' });
+  assert.deepEqual(record(), { sessionId: main, nativeId: nativeOf(main) });
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); items = await menuItems(); await closeMenu();
   for (const key of ['menu.stewardChange', 'menu.stewardRevoke', 'menu.rename', 'menu.archiveSession']) assert.ok(items.includes(say(key)), key);
   for (const text of [say('menu.moveUp'), say('menu.moveDown'), say('menu.stewardSet'), say('menu.joinSpace', { name: '网站改版' })]) assert.equal(items.includes(text), false, text);
@@ -157,6 +165,7 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   await page.locator('#steward-slot .session-row').click({ button: 'right' }); await page.getByRole('menuitem', { name: say('menu.rename'), exact: true }).click();
   await page.locator('#rename-name').fill('Claude 主会话'); await page.locator('#confirm-rename').click();
   await until(async () => (await sidebar()).title === 'Claude 主会话', 'Renamed back');
+  checks.push('「大管家换成新的 Codex 会话…」 on the butler opens the chooser on a new Codex session with the native default model and effort and the sentence on what a Codex butler lacks; cancelling leaves the butler as it was');
   checks.push('The butler\'s menus offer change and revoke and no reordering or spaces; another session of the person\'s is offered "make it the butler" above the integrator\'s item, a space member is not; renaming the butler from its row renames the session and the row stays named for the butler');
 
   // 5. The rules the main process holds, whatever the window offers: a member cannot be designated, an unknown
@@ -229,8 +238,11 @@ const select = async id => { await page.locator(`.session-row .session-link[data
   // session's menu above, after the whole default was filled in. Without the fix this fails (checked 11-12).
   assert.equal(await page.locator('#steward-duty').evaluate(box => box.scrollTop), 0, 'The statement is shown from its start');
   await shot('en-1280-chooser'); await dutyEnd('en-1280-chooser-end');
+  await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' });
+  await page.locator('#session-header-more').click(); await shot('en-1280-butler-menu'); await page.getByRole('menuitem', { name: locale.format('en', 'menu.stewardToCodex'), exact: true }).click(); await dialog.waitFor({ state: 'visible' });
+  assert.deepEqual(await codexBox(), { chosen: 'new', codex: true, model: '', effort: '', locked: true, note: locale.format('en', 'steward.new.codex') }); await shot('en-1280-switch-codex');
   await page.locator('#steward-cancel').click(); await dialog.waitFor({ state: 'hidden' }); await language('zh');
-  checks.push('In the 850 by 600 window the row is the first icon of the narrow rail; in English the row, the mark and the labels are English, and the chooser offers the English default statement');
+  checks.push('In the 850 by 600 window the row is the first icon of the narrow rail; in English the row, the mark and the labels are English, and the chooser offers the English default statement; Change the butler to a new Codex session… opens it on one');
 
   // 8. Where the window lands when the app starts: on the butler's conversation, whatever was open before; a
   //    reload of the page stays where it was.

@@ -233,6 +233,19 @@ test('a handoff goes in front of the duty statement this once; it is not kept, a
   await assert.rejects(f.agent('other')('steward', ['outside', null, null, handoff]), key('error.steward.personOnly')); assert.equal(f.submitted.length, 3);
 });
 
+// M82: a new Codex session made the butler gets the handoff and the duty statement as an idle Claude one does; an agent,
+// whatever its provider, designates nobody.
+test('a Codex session the person designates gets the handoff in front of the duty statement; no agent designates one (M82)', async t => {
+  const f = fixture(t), header = locale.format('zh', 'steward.duty.header'), standard = locale.format('zh', 'steward.duty.default');
+  const handoff = locale.format('zh', 'steward.new.handoffDefault', { name: '大管家 7' });
+  f.sessions.push({ id: 'new-codex', nativeId: 'native-new-codex', name: '大管家 11-25 16:00', state: 'idle', provider: 'codex', roomIds: [] });
+  assert.equal((await f.call('new-codex', null, null, handoff)).duty.state, 'sent');
+  assert.deepEqual([f.submitted, f.role.selected], [[[true, 'send', 'new-codex', handoff + '\n\n' + header + '\n' + standard, 'native-new-codex']], { sessionId: 'new-codex', nativeId: 'native-new-codex' }]);
+  await f.call(null);
+  for (const who of ['outside', 'other']) await assert.rejects(f.agent(who)('steward', ['new-codex', null, null, handoff]), key('error.steward.personOnly'), who);
+  assert.deepEqual([f.submitted.length, f.role.selected], [1, null]);
+});
+
 test('the duty statement is bounded so that the record stays readable by every build, and a damaged one is an error', t => {
   // The longest ids with the longest statement still fit the 4096 bytes every build reads.
   const f = fixture(t), long = { sessionId: '会'.repeat(100), nativeId: '話'.repeat(100) };
@@ -371,7 +384,7 @@ test('every sentence exists in both languages, and the words say what the design
     // Batch 4: the duty statement designating sends (the activation checklist, item 6).
     'steward.choose.resend', 'steward.duty.label', 'steward.duty.default', 'steward.duty.header', 'steward.duty.notSent', 'error.steward.dutyInvalid', 'error.steward.dutyBusy',
     // A new session as the butler (M82), made from the chooser.
-    'steward.new.title', 'steward.new.name', 'steward.new.folder', 'steward.new.outside', 'steward.new.codex', 'steward.new.model', 'steward.new.effort', 'steward.new.handoff', 'steward.new.handoffDefault', 'steward.new.duty',
+    'menu.stewardToCodex', 'menu.stewardToClaude', 'steward.new.title', 'steward.new.name', 'steward.new.folder', 'steward.new.outside', 'steward.new.codex', 'steward.new.model', 'steward.new.effort', 'steward.new.handoff', 'steward.new.handoffDefault', 'steward.new.duty',
     'steward.new.note', 'steward.new.confirm', 'steward.new.making', 'steward.new.closed', 'error.steward.newRefused', 'error.steward.newFailed', 'error.steward.newNotReady', 'error.steward.newDisconnected', 'error.steward.handoffInvalid',
     // The butler's record (step 2, batch 1); its own sentences are checked in steward-record.test.cjs.
     // Batch 4: what the butler does to a queue says so.

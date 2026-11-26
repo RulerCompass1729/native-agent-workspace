@@ -3948,7 +3948,11 @@ function offerManager(ids) {
 // changing and revoking are offered on the session that holds the designation, wherever it is now.
 function stewardAction(record) {
   if (typeof api.steward !== 'function' || !record) return [];
-  if (state.steward?.sessionId === record.id) return [...(typeof api.stewardRecord === 'function' && stewardSteps ? [{ id: 'steward-record', label: uiText('menu.stewardRecord'), labelKey: 'menu.stewardRecord' }] : []), { id: 'steward-change', label: uiText('menu.stewardChange'), labelKey: 'menu.stewardChange' }, { id: 'steward-revoke', label: uiText('menu.stewardRevoke'), labelKey: 'menu.stewardRevoke' }];
+  // M82 (the person, 11-21: 「我怎么把你换成 codex,没地方改模型」): a running session keeps its provider, so the butler's own
+  // menu offers a new session of the other one, made and designated in the chooser.
+  const other = state.steward?.sessionId === record.id && stewardNewOffered() && { claude: 'codex', codex: 'claude' }[record.provider];
+  const key = other === 'codex' ? 'menu.stewardToCodex' : 'menu.stewardToClaude', to = other ? [{ id: 'steward-to-' + other, label: uiText(key), labelKey: key }] : [];
+  if (state.steward?.sessionId === record.id) return [...to, ...(typeof api.stewardRecord === 'function' && stewardSteps ? [{ id: 'steward-record', label: uiText('menu.stewardRecord'), labelKey: 'menu.stewardRecord' }] : []), { id: 'steward-change', label: uiText('menu.stewardChange'), labelKey: 'menu.stewardChange' }, { id: 'steward-revoke', label: uiText('menu.stewardRevoke'), labelKey: 'menu.stewardRevoke' }];
   if (!record.nativeId || record.archived || window.nativeWorkspaceSpaces.roomIds(record).length) return [];
   return [{ id: 'steward-set', label: uiText('menu.stewardSet'), labelKey: 'menu.stewardSet' }];
 }
@@ -3981,6 +3985,13 @@ const stewardTextValid = value => value.trim().length > 0 && new TextEncoder().e
 const stewardReady = record => Boolean(record?.nativeId) && !record.nativeContextPending && !record.nativeStartupPrompt && record.state === 'idle';
 const stewardNewOffered = () => typeof api.create === 'function' && ['createSettingsV1', 'createSkipPermissions'].every(name => state.capabilities?.includes(name));
 const stewardNewChosen = () => stewardChoice === STEWARD_NEW || Boolean(stewardMade) && stewardChoice === stewardMade;
+// A Codex butler starts on Codex's own model and effort, changed later with 换模型…: Claude's names are not Codex's.
+const stewardNewProvider = () => $('steward-new-provider-codex').checked ? 'codex' : 'claude';
+function stewardNewDefaults(provider) {
+  $('steward-new-provider-claude').checked = provider !== 'codex'; $('steward-new-provider-codex').checked = provider === 'codex';
+  $('steward-new-model').value = provider === 'codex' ? '' : 'claude-opus-5-5'; $('steward-new-effort').value = provider === 'codex' ? '' : 'xhigh';
+}
+function chooseStewardProvider(provider) { stewardNewDefaults(provider); renderStewardChooser(); }
 // The session made here replaces the butler only once it can take a message, also when the person clicks again.
 const stewardConfirmable = () => Boolean(stewardChoice) && !disconnected && stewardStandingOn !== null && !currentDialogTicket(stewardBusy) &&
   !(stewardMade && stewardChoice === stewardMade && state.steward?.sessionId !== stewardMade && !stewardReady(state.sessions.find(s => s.id === stewardMade)));
@@ -4026,19 +4037,22 @@ function renderStewardChooser() {
   $('steward-new-note').hidden = !fresh || again || !stewardReplaces;
   ui.display.text($('steward-duty-label'), stewardChoice === STEWARD_NEW ? 'steward.new.duty' : 'steward.duty.label');
   // What is being carried out was read when it was confirmed.
-  for (const id of ['steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep']) $(id).disabled = busy;
+  for (const id of ['steward-new-provider-claude', 'steward-new-provider-codex', 'steward-new-model', 'steward-new-effort', 'steward-new-skip', 'steward-handoff', 'steward-duty', 'steward-standing-keep']) $(id).disabled = busy;
+  const codex = stewardNewProvider() === 'codex'; $('steward-new-codex').hidden = !codex;
+  if (codex) $('steward-new-model').disabled = $('steward-new-effort').disabled = true;
   $('steward-confirm').disabled = !stewardConfirmable();
   ui.display.text($('steward-confirm'), busy && fresh && !again ? 'steward.new.making' : again ? 'steward.choose.resend' : stewardChoice === STEWARD_NEW ? 'steward.new.confirm' : 'steward.choose.confirm');
   if (atEnd) box.scrollTop = box.scrollHeight;
 }
-// From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen.
-function openStewardChooser(chosen = null) {
+// From the entry or the butler's menu with the butler chosen; from a session's menu with that session chosen; from
+// 大管家换成新的 Codex 会话… / …Claude 会话… with a new session of that provider chosen.
+function openStewardChooser(chosen = null, provider = 'claude') {
   if (disconnected || typeof api.steward !== 'function' || $('steward-dialog').open) return;
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   const butler = stewardRecord();
   stewardChoice = chosen || butler?.id || ''; $('steward-error').hidden = true;
   // Skipping permission checks is never ticked for the person, whatever the butler it replaces runs with.
-  stewardMade = ''; stewardReplaces = butler?.id || ''; $('steward-new-model').value = 'claude-opus-5-5'; $('steward-new-effort').value = 'xhigh';
+  stewardMade = ''; stewardReplaces = butler?.id || ''; stewardNewDefaults(provider);
   $('steward-new-skip').checked = false;
   $('steward-handoff').value = butler ? uiText('steward.new.handoffDefault', { name: butler.name }) : '';
   // The text the person last chose, or the default of their language; their edits stay while the dialog is open.
@@ -4059,7 +4073,7 @@ function openStewardChooser(chosen = null) {
 // Made, but designated only once it can take a message: until then the butler stays who it is. Null when the person has
 // closed the dialog meanwhile.
 async function makeSteward(ticket) {
-  const butler = stewardRecord(), model = $('steward-new-model').value, effort = $('steward-new-effort').value, skipPermissions = $('steward-new-skip').checked || undefined;
+  const butler = stewardRecord(), provider = stewardNewProvider(), model = $('steward-new-model').value, effort = $('steward-new-effort').value, skipPermissions = $('steward-new-skip').checked || undefined;
   const settings = { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
   let place = butler?.cwd ? { cwd: butler.cwd } : null, id;
   if (!place) {
@@ -4069,7 +4083,7 @@ async function makeSteward(ticket) {
   }
   if (!currentDialogTicket(ticket)) return null;
   const now = new Date(), name = uiText('steward.new.name', { date: now.toLocaleDateString('en-CA').slice(5) + ' ' + now.toTimeString().slice(0, 5) });
-  try { id = await api.create({ provider: 'claude', ...place, name, view: 'chat', skipPermissions, ...(Object.keys(settings).length ? { settings } : {}) }); }
+  try { id = await api.create({ provider, ...place, name, view: 'chat', skipPermissions, ...(Object.keys(settings).length ? { settings } : {}) }); }
   catch (error) { throw uiError('error.steward.newRefused', { reason: ui.errorText(error) }); }
   if (currentDialogTicket(ticket)) stewardMade = stewardChoice = id;
   updateState(await api.initial()); render();
@@ -4166,6 +4180,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'steward-set') openStewardChooser(id);
       else if (action === 'steward-revoke') attempt(() => revokeSteward(id));
       else if (action === 'steward-change') openStewardChooser();
+      else if (action === 'steward-to-codex' || action === 'steward-to-claude') openStewardChooser(STEWARD_NEW, action === 'steward-to-codex' ? 'codex' : 'claude');
       else if (action === 'steward-record') stewardSteps?.open();
       else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
       else if (action === 'operator-enable-global') attempt(() => setOperatorEnabled(null, true));
@@ -5564,6 +5579,7 @@ function openHeaderMenu(anchor, terminal = false) {
       else if (action === 'steward-set') openStewardChooser(current().id);
       else if (action === 'steward-revoke') { if (!disconnected) attempt(() => revokeSteward(current().id)); }
       else if (action === 'steward-change') openStewardChooser();
+      else if (action === 'steward-to-codex' || action === 'steward-to-claude') openStewardChooser(STEWARD_NEW, action === 'steward-to-codex' ? 'codex' : 'claude');
       else if (action === 'steward-record') stewardSteps?.open();
       else items.find(item => item.id === action)?.control.click();
     },
@@ -8375,6 +8391,7 @@ disposers.push(...[api.onState, api.onDisconnected, api.onReconnected].map(on =>
 $('model-confirm').onclick = () => attempt(() => modelDialog.confirm()); $('model-withdraw').onclick = () => attempt(() => modelDialog.withdraw());
 $('steward-cancel').onclick = () => $('steward-dialog').close();
 $('steward-confirm').onclick = () => attempt(confirmSteward); $('steward-new-skip').onchange = () => renderStewardChooser();
+$('steward-new-provider-claude').onchange = () => chooseStewardProvider('claude'); $('steward-new-provider-codex').onchange = () => chooseStewardProvider('codex');
 $('steward-dialog').addEventListener('close', () => { if ($('steward-dialog').open) return; stewardChoice = ''; $('steward-list').replaceChildren(); $('steward-error').hidden = true; });
 $('close-session-chain').onclick = () => $('session-chain-dialog').close();
 $('session-chain-chip').onclick = () => { const id = $('session-chain-chip').dataset.sessionId; if (id) openSessionChain(id); };
