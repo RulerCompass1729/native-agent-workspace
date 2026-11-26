@@ -20,15 +20,18 @@
     const { doc, el, button, clock, day } = tools(host);
     const t = (key, params) => host.text('feed.' + key, params);
     const scopes = new Map(), cache = new Map();
-    let roomId = '', group = 'all', people = new Set(), limit = PAGE, signature = '', inputKey = '', items = [], preferred = '', seeking = '', found = '';
+    let roomId = '', group = 'all', people = new Set(), limit = PAGE, signature = '', inputKey = '', items = [], preferred = '', seeking = '', found = '', restoring = null;
+    // U22, as in the sidebar: a name another listed participant also has carries its short id.
+    let repeated = new Set();
+    const named = (id, name) => repeated.has(id) ? `${name} ${host.shortId(id)}` : name;
     const panel = el('section', 'space-feed'); panel.id = 'space-feed'; panel.hidden = true;
     const bar = el('div', 'feed-tools');
     const scopeGroup = el('div', 'feed-seg'); scopeGroup.setAttribute('role', 'group');
     const scopeButtons = ['space', 'all'].map(value => { const b = button('', () => setScope(value)); b.dataset.scope = value; scopeGroup.append(b); return b; });
     const kindGroup = el('div', 'feed-kinds'); kindGroup.setAttribute('role', 'group');
-    const kindButtons = GROUPS.map(value => { const b = button('', () => { group = value; reset(); draw(); }); b.dataset.group = value; kindGroup.append(b); return b; });
+    const kindButtons = GROUPS.map(value => { const b = button('', () => { group = value; restoring = null; reset(); draw(); }); b.dataset.group = value; kindGroup.append(b); return b; });
     const search = el('input', 'feed-search'); search.type = 'search';
-    search.oninput = () => { reset(); draw(); };
+    search.oninput = () => { restoring = null; reset(); draw(); };
     bar.append(scopeGroup, kindGroup, search);
     // R249 (11-25 19:09): 「某个或者某几个 agent 的消息」. Any number of names; none chosen is everyone.
     const names = el('div', 'feed-people'); names.setAttribute('role', 'group');
@@ -43,7 +46,7 @@
 
     const reset = () => { limit = PAGE; signature = ''; };
     const scope = () => scopes.get(roomId) || (host.room()?.stewardTeam === true ? 'all' : 'space');
-    function setScope(value) { scopes.set(roomId, value); people = new Set(); reset(); inputKey = ''; draw(); }
+    function setScope(value) { scopes.set(roomId, value); people = new Set(); restoring = null; reset(); inputKey = ''; draw(); }
     function scopedRooms() {
       const all = host.rooms().filter(r => r && !r.archived);
       return scope() === 'all' ? all : all.filter(r => r.id === roomId);
@@ -51,7 +54,9 @@
     // Cheap key of what the feed reads, so a redraw while nothing changed costs nothing.
     function readKey(rooms) {
       const tail = rows => { const m = Array.isArray(rows) ? rows.at(-1) : null; return m ? [rows.length, m.id, m.status, m.text?.length] : [0]; };
-      return JSON.stringify([host.language(), roomId, scope(), host.butlerId(), rooms.map(r => [r.id, host.roomName(r), tail(r.messages), tail(r.events),
+      // A request's or a wake's delivery can settle long after newer lines.
+      const delivery = rows => (Array.isArray(rows) ? rows : []).filter(m => m?.role === 'human' || m?.kind === 'agent-wake').map(m => [m.status, m.wakeStatus]);
+      return JSON.stringify([host.language(), roomId, scope(), host.butlerId(), rooms.map(r => [r.id, host.roomName(r), tail(r.messages), delivery(r.messages), tail(r.events),
         (r.queue || []).map(i => [i.id, i.status, i.sentTo]), host.membersOf(r.id).map(s => [s.id, s.name, s.state, Boolean(s.messagesOmitted), tail(s.messages)])])]);
     }
     function collect(rooms) {
@@ -61,9 +66,10 @@
         .sort((a, b) => b.time - a.time).filter(item => !seen.has(item.id) && seen.add(item.id));
     }
     const speaker = item => item.fromKind === 'person' ? t('you') : item.fromKind === 'naw' ? host.text('notice.queue.senderName')
-      : item.fromName ? item.fromName + (item.unverified ? host.text('speech.unverified') : '') : '';
-    const recordText = item => item.text ?? host.displayText(item.row?.text, item.row?.uiMessage) ?? '';
-    const recordBody = item => item.body ?? recordText(item);
+      : item.fromName ? named(item.fromId, item.fromName) + (item.unverified ? host.text('speech.unverified') : '') : '';
+    const recordText = item => item.uiMessage ? host.displayText(item.text, item.uiMessage) ?? item.text
+      : item.text ?? host.displayText(item.row?.text, item.row?.uiMessage) ?? '';
+    const recordBody = item => item.uiMessage ? recordText(item) : item.body ?? recordText(item);
     const words = item => item.text === null ? recordText(item) + '\n' + host.label(item.row) : '';
     function choices() {
       const order = [], seen = new Set();
@@ -76,13 +82,15 @@
       return order;
     }
     function drawNames() {
-      const options = choices(), key = options.map(o => o.id + '\t' + o.name).join('\n');
+      const options = choices();
+      repeated = host.sameName(options.filter(o => !o.id.startsWith('@')));
+      const key = options.map(o => o.id + '\t' + named(o.id, o.name)).join('\n');
       for (const id of [...people]) if (!options.some(o => o.id === id)) people.delete(id);
       if (names.dataset.keys !== key) {
         const focused = names.contains(doc.activeElement) ? doc.activeElement.dataset.person : null;
         names.replaceChildren(...options.map(o => {
-          const b = button('feed-person', () => { if (people.has(o.id)) people.delete(o.id); else people.add(o.id); reset(); draw(); });
-          b.dataset.person = o.id; b.textContent = o.name; return b;
+          const b = button('feed-person', () => { if (people.has(o.id)) people.delete(o.id); else people.add(o.id); restoring = null; reset(); draw(); });
+          b.dataset.person = o.id; b.textContent = named(o.id, o.name); return b;
         }));
         names.dataset.keys = key;
         if (focused !== null) names.querySelector(`[data-person="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
@@ -110,13 +118,17 @@
       entry.kind.textContent = t('kind.' + item.kind); entry.kind.className = 'feed-kind k-' + item.kind;
       const room = allScope && host.rooms().find(r => r.id === item.roomId);
       entry.space.hidden = !room; entry.space.textContent = room ? host.roomName(room) : '';
-      const from = item.text === null && !item.fromName ? '' : speaker(item), to = item.to.map(r => r.name).filter(Boolean).join('、');
+      const from = item.text === null && !item.fromName ? '' : speaker(item), to = item.to.filter(r => r.name).map(r => named(r.id, r.name)).join('、');
       entry.who.textContent = from && to ? `${from} → ${to}` : from || (to ? `→ ${to}` : '');
       entry.who.hidden = !entry.who.textContent;
       const line = recordText(item).replace(/\s+/gu, ' ').trim();
       if (entry.text.textContent !== line) entry.text.textContent = line;
       const body = recordBody(item);
       if (entry.bodyText.textContent !== body) entry.bodyText.textContent = body;
+      // What happened to a request's delivery, as its space record said it.
+      const status = item.request ? host.requestStatus(item.request) : '';
+      if (entry.end.textContent !== status) entry.end.textContent = status;
+      entry.end.hidden = !status;
       entry.time.textContent = clock(item.time);
       if (validTime(item.time)) entry.time.dateTime = new Date(item.time).toISOString(); else entry.time.removeAttribute('datetime');
       entry.link.textContent = host.text('stream.original'); entry.link.hidden = !item.target;
@@ -185,16 +197,23 @@
       // Built only while shown: a hidden feed keeps its filters, not its lines.
       if (!visible) { if (inputKey) { items = []; inputKey = ''; signature = ''; cache.clear(); list.replaceChildren(); } return; }
       if (room.id !== roomId) { roomId = room.id; group = 'all'; people = new Set(); search.value = ''; limit = PAGE; signature = ''; inputKey = ''; cache.clear(); list.scrollTop = 0; }
+      if (restoring?.roomId === room.id) { ({ group } = restoring); people = new Set(restoring.people); search.value = restoring.search; restoring = null; reset(); }
       if (preferred) { people = new Set([preferred]); group = 'all'; preferred = ''; reset(); }
       draw();
     }
     // A member's 「相关记录」: the stream opens on that member's lines.
     const showPerson = id => { preferred = id || ''; };
     // Whether a record is a line here: reveal(id) before the next render, then shown() after it.
-    const reveal = id => { seeking = id || ''; found = ''; for (const n of list.querySelectorAll('[data-search-target]')) delete n.dataset.searchTarget; };
+    const reveal = id => { seeking = id || ''; found = ''; restoring = null; for (const n of list.querySelectorAll('[data-search-target]')) delete n.dataset.searchTarget; };
     // Open waits in the open space, for the tab's count.
     const waiting = room => room ? model.roomTasks(room).tasks.filter(task => model.NEEDS_YOU.includes(task.status)).length : 0;
-    return { render, waiting, showPerson, reveal, shown: () => Boolean(list.querySelector('[data-search-target]')), panel };
+    // 「返回」 after a search: the names, group and words this feed had before it.
+    const filters = () => ({ roomId, group, people: [...people], search: search.value });
+    const restore = saved => {
+      const ok = saved && typeof saved.roomId === 'string' && GROUPS.includes(saved.group) && Array.isArray(saved.people) && typeof saved.search === 'string';
+      restoring = ok ? { roomId: saved.roomId, group: saved.group, people: saved.people.filter(id => typeof id === 'string'), search: saved.search } : null;
+    };
+    return { render, waiting, showPerson, reveal, filters, restore, shown: () => Boolean(list.querySelector('[data-search-target]')), panel };
   }
 
   function bindSummary(host) {

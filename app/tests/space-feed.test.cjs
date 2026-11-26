@@ -154,3 +154,12 @@ test('a wait the person answered is a 「已处理」 line, not 「等你」; on
   feed = stream.spaceFeed(room, { sessions: [] });
   assert.deepEqual(feed.filter(i => i.itemId === 'item2' && ['wait', 'answered'].includes(i.kind)).map(i => i.kind), ['wait', 'answered']);
 });
+
+// R248 ② follow-up 4, side finding 3: a request's line carries its record, so the 信息流 can name its delivery state.
+test('a request line carries the space record it came from', () => {
+  const { room, sessions } = space();
+  room.messages[0].status = 'reply-private';
+  const line = stream.spaceFeed(room, { sessions }).find(i => i.id === 'room:h1');
+  assert.equal(line.request, room.messages[0]);
+  assert.ok(stream.spaceFeed(room, { sessions }).filter(i => i.request).every(i => i.fromKind === 'person'));
+});

@@ -152,3 +152,51 @@ Requirements: R247 to R249. Brief: `newreq-r247-249-followup3-20261126.md`, queu
   - `reading-list.js:939` draws it only into the hidden `#room-messages`, and no unit test checks the label.
   - The member's reply itself is a 信息流 line.
 - Not run: the full suite, and native-addressed past its gates. The daily app was not touched.
+
+# Follow-up 4: the three 信息流 gaps and side finding 3, fixed
+
+Requirements: R247 to R249. Brief: `newreq-r247-249-followup4-20261126.md`, queue item ad8b284e. This follow-up starts from `638e55ab`. It changes product code only at the four places the brief names, plus their tests. It does not touch delivery logic.
+
+## What changed
+
+1. An unverified wake keeps its warning (gap 1).
+   - `app/task-stream.js:177`: a wake line keeps its record's own text and `uiMessage` for every state short of native receipt (`wakeStatus` other than `submitted`). A received wake still reads as its body.
+   - The missing-original case (`workspace.cjs:1309`, `notice.wake.senderRemoved`) is the gap the brief names. The same condition also covers unconfirmed, not sent, held and cancelled wakes: their text states their delivery too, and the line showed only the body.
+   - Desktop: `space-feed.js:70` renders the text through `uiMessage`, so zh and en both use the existing key. The phone (`mobile-workspace.cjs:69`) gets the record's text, which is zh-only like the phone's other rows.
+2. 返回 after a search restores the 信息流's names, group and search words (gap 2).
+   - `search-view.js:16` saves `feed.filters()` when the search starts from the 信息流; `search-view.js:181` hands them back on 返回.
+   - `space-feed.js:200` applies them when that space's 信息流 next draws. Pressing a filter or a new `reveal` drops them (`space-feed.js:211–216`).
+3. Same-name members are told apart (gap 3).
+   - `space-feed.js:26, 86, 121`: the name buttons and each line's speaker and recipients add the short id only when the name repeats. This reuses `sameNameSessions` and `sessionShortId` (`renderer.js:5189`). No new style or text.
+4. A request line shows its delivery state (side finding 3).
+   - `reading-list.js:44`: the status map from line 939 is now `readingMessageStatusKey`, used by the hidden record list (`reading-list.js:944`) and by the 信息流 (`renderer.js:5190`).
+   - `task-stream.js:326` attaches the space record to a person's request line. `space-feed.js:129` writes the state into the line's existing `.disclosure-end`.
+   - `space-feed.js:58`: the feed's change key includes request and wake states, so a state that settles after newer lines still redraws.
+
+## Results
+
+| Check | Red (before the fix) | Green |
+| --- | --- | --- |
+| `app/tests/speech-stream.test.cjs` | 11/12 (the new test fails: the line has the body only) | 12/12 |
+| `app/tests/space-feed.test.cjs` | 11/12 (the new test fails: the line has no `request`) | 12/12 |
+| `app/tests/mobile-space-speech.test.cjs` | 5/6 (the new test fails: the phone has the body only) | 6/6 |
+| 226 test files that read a changed source | not run | 5209/5209 |
+| `scripts/test-space-feed-ui.cjs` (new check 12) | 11 pass, then check 12 fails on statuses, the warning and the names | 15/15 |
+| `scripts/test-room-navigation.cjs` | follow-up 3: 5/5 with 2 OPEN GAPs | 5/5, 0 gaps |
+| `scripts/test-room-member-route.cjs` | 6/6 (follow-up 3) | 6/6 |
+| `scripts/test-graphical-followthrough.cjs` | 7/7 (follow-up 3) | 7/7 |
+| `scripts/test-native-addressed.cjs` | stops at its version gate | stops at its version gate: unverified, not passed |
+
+- Logs, in `.local/evidence/newreq-space-ui-20261125/`:
+  - unit tests: `followup4-unit-red.log`, `-unit-green.log` and `-related-tests.log`;
+  - GUI scripts: `followup4-feed-ui-red.log`, `-feed-ui-green.log`, `-navigation.log`, `-member-route.log`, `-followthrough.log` and `-native-addressed.log`.
+- The failed run `followup4-feed-ui-red-1-testbug.log` is kept. The test called `sessionShortId`, which is not a page global, and now reads the short id from the left list's own `.session-short-id`.
+- The feed-ui red run used the bundle built at 02:13, before these edits. It still had the old `text: String(w.body ?? '')` and no `readingMessageStatusKey`. `node scripts/build-ui.cjs` was rerun before the green runs.
+- The feed-ui fixture adds two synthetic requests: `h-a-private` (`reply-private`) and `h-b-failed` (`failed`). Its wake `w-pm-a` has no original in the sender's session, so its line now shows the warning. Check 12 asserts this.
+- No model was called. The daily app was not touched. At most one GUI instance ran at a time. Memory stayed at pressure 2 with the compressor at 62–69%.
+
+## Not done, with triggers
+
+- Side finding 1, copy in the 信息流: do it if the person asks for copy back.
+- Side finding 2, `waiting-stream-dom.cjs:30`: do it the next time the two task-waiting tests change.
+- native-addressed is unverified, not passed. Codex 0.172.0 is not qualified for `addressedTool` (line 22), and Claude 2.1.332 is outside the script's version pattern (line 26). Unlock: rerun it once those versions enter the qualification table. The gates are unchanged. Same-name short ids are checked locally by feed-ui check 12.

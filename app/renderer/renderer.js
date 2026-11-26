@@ -5186,6 +5186,8 @@ function getSpaceFeed() {
     // Every space's members as this window holds them: what it already shows, never more (R249 19:09).
     membersOf: id => orderedMembers(id),
     displayText: (text, notice) => ui.displayText(text, notice), label: row => row ? roomMessageLabel(row) : '',
+    sameName: sameNameSessions, shortId: sessionShortId,
+    requestStatus: row => { const key = readingMessageStatusKey(row, true, null); return key ? uiText(key) : ''; },
     visible: () => selected === 'room' && roomSurface === 'stream',
     original: openOriginal, answer: item => answerFeedItem(item),
   });
