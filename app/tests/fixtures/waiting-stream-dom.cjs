@@ -19,17 +19,19 @@ function scene(language, input) {
   const stream = scope.nativeWorkspaceActivityStream.bind({ document: f.doc, state: () => ({ sessions: input.sessions, backgroundConfirmations: input.confirmations }),
     rooms: () => input.rooms, roomName: r => r.name || r.id, isMember: (s, id) => s?.roomIds?.includes(id), inRoom: () => true,
     text: (k, p) => locale.format(language, k, p), language: () => language, connected: () => true, attempt: fn => fn(),
-    waitingChanged: n => { observed.push(n); status.setWaitingCount(n); }, card() {}, question() {}, toggleChanged() {}, label: () => '', displayText: x => x });
+    waitingChanged: items => { observed.push(items.length); status.setWaiting(items); }, cardHidden: () => false, cardTitle: () => '', original() {}, toggleChanged() {}, label: () => '', displayText: x => x });
   const render = () => { status.update(input); stream.render(); };
   render();
+  const need = () => f.host.querySelector('.task-status-need'), due = () => f.host.querySelector('.task-status-due');
   return { input, observed, render, dispose: () => status.dispose(),
     advance(ms) { now += ms; status.tick(); },
-    // The strip is the one place the needs-you count is shown (11-22); the task bar must not repeat it.
-    count: () => { const strip = f.doc.getElementById('stream-waiting'), m = strip.hidden ? null : /(\d+) (?:件待你处理|to handle)/u.exec(strip.getAttribute('aria-label')); return m ? Number(m[1]) : 0; },
-    barRepeats: () => Boolean(f.host.querySelector('.task-status-waiting')) || /等你|待你处理|need you|to handle|waiting/u.test(f.host.querySelector('.task-status-chips').textContent),
-    deadline: () => f.host.querySelector('.task-status-card-time').textContent,
-    cardHidden: () => f.host.querySelector('.task-status-card-time').hidden,
-    label: () => f.doc.getElementById('stream-waiting').getAttribute('aria-label'),
-    hidden: () => f.doc.getElementById('stream-waiting').hidden };
+    // Since R251 (11-25) the task board button is the one place the needs-you count is shown.
+    count: () => need().hidden ? 0 : Number(/\d+/u.exec(need().textContent)[0]),
+    strip: () => f.doc.getElementById('stream-waiting'),
+    deadline: () => due().textContent,
+    cardHidden: () => due().hidden,
+    label: () => f.host.querySelector('.task-board-toggle').getAttribute('aria-label'),
+    hidden: () => need().hidden,
+    subs() { status.open(); const subs = f.host.querySelectorAll('.task-board-sub').filter(e => !e.hidden).map(e => e.textContent); status.close(); return subs.sort(); } };
 }
 module.exports = { scene };

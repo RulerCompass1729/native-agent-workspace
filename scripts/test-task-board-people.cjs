@@ -1,5 +1,5 @@
 // Hidden source application and synthetic transport only; no provider calls.
-// Many members across three spaces: the header fits its squares with +N, and the open board lists every member in full.
+// Many members across three spaces: the header fits its squares with +N; the open board lists their tasks only (R250, 11-25).
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto'), { execFileSync } = require('node:child_process'), { createRequire } = require('node:module');
 const code = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '..'), req = createRequire(path.join(code, 'package.json'));
@@ -8,7 +8,7 @@ const { createSourceEntry } = req('./scripts/fixtures/synthetic-source-boot.cjs'
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' }).trim();
 const slot = process.env.NAW_GUI_TEST_SLOT || path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no launch.'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, task: 'task board members synthetic GUI', pid: process.pid }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, task: 'task board tasks synthetic GUI', pid: process.pid }));
 let profile, app, child, client, page, sequence = 0;
 const checks = [], errors = [], observations = [];
 const check = (yes, name) => { console.log(yes ? 'PASS' : 'FAIL', name); assert.ok(yes, name); checks.push(name); };
@@ -67,7 +67,7 @@ const CREW = [
   const entry = createSourceEntry({ profile, code, fixturePid: child.pid }), file = path.join(entry, 'entry.cjs');
   const prefix = `const e=require('electron');e.Notification.isSupported=()=>false;require(${JSON.stringify(path.join(code, 'app/preflight.cjs'))}).preflight=()=>({claude:true,codex:true,python:true,paths:{},configured:{}});for(const k of ['show','showInactive','focus'])e.BrowserWindow.prototype[k]=function(){};for(const k of ['showOpenDialog','showSaveDialog','showMessageBox','showOpenDialogSync','showSaveDialogSync','showMessageBoxSync'])e.dialog[k]=()=>{throw Error('OS dialog forbidden')};e.shell.openExternal=e.shell.openPath=async()=>{throw Error('External open forbidden')};`;
   fs.writeFileSync(file, prefix + '\n' + fs.readFileSync(file, 'utf8'));
-  const language = process.env.NAW_TEST_UI_LANGUAGE || 'zh', en = language === 'en';
+  const language = process.env.NAW_TEST_UI_LANGUAGE || 'zh', t = (key, params) => req('./app/ui-locale.js').format(language, key, params);
   app = await _electron.launch({ executablePath: req('electron'), args: [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_TEST_VISIBLE: '0', NAW_TEST_UI_LANGUAGE: language }), timeout: 60000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000);
   page.on('pageerror', e => { errors.push(e.message); console.error('Synthetic renderer error:', e.stack); });
@@ -94,49 +94,49 @@ const CREW = [
     if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-people-${theme}-${width}.png`) });
     await page.locator('.task-board-toggle').click(); await settled();
     const b = await page.evaluate(() => {
-      const panel = document.getElementById('task-board-panel'), crew = panel.querySelector('.task-board-people'), list = panel.querySelector('.task-board-list');
-      const names = [...crew.querySelectorAll('.task-board-person-name')], p = panel.getBoundingClientRect();
-      return { before: Boolean(crew.compareDocumentPosition(panel.querySelector('.task-board-tabs')) & Node.DOCUMENT_POSITION_FOLLOWING),
-        people: crew.querySelectorAll('.task-board-person').length, cut: names.filter(n => n.scrollWidth > n.clientWidth + 1).map(n => n.textContent),
-        long: names.some(n => n.textContent.includes('deliberately long')), summary: crew.querySelector('.task-board-people-summary').textContent,
-        spaces: [...crew.querySelectorAll('[data-people-space]')].map(s => [s.dataset.peopleSpace, s.querySelectorAll('.task-board-person').length]),
-        stale: crew.querySelector('.task-board-people-stale:not([hidden])')?.textContent || '', list: list.clientHeight, listMin: Math.min(240, innerHeight * 0.3), crewInner: crew.scrollHeight - crew.clientHeight, text: crew.textContent,
-        inside: p.left >= 0 && p.right <= innerWidth + 1 && p.bottom <= innerHeight + 1, crewScroll: crew.scrollWidth - crew.clientWidth,
-        missing: [...document.querySelectorAll('#agent-distribution .agent-cell')].map(c => c.dataset.sessionId).filter(id => !crew.querySelector(`[data-person-id="${id}"]`)) };
+      const panel = document.getElementById('task-board-panel'), p = panel.getBoundingClientRect(), toggle = document.querySelector('.task-board-toggle');
+      const groups = [...panel.querySelectorAll('.task-board-group')].map(g => ({ key: g.dataset.groupKey, open: g.querySelector('.task-board-fold').getAttribute('aria-expanded') === 'true',
+        rows: [...g.querySelectorAll('.task-board-task')].map(r => { const sub = r.querySelector('.task-board-sub'); return { title: r.querySelector('.task-board-task-title').textContent, sub: sub.hidden ? '' : sub.textContent }; }) }));
+      const cut = [...panel.querySelectorAll('.task-board-task-title')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.textContent);
+      const columns = ['.task-board-sub', '.task-board-agent', '.task-board-when'].map(c => new Set([...panel.querySelectorAll('.task-board-line > ' + c)].map(e => Math.round(e.getBoundingClientRect().left))).size);
+      return { groups, label: toggle.getAttribute('aria-label'), legacy: panel.querySelectorAll('.task-board-people, .task-board-person, .task-board-tabs, [data-board-tab]').length,
+        inside: p.left >= 0 && p.right <= innerWidth + 1 && p.bottom <= innerHeight + 1, scrollX: panel.scrollWidth - panel.clientWidth, cut, columns,
+        footer: panel.querySelector('.task-board-retention').textContent, total: panel.querySelector('.task-board-total').textContent };
     });
     observations.push({ width, theme, board: b });
-    if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-people-${theme}-${width}-open.png`) });
-    const offline = ids[CREW.findIndex(([, name]) => name === 'Solo off')];
-    check(b.missing.length === 1 && b.missing[0] === offline, `${tag}: only the independent disconnected agent is header-only`);
-    check(b.before && b.inside, `${tag}: the member section opens above the task tabs, inside the viewport`);
-    check(b.people === listed && b.long && b.cut.length === 0 && b.crewScroll <= 1, `${tag}: all ${listed} members are listed with whole names (${b.cut.length} cut)`);
-    check(!b.text.includes('…') && !/至少|at least/u.test(b.text), `${tag}: no ellipsis or lower bound in the member section`);
-    check(b.summary.includes(en ? listed + ' members' : '成员 ' + listed), `${tag}: the summary counts every listed member`);
-    check(b.stale.includes(en ? '1 old dispatch' : '旧派单 1 件'), `${tag}: the ended session's decision is an old dispatch in its space`);
-    check(b.crewInner <= 1, `${tag}: the member section is fully expanded, no inner scroll (${b.crewInner}px hidden)`);
-    check(b.list >= b.listMin - 1, `${tag}: the task list keeps its minimum height (${b.list}px of ${Math.round(b.listMin)}px)`);
-    const reach = await page.evaluate(() => { const panel = document.getElementById('task-board-panel'), list = panel.querySelector('.task-board-list');
-      panel.scrollTop = panel.scrollHeight; const r = list.getBoundingClientRect(), p = panel.getBoundingClientRect(), shown = Math.min(r.bottom, p.bottom) - Math.max(r.top, p.top);
-      const head = panel.querySelector('.task-board-heading').getBoundingClientRect(), people = [...panel.querySelectorAll('.task-board-person')];
-      // Park a member just under the sticky heading, then focus it: it must not stay covered.
-      const target = people[Math.floor(people.length / 2)], heading = panel.querySelector('.task-board-heading');
-      panel.scrollTop = 0; panel.scrollTop = target.getBoundingClientRect().top - panel.getBoundingClientRect().top - 4;
-      const parked = target.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
-      target.focus(); const focusTop = target.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
-      panel.scrollTop = 0; return { shown, headTop: head.top - p.top, list: list.clientHeight, focused: document.activeElement === target, parked, focusTop }; });
-    check(reach.shown >= reach.list - 2 && Math.abs(reach.headTop) <= 2, `${tag}: scrolling the board shows the whole task list, the heading stays on top (${Math.round(reach.shown)}/${reach.list}px)`);
-    check(reach.focused && reach.focusTop >= -1, `${tag}: a member focused under the sticky heading scrolls out from under it (${Math.round(reach.parked)}px → ${Math.round(reach.focusTop)}px)`);
+    if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-board-${theme}-${width}-open.png`) });
+    const group = key => b.groups.find(g => g.key === key), waiting = group('waiting'), problem = group('problem'), sent = group('sent');
+    check(b.legacy === 0, `${tag}: the board lists tasks only, with no member section or tabs`);
+    check(b.inside && b.scrollX <= 1, `${tag}: the board opens inside the viewport without sideways scroll (${b.scrollX}px)`);
+    check(b.cut.length === 0 && b.columns.every(n => n === 1), `${tag}: titles are whole and labels, agents and times line up in every group (cut ${JSON.stringify(b.cut)}, column starts ${b.columns})`);
+    check(b.groups[0]?.key === 'waiting' && waiting.open && waiting.rows.some(r => r.title.includes('keep the old tab order')), `${tag}: 等你 comes first, open, with the live decision`);
+    check(!waiting.rows.some(r => r.title.includes('has ended')) && problem?.rows.some(r => r.title.includes('has ended') && r.sub === t('taskBoard.status.stale')), `${tag}: the ended session's decision is an old dispatch under 异常, not 等你`);
+    check(sent?.rows.length === 2 && sent.rows.some(r => r.title === 'Synthetic layout pass for the status strip'), `${tag}: dispatched work is 在做 under its first line`);
+    check(b.label === [t('taskBoard.boardButton'), t('taskBoard.need', { count: waiting.rows.length })].join(t('taskBoard.labelSeparator')), `${tag}: the button names the board and counts ${waiting.rows.length} waiting (${b.label})`);
+    check(b.footer.includes('300') && b.total === t('taskBoard.total', { count: b.groups.reduce((n, g) => n + g.rows.length, 0) }), `${tag}: the footer states the 300-per-space retention and the total counts every row`);
     await page.keyboard.press('Escape'); await settled();
   }
-  await page.locator('.task-board-toggle').click();
-  await page.locator('.task-board-people-stale').first().click();
-  check(await page.locator('[data-board-tab="stale"]').getAttribute('aria-selected') === 'true' && await page.locator('[data-board-tab="stale"]').getAttribute('data-count') === '1', 'The old-dispatch line opens its own tab with one item');
-  const opened = await page.evaluate(() => { const panel = document.getElementById('task-board-panel'), row = panel.querySelector('.task-board-entry'), head = panel.querySelector('.task-board-heading').getBoundingClientRect();
-    const r = row?.getBoundingClientRect(), p = panel.getBoundingClientRect(); return r ? { top: Math.round(r.top - head.bottom), bottom: Math.round(p.bottom - r.bottom), focus: document.activeElement?.dataset.boardTab || '' } : null; });
-  check(opened && opened.top >= -1 && opened.bottom >= -1 && opened.focus === 'stale', `The old dispatch it opens is in view, below the heading, with focus on its tab (${JSON.stringify(opened)})`);
-  const queued = await page.locator('#stream-waiting-list [data-waiting-id^="queue:"]').allTextContents();
-  check(queued.length === 1 && queued[0].includes('keep the old tab order') && !queued.some(t => t.includes('has ended')), `The header's 等你 list holds the live decision and leaves the old dispatch out (${queued.length} queue rows)`);
-  await page.keyboard.press('Escape');
+  await page.locator('.task-board-toggle').click(); await settled();
+  await page.locator('.task-board-mode[data-grouping="agent"]').click(); await settled();
+  const agents = await page.evaluate(() => [...document.querySelectorAll('#task-board-panel .task-board-group')].map(g => { const name = g.querySelector('.task-board-group-name'), go = g.querySelector('.task-board-go');
+    return { name: name.textContent, cut: name.scrollWidth > name.clientWidth + 1, rows: g.querySelectorAll('.task-board-task').length, go: !go.hidden, chips: [...g.querySelectorAll('.task-board-agent')].filter(c => !c.hidden).length }; }));
+  if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-board-by-agent.png`) });
+  const a = agents.find(g => g.name === 'Dev 在做 A');
+  check(a?.rows === 2 && a.go && agents.some(g => g.name === LONG && !g.cut) && agents.every(g => g.chips === 0), `By agent: each agent heads its own tasks with a session button, whole names, no repeated agent chips (${agents.length} groups)`);
+  await page.locator('.task-board-mode[data-grouping="status"]').click(); await settled();
+  const stale = page.locator('#task-board-panel .task-board-entry[data-kind="stale"]');
+  await stale.click(); await settled();
+  const opened = await page.evaluate(() => { const panel = document.getElementById('task-board-panel'), task = panel.querySelector('.task-board-entry[data-kind="stale"]').closest('.task-board-task');
+    const detail = task.querySelector('.task-board-detail'), r = detail?.getBoundingClientRect(), p = panel.getBoundingClientRect();
+    return detail ? { actions: [...detail.querySelectorAll('.task-board-action')].map(b => b.dataset.action), inView: r.top >= p.top - 1 && r.top <= p.bottom, full: detail.querySelector('.task-board-full')?.textContent || '' } : null; });
+  check(opened && opened.inView && opened.full.includes('has ended') && opened.actions.join() === 'openQueueOf', `The old dispatch expands in place, offering its queue and no answer to an ended session (${JSON.stringify(opened)})`);
+  await page.locator('#task-board-panel .task-board-search').fill('tab order'); await settled();
+  const found = await page.evaluate(() => ({ total: document.querySelector('#task-board-panel .task-board-total').textContent, marks: [...document.querySelectorAll('#task-board-panel .task-board-task mark')].map(m => m.textContent) }));
+  check(found.total === t('taskBoard.found', { count: 1 }) && found.marks.join() === 'tab order', `Search finds the one matching task and marks the words (${JSON.stringify(found)})`);
+  if (pictures) await page.screenshot({ scale: 'css', path: path.join(pictures, `${language}-board-search.png`) });
+  await page.locator('#task-board-panel .task-board-task .task-board-agent').first().click(); await settled();
+  const landed = await page.evaluate(() => ({ closed: !document.getElementById('task-board-panel').matches(':popover-open'), current: [...document.querySelectorAll('[aria-current="page"]')].map(e => e.textContent) }));
+  check(landed.closed && landed.current.some(text => text.includes('Dev 等你 D')), `The agent chip closes the board and opens that agent's session (${JSON.stringify(landed.current)})`);
   // Test-only stand-in for a crowded header: cap the strip's room, then give it back.
   const room = width => page.evaluate(w => { document.getElementById('agent-distribution').style.maxWidth = w; }, width);
   const strip = () => page.evaluate(() => { const host = document.getElementById('agent-distribution'), more = host.querySelector('.agent-strip-more'), cells = [...host.querySelectorAll('.agent-cell')];

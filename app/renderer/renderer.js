@@ -228,7 +228,14 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 // reveal it as soon as it has members or any saved activity; never migrate it.
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
-const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }) });
+const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }),
+  onOriginal: target => attempt(() => openOriginal(target)), onWaiting: renderBoardWaiting });
+// A waiting row the board opens in place (R250 A): the conversation's own card, answer form or creation card.
+function renderBoardWaiting(slot, item) {
+  if (item.kind === 'operator-creation') renderOperatorCreation(slot.entry, item.message, { inbox: true });
+  else if (item.card) renderBackgroundControls(slot.entry, item.card.message);
+  else if (item.kind === 'question') renderWaitingQuestion(slot.question, item);
+}
 const agentDistribution = window.nativeWorkspaceAgentDistribution.bind({ host: $('agent-distribution'), document, text: uiText,
   onSession: id => attempt(() => select(id, 'chat')), onMode: () => attempt(persistView) });
 function distributionStewardRole(record, rooms) {
@@ -252,6 +259,29 @@ function updateAgentDistribution() {
 }
 // A space's name as shown: the untouched default space follows the interface language; any name the person gave stays as is (T-60).
 const spaceName = room => window.nativeWorkspaceSpaces.untouchedDefault(room) ? uiText('space.defaultName') : room?.name;
+// Agent session-creation grants are settings (R251 D, 11-25): each one's holder, use, limits, expiry and quota edit.
+const setupGrantRows = new Map();
+let setupGrantCount = 0;
+function renderSetupGrants() {
+  if (!$('setup-dialog')?.open || !state) return;
+  const grants = (state.operatorPolicy?.domains || []).filter(d => !d.revokedAt && d.expiresAt > Date.now()), list = $('setup-grants-list'), rows = [];
+  setupGrantCount = grants.length; $('setup-grants').hidden = !grants.length;
+  ui.display.text($('setup-grants-count'), 'operator.quota.settingsCount', () => ({ count: setupGrantCount }));
+  for (const domain of grants) {
+    let entry = setupGrantRows.get(domain.id);
+    if (!entry) { const row = node('div', undefined, 'setup-grant'), actions = node('div'); row.append(actions); entry = { item: row, actions }; setupGrantRows.set(domain.id, entry); }
+    renderOperatorQuota(entry, domain); rows.push(entry.item);
+  }
+  // In place: an open quota edit keeps its input and focus across updates.
+  for (const row of [...list.children]) if (!rows.includes(row)) row.remove();
+  rows.forEach((row, i) => { if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null); });
+  for (const id of [...setupGrantRows.keys()]) if (!grants.some(d => d.id === id)) setupGrantRows.delete(id);
+}
+async function openGrants(id) {
+  await showSetup();
+  updateState(await api.initial()); render();
+  setupGrantRows.get(id)?.quotaHeading?.focus();
+}
 function updateTaskBoard() {
   if (!state) return;
   taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
@@ -259,18 +289,8 @@ function updateTaskBoard() {
       createdAt: Number.isFinite(q.createdAt) && q.createdAt >= 0 ? q.createdAt : null, sentAt: Number.isFinite(q.sentAt) && q.sentAt >= 0 ? q.sentAt : null,
       ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
-    sessions: state.sessions.map(s => {
-      let roomIds; try { roomIds = window.nativeWorkspaceSpaces.roomIds(s); } catch {}
-      const fleet = window.nativeWorkspaceFleet.currentFleet(s, !disconnected), presentation = sidebarPresentation(s), { look, group } = window.nativeWorkspaceAgentDistribution;
-      return { id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, roomIds, membershipUnknown: !roomIds, archived: s.archived, backendUnavailable: s.backendUnavailable,
-        look: look(presentation), agentStatus: group(presentation), statusText: presentation.compact,
-        transportDisconnected: s.transportDisconnected, nativeContextPending: s.nativeContextPending,
-        approval: s.approval ? { pending: s.approval.pending } : null, approvals: s.approvals?.map(a => ({ pending: a.pending })),
-        claudeQuestion: s.claudeQuestion ? { pending: s.claudeQuestion.pending } : null, approvalOverflow: Boolean(s.approvalOverflow),
-        nativeApproval: s.nativeApproval ? { requests: s.nativeApproval.requests?.map(a => ({ pending: a.pending })) } : null, nativeInputRequired: s.nativeInputRequired,
-        background: s.background, backgroundStale: s.backgroundStale, runningChildren: fleet.running, unknownChildren: fleet.unknown, workUnconfirmed: fleet.work.unconfirmed,
-        step: disconnected ? null : runningStepView(s) };
-    }), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
+    // The board lists tasks, not live session state (R250): names and whether a session has ended.
+    sessions: state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, archived: s.archived })), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
       state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition })),
     confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId });
 }
@@ -3459,7 +3479,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
   const permission = uiNode('span', 'operator.permission', () => ({ permission: uiText('operator.' + op.args.permission) }));
   permission.classList.toggle('operator-bypass', op.args.permission === 'bypass'); facts.append(permission); controls.append(facts);
   if (!inbox) {
-    controls.append(uiButton('operator.card.review', () => getActivityStream()?.showCreation(op.initiatorId, op.actionKey), 'small'));
+    controls.append(uiButton('operator.card.review', () => taskBoard.show(`operator-creation:${op.initiatorId}:${op.actionKey}`), 'small'));
     return;
   }
   const currentRequest = () => {
@@ -3509,7 +3529,7 @@ function renderOperatorCreation(entry, message, { inbox = false } = {}) {
       if (latest.space && !allSpaces().some(r => r.id === latest.space && !r.archived)) throw uiError('error.operator.stale');
       await act('authorize', { key: op.actionKey, domainId: grant.id });
     }), 'small primary');
-    approvalNodes.push(reuse); coverage.append(reuse, uiButton('operator.quota.edit', () => getActivityStream()?.showGrants(grant.id), 'small')); controls.append(coverage);
+    approvalNodes.push(reuse); coverage.append(reuse, uiButton('operator.quota.edit', () => attempt(() => openGrants(grant.id)), 'small')); controls.append(coverage);
   }
   const localValue = ms => { const date = new Date(ms); return new Date(ms - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const draft = entry.operatorGrantDraft ||= { daily: '1', concurrent: '1', duration: '1', expires: localValue(Date.now() + 3600000), space: '', consent: false };
@@ -5054,7 +5074,7 @@ function renderSetupPrograms(localeOnly = false) {
 }
 async function showSetup() {
   const ticket = setupTicket = openSetupDialog();
-  mobileSetup.open();
+  mobileSetup.open(); renderSetupGrants();
   setupLoading = true; setupFailure = null;
   renderInterfaceLanguage(); renderSetupPrograms();
   try {
@@ -5173,10 +5193,7 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
-    waitingChanged: count => taskBoard.setWaitingCount(count),
-    selectSpace, confirmation: showBackgroundConfirmation, card: renderBackgroundControls, cardHidden: confirmationCardHidden, question: renderWaitingQuestion,
-    creation: (entry, message) => renderOperatorCreation(entry, message, { inbox: true }),
-    quota: renderOperatorQuota, refresh: async () => { updateState(await api.initial()); render(); },
+    waitingChanged: items => taskBoard.setWaiting(items), cardHidden: confirmationCardHidden,
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: openOriginal, showStream: () => showRoomSurface('stream'),
@@ -6314,7 +6331,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderResumeAll(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
-    updateTaskBoard(); updateAgentDistribution();
+    updateTaskBoard(); renderSetupGrants(); updateAgentDistribution();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {

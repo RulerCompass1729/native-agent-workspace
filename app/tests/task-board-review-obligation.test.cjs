@@ -19,5 +19,11 @@ test('positive control: an unchanged untouched explicit decision stays waiting',
 for(const mode of ['human','control'])for(const language of ['zh','en'])test(mode+' '+language+': a real outstanding decision must not promise that no reply is requested',()=>{
  const x=scenario(mode);assert.equal(x.settle.status,'waiting');assert.equal(x.settle.reason,'person-intervened');assert.ok(q.startsWithDecision(x.settle.reply));assert.equal(x.rows.length,1);assert.equal(x.rows[0].kind,'review');
  const f=fixture();let b=board.bind({host:f.host,document:f.doc,text:(k,p)=>locale.format(language,k,p),now:()=>now,onQueue:()=>{}});
- try {b.update(x.input);b.open();f.host.querySelector('[data-board-tab="review"]').fire('click');const text=f.host.querySelector('.task-board-state-help').textContent;console.log(JSON.stringify({mode,language,reason:x.settle.reason,kind:x.rows[0].kind,waitingRows:x.rows.filter(r=>r.kind==='waiting').length,help:text}));assert.doesNotMatch(text,/不要求你回复|No reply is requested/,'An actual unanswered decision is hidden behind an unconditional no-reply promise');assert.ok(text.includes(language==='zh'?'是否需要回应':'whether you need to respond'));assert.ok(text.includes(language==='zh'?'打开来源核实结果':'open the source to check the outcome'));} finally {b.dispose();}
+ try {b.update(x.input);b.open();
+  // The board has no state help since R250 (11-25): the row itself must still say the person is needed.
+  const head=f.host.querySelector('.task-board-group');assert.equal(head.dataset.groupKey,'waiting');
+  const entry=f.host.querySelector('.task-board-entry');assert.equal(entry.dataset.itemId,'task');assert.equal(f.host.querySelector('.task-board-sub').textContent,locale.format(language,'taskBoard.status.review'));
+  assert.equal(f.host.querySelector('.task-status-need').textContent,locale.format(language,'taskBoard.needOne',{count:1}));
+  entry.fire('click');assert.equal(f.host.querySelector('.task-board-reason').textContent,locale.format(language,'taskBoard.reasonIntervened'));assert.equal(f.host.querySelector('.task-board-action').dataset.action,'checkIn');
+  assert.doesNotMatch(f.host.textContent,/不要求你回复|No reply is requested/,'An actual unanswered decision is hidden behind an unconditional no-reply promise');} finally {b.dispose();}
 });

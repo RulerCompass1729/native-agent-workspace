@@ -161,15 +161,14 @@ async function run() {
     await merged.last().getByRole('button', { name: /^去确认：/ }).click();
     assert.equal(await card(records[0]).getAttribute('data-search-target'), 'true');
     await until(inView, 'A merged line leads to the batch');
-    const more = page.locator('#stream-waiting-more');
-    if (await more.count() && await more.isVisible()) {
-      if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
-      const rows = page.locator('#stream-waiting-list .stream-waiting-row');
-      save('waiting-rows', { rows: await rows.count() });
-      assert.equal(await rows.count(), 1, 'The waiting list shows the batch once');
-      assert.match(await page.locator('.stream-waiting-lead .stream-waiting-title').textContent(), /归档会话 · 4 项/, 'The strip names the batch');
-      await more.click();
-    }
+    // What waits for the person is on the task board (R250): the batch is one row there.
+    const board = require('./fixtures/board-waiting.cjs')(page);
+    await board.open();
+    const rows = board.waiting();
+    save('waiting-rows', { rows: await rows.count() });
+    assert.equal(await rows.count(), 1, 'The board lists the batch once');
+    assert.match(await rows.first().locator('.task-board-task-title').textContent(), /归档会话 · 4 项/, 'The board names the batch');
+    await board.close();
     await shot('pending-zh-light', { lang: 'zh', scheme: 'light', width: 1240 });
     await shot('pending-en-dark', { lang: 'en', scheme: 'dark', width: 1240 });
     await shot('pending-zh-dark-narrow850', { lang: 'zh', scheme: 'dark', width: 850 });

@@ -130,11 +130,12 @@ test('stewardEvents records an open question once and its end once, across a res
 
 test('the session view and the 「等你」 row enable the answer form for an open non-blocking question', () => {
   const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-  const renderer = read('renderer/renderer.js'), stream = read('renderer/activity-stream.js');
+  const renderer = read('renderer/renderer.js'), board = read('renderer/task-board.js');
   assert.match(renderer, /const open = s\.state === 'approval' \|\| window\.nativeWorkspaceApproval\.nonBlockingQuestion\(s\.approval\) && \['working', 'idle'\]\.includes\(s\.state\);/);
-  assert.match(renderer, /question: renderWaitingQuestion,/);
+  assert.match(renderer, /else if \(item\.kind === 'question'\) renderWaitingQuestion\(slot\.question, item\);/);
   assert.match(renderer, /appendQuestionForm\(parent, questions, s\.owner !== owner [^\n]*api\.answer\(s\.id, item\.requestId, answers\)\)/);
-  assert.match(stream, /item\.kind === 'question' && host\.question\) \{[^}]*host\.question\(row, item\);/);
+  assert.match(board, /\['background-confirmation', 'question', 'operator-creation'\]\.includes\(row\.kind\)/);
+  assert.match(board, /onWaiting\(d\.slot, row\.waiting\)/);
   const messages = require('../ui-messages.js'), zh = messages.zh || messages.messages?.zh, en = messages.en || messages.messages?.en;
   assert.equal(zh['stream.question'], zh['approval.nonBlocking']); assert.equal(en['stream.question'], en['approval.nonBlocking']);
 });

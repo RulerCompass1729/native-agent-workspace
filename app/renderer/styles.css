@@ -1001,6 +1001,9 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-creation-card .operator-grant label[hidden] { display:none; }
 .operator-creation-card .operator-grant-consent { flex-direction:row; align-items:flex-start; line-height:1.65; }
 .operator-grant-consent input { flex:none; margin-top:5px; }
+/* Grants sit in the settings dialog (R251 D): undo the dialog's full-width, spaced inputs. */
+dialog .operator-creation-card .operator-grant input[type=checkbox] { width:auto; margin:5px 0 0; }
+dialog .operator-creation-card .operator-grant input:not([type=checkbox]) { margin-bottom:0; }
 .operator-task-details > summary, .operator-new-grant > summary { cursor:pointer; min-height:28px; }
 .operator-task-body { max-height:200px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:8px; background:var(--panel); }
 .operator-creation-buttons { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
@@ -1011,12 +1014,14 @@ header h1, header p { overflow-wrap: anywhere; }
 .operator-quota-card .operator-bypass { color:var(--approval-ink); font-weight:700; }
 .operator-quota-fields, .operator-quota-usage { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .operator-quota-usage { padding-block:8px; font-weight:600; }
-.operator-grants-toggle { margin-left:auto; white-space:nowrap; }
 .operator-quota-card .operator-quota-form { display:grid; gap:12px; }
 .operator-quota-card { padding-top:8px; overflow-wrap:anywhere; }
 .operator-new-grant { border-top:1px solid var(--border); padding-top:10px; }
 @media(max-width:600px) { .operator-grant-fields { grid-template-columns:1fr; } }
 .operator-cancel-warning { flex-basis:100%; }
+.setup-grants { margin-top:16px; padding-top:12px; border-top:1px solid var(--border); }
+.setup-grants h3 { margin:0 0 8px; font-size:14px; }
+.setup-grants h3 small { font-weight:400; color:var(--muted); }
 /* Compact setup dialog: preserve existing controls, labels and lifecycle. */
 #setup-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
 #setup-dialog .setup-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:-20px;z-index:1;background:var(--surface);padding:8px 0;margin-bottom:12px}
