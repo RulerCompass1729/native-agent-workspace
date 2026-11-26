@@ -219,7 +219,6 @@ header h1, header p { overflow-wrap: anywhere; }
 .timeline-tools input { width: min(230px, 30%); min-width: 100px; }
 .timeline-tools input, .timeline-tools select { padding: 6px 9px; font-size: 12px; }
 .timeline-tools select { max-width: 190px; }
-#timeline-count { font-size: 11px; color: var(--muted); margin-right: auto; }
 #room-messages { padding: 12px 24px; }
 #room-messages .message { max-width: none; margin-bottom: 18px; }
 #room-messages .message-heading { margin-bottom: 4px; }

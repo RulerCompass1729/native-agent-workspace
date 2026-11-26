@@ -25,7 +25,7 @@ function harness(){
  const ctx=vm.createContext({getActivityStream:()=>null,...bound,$,node,document,structuredClone,fitRoomTabs(){},
   uiNode:(tag,key,vars)=>{const el=node(tag);bound.ui.display.text(el,key,vars);return el},button:(label,fn)=>Object.assign(node('button',label),{click:fn}),draggableSession(){},
   spaceId:'shared',selected:'room',roomSurface:'overview',roomSession:'a',mode:'terminal',terminalLayout:'split',roomOverview:null,
-  roomViews:{},roomRecordScope:'',roomRecordReturn:null,roomFilterHistory:null,roomRecordSelections:new Map(),roomReturnReading:null,roomHistories:new Map(),roomMention:null,roomMentionHistory:{},
+  roomViews:{},roomRecordScope:'',roomRecordReturn:null,roomFilterHistory:null,roomReturnReading:null,roomHistories:new Map(),roomMention:null,roomMentionHistory:{},
   roomDraftRevision:7,roomThread:'',roomReplyTo:'original-reply',pendingRoomFilter:'',roomSubmitting:null,readingPositions:{},selectionRevision:0,lastRoomMessages:'',lastMessages:'',terminals:new Map(),
   state:{sessions:['a','b'].map(id=>spaces.withMembership({id,name:'Agent '+id,nativeId:'native-'+id,provider:'codex',state:'idle',liveDraft:'PRIVATE '+id},'shared',true)),room:{messages:[],events:[]}},
   window:{nativeWorkspaceThreads:threads,nativeWorkspaceCollaboration:require('../renderer/collaboration-overview.js')},
@@ -38,7 +38,7 @@ function harness(){
  $('shared-input').value='@Agent a UNSENT';$('recipient').value='a';
  vendorMarks(source,ctx);
  const fields=source.match(/const roomViewFields = (\[[^;]+\]);/);assert.ok(fields);vm.runInContext(`const roomViewFields=${fields[1]};`,ctx);
- const names=['roomMemberStateText','spaceMemberLabel','focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','filteredTimeline','showRoomRecords','returnRoomRecordMember','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews','archivedName'];
+ const names=['roomMemberStateText','spaceMemberLabel','focusRoomMember','rememberRoomMemberView','restoreRoomMemberView','openRoomMember','timeline','timelineParticipants','showRoomRecords','clearRoomRecordFilter','restoreRoomRecordFilter','renderTimeline','refreshRoomMemberTabs','roomMemberStatusKey','refreshRoomMemberStatus','openRoomMemberStatus','captureRoomView','persistedRoomViews','archivedName'];
  for(const name of ['roomRecentPreview','roomNavigationKey','memberTabClick','renderRoomMemberTabs','roomTabs','roomTabCurrent'])if(source.includes('function '+name+'('))names.push(name);
  vm.runInContext(names.map(actual).join('\n'),ctx);vm.runInContext(source.split('\n').find(l=>l.startsWith('const roomReadingKey =')),ctx);ctx.renderSnapshotMaterials=()=>{};
  if(!ctx.renderRoomMemberTabs){const from=source.indexOf("      const tabs = $('room-member-tabs');",source.indexOf('function render()'));const tail='      refreshRoomMemberTabs(people);';const to=source.indexOf(tail,from);assert.ok(from>=0&&to>from);vm.runInContext('function renderRoomMemberTabs(){const people=orderedMembers();\n'+source.slice(from,to+tail.length)+'\n}',ctx)}

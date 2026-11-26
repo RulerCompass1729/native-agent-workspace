@@ -33,6 +33,17 @@ function fixture(method, value) {
 // What a sighted reader sees in each line: its kind, who to whom, and the line.
 const rows = () => page.locator('#space-feed .feed-row').evaluateAll(list => list.map(n =>
   [n.dataset.kind, n.querySelector('.feed-who').textContent, n.querySelector('.feed-text').textContent].join(' | ')));
+// The name Chromium's accessibility tree gives each line's summary, which a screen reader announces.
+async function spokenNames() {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { root: doc } = await cdp.send('DOM.getDocument', { depth: 0 });
+    const { nodeIds } = await cdp.send('DOM.querySelectorAll', { nodeId: doc.nodeId, selector: '#space-feed .feed-row summary' });
+    const names = [];
+    for (const nodeId of nodeIds) names.push((await cdp.send('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false })).nodes[0]?.name?.value || '');
+    return names;
+  } finally { await cdp.detach(); }
+}
 const listMetrics = () => page.locator('#space-feed .feed-list').evaluate(n => ({ top: n.scrollTop, height: n.scrollHeight, client: n.clientHeight }));
 const TABS = ['room-summary', 'room-stream', 'room-overview', 'room-member'];
 async function main() {
@@ -88,6 +99,16 @@ async function main() {
   ];
   await until(async () => (await rows()).length === said.length, 'The feed shows the seeded speech: ' + (await rows()).join(' / '));
   assert.deepEqual(await rows(), said);
+  const spoken = await spokenNames();
+  assert.equal(spoken.length, said.length, JSON.stringify(spoken));
+  said.forEach((line, i) => {
+    const [, who, text] = line.split(' | ');
+    // The shared disclosure CSS draws ▸/▾ as generated text, which Chromium puts in the name (record 11-26, side finding 6).
+    assert.match(spoken[i], /^(?:[▸▾] )?\d\d:\d\d /u, spoken[i]);
+    assert.ok(spoken[i].includes(who) && spoken[i].includes(text.slice(0, 12)), JSON.stringify({ spoken: spoken[i], who, text }));
+  });
+  console.log('NAMES', JSON.stringify(spoken.slice(0, 2)));
+  record('each line is named by who spoke, to whom, and when');
   await page.locator('#space-feed [data-group="all"]').click();
   const everything = await rows();
   for (const text of ['npm test', '先看队列。', '先跑一遍测试。', '继续', 'wake', '【NAW 派活】写文档：对话视图的说明。']) assert.ok(!everything.some(r => r.endsWith('| ' + text)), 'Not a line: ' + text);

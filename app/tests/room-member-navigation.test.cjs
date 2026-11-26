@@ -21,7 +21,7 @@ function fixture() {
   const feedPeople = [];
   const context = vm.createContext({getActivityStream:()=>null, getSpaceFeed: () => ({ showPerson: id => feedPeople.push(id) }),
     structuredClone, roomViews: {}, spaceId: 'shared', selected: 'room', roomSurface: 'overview', roomSession: 'a', mode: 'terminal', terminalLayout: 'split',
-    roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, roomRecordSelections: new Map(), readingPositions: { 'collaboration-focus:a': { top: 314, follow: false, anchor: 'original', offset: 4 } },
+    roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, readingPositions: { 'collaboration-focus:a': { top: 314, follow: false, anchor: 'original', offset: 4 } },
     roomReturnReading: null, roomThread: 'old-thread', roomReplyTo: 'reply-original', pendingRoomFilter: '', selectionRevision: 4,
     roomDraftRevision: 8, roomSubmitting: { id: 'still-in-flight' }, roomMention: null, roomMentionHistory: {}, roomHistories: new Map(), lastRoomMessages: '', lastMessages: '',
     state: { sessions, room: { id: 'shared' } }, document: { getSelection: () => ({ rangeCount: 0, isCollapsed: true }) },
@@ -39,7 +39,7 @@ function fixture() {
   context.roomOverview = { key: id => `collaboration:shared:${id}`, focus: id => context.focusRoomMember(id, context.roomSession, `collaboration:shared:${id}`) };
   const fields = source.match(/const roomViewFields = (\[[^;]+\]);/); assert.ok(fields);
   const surfaces = source.match(/const ROOM_SURFACES = (\[[^;]+\]);/); assert.ok(surfaces);
-  vm.runInContext(`const roomViewFields = ${fields[1]};\nconst ROOM_SURFACES = ${surfaces[1]};\n` + ['roomRecentPreview', 'roomMemberChoice', 'showRoomSurface', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'openSidebarRow'].map(actualFunction).join('\n'), context);
+  vm.runInContext(`const roomViewFields = ${fields[1]};\nconst ROOM_SURFACES = ${surfaces[1]};\n` + ['roomRecentPreview', 'roomMemberChoice', 'showRoomSurface', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'showRoomRecords', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'openSidebarRow'].map(actualFunction).join('\n'), context);
   return { context, element, events, nativeCalls, notices, feedPeople };
 }
 

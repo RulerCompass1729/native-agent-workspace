@@ -8,7 +8,7 @@ function take(text, start, end) {
   assert.ok(a >= 0 && b > a, start); return text.slice(a, b);
 }
 const code = take(source, 'function participantLabel(', 'function timeline()') +
-  take(source, 'function timelineParticipants(', 'function filteredTimeline()') +
+  take(source, 'function timelineParticipants(', 'function getActivityStream()') +
   take(reading, 'function readingDeliveryStatusKey(', '// A sender') +
   take(reading, 'function readingWakeStatus(', 'function cancelReadingWakeCollapse(') +
   take(source, 'let spaceMessagePreview;', 'function renderHeader(');
