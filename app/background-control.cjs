@@ -1278,7 +1278,8 @@ class BackgroundControl {
     for (const expected of row.guard?.sessions || []) {
       const target = snapshot.sessions.find(s => s.id === expected.id);
       if (!target) return unknown('temporarily-unavailable');
-      if (target.archived) return unknown('temporarily-unavailable');
+      // Archiving does not end a process, so a stop of the archived session itself is still shown (R231.1).
+      if (target.archived && !(row.command.method === 'stop' && expected.id === row.command.arguments[0])) return unknown('temporarily-unavailable');
       if (target.backendUnavailable || target.transportDisconnected || target.nativeContextPending) return unknown('temporarily-unavailable');
       if (expected.nativeId && target.nativeId !== expected.nativeId) return unknown('temporarily-unavailable');
     }
