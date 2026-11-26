@@ -43,14 +43,57 @@ function successor(selected, entries) {
   }
 }
 
+// A space's project manager moves at the confirmed handoff (R254), and at a kept or finished one, to the one successor;
+// a handoff that failed afterwards gives it back. Every session the role passed through, the current one last.
+function handoffChain(selected, entries) {
+  const edges = new Map(), parents = new Map();
+  for (const entry of entries) {
+    if (!validId(entry?.old?.id)) continue;
+    const from = entry.old.id;
+    const to = JSON.stringify([entry.new?.id, entry.new?.nativeId]);
+    const edge = edges.get(from)?.get(to);
+    if (entry.event === 'failed') {
+      if (edge?.handedOnly) {
+        edges.get(from).delete(to);
+        parents.get(to).delete(from);
+      }
+      continue;
+    }
+    if (!['handed', 'kept', 'done'].includes(entry.event)) continue;
+    if (edge) {
+      edge.mixed ||= edge.entry.old.nativeId !== entry.old.nativeId;
+      edge.handedOnly &&= entry.event === 'handed';
+      continue;
+    }
+    if (!edges.has(from)) edges.set(from, new Map());
+    edges.get(from).set(to, { entry, handedOnly: entry.event === 'handed', mixed: false });
+    if (!parents.has(to)) parents.set(to, new Set());
+    parents.get(to).add(from);
+  }
+  let current = identity(selected);
+  const chain = [current], seen = new Set();
+  while (true) {
+    if (seen.has(current.sessionId)) return [identity(selected)];
+    seen.add(current.sessionId);
+    const next = edges.get(current.sessionId);
+    if (!next || next.size !== 1) return chain;
+    const [to, { entry, mixed }] = next.entries().next().value;
+    if (mixed || parents.get(to).size !== 1 || entry.old.nativeId !== current.nativeId || !validId(entry.new?.id) || !validId(entry.new?.nativeId)) return chain;
+    current = { sessionId: entry.new.id, nativeId: entry.new.nativeId };
+    chain.push(current);
+  }
+}
+
 // The rotation log's finished and kept replacements, the only lines the selection rule reads (the secretary, the
 // integrator and the butler designation all follow them). The log only grows, so each call reads only what was
 // added since the last one: a long log is read once, not on every call, and has no size past which the
 // designation is lost (it was 32 MB; review note 5, 2026-11-14). Memory is the kept lines and one read; every
-// line must still parse, as before, or the record is an error, never "nobody".
+// line must still parse, as before, or the record is an error, never "nobody". `handoffs` adds the handed and failed
+// lines handoffChain reads.
+const EDGE_EVENTS = ['done', 'kept'], HANDOFF_EVENTS = ['done', 'kept', 'handed', 'failed'];
 const LOG_READ = 4 * 1024 * 1024, LOG_LINE_MAX = 1024 * 1024, LOG_FILES = 8, LOG_MARK = 256;
 const logs = new Map();
-function rotationEdges(logFile) {
+function rotationEdges(logFile, { handoffs = false } = {}) {
   // Open first, then judge what was opened: a link is refused and nothing can be swapped in between.
   const fd = fs.openSync(logFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
@@ -71,7 +114,7 @@ function rotationEdges(logFile) {
     const take = line => {
       if (!line.trim()) return;
       const entry = JSON.parse(line);
-      if (['done', 'kept'].includes(entry?.event)) state.entries.push(entry);
+      if (HANDOFF_EVENTS.includes(entry?.event)) state.entries.push(entry);
     };
     let rest = Buffer.alloc(0);
     try {
@@ -94,9 +137,12 @@ function rotationEdges(logFile) {
     } catch (error) { state.broken = true; throw error; }
     // A last line without its newline yet is read as it is now, and again next time.
     // A copy: a caller cannot change what the next call returns.
-    if (!rest.toString('utf8').trim()) return state.entries.slice();
-    const entry = JSON.parse(rest.toString('utf8'));
-    return ['done', 'kept'].includes(entry?.event) ? state.entries.concat([entry]) : state.entries.slice();
+    const entries = state.entries.slice();
+    if (rest.toString('utf8').trim()) {
+      const entry = JSON.parse(rest.toString('utf8'));
+      if (HANDOFF_EVENTS.includes(entry?.event)) entries.push(entry);
+    }
+    return handoffs ? entries : entries.filter(entry => EDGE_EVENTS.includes(entry.event));
   } finally { fs.closeSync(fd); }
 }
 
@@ -158,4 +204,4 @@ function author(actor, records, labels, refusal = 'error.queue.withdrawOwnOnly')
 function usableRecord(actor, records) {
   return records.find(record => record.id === actor?.id && record.nativeId === actor?.nativeId && !record.archived && !record.nativeContextPending && !['ended', 'background'].includes(record.state)) || null;
 }
-module.exports = { QueueSecretary, successor, follow, rotationEdges, usableRecord, author };
+module.exports = { QueueSecretary, successor, handoffChain, follow, rotationEdges, usableRecord, author };

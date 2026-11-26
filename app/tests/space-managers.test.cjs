@@ -55,30 +55,108 @@ test('one session manages one space: choosing it for another ends the former, al
 test('the role follows a finished rotation and stays put on a branch, per space', t => {
   const { role, log } = setup(t);
   role.set(ROOM_A, manager);
-  log([done(manager, next, 'kept')]);
-  assert.deepEqual(role.current(ROOM_A), manager);
   log([done(manager, next)]);
   assert.deepEqual(role.current(ROOM_A), next);
   log([done(manager, next), done(manager, { sessionId: 'other', nativeId: 'native-other' })]);
   assert.deepEqual(role.current(ROOM_A), manager);
 });
 
-test('the seat a finished rotation hands over is the one the successor adds with; a kept or branched one adds nothing (R220.2)', t => {
+// R254 changed the kept case: a kept replacement hands the seat over too, and the session it came from is told to whom.
+test('the seat a finished or kept rotation hands over is the one the successor adds with; a branched one adds nothing (R220.2, R254)', t => {
   const other = { sessionId: 'other', nativeId: 'native-other' };
   const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('other', [ROOM_A])];
   const adds = (role, actor) => role.creator({ id: actor.sessionId, nativeId: actor.nativeId }, ROOM_A, null, records, new Map());
+  const handedToNext = error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes('经理已经交给 Session next');
   const kept = setup(t);
   kept.role.set(ROOM_A, manager); kept.log([done(manager, next, 'kept')]);
-  assert.equal(adds(kept.role, manager).sessionId, 'manager', 'a kept replacement leaves the seat where it was');
-  assert.throws(() => adds(kept.role, next), key('error.queue.managerOnly'), 'a kept successor does not add');
+  assert.equal(adds(kept.role, next).sessionId, 'next', 'a kept replacement hands the seat to its one successor');
+  assert.throws(() => adds(kept.role, manager), handedToNext, 'the kept session is told who has the seat');
   const finished = setup(t);
   finished.role.set(ROOM_A, manager); finished.log([done(manager, next)]);
   assert.equal(adds(finished.role, next).sessionId, 'next', 'a finished rotation hands the seat to the successor that joined the space');
-  assert.throws(() => adds(finished.role, manager), key('error.queue.managerOnly'), 'the session that went away adds nothing');
+  assert.throws(() => adds(finished.role, manager), handedToNext, 'the session that went away adds nothing');
   const branch = setup(t);
   branch.role.set(ROOM_A, manager); branch.log([done(manager, next), done(manager, other)]);
   assert.throws(() => adds(branch.role, next), key('error.queue.managerOnly'), 'neither side of a branch adds');
   assert.throws(() => adds(branch.role, other), key('error.queue.managerOnly'), 'neither side of a branch adds');
+});
+
+// R254 (the person, 2026-11-25: 「项目经理交接失败,这也是个 bug」, 「貌似 NAW 新需求的项目经理继任又失败了?」): the
+// successor had the manager's work for two hours while the role stayed with the old session the person kept using.
+const other = { sessionId: 'other', nativeId: 'native-other' };
+const waiting = (from, to, reason) => ({ ...done(from, to, 'waiting'), reason });
+const labels = new Map([['manager', 'Manager old'], ['next', 'Manager next']]);
+const handedOver = expected => error => error.uiMessage?.key === 'error.queue.managerHandedOver' && error.message.includes(`经理已经交给 ${expected}`);
+
+test('R254: the role moves at a confirmed handoff, while the person keeps using the old session', t => {
+  const { role, log } = setup(t);
+  role.set(ROOM_A, manager);
+  const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('worker', [ROOM_A])];
+  const oldActor = { id: 'manager', nativeId: 'native-manager' }, nextActor = { id: 'next', nativeId: 'native-next' };
+  const steps = [
+    [done(manager, next, 'handed')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-message')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-message'), waiting(manager, next, 'person-quiet')],
+    [done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), done(manager, next)],
+  ];
+  for (const entries of steps) {
+    log(entries);
+    const at = entries.at(-1).reason || entries.at(-1).event;
+    assert.deepEqual(role.current(ROOM_A), next, at);
+    assert.deepEqual(role.creator(nextActor, ROOM_A, 'worker', records, labels), { kind: 'secretary', name: 'Manager next', sessionId: 'next' }, at);
+    assert.throws(() => role.creator(oldActor, ROOM_A, null, records, labels), handedOver('Manager next'), at);
+    assert.deepEqual([...role.activeIds(records)], ['next'], `one manager in the space: ${at}`);
+    assert.equal(role.roomOf(records[0]), null, at);
+  }
+  // No label: the successor's own name.
+  assert.throws(() => role.creator(oldActor, ROOM_A, null, records, new Map()), handedOver('Session next'));
+  // Another space's queue is refused as before.
+  assert.throws(() => role.creator(oldActor, ROOM_B, null, [session('manager', [ROOM_A, ROOM_B])], labels), key('error.queue.managerOnly'));
+});
+
+test('R254: a kept rotation moves the role too; a branch does not, and a successor gone before the end gives it back', t => {
+  const { role, log } = setup(t);
+  role.set(ROOM_A, manager);
+  const records = [session('manager', [ROOM_A]), session('next', [ROOM_A]), session('other', [ROOM_A])];
+  const oldActor = { id: 'manager', nativeId: 'native-manager' };
+  log([done(manager, next, 'kept')]);
+  assert.deepEqual(role.current(ROOM_A), next, 'kept');
+  assert.throws(() => role.creator(oldActor, ROOM_A, null, records, labels), handedOver('Manager next'));
+  log([done(manager, next, 'handed'), done(manager, next, 'kept')]);
+  assert.deepEqual(role.current(ROOM_A), next, 'handed, then kept');
+  for (const branch of [
+    [done(manager, next, 'handed'), done(manager, other, 'handed')],
+    [done(manager, next, 'kept'), done(manager, other)],
+    [done(manager, next, 'handed'), done(manager, other, 'kept')],
+    [done(manager, next, 'handed'), done({ sessionId: 'someone', nativeId: 'native-someone' }, next, 'handed')],
+  ]) {
+    log(branch);
+    assert.deepEqual(role.current(ROOM_A), manager, JSON.stringify(branch.map(e => [e.old.id, e.event, e.new.id])));
+    assert.deepEqual(role.creator(oldActor, ROOM_A, null, records, labels), { kind: 'secretary', name: 'Manager old', sessionId: 'manager' });
+  }
+  const gone = { ...done(manager, next, 'failed'), reason: 'successor-gone' };
+  log([done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), gone]);
+  assert.deepEqual(role.current(ROOM_A), manager, 'the old session has its work back, and the role with it');
+  assert.deepEqual(role.creator(oldActor, ROOM_A, null, records, labels).sessionId, 'manager');
+  log([done(manager, next, 'handed'), gone, done(manager, other, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), other, 'a later rotation of it moves the role again');
+  // The handoff line names the old session as it was: one that changed since is not followed.
+  log([done({ ...manager, nativeId: 'native-before' }, next, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), manager);
+  // A successor whose native session was not known when it was confirmed is not followed until it is.
+  log([done(manager, { sessionId: 'next', nativeId: null }, 'handed')]);
+  assert.deepEqual(role.current(ROOM_A), manager);
+});
+
+test("R254: only the manager follows a handoff before it is done; the butler's and the integrator's rule is as it was", t => {
+  const { successor, rotationEdges } = require('../queue-secretary.cjs');
+  const { dir, log } = setup(t);
+  for (const entries of [[done(manager, next, 'handed')], [done(manager, next, 'kept')], [done(manager, next, 'handed'), done(manager, next, 'kept')]]) {
+    log(entries);
+    assert.deepEqual(successor(manager, rotationEdges(path.join(dir, 'rotation-log.jsonl'))), manager);
+  }
+  log([done(manager, next, 'handed'), waiting(manager, next, 'person-quiet'), { ...done(manager, next, 'failed'), reason: 'successor-gone' }, done(manager, next)]);
+  assert.deepEqual(rotationEdges(path.join(dir, 'rotation-log.jsonl')).map(entry => entry.event), ['done'], 'what the other roles read is unchanged');
 });
 
 test('the role counts only while the very native session is a member of its space', t => {

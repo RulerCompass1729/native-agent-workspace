@@ -1,15 +1,16 @@
 'use strict';
 // The project manager (项目经理) of each collaboration space: at most one session per space, and one space per
 // session. Only the person designates it (main.cjs); it may add to that space's queue and reads that space only.
-// After a session rotation the record follows the written log to the one clear successor, by the same rules as the
-// butler's and the integrator's. A record that cannot be read is an error, never "nobody".
+// After a session rotation the record follows the written log to the one clear successor from the moment it confirms
+// the handoff (handoffChain, R254), not only once the old session is ended as the butler's and the integrator's do.
+// A record that cannot be read is an error, never "nobody".
 // It took the place of the one secretary for all of NAW (queue-secretary.cjs), whose file it reads once and never writes.
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { uiError } = require('./ui-errors.cjs');
 const { roomId: validRoomId, roomIds, isMember } = require('./collaboration-spaces.cjs');
-const { successor, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
+const { handoffChain, rotationEdges, usableRecord } = require('./queue-secretary.cjs');
 
 const RECORD_MAX = 256 * 1024;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -70,26 +71,34 @@ class SpaceManagers {
       this.failed = error.code !== 'ENOENT';
     }
   }
-  // Each space's designated session as it is now. Two spaces naming the same session is no one's role.
-  all() {
+  // Each space's designated sessions, from the one the person chose to the one that holds the role now.
+  chains() {
     if (this.failed) {
       throw uiError('error.manager.state');
     }
     let entries = [];
     if (this.managers.size) {
       try {
-        entries = rotationEdges(this.logFile);
+        entries = rotationEdges(this.logFile, { handoffs: true });
       } catch (error) {
         if (error.code !== 'ENOENT') {
           throw uiError('error.manager.state');
         }
       }
     }
-    const current = new Map();
+    const chains = new Map();
     for (const [roomId, selected] of this.managers) {
       if (selected) {
-        current.set(roomId, successor(selected, entries));
+        chains.set(roomId, handoffChain(selected, entries));
       }
+    }
+    return chains;
+  }
+  // Each space's designated session as it is now. Two spaces naming the same session is no one's role.
+  all() {
+    const current = new Map();
+    for (const [roomId, chain] of this.chains()) {
+      current.set(roomId, chain.at(-1));
     }
     return current;
   }
@@ -119,6 +128,16 @@ class SpaceManagers {
     const roomId = this.secretaryRetired?.roomId;
     return roomId ? this.current(roomId) : null;
   }
+  // The session that manages this space now, when it took the role over from this one; or null.
+  handedTo(record, roomId) {
+    const chain = this.chains().get(roomId) || [];
+    const at = chain.findIndex(value => value.sessionId === record.id && value.nativeId === record.nativeId);
+    if (at < 0 || at === chain.length - 1) {
+      return null;
+    }
+    const holder = chain.at(-1);
+    return this.designated({ id: holder.sessionId, nativeId: holder.nativeId }) === roomId ? holder : null;
+  }
   // Every session that manages a space now.
   activeIds(sessions) {
     return new Set(sessions.filter(session => this.roomOf(session)).map(session => session.id));
@@ -127,6 +146,11 @@ class SpaceManagers {
   // directly or through another space's manager.
   creator(actor, roomId, assignee, records, labels) {
     const record = usableRecord(actor, records);
+    const holder = record && this.handedTo(record, roomId);
+    if (holder) {
+      const name = labels.get(holder.sessionId) || records.find(value => value.id === holder.sessionId)?.name || holder.sessionId;
+      throw uiError('error.queue.managerHandedOver', { name });
+    }
     if (!record || this.roomOf(record) !== roomId) {
       throw uiError('error.queue.managerOnly');
     }

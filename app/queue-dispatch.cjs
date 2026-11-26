@@ -2219,8 +2219,8 @@ function validLogEntry(entry) {
     return false;
   }
   // archived: an old session NAW archived after its done rotation (only done and kept link sessions).
-  // asked, withdrawn, dropped: a rotation asked for by hand (R207).
-  if (!['asked', 'withdrawn', 'dropped', 'requested', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
+  // asked, withdrawn, dropped: a rotation asked for by hand (R207). handed: the successor confirmed its handoff (R254).
+  if (!['asked', 'withdrawn', 'dropped', 'requested', 'handed', 'done', 'kept', 'failed', 'waiting', 'archived'].includes(entry.event) || !Number.isFinite(entry.time)) {
     return false;
   }
   if (entry.noticeId !== undefined && !validTrustReceipt(entry.noticeId)) return false;
@@ -5705,6 +5705,7 @@ class QueueDispatcher {
   // The rotation waits from here on for its old session (advanceWaiting); the successor has the work and rests as after
   // any rotation.
   async holdOld(oldId, record, gate, now, old = null) {
+    this.noteHanded(oldId, record);
     if (!waitingOld(record)) {
       record.waitSince = now;
       record.oldId ??= oldId;
@@ -5718,6 +5719,20 @@ class QueueDispatcher {
     this.noteGate(oldId, record, gate, now);
     this.save();
     await this.broadcast();
+  }
+
+  // A confirmed handoff whose old session is kept waiting: one line, which a space's project manager follows at once
+  // (R254: the person kept talking in the old one for two hours while its successor already had the manager's work).
+  noteHanded(oldId, record) {
+    if (record.handedLogged) return;
+    record.oldId ??= oldId;
+    const entry = this.appendLog('handed', record);
+    if (this.unlogged === entry) {
+      this.log.splice(this.log.indexOf(entry), 1);
+      return;
+    }
+    record.handedLogged = true;
+    this.save();
   }
 
   restSuccessor(oldId, record, now) {
@@ -5861,6 +5876,8 @@ class QueueDispatcher {
   // A waiting rotation, on each pass: nothing here is timed out. First whether it can still be finished at all, then
   // whether the old session is free, then what it did after its handoff is told to the successor, then it is ended.
   async advanceWaiting(oldId, record, snapshot, now) {
+    // One already waiting when this version started, or whose line could not be written.
+    this.noteHanded(oldId, record);
     const old = snapshot.sessions.find(s => s.id === oldId);
     const note = gate => this.noteGate(oldId, record, gate, now);
     // Whatever the step waits for, it goes on without holding them.
