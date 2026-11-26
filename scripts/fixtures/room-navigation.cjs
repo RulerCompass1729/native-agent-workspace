@@ -31,7 +31,7 @@ process.on('message', async question => {
         { id, role: 'human', name: 'You', recipientId: records[0].id, text: 'Synthetic manual request to member A', time: now - 1500, status: 'unconfirmed' },
         { id: randomUUID(), role: 'assistant', name: records[0].name, sessionId: records[0].id, replyTo: id, text: 'Synthetic explicitly associated reply from A', time: now - 1000, status: 'complete' },
         { id: randomUUID(), role: 'human', name: 'You', recipientId: records[1].id, text: 'Synthetic unrelated request to B', time: now - 500, status: 'submitted' },
-        { id: randomUUID(), role: 'system', kind: 'notice', name: 'Synthetic wake', text: 'Synthetic waiting message from B to A', time: now - 750, status: 'complete',
+        { id: randomUUID(), role: 'system', kind: 'agent-wake', name: 'Synthetic wake', text: 'Synthetic waiting message from B to A', time: now - 750, status: 'complete',
           wake: { senderId: records[1].id, senderName: records[1].name, recipientId: records[0].id, recipientName: records[0].name, body: 'Synthetic waiting message from B to A', status: 'waiting' } },
         { id: randomUUID(), role: 'system', name: 'Past member', sessionId: 'synthetic-departed-member', text: 'Synthetic retained historical record', time: now - 3000, status: 'complete' },
       );
