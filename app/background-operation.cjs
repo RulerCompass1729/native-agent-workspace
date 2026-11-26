@@ -208,16 +208,16 @@ function operationSummary(command, actor, names = {}) {
   const put = (key, value) => { if (value !== undefined) summary[key] = value; };
   if (method === 'create' || method === 'importHistory') {
     const options = (method === 'create' ? args[0] : args[1]) || {};
-    const providers = method === 'create' ? ['claude', 'codex', 'dsh', 'agy'] : ['claude', 'codex'];
+    const providers = method === 'create' ? ['claude', 'codex', 'dsh', 'agy', 'pi'] : ['claude', 'codex'];
     put('name', shown(options.name)); put('provider', providers.includes(options.provider) ? options.provider : undefined);
     put('folder', last(options.cwd));
     if (method === 'create') {
       // Creation's batch identity. Names differ on purpose; everything that changes what starts must match.
       // A hash keeps the absolute directory out of the broadcast summary while still separating same-named folders.
       const settings = options.settings && typeof options.settings === 'object' && !Array.isArray(options.settings) ? options.settings : {};
-      // The key follows what workspace.create runs: a fork, DSH and Antigravity are terminal-only, and one folder has one path.
+      // The key follows what workspace.create runs: a fork, DSH, Antigravity and pi are terminal-only, and one folder has one path.
       const requested = ['chat', 'terminal'].includes(options.view) ? options.view : options.provider === 'codex' ? 'terminal' : 'chat';
-      const view = options.fork != null || options.provider === 'dsh' || options.provider === 'agy' ? 'terminal' : requested;
+      const view = options.fork != null || ['dsh', 'agy', 'pi'].includes(options.provider) ? 'terminal' : requested;
       const directory = typeof options.cwd === 'string' && path.isAbsolute(options.cwd) ? path.resolve(options.cwd) : options.cwd;
       put('model', shown(settings.model)); put('effort', shown(settings.effort)); put('profile', shown(settings.profile));
       put('permissionMode', ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'].includes(settings.permissionMode) ? settings.permissionMode : undefined);

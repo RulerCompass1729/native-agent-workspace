@@ -2088,7 +2088,7 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
 // Native-reported vendor identity is independent of the program running it.
 // Optional local PNGs stay outside the public repository; letters work without them.
 const VENDOR_MARKS = { anthropic: ['A', 'Anthropic'], openai: ['O', 'OpenAI'], deepseek: ['D', 'DeepSeek'] };
-const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH' };
+const SHELL_NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH', pi: 'pi' };
 function sessionMaker(record) {
   const shell = record?.shell || record?.provider;
   const vendor = typeof record?.vendor === 'string' && record.vendor ? record.vendor : shell === 'claude' ? 'anthropic' : null;
@@ -3157,8 +3157,9 @@ async function answerConfirmationBatch(batch, cancel) {
 }
 // A create batch states its one shared configuration once; each row keeps only the name that differs.
 function backgroundPermissionText(summary) {
-  // DSH keeps its own approvals and takes no per-session settings.
+  // DSH keeps its own approvals and takes no per-session settings; pi has no approvals and takes none either.
   if (summary?.provider === 'dsh') return uiText('background.permission.dsh');
+  if (summary?.provider === 'pi') return uiText('background.permission.pi');
   const modes = ['manual', 'plan', 'dontAsk', 'acceptEdits', 'auto', 'bypassPermissions'];
   if (summary?.risks?.includes('skipPermissions') || summary?.permissionMode === 'bypassPermissions') return uiText('background.permission.skipped');
   return uiText(modes.includes(summary?.permissionMode) ? 'background.permission.' + summary.permissionMode : 'background.permission.native');
@@ -3166,7 +3167,7 @@ function backgroundPermissionText(summary) {
 function backgroundBatchConfig(summary) {
   const parts = [], native = uiText('standing.nativeDefault');
   if (summary.provider) parts.push(providerName(summary.provider));
-  if (summary.provider !== 'dsh') {
+  if (summary.provider !== 'dsh' && summary.provider !== 'pi') {
     parts.push(uiText('background.card.model', { model: summary.model || native }));
     if (summary.effort) parts.push(uiText('background.card.effort', { effort: summary.effort }));
     if (summary.profile) parts.push(uiText('background.card.profile', { profile: summary.profile }));
@@ -4569,6 +4570,7 @@ function providerName(provider) {
   if (provider === 'claude') return 'Claude';
   if (provider === 'dsh') return 'DSH';
   if (provider === 'agy') return 'Antigravity';
+  if (provider === 'pi') return 'pi';
   return 'Codex';
 }
 async function moveSidebarSession(id, target, after) {
@@ -4775,11 +4777,12 @@ function createReadiness() {
   renderCreateSpaces();
   renderCreateProfiles();
   renderDshProvider();
+  renderPiProvider();
   renderAgyProvider();
   const historyProvider = chosenProvider();
   // Codex history continues a thread with its own vendor; it is not offered for a new DeepSeek member.
-  // DSH and Antigravity sessions have no history picker here.
-  $('open-native-history').hidden = deepseekChosen() || historyProvider === 'dsh' || historyProvider === 'agy' || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  // DSH, pi and Antigravity sessions have no history picker here.
+  $('open-native-history').hidden = deepseekChosen() || ['dsh', 'pi', 'agy'].includes(historyProvider) || !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   $('open-claude-sessions').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeSessionList');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
@@ -4816,7 +4819,7 @@ function createReadiness() {
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   // DSH keeps its own approvals; the service refuses bypass for it.
   if ($('skip-permissions').getAttribute('data-agy-auto-skip') === 'true' && historyProvider !== 'agy') { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
-  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh';
+  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions') || historyProvider === 'dsh' || historyProvider === 'pi';
   if ($('skip-permissions-option').hidden) { $('skip-permissions').checked = false; $('skip-permissions').removeAttribute('data-agy-auto-skip'); }
   const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
   const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
@@ -4828,8 +4831,8 @@ function createReadiness() {
     return;
   }
   const provider = chosenProvider();
-  // DSH and Antigravity are ready when the service resolved their runtimes.
-  const programReady = provider === 'dsh' ? state.available?.dsh === true : provider === 'agy' ? state.available?.agy === true : state.preflight?.[provider];
+  // DSH, pi and Antigravity are ready when the service resolved their runtimes.
+  const programReady = ['dsh', 'pi', 'agy'].includes(provider) ? state.available?.[provider] === true : state.preflight?.[provider];
   const ready = state.preflight?.python && programReady && (!deepseekChosen() || Boolean($('create-profile').value));
   $('confirm-create').disabled = creatingSession || Boolean(createTicket?.directoryDefaults) || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
@@ -4849,6 +4852,13 @@ function renderDshProvider() {
   const offered = state.available?.dsh === true;
   $('dsh-provider').hidden = !offered;
   const chosen = document.querySelector('input[name="provider"]:checked').value === 'dsh';
+  if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
+}
+// pi on DeepSeek, offered only when the service reports NAW's pinned pi runtime.
+function renderPiProvider() {
+  const offered = state.available?.pi === true;
+  $('pi-provider').hidden = !offered;
+  const chosen = document.querySelector('input[name="provider"]:checked').value === 'pi';
   if (!offered && chosen) document.querySelector('input[name="provider"][value="claude"]').checked = true;
 }
 function renderAgyProvider() {
@@ -6996,7 +7006,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // A DSH session opens in its terminal (it has no conversation view yet) and leaves the remembered view alone.
     let view = preference;
     if (provider === 'codex') view = $('initial-view').value;
-    if (provider === 'dsh' || provider === 'agy') view = 'terminal';
+    if (['dsh', 'pi', 'agy'].includes(provider)) view = 'terminal';
     else preference = view;
     // DeepSeek at its highest effort (the person, 2026-11-13); DeepSeek refuses Codex's ultra.
     const settings = deepseekChosen() ? { profile: $('create-profile').value, effort: 'max' } : undefined;

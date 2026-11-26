@@ -469,3 +469,88 @@ option; and, with the hook's answer, its interactive screen, MCP tools it loads 
 and other versions. Antigravity's handling and retention follow
 its own terms; this section discloses a recipient and is not a claim that the content
 stays private.
+
+## pi members (2026-11-25)
+
+A pi member is pi (`@earendil-works/pi-coding-agent` 1.6.1, MIT) on DeepSeek, running
+in NAW's terminal. NAW offers it only once `scripts/install-pi-tui.cjs` has installed
+that exact version from the committed lockfile into the NAW data folder; NAW never
+updates it. This section was read from pi's source and checked with a loopback stand-in
+for DeepSeek and with two synthetic turns against the real service.
+
+**Who receives its content.** DeepSeek (`api.deepseek.com`, pi's built-in DeepSeek
+provider) receives the member's prompts, the files it reads, its command and tool
+output. Files in the working folder are read without asking; others only once the
+person allows it (see Approvals). Each request also carries pi's
+system prompt, which names the working folder and the path of pi's own documentation
+inside NAW's data folder (both usually contain the account name), and the OpenAI SDK's
+request headers (operating system, architecture and Node.js version). NAW records the
+session with vendor `deepseek` and shell `pi`.
+
+**What does not leave.** pi starts with `--offline` (no install report, version check,
+model catalog or tool download), `PI_TELEMETRY=0`, and without context files, skills,
+prompt templates, MCP or any extension but NAW's tool gate: otherwise pi would put every `AGENTS.md` and
+`CLAUDE.md` from the working folder up to `/`, and the person's skills, into each
+request. Its HOME, settings and sessions are NAW's own folders under the backend's data
+folder, and the macOS sandbox keeps the person's `~/.pi`, `~/.claude`, `~/.codex`,
+`~/.agents`, `~/.dsh`, `~/.dsh-tui`, `~/CLAUDE.md` and `~/AGENTS.md` unreadable.
+
+**Network.** As for the DSH TUI: the sandbox lets the pi process tree connect only to
+NAW's loopback egress proxy, which passes only `api.deepseek.com:443`. Any other
+connection by any process of the session (a command that downloads, for instance) is
+refused, recorded, and stops the session. Name lookups are refused as well.
+
+A command the person allows still runs in the sandbox, so the profile also has rules
+against the ways a command could reach the network through a program outside the sandbox: Apple Events,
+LaunchServices (through which `open` hands a URL to the browser), background URL
+sessions, new launchd jobs, and running `open`, `osascript`, `automator`, `shortcuts` and
+`launchctl`. Writes are allowed only in the working folder, pi's own folder, the
+temporary folders and `/dev`. The rest of NAW's data folder, the pi runtime,
+`~/Library` (launch agents included), `~/.ssh`, `~/.config` and the shell startup files
+are refused, so a command cannot leave something there that a program outside the
+sandbox later runs; hard links to files there are refused as well. These refusals are
+quiet: the command fails and the session goes on.
+
+`scripts/pi-tui-sandbox-check.cjs` tests on this machine, each against a control without
+the sandbox: the writes and hard links, the five programs at their system paths, each
+refused service lookup, other connections and name lookups. It also shows that macOS
+stops copies of the five programs, sandbox or not. Two rules are not shown to have an
+effect of their own. Apple Events: a test needs another app to receive one, and macOS
+would ask the person first. launchd jobs: `launchctl` creates no job from the sandbox
+even under a profile without that rule, and a program other than `launchctl` that
+submits one was not tried.
+
+What stays open: other programs later use what pi writes in the working folder, or in
+the temporary folders every program shares, as it is (a git hook, a project script, a
+rule file another agent reads). macOS services that act for a process, other than those
+named above, were not each audited. A working folder inside `~/Library` or NAW's data
+folder is read-only for pi.
+
+**The key.** pi uses the DSH TUI's Keychain item (`NAW DSH TUI DeepSeek API key`,
+account `deepseek`). NAW reads it at each start and hands it only to the session's
+environment: it is not on a command line, and the offline check finds it in no file of
+pi's folders. A command pi runs can read that environment (`env`, for instance); its
+output then sits in pi's session file and goes to DeepSeek with the next request.
+
+**Installing.** `scripts/install-pi-tui.cjs` downloads the 123 packages of the
+committed lockfile from `registry.npmjs.org` with npm, using no npm configuration of the
+person's and running no package scripts. npm sends its usual request headers, whose
+user agent names the npm and Node.js versions, the operating system and architecture.
+
+**Approvals.** pi itself has no per-tool approvals, so NAW loads its own gate
+(`app/pi-confirm.mjs`) into pi. Each command, file write, edit, read or search outside
+the working folder, and call of any other tool, waits in pi's terminal for the person
+to choose Yes; "No" is the first choice, so a stray Enter declines. A declined call does
+not run, and pi tells the model the person did not allow it and ends the turn. Reading,
+listing and searching inside the working folder (by the real path, so a link out of it
+asks) run without asking. Control and text-direction characters in the dialog are shown
+as escapes, so it shows what runs.
+
+pi starts without its built-in tools and the gate turns them on: a gate that fails to
+load stops pi, and one that loads without turning them on leaves the model none. NAW
+writes the gate anew at each start into a folder the sandbox lets nothing write, replace,
+remove or move, and turns off jiti's compiled-file cache, which would otherwise sit in a
+folder the session can write. NAW offers no permission choice for pi; Yes allows one call.
+
+**Not audited.** DeepSeek's handling and retention follow DeepSeek's own terms; this
+section discloses a recipient and is not a claim that the content stays private.
