@@ -116,4 +116,19 @@ async function connectService(dataDir, owner, { page = true } = {}) {
   });
   return client;
 }
-module.exports = { ServiceClient, connectService };
+// Each backend answers with its whole state, up to tens of megabytes: a few at a time, so that this process never
+// parses them all at once. The first failure is thrown without waiting for the ones in flight, and no more are started.
+const BACKENDS_AT_ONCE = 4;
+async function eachBackend(keys, run, limit = BACKENDS_AT_ONCE) {
+  const results = new Array(keys.length); let next = 0, stopped = false;
+  const worker = async () => {
+    while (!stopped && next < keys.length) {
+      const index = next++;
+      results[index] = await run(keys[index]);
+    }
+  };
+  try { await Promise.all(Array.from({ length: Math.min(limit, keys.length) }, worker)); }
+  catch (error) { stopped = true; throw error; }
+  return results;
+}
+module.exports = { ServiceClient, connectService, eachBackend };

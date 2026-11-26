@@ -27,7 +27,7 @@ function dispatcher(t, clock, sessions, { steward, wake, compactions, contexts =
     call: async (method, ...args) => {
       if (method === 'dispatch') {
         const target = sessions.find(s => s.id === args[0]);
-        sends.push({ at: clock.now, to: args[0], text: args[1], itemId: args[3] });
+        sends.push({ at: clock.now, to: args[0], text: args[1], itemId: args[3]?.itemId ?? args[3] });
         target.state = 'working'; target.turnEnds = ROTATION.test(args[1]) ? Infinity : clock.now + TURN_MS;
         return 'receipt-' + sends.length;
       }
@@ -94,11 +94,14 @@ test('below the compaction limit the wake is not held', async t => {
   assert.ok(first && !ROTATION.test(first.text) && first.at - NOW < 60000, 'woken within the first minute, as before');
 });
 
-test('a draft in the butler\'s input still holds both the rotation and the wake', async t => {
+test('a draft in the butler\'s input still holds the rotation, and the wake goes beside it', async t => {
   const f = setup(t);
   f.sessions[0].liveDraft = 'x';
   await run(f, 10 * 60000);
-  assert.deepEqual(f.sends, []);
+  assert.equal(f.sends.filter(s => ROTATION.test(s.text)).length, 0, 'not rotated with a draft (R207)');
+  const first = f.sends.find(s => s.to === OLD.sessionId);
+  assert.ok(first && first.at - NOW < 60000, 'woken within the first minute, beside the draft');
+  assert.equal(f.sessions[0].liveDraft, 'x');
 });
 
 // R221: a butler over the size a quiet rotation needs. Only the 45 minutes make that a reason, so until then it holds no wake.

@@ -26,7 +26,7 @@ function fixture(t, sessions) {
     call: async (method, ...args) => {
       if (method === 'initial') return client.snapshot();
       if (method !== 'dispatch') return undefined;
-      sent.push({ id: args[0], kind: (args[3] || '').split(':')[0], at: clock.now });
+      sent.push({ id: args[0], kind: String(args[3]?.itemId ?? args[3] ?? '').split(':')[0], at: clock.now });
       const s = sessions.find(x => x.id === args[0]); s.state = 'working'; s.lastActivityAt = clock.now;
       return `tag-${sent.length}`;
     } });

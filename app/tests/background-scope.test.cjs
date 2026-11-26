@@ -93,3 +93,17 @@ test('an agent whose spaces are all it may be shown is shown those and itself, a
   const none = conversationSnapshot(source, actor, null, 'room', { roomIds: [], metadataOnly: false, limit: [] });
   assert.deepEqual([none.rooms, none.room, none.sessions.map(s => s.id), none.spaceManagers, none.rotationChains], [[], undefined, ['agent'], {}, []]);
 });
+
+// R229 / 308: all events of every space were most of an agent's answer, and Claude Code drops one above 4 MiB.
+test("an agent is told each space's newest 50 events and how many it was not told; the source keeps all", () => {
+  const source = fixture(), many = Array.from({ length: 120 }, (_, n) => ({ id: 'e' + n, text: 'event ' + n }));
+  source.rooms[0].events = many;
+  const room = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: false }).rooms[0];
+  assert.deepEqual(room.events, many.slice(-50)); assert.equal(room.eventsOmitted, 70);
+  assert.equal(source.rooms[0].events.length, 120);
+  source.rooms[0].events = many.slice(0, 50);
+  const few = conversationSnapshot(source, actor, null, 'room', { roomIds: [A], metadataOnly: false }).rooms[0];
+  assert.equal(few.events.length, 50); assert.equal(Object.hasOwn(few, 'eventsOmitted'), false);
+  const outside = conversationSnapshot(source, actor, null, 'room', { roomIds: [], metadataOnly: false }).rooms[0];
+  assert.equal(outside.events, undefined); assert.equal(outside.eventsOmitted, undefined);
+});

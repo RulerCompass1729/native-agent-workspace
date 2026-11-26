@@ -8,7 +8,7 @@ process.once('message',input=>{
   const store=persistent?new(require('../../mobile-pairing-store.cjs').PairingStore)(profile,{adapter}):null;
   const actor='synthetic-person',host='demo.example.ts.net',origin='https://'+host+':10000';
   const status={BackendState:'Running',Self:{DNSName:host+'.',UserID:7},User:{'7':{LoginName:actor}}},serve={TCP:{},Web:{},AllowFunnel:{}};
-  for(const [port,target] of [[443,8001],[8443,8780],[10000,48765]]){serve.TCP[port]={HTTPS:true};serve.Web[host+':'+port]={Handlers:{'/':{Proxy:'http://127.0.0.1:'+target}}};}
+  for(const [port,target] of [[443,7301],[8443,7303],[10000,48765]]){serve.TCP[port]={HTTPS:true};serve.Web[host+':'+port]={Handlers:{'/':{Proxy:'http://127.0.0.1:'+target}}};}
   const carrier=persistent?require('../../mobile-carrier.cjs'):null;
   const binding=carrier?.binding?carrier.binding(carrier.inspect(status,serve,{sharedHostConfirmed:true})):null;
   const details={endpoint:{origin,actor,port:48765,binding},all:false,workspace:null,consent:null,consentView:false};

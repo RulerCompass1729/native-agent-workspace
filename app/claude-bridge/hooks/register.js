@@ -654,6 +654,27 @@ async function request($, route, body, binding) {
   return JSON.parse(response.text);
 }
 
+// Why a request has no usable answer, and what is known of the work it asked for. NAW answers 4xx only from its checks
+// before any work (claude-submit.cjs); an answer too large to read is still an answer. The other kinds carry only Claude
+// Code's text ($.http.fetch, 2.1.332).
+function unanswered(error) {
+  if (error?.status >= 400 && error.status < 500) return { reason: 'http', ran: false, said: `HTTP ${error.status}：NAW 在执行前的检查里拒绝了` };
+  const text = String(error?.message || error);
+  if (/no complete answer within \d+ms/u.test(text)) return { reason: 'timeout', said: '超时：NAW 没有在时限内答完' };
+  if (/over the \d+-byte limit/u.test(text)) return { reason: 'too-large', said: '过大：NAW 答了，但答复超过 Claude Code 能收的大小，没有送到' };
+  return { reason: 'no-answer', said: `${error?.status ? `HTTP ${error.status}：` : ''}没有收到 NAW 完整的答复` };
+}
+function unansweredControl(error, args) {
+  const { ran, said, reason } = unanswered(error), outcome = args.action !== 'invoke' ? '这次只是读，什么都没改。'
+    : ran === false ? '没执行。' : `不知道执行了没有：用 receipt 读 ${args.operation_id}，没有这条回执就是没执行。不要重发。`;
+  return { result: JSON.stringify({ state: ran === false ? 'not-executed' : 'unconfirmed', reason, retry: false, message: `${said}。${outcome}` }), isError: true };
+}
+function unansweredMessage(error) {
+  const { ran, said, reason } = unanswered(error);
+  return { result: JSON.stringify({ status: ran === false ? 'not-sent' : 'unconfirmed', reason, retry: false,
+    message: `${said}。${ran === false ? '没执行：没有登记转交。' : '不知道登记了没有，这个工具没有回执可读。不要重发，请让真人或收件人核对。'}` }), isError: true };
+}
+
 async function listen($, ownGeneration) {
   if (stopped || generation !== ownGeneration) return;
   try {
@@ -950,7 +971,7 @@ export function register(on) {
     try {
       const result = await request($, '/background-control', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
       return { result: JSON.stringify(result), isError: !['complete', 'received', 'awaiting-native'].includes(result.state) };
-    } catch { return { deny: 'Background operation result is unconfirmed. Read its saved receipt; do not resend.' }; }
+    } catch (error) { return unansweredControl(error, args); }
   });
   for (const [name, keys] of Object.entries(operatorSchemas)) {
     const tool = `mcp__native_workspace__${name}`;
@@ -1004,7 +1025,7 @@ export function register(on) {
     try {
       const result = await request($, '/addressed-message', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
       return { result: JSON.stringify(result), isError: result.status !== 'staged' };
-    } catch { return { deny: '本地接收结果未确认；不要重试，请让真人核对。' }; }
+    } catch (error) { return unansweredMessage(error); }
   });
   on('classic.PostModelSwitch', async ($, e, next) => {
     const binding = rootBinding, ownGeneration = generation;

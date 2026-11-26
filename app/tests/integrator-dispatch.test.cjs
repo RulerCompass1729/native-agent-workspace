@@ -29,11 +29,12 @@ function fixture(t, options = {}) {
   client.snapshot = () => structuredClone(client.state); client.refresh = async () => { f.refreshes += 1; return client.snapshot(); }; client.close = () => {};
   client.route = () => ({ client, state: { capabilities: [CAPABILITY] } });
   // The backend's own NAW input: it takes the message, and the session starts to work.
-  client.call = async (method, id, text, nativeId, itemId) => {
+  client.call = async (method, id, text, nativeId, packet) => {
     // What the space record asks of a backend while it archives a session; nothing here sends a message.
     if (method === 'initial') return client.snapshot();
     if (['pause', 'resumeRoom'].includes(method)) return undefined;
     assert.equal(method, 'dispatch');
+    const itemId = typeof packet === 'object' ? packet.itemId : packet;
     const target = client.state.sessions.find(candidate => candidate.id === id);
     assert.equal(target.nativeId, nativeId);
     const tag = `tag-${f.calls.length + 1}`;

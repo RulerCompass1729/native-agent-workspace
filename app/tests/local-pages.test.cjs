@@ -12,7 +12,7 @@ const tempDir = t => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-lo
 const declare = (dir, pages) => fs.writeFileSync(path.join(dir, FILE), typeof pages === 'string' ? pages : JSON.stringify({ pages }));
 const key = fn => { try { fn(); } catch (error) { return error.uiMessage?.key; } return null; };
 const rejection = async promise => { try { await promise; } catch (error) { return error.uiMessage?.key; } return null; };
-const board = { id: 'board', title: 'Board', url: 'http://127.0.0.1:8001/' };
+const board = { id: 'board', title: 'Board', url: 'http://127.0.0.1:7301/' };
 
 function electron() {
   const created = [], partitions = new Map(), external = [];
@@ -96,11 +96,11 @@ test('declarations accept only http on 127.0.0.1 or localhost', t => {
   declare(dir, [board, { id: 'b.2_x-y', title: ' Other ', url: 'http://localhost:9000/start?x=1' }]);
   const read = readDeclarations(dir, uiError);
   assert.deepEqual([...read.values()], [
-    { id: 'board', title: 'Board', url: 'http://127.0.0.1:8001/', origin: 'http://127.0.0.1:8001' },
+    { id: 'board', title: 'Board', url: 'http://127.0.0.1:7301/', origin: 'http://127.0.0.1:7301' },
     { id: 'b.2_x-y', title: 'Other', url: 'http://localhost:9000/start?x=1', origin: 'http://localhost:9000' },
   ]);
-  for (const url of ['https://127.0.0.1:8001/', 'http://example.com/', 'http://127.0.0.2/', 'http://user:pw@localhost/', 'http://localhost.evil.example/',
-    'http://[::1]:8000/', 'http://0.0.0.0:8001/', 'file:///etc/hosts', 'javascript:alert(1)', 'ftp://localhost/', 'ws://localhost/', '', 7, undefined]) {
+  for (const url of ['https://127.0.0.1:7301/', 'http://example.com/', 'http://127.0.0.2/', 'http://user:pw@localhost/', 'http://localhost.evil.example/',
+    'http://[::1]:7300/', 'http://0.0.0.0:7301/', 'file:///etc/hosts', 'javascript:alert(1)', 'ftp://localhost/', 'ws://localhost/', '', 7, undefined]) {
     declare(dir, [{ ...board, url }]);
     assert.equal(key(() => readDeclarations(dir, uiError)), 'error.localPage.entryUrl', String(url));
   }
@@ -122,44 +122,44 @@ test('declaration problems name the entry or the file', t => {
 });
 
 test('a plugin path stays under the declared origin; a raw address is refused', () => {
-  const page = { ...board, origin: 'http://127.0.0.1:8001' };
-  assert.equal(pageUrl(page, undefined, uiError), 'http://127.0.0.1:8001/');
-  assert.equal(pageUrl(page, '/?tab=research', uiError), 'http://127.0.0.1:8001/?tab=research');
-  assert.equal(pageUrl(page, '/a/../b?x=1#y', uiError), 'http://127.0.0.1:8001/b?x=1#y');
-  for (const requested of ['http://evil.example/', 'https://127.0.0.1:8001/', 'http://127.0.0.1:8002/', '//evil.example/x', '/\\evil.example', '\\\\evil.example',
+  const page = { ...board, origin: 'http://127.0.0.1:7301' };
+  assert.equal(pageUrl(page, undefined, uiError), 'http://127.0.0.1:7301/');
+  assert.equal(pageUrl(page, '/?view=list', uiError), 'http://127.0.0.1:7301/?view=list');
+  assert.equal(pageUrl(page, '/a/../b?x=1#y', uiError), 'http://127.0.0.1:7301/b?x=1#y');
+  for (const requested of ['http://evil.example/', 'https://127.0.0.1:7301/', 'http://127.0.0.1:7302/', '//evil.example/x', '/\\evil.example', '\\\\evil.example',
     'javascript:alert(1)', 'data:text/html,x', '?tab=x', 'tab', '/\nx', 42, {}, '/' + 'x'.repeat(2048)]) {
     assert.equal(key(() => pageUrl(page, requested, uiError)), 'error.localPage.path', String(requested));
   }
 });
 
 test('the window partition reaches only the declared origin', () => {
-  const origin = 'http://127.0.0.1:8001';
-  for (const url of ['http://127.0.0.1:8001/', 'http://127.0.0.1:8001/api?x=1', 'ws://127.0.0.1:8001/socket', 'blob:http://127.0.0.1:8001/1234', 'data:image/png;base64,AA=='])
+  const origin = 'http://127.0.0.1:7301';
+  for (const url of ['http://127.0.0.1:7301/', 'http://127.0.0.1:7301/api?x=1', 'ws://127.0.0.1:7301/socket', 'blob:http://127.0.0.1:7301/1234', 'data:image/png;base64,AA=='])
     assert.equal(allowedRequest(origin, url), true, url);
-  for (const url of ['http://127.0.0.1:8002/', 'http://localhost:8001/', 'https://127.0.0.1:8001/', 'wss://127.0.0.1:8001/', 'ws://127.0.0.1:8002/',
+  for (const url of ['http://127.0.0.1:7302/', 'http://localhost:7301/', 'https://127.0.0.1:7301/', 'wss://127.0.0.1:7301/', 'ws://127.0.0.1:7302/',
     'http://example.com/', 'file:///etc/hosts', 'blob:http://example.com/1', 'not a url'])
     assert.equal(allowedRequest(origin, url), false, url);
-  assert.equal(allowedRequest(undefined, 'http://127.0.0.1:8001/'), false);
+  assert.equal(allowedRequest(undefined, 'http://127.0.0.1:7301/'), false);
 });
 
 test('opening a page makes one isolated window without the workspace bridge', async t => {
   const { fake, local } = pages(t);
   const result = await local.open('board', '/?tab=a');
-  assert.deepEqual(result, { id: 'board', url: 'http://127.0.0.1:8001/?tab=a', reused: false });
+  assert.deepEqual(result, { id: 'board', url: 'http://127.0.0.1:7301/?tab=a', reused: false });
   assert.equal(fake.created.length, 1);
   const [win] = fake.created, prefs = win.options.webPreferences;
   assert.equal(prefs.partition, 'persist:naw-local-page-board');
   assert.equal('preload' in prefs, false);
   assert.equal(prefs.sandbox, true); assert.equal(prefs.contextIsolation, true); assert.equal(prefs.nodeIntegration, false); assert.equal(prefs.webviewTag, false);
   assert.equal(win.options.title, 'Board');
-  assert.deepEqual(win.webContents.loads, ['http://127.0.0.1:8001/?tab=a']);
+  assert.deepEqual(win.webContents.loads, ['http://127.0.0.1:7301/?tab=a']);
   assert.equal(win.shown, 1);
   assert.deepEqual([...fake.partitions.keys()], ['persist:naw-local-page-board']);
   const ses = fake.partitions.get('persist:naw-local-page-board');
   for (const permission of ['media', 'geolocation', 'notifications', 'clipboard-read']) { let granted; ses.request(null, permission, value => { granted = value; }); assert.equal(granted, false); }
   assert.equal(ses.check(), false); assert.equal(ses.device(), false);
   const filter = url => { let reply; ses.filter({ url }, value => { reply = value; }); return reply.cancel; };
-  assert.equal(filter('http://127.0.0.1:8001/api'), false);
+  assert.equal(filter('http://127.0.0.1:7301/api'), false);
   assert.equal(filter('http://127.0.0.1:9999/'), true);
   assert.equal(filter('https://example.com/x.js'), true);
 });
@@ -180,24 +180,24 @@ test('other origins cannot be navigated to; new windows go to the system browser
   await local.open('board');
   const wc = fake.created[0].webContents;
   const navigate = url => { let prevented = false; wc.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
-  assert.equal(navigate('http://127.0.0.1:8001/?tab=b'), false);
-  for (const url of ['http://example.com/', 'http://127.0.0.1:8002/', 'file:///etc/hosts', 'https://127.0.0.1:8001/']) assert.equal(navigate(url), true, url);
+  assert.equal(navigate('http://127.0.0.1:7301/?tab=b'), false);
+  for (const url of ['http://example.com/', 'http://127.0.0.1:7302/', 'file:///etc/hosts', 'https://127.0.0.1:7301/']) assert.equal(navigate(url), true, url);
   let attached = false; wc.emit('will-attach-webview', { preventDefault: () => { attached = true; } }); assert.equal(attached, true);
   assert.deepEqual(wc.openHandler({ url: 'https://example.com/doc' }), { action: 'deny' });
-  assert.deepEqual(wc.openHandler({ url: 'http://127.0.0.1:8001/other' }), { action: 'deny' });
+  assert.deepEqual(wc.openHandler({ url: 'http://127.0.0.1:7301/other' }), { action: 'deny' });
   assert.deepEqual(wc.openHandler({ url: 'file:///etc/hosts' }), { action: 'deny' });
   assert.deepEqual(wc.openHandler({ url: 'javascript:alert(1)' }), { action: 'deny' });
-  assert.deepEqual(fake.external, ['https://example.com/doc', 'http://127.0.0.1:8001/other']);
+  assert.deepEqual(fake.external, ['https://example.com/doc', 'http://127.0.0.1:7301/other']);
   assert.equal(fake.created.length, 1);
 });
 
 test('the same id focuses its window and moves it to the new path', async t => {
   const { fake, local } = pages(t);
   await local.open('board', '/?tab=a');
-  assert.deepEqual(await local.open('board', '/?tab=b'), { id: 'board', url: 'http://127.0.0.1:8001/?tab=b', reused: true });
-  assert.deepEqual(await local.open('board'), { id: 'board', url: 'http://127.0.0.1:8001/', reused: true });
+  assert.deepEqual(await local.open('board', '/?tab=b'), { id: 'board', url: 'http://127.0.0.1:7301/?tab=b', reused: true });
+  assert.deepEqual(await local.open('board'), { id: 'board', url: 'http://127.0.0.1:7301/', reused: true });
   assert.equal(fake.created.length, 1);
-  assert.deepEqual(fake.created[0].webContents.loads, ['http://127.0.0.1:8001/?tab=a', 'http://127.0.0.1:8001/?tab=b']);
+  assert.deepEqual(fake.created[0].webContents.loads, ['http://127.0.0.1:7301/?tab=a', 'http://127.0.0.1:7301/?tab=b']);
   assert.equal(fake.created[0].shown, 3);
 });
 
@@ -216,24 +216,24 @@ test('a page that cannot load says so in the window', async t => {
   const { fake, local } = pages(t);
   await local.open('board', '/?tab=a');
   const wc = fake.created[0].webContents;
-  wc.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:8001/?tab=a', false);
-  wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://127.0.0.1:8001/?tab=a', true);
+  wc.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:7301/?tab=a', false);
+  wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://127.0.0.1:7301/?tab=a', true);
   assert.equal(wc.loads.length, 1);
-  wc.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:8001/?tab=a', true);
+  wc.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://127.0.0.1:7301/?tab=a', true);
   assert.equal(wc.loads.length, 2);
   const shown = wc.loads[1];
   assert.match(shown, /^data:text\/html;charset=utf-8,/u);
   const html = decodeURIComponent(shown.slice(shown.indexOf(',') + 1));
   assert.match(html, /「Board」打不开/u);
-  assert.match(html, /http:\/\/127\.0\.0\.1:8001 没有正常响应（ERR_CONNECTION_REFUSED）/u);
-  assert.match(html, /<a href="http:\/\/127\.0\.0\.1:8001\/\?tab=a">重试<\/a>/u);
+  assert.match(html, /http:\/\/127\.0\.0\.1:7301 没有正常响应（ERR_CONNECTION_REFUSED）/u);
+  assert.match(html, /<a href="http:\/\/127\.0\.0\.1:7301\/\?tab=a">重试<\/a>/u);
   assert.match(html, /default-src 'none'/u);
   assert.doesNotMatch(html, /<script/u);
   wc.emit('did-fail-load', {}, -2, 'ERR_FAILED', shown, true);
   assert.equal(wc.loads.length, 2);
   // A blocked jump to another origin retries the declared page, never the other origin.
   wc.emit('did-fail-load', {}, -20, 'ERR_BLOCKED_BY_CLIENT', 'http://example.com/', true);
-  assert.match(decodeURIComponent(wc.loads[2]), /<a href="http:\/\/127\.0\.0\.1:8001\/">/u);
+  assert.match(decodeURIComponent(wc.loads[2]), /<a href="http:\/\/127\.0\.0\.1:7301\/">/u);
 });
 
 test('window size and position are remembered per page', async t => {
@@ -273,7 +273,7 @@ test('a declaration may ask for a tab; anything but true or false is refused', t
   const dir = tempDir(t);
   declare(dir, [tabPage, { ...other, tab: false }]);
   assert.deepEqual([...readDeclarations(dir, uiError).values()], [
-    { id: 'board', title: 'Board', url: 'http://127.0.0.1:8001/', origin: 'http://127.0.0.1:8001', tab: true },
+    { id: 'board', title: 'Board', url: 'http://127.0.0.1:7301/', origin: 'http://127.0.0.1:7301', tab: true },
     { id: 'other', title: 'Other', url: 'http://localhost:9000/', origin: 'http://localhost:9000' },
   ]);
   for (const tab of ['true', 1, null, {}]) {
@@ -300,7 +300,7 @@ test('a tab page opens in the asking window under the tab strip, isolated like a
   const { fake, local, pushed } = pages(t, [tabPage, other]), w = owner();
   assert.deepEqual(local.tabs(w), { tabs: [{ id: 'board', title: 'Board' }], active: null });
   const result = await local.open('board', undefined, { owner: w });
-  assert.deepEqual(result, { id: 'board', url: 'http://127.0.0.1:8001/', reused: false, tab: true });
+  assert.deepEqual(result, { id: 'board', url: 'http://127.0.0.1:7301/', reused: false, tab: true });
   assert.equal(fake.created.length, 0, 'No window is opened for a tab page');
   assert.equal(fake.views.length, 1);
   const [view] = fake.views, prefs = view.options.webPreferences;
@@ -308,21 +308,21 @@ test('a tab page opens in the asking window under the tab strip, isolated like a
   assert.equal(prefs.partition, 'persist:naw-local-page-board');
   assert.equal('preload' in prefs, false);
   assert.equal(prefs.sandbox, true); assert.equal(prefs.contextIsolation, true); assert.equal(prefs.nodeIntegration, false); assert.equal(prefs.webviewTag, false);
-  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/']);
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:7301/']);
   assert.deepEqual(view.bounds, { x: 0, y: 30, width: 1240, height: 792 });
   assert.equal(view.visible, true);
   assert.equal(view.webContents.focused, 1);
   assert.deepEqual(pushed.at(-1), { to: w, state: { tabs: [{ id: 'board', title: 'Board' }], active: 'board' } });
   const wc = view.webContents;
   const navigate = url => { let prevented = false; wc.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
-  assert.equal(navigate('http://127.0.0.1:8001/?x=1'), false);
+  assert.equal(navigate('http://127.0.0.1:7301/?x=1'), false);
   assert.equal(navigate('http://example.com/'), true);
   let attached = false; wc.emit('will-attach-webview', { preventDefault: () => { attached = true; } }); assert.equal(attached, true);
   assert.deepEqual(wc.openHandler({ url: 'https://example.com/doc' }), { action: 'deny' });
   assert.deepEqual(fake.external, ['https://example.com/doc']);
   const ses = fake.partitions.get('persist:naw-local-page-board');
   const filter = url => { let reply; ses.filter({ url }, value => { reply = value; }); return reply.cancel; };
-  assert.equal(filter('http://127.0.0.1:8001/api'), false);
+  assert.equal(filter('http://127.0.0.1:7301/api'), false);
   assert.equal(filter('http://localhost:9000/'), true);
 });
 
@@ -338,15 +338,15 @@ test('switching to NAW and back within 20 minutes keeps the page loaded', async 
   local.show(w, 'board');
   assert.equal(view.visible, true);
   assert.equal(fake.views.length, 1);
-  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/']);
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:7301/']);
   assert.equal(view.webContents.reloads, 0);
   assert.equal(timers.pending, 0, 'A shown page has no release timer');
   local.show(w, null);
   timers.advance(10 * MINUTE);
-  assert.deepEqual(await local.open('board', undefined, { owner: w }), { id: 'board', url: 'http://127.0.0.1:8001/', reused: true, tab: true });
-  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/'], 'Opening without a path only switches');
+  assert.deepEqual(await local.open('board', undefined, { owner: w }), { id: 'board', url: 'http://127.0.0.1:7301/', reused: true, tab: true });
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:7301/'], 'Opening without a path only switches');
   await local.open('board', '/?tab=b', { owner: w });
-  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:8001/', 'http://127.0.0.1:8001/?tab=b'], 'A plugin path still moves the page');
+  assert.deepEqual(view.webContents.loads, ['http://127.0.0.1:7301/', 'http://127.0.0.1:7301/?tab=b'], 'A plugin path still moves the page');
 });
 
 test('a page hidden for 20 minutes is released and loads again when shown', async t => {
@@ -362,7 +362,7 @@ test('a page hidden for 20 minutes is released and loads again when shown', asyn
   assert.equal(fake.views.length, 2);
   const [, second] = fake.views;
   assert.deepEqual(w.win.contentView.children, [second]);
-  assert.deepEqual(second.webContents.loads, ['http://127.0.0.1:8001/?tab=a'], 'It reloads where the person left it');
+  assert.deepEqual(second.webContents.loads, ['http://127.0.0.1:7301/?tab=a'], 'It reloads where the person left it');
 });
 
 test('the reload button reloads the shown page', async t => {
@@ -448,9 +448,9 @@ test('a tab page whose declared address changed loads the new one when shown aga
   const { dataDir, fake, local, timers } = pages(t, [tabPage]), w = owner();
   await local.open('board', undefined, { owner: w });
   local.show(w, null);
-  declare(dataDir, [{ ...tabPage, url: 'http://127.0.0.1:8002/' }]);
+  declare(dataDir, [{ ...tabPage, url: 'http://127.0.0.1:7302/' }]);
   local.show(w, 'board');
-  assert.deepEqual(fake.views[0].webContents.loads, ['http://127.0.0.1:8001/', 'http://127.0.0.1:8002/']);
+  assert.deepEqual(fake.views[0].webContents.loads, ['http://127.0.0.1:7301/', 'http://127.0.0.1:7302/']);
   local.show(w, 'board');
   assert.equal(fake.views[0].webContents.loads.length, 2, 'the same address is not loaded again');
   local.show(w, null); timers.advance(20 * 60 * 1000);

@@ -20,7 +20,7 @@ function fixture(t) {
       if (method === 'invalidateRotation') return w.invalidateRotation(...args);
       if (method === 'completeRotation') return w.completeRotation(...args);
       if (method === 'releaseRotation') return w.releaseRotation(...args);
-      if (method === 'dispatch') return w.send(args[0], args[1], 'naw-dispatcher', null, null, null, null, null, null, null, { itemId: args[3], control: args[4] });
+      if (method === 'dispatch') return w.send(args[0], args[1], 'naw-dispatcher', null, null, null, null, null, null, null, (typeof args[3] === 'object' ? args[3] : { itemId: args[3], control: args[4] }));
       throw Error('Unexpected control call: ' + method);
     } };
   const dispatcher = new rules.QueueDispatcher({ dataDir: dir, roomState: room, clients: () => client, now: () => NOW, settleMs: 0, tickMs: 3600000 });

@@ -172,8 +172,14 @@ async function main() {
   record('real MCP create, join and archive execute without cards; durable audit lines and standing receipts');
   await revealDefaultSpace(page); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await shot('zh-audit-1240', 1240); await shot('zh-audit-850', 850);
+  // Rows written in Chinese read in the reader's language; chosen names stay (ext-standing-audit-en-20261125).
+  const auditRows = () => page.locator('#activity-stream [data-record-id]').evaluateAll(rows => rows.map(row => row.textContent).join('\n'));
+  assert.match(await auditRows(), /归档会话[\s\S]*撤销：/); assert.doesNotMatch(await auditRows(), /Standing permission|请求 create\b/);
   await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
   await until(async () => await page.locator('#setup-title').innerText() === 'Settings', 'English accepted'); await page.locator('#close-setup').click();
+  await until(async () => /Archive session/.test(await auditRows()), 'English audit rows');
+  assert.doesNotMatch(await auditRows(), /归档会话|新建会话|加入或移动到空间|原生默认|常设许可|撤销|requested create\b/);
+  assert.match(await auditRows(), /新开发成员/); record('audit rows written in Chinese read in English after switching; chosen names stay');
   await shot('en-audit-850', 850);
   await page.locator(`#steward-slot .session-link[data-session-id="${source}"]`).click(); await open();
   await shot('en-on-1240', 1240); await shot('en-on-850', 850); await toggle.uncheck();
