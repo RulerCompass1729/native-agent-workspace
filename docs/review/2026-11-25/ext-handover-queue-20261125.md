@@ -1,0 +1,16 @@
+## A handoff is not undone by the person using the session, and what they send meanwhile reaches the successor (lane/ext-handover-queue-20261125)
+
+The person (2026-11-25): 「每次 agent hand over 给继任的时候感觉会被打断…否则一直 hand over 不出去，可以设置一个 cached queue…在一个 agent 要 hand over 的时候把这个queue 启用，等 handover 之后把 queue 的里的内容发给继任，然后清空这个 queue」, 「hand over的时候要迅速，否则会被一直打断」, 「但是 hand over 的过程中发过来的消息不能丢，这就是我提的建议」, 「如果有改进的地方你就改进」.
+
+Found in the daily rotation log: the butler's rotation was undone as person-active twice in a row before the third went through. A rotation that came due (context, compaction) was undone by any click, view, key or message the person made in the old session while it wrote its handoff, and was asked again only after two or thirty quiet minutes. One asked for by hand (R207) already went on through those.
+
+Change:
+- `queue-dispatch.cjs` `interrupted()`: once its handoff is asked for, a rotation that came due goes on as one asked for by hand. Only a stop (Esc, an interrupt, a takeover from another window: `noteStop`, now recorded for both) or another native session ends it. A stopped one that came due is said to be paused (`deferred`), not undone, and is asked again once quiet, as before. A handoff turn cut off where NAW saw no stop is no handoff for both kinds (`cutTurn`); before, one that came due took the half it had written.
+- Unchanged after the successor has the handoff: whether the old session was in use (`confirmedGate` keeps `untouched()` for one that came due), and the old session's quiet wait before it is asked what changed and ended (R206).
+- Held messages: what the person sends from their own window (`send`, `queue`, `steer`, `main.cjs`) to the old session while its handoff is written, or to the successor before it has the handoff, is not sent. It is saved with that rotation in `queue-dispatch.json` (`held`, read back by `readHeld`). Once the successor confirms the handoff, it goes there as one message, the texts in the order sent; it goes the way the composer would send it (idle `send`, working `queue` or `steer`), from the person's window. If the rotation does not go ahead, it goes back to the old session. If the receiver is being rotated itself, it waits with that rotation. A send whose answer was lost counts as done once the words are in that session; otherwise it is tried again after 30 s. Not held: native commands, anything after the person's stop, more than 20, a session waiting for its provider. The window says so (`toast.rotationHeld`, zh and en).
+
+Not covered: keys typed in the native terminal, the phone, and @ messages in a space still reach the old session, and the supplement step tells the successor about them (R207).
+
+Tests (`app/tests/queue-dispatch.test.cjs`): new ones for a look/click/keys not stopping one that came due, the cut turn, held messages to the successor (queued while it works), back to the old session after a stop, and reading `held` back. Red on `905d5c44`: the look/click test (no successor made) and the cut-turn test (the half handoff was taken). Updated to the new behavior: the two pause tests now pause on Esc; the two B2 trust-wait tests and the task-notification test no longer expect person-active.
+
+Undo: drop this lane's commit.

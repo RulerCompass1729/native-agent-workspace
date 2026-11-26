@@ -2901,7 +2901,9 @@ async function boot() {
   register('landing', c => { if (c.background || landingOwner === null || c.view?.owner !== landingOwner) return false; landingOwner = null; return true; });
   for (const method of ['send', 'queue', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
-    const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
+    // The person's words while this session's handoff is written wait for it (queue-dispatch.cjs holdMessage).
+    const held = isCurrentHumanContext(c) ? queueDispatcher?.holdMessage(id, text) : null;
+    const result = held || await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
     if (!result?.contextChanged && acceptSentDraft(c.view, id, draft, text)) {

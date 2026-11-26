@@ -374,6 +374,8 @@ async function confirmSearchSend() {
     reportShown();
     const receipt = await sendFollowStart(follow, s, pick, text, SEARCH_SEND_REVISION);
     if (searchSendFollow !== follow) return;
+    // Kept for the session that takes over (holdMessage): no row of it is coming here.
+    if (receipt?.held) { searchSendFollow = null; closeSearchSendDialogs(); toastMessage('toast.rotationHeld'); return; }
     sendFollowTag(follow, receipt);
     if (follow.phase === 'dialog') showSearchSendReceipt(follow); else updateSearchSendReceipt(follow);
   } catch (error) {

@@ -573,6 +573,7 @@ async function submitSession(binding) {
   }
   const fresh = state.sessions.find(s => s.id === id);
   if (!receipt?.contextChanged && fresh?.owner === owner && fresh?.nativeId === nativeId && !fresh.nativeContextPending && draftRevisions.get(id) === revision && binding.ui.input.value === text) binding.ui.setValue('');
+  if (receipt?.held) toastMessage('toast.rotationHeld');
 }
 async function sessionComposerAction(binding) {
   if (!composerCurrent(binding) || binding.ui.send.disabled) return;
