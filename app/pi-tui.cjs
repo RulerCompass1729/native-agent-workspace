@@ -79,8 +79,12 @@ function unsafeRuntime(file) {
 // every session while a start checks the runtime.
 async function verifyTree(root) {
   const uid = process.getuid?.();
-  const top = fs.lstatSync(root);
-  if (!top.isDirectory() || top.isSymbolicLink()) throw unsafeRuntime(root);
+  // The tree's own folder and its parent too: either one writable by others lets them swap the tree.
+  for (const dir of [root, path.dirname(root)]) {
+    const top = fs.lstatSync(dir);
+    if (!top.isDirectory() || top.isSymbolicLink()) throw unsafeRuntime(dir);
+    if ((uid !== undefined && top.uid !== uid) || (top.mode & 0o022)) throw unsafeRuntime(dir);
+  }
   const pending = [root];
   let count = 0;
   while (pending.length) {
@@ -125,25 +129,64 @@ function prepareHome(where) {
   for (const dir of [where.agentDir, where.tmp, where.sessionDir]) dshTui.ownFolder(where, dir, homeUnsafe);
 }
 
-// macOS sandbox rules for the pi process tree, as for the DSH TUI (dsh-tui.cjs sandboxProfile):
-// outbound only IPv4 TCP to the egress proxy's loopback port, nothing listens, and each refusal reaches
-// the unified log with the session's nonce. The person's agent homes and rule files stay unreadable
-// even though HOME points elsewhere, so a tool call cannot read them either; those refusals are quiet.
-function sandboxProfile({ proxyPort, nonce, personHome = os.homedir() }) {
+// The real path, which sandbox rules match. A missing folder resolves through its nearest existing parent.
+function realOrGiven(file) {
+  const given = path.resolve(file);
+  try {
+    return fs.realpathSync(given);
+  } catch {
+    const parent = path.dirname(given);
+    if (parent === given) return given;
+    return path.join(realOrGiven(parent), path.basename(given));
+  }
+}
+
+// Programs that hand work to processes outside the sandbox: a browser (open), other apps (osascript,
+// automator, shortcuts) or launchd (launchctl).
+const HANDOFF_PROGRAMS = Object.freeze(['/usr/bin/open', '/usr/bin/osascript', '/usr/bin/automator', '/usr/bin/shortcuts', '/bin/launchctl']);
+// Files under the person's home that programs outside the sandbox read or run later.
+const STARTUP_FILES = Object.freeze(['.zshrc', '.zshenv', '.zprofile', '.zlogin', '.bashrc', '.bash_profile', '.profile', '.gitconfig']);
+
+// macOS sandbox rules for the pi process tree. The last matching rule wins.
+// - Network as for the DSH TUI (dsh-tui.cjs sandboxProfile): outbound only IPv4 TCP to the egress
+//   proxy's loopback port, nothing listens, and each refusal reaches the unified log with the nonce.
+// - pi runs the model's commands without asking, so no command may reach the network through another
+//   process either: Apple Events, LaunchServices, background URL sessions and launchd jobs are refused,
+//   and so are the programs that use them.
+// - Writes only in the working folder, pi's own folder, the temporary folders and /dev: nothing outside
+//   that a program outside the sandbox runs later (launch agents, shell startup files, NAW's data
+//   folder, this runtime).
+// - The person's agent homes and rule files stay unreadable even though HOME points elsewhere.
+// Refusals other than the network ones are quiet: the command fails and the session goes on.
+function sandboxProfile({ proxyPort, nonce, where, cwd, personHome = os.homedir() }) {
   if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) throw Error('pi sandbox: invalid proxy port');
   if (!require('./dsh-witness.cjs').validNonce(nonce)) throw Error('pi sandbox: invalid nonce');
   if (typeof personHome !== 'string' || !path.isAbsolute(personHome)) throw Error('pi sandbox: invalid home');
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw Error('pi sandbox: invalid working folder');
   const q = dshTui.sbplString;
+  const home = realOrGiven(personHome);
   const recorded = `(with message ${q(nonce)})`;
-  const folders = ['.pi', '.claude', '.codex', '.agents', '.dsh', '.dsh-tui'].map(name => `(subpath ${q(path.join(personHome, name))})`);
-  const files = ['CLAUDE.md', 'AGENTS.md'].map(name => `(literal ${q(path.join(personHome, name))})`);
+  const subpaths = list => list.map(dir => `(subpath ${q(dir)})`).join(' ');
+  const literals = list => list.map(file => `(literal ${q(file)})`).join(' ');
+  const agentFolders = ['.pi', '.claude', '.codex', '.agents', '.dsh', '.dsh-tui'].map(name => path.join(home, name));
+  const agentFiles = ['CLAUDE.md', 'AGENTS.md'].map(name => path.join(home, name));
+  const kept = [path.join(home, 'Library'), path.join(home, '.ssh'), path.join(home, '.config'), realOrGiven(path.dirname(where.runtimeBase))];
   return [
     '(version 1)',
     '(allow default)',
     `(deny network-outbound ${recorded})`,
     `(allow network-outbound (remote tcp4 ${q(`localhost:${proxyPort}`)}))`,
     `(deny network-inbound ${recorded})`,
-    `(deny file-read* file-write* ${[...folders, ...files].join(' ')})`,
+    '(deny appleevent-send)',
+    '(deny job-creation)',
+    `(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name "com.apple.nsurlsessiond") (global-name-regex #"^com\\.apple\\.lsd\\."))`,
+    `(deny process-exec ${literals(HANDOFF_PROGRAMS)})`,
+    '(deny file-write*)',
+    `(allow file-write* ${subpaths([realOrGiven(cwd), '/private/tmp', '/private/var/folders', '/dev'])})`,
+    `(deny file-write* ${subpaths(kept)} ${literals(STARTUP_FILES.map(name => path.join(home, name)))})`,
+    `(allow file-write* ${subpaths([realOrGiven(where.base)])})`,
+    `(deny file-write* ${subpaths([realOrGiven(where.runtimeBase)])})`,
+    `(deny file-read* file-write* ${subpaths(agentFolders)} ${literals(agentFiles)})`,
   ].join('\n');
 }
 
@@ -239,7 +282,7 @@ class PiTui extends EventEmitter {
       return;
     }
     const nonce = `naw-pi-${randomBytes(12).toString('hex')}`;
-    const profile = sandboxProfile({ proxyPort: proxy.port, nonce });
+    const profile = sandboxProfile({ proxyPort: proxy.port, nonce, where, cwd: this.record.cwd });
     try {
       this.witness = await this.witnessModule.startWitness({
         nonce,
@@ -329,6 +372,8 @@ module.exports = {
   PI_VERSION,
   PI_INTEGRITY,
   PRIVATE_FLAGS,
+  HANDOFF_PROGRAMS,
+  STARTUP_FILES,
   SESSION_ID,
   dataRoot,
   paths,

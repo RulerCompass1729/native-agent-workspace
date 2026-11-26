@@ -480,7 +480,7 @@ for DeepSeek and with two synthetic turns against the real service.
 
 **Who receives its content.** DeepSeek (`api.deepseek.com`, pi's built-in DeepSeek
 provider) receives the member's prompts, the files it reads, its command and tool
-output, and whatever a space or queue routes to it. Each request also carries pi's
+output. Each request also carries pi's
 system prompt, which names the working folder and the path of pi's own documentation
 inside NAW's data folder (both usually contain the account name), and the OpenAI SDK's
 request headers (operating system, architecture and Node.js version). NAW records the
@@ -496,12 +496,36 @@ folder, and the macOS sandbox keeps the person's `~/.pi`, `~/.claude`, `~/.codex
 
 **Network.** As for the DSH TUI: the sandbox lets the pi process tree connect only to
 NAW's loopback egress proxy, which passes only `api.deepseek.com:443`. Any other
-attempt by any process of the session (a command that downloads, for instance) is
-refused, recorded, and stops the session.
+connection by any process of the session (a command that downloads, for instance) is
+refused, recorded, and stops the session. Name lookups are refused as well.
+
+Because pi runs commands without asking, the sandbox also closes the ways a command
+could reach the network through a program outside it. Apple Events, LaunchServices
+(through which `open` hands a URL to the browser), background URL sessions and new
+launchd jobs are refused, and so are `open`, `osascript`, `automator`, `shortcuts` and
+`launchctl`. Writes are allowed only in the working folder, pi's own folder, the
+temporary folders and `/dev`. The rest of NAW's data folder, the pi runtime,
+`~/Library` (launch agents included), `~/.ssh`, `~/.config` and the shell startup files
+are refused, so a command cannot leave something there that a program outside the
+sandbox later runs. These refusals are quiet: the command fails and the session goes on.
+`scripts/pi-tui-sandbox-check.cjs` tests each of them on this machine against a control
+without the sandbox.
+
+What stays open: other programs later use what pi writes in the working folder as it
+is (a git hook, a project script, a rule file another agent reads). macOS services that
+act for a process, other than those named above, were not each audited. A working
+folder inside `~/Library` or NAW's data folder is read-only for pi.
 
 **The key.** pi uses the DSH TUI's Keychain item (`NAW DSH TUI DeepSeek API key`,
 account `deepseek`). NAW reads it at each start and hands it only to the session's
-environment; it is not on a command line and not written to pi's folders.
+environment: it is not on a command line, and the offline check finds it in no file of
+pi's folders. A command pi runs can read that environment (`env`, for instance); its
+output then sits in pi's session file and goes to DeepSeek with the next request.
+
+**Installing.** `scripts/install-pi-tui.cjs` downloads the 123 packages of the
+committed lockfile from `registry.npmjs.org` with npm, using no npm configuration of the
+person's and running no package scripts. npm sends its usual request headers, whose
+user agent names the npm and Node.js versions, the operating system and architecture.
 
 **Approvals.** pi has no per-tool approvals: it runs the model's commands and edits in
 the working folder without asking. NAW therefore offers no permission choice for it.

@@ -60,6 +60,12 @@ test('the runtime is offered only with the pinned versions and refused unless ev
   fs.unlinkSync(outside);
   fs.symlinkSync('package.json', outside);
   await piTui.verifyRuntime(dataDir);
+  for (const dir of [where.root, where.runtimeBase]) {
+    fs.chmodSync(dir, 0o777);
+    await assert.rejects(piTui.verifyRuntime(dataDir), error => error.code === 'pi-runtime-unsafe' && error.file === dir, dir);
+    fs.chmodSync(dir, 0o755);
+  }
+  await piTui.verifyRuntime(dataDir);
   const other = fakeRuntime(t, { version: '1.6.0' });
   assert.equal(piTui.installed(other.dataDir), false);
   await assert.rejects(piTui.verifyRuntime(other.dataDir), /is not 1\.6\.1/);
@@ -90,19 +96,41 @@ test('the launch turns pi\'s own network and the person\'s files off and passes 
 });
 
 test('the sandbox allows only the proxy port, refuses listening, and keeps the person\'s agent files unreadable', () => {
-  const profile = piTui.sandboxProfile({ proxyPort: 40123, nonce: NONCE, personHome: '/synthetic/home' });
+  const where = piTui.paths('/synthetic/data/backends/abc');
+  const profile = piTui.sandboxProfile({ proxyPort: 40123, nonce: NONCE, where, cwd: '/synthetic/work', personHome: '/synthetic/person' });
   const lines = profile.split('\n');
   assert.equal(lines[0], '(version 1)');
   assert.ok(lines.includes(`(deny network-outbound (with message "${NONCE}"))`));
   assert.ok(lines.includes('(allow network-outbound (remote tcp4 "localhost:40123"))'));
   assert.ok(lines.includes(`(deny network-inbound (with message "${NONCE}"))`));
-  const files = lines.find(line => line.startsWith('(deny file-read* file-write*'));
-  for (const name of ['.pi', '.claude', '.codex', '.agents', '.dsh', '.dsh-tui']) assert.ok(files.includes(`(subpath "/synthetic/home/${name}")`), name);
-  for (const name of ['CLAUDE.md', 'AGENTS.md']) assert.ok(files.includes(`(literal "/synthetic/home/${name}")`), name);
-  assert.ok(!files.includes('with message'), 'file refusals are not network violations');
-  assert.throws(() => piTui.sandboxProfile({ proxyPort: 0, nonce: NONCE }));
-  assert.throws(() => piTui.sandboxProfile({ proxyPort: 1, nonce: 'short' }));
-  assert.throws(() => piTui.sandboxProfile({ proxyPort: 1, nonce: NONCE, personHome: 'relative' }));
+  const files = lines.at(-1);
+  assert.ok(files.startsWith('(deny file-read* file-write*'), 'the agent-file rule comes last, so nothing later allows them');
+  for (const name of ['.pi', '.claude', '.codex', '.agents', '.dsh', '.dsh-tui']) assert.ok(files.includes(`(subpath "/synthetic/person/${name}")`), name);
+  for (const name of ['CLAUDE.md', 'AGENTS.md']) assert.ok(files.includes(`(literal "/synthetic/person/${name}")`), name);
+  assert.equal(lines.filter(line => line.includes('with message')).length, 2, 'only network refusals reach the witness');
+  assert.throws(() => piTui.sandboxProfile({ proxyPort: 0, nonce: NONCE, where, cwd: '/w' }));
+  assert.throws(() => piTui.sandboxProfile({ proxyPort: 1, nonce: 'short', where, cwd: '/w' }));
+  assert.throws(() => piTui.sandboxProfile({ proxyPort: 1, nonce: NONCE, where, cwd: '/w', personHome: 'relative' }));
+  assert.throws(() => piTui.sandboxProfile({ proxyPort: 1, nonce: NONCE, where, cwd: 'relative' }));
+});
+
+test('commands pi runs cannot hand work to programs outside the sandbox or write what those programs run', () => {
+  const where = piTui.paths('/synthetic/data/backends/abc');
+  const lines = piTui.sandboxProfile({ proxyPort: 40123, nonce: NONCE, where, cwd: '/synthetic/work', personHome: '/synthetic/person' }).split('\n');
+  assert.ok(lines.includes('(deny appleevent-send)'));
+  assert.ok(lines.includes('(deny job-creation)'));
+  const lookups = lines.find(line => line.startsWith('(deny mach-lookup'));
+  for (const name of ['"com.apple.coreservices.launchservicesd"', '"com.apple.nsurlsessiond"', '#"^com\\.apple\\.lsd\\."']) assert.ok(lookups.includes(name), name);
+  const programs = lines.find(line => line.startsWith('(deny process-exec'));
+  for (const program of piTui.HANDOFF_PROGRAMS) assert.ok(programs.includes(`(literal "${program}")`), program);
+  const writes = lines.filter(line => line.includes('file-write*') && !line.includes('file-read*'));
+  assert.deepEqual(writes, [
+    '(deny file-write*)',
+    '(allow file-write* (subpath "/synthetic/work") (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/dev"))',
+    `(deny file-write* (subpath "/synthetic/person/Library") (subpath "/synthetic/person/.ssh") (subpath "/synthetic/person/.config") (subpath "/synthetic/data") ${piTui.STARTUP_FILES.map(name => `(literal "/synthetic/person/${name}")`).join(' ')})`,
+    '(allow file-write* (subpath "/synthetic/data/backends/abc/pi-tui"))',
+    '(deny file-write* (subpath "/synthetic/data/pi-tui-runtime"))',
+  ], 'later rules win: pi\'s own folder is writable inside the NAW data folder, its runtime is not');
 });
 
 test('the committed install lock names the pinned pi, all from the public registry', () => {

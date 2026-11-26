@@ -173,6 +173,21 @@ function sessionFiles(dataDir) {
   return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
 }
 
+// Files under a folder whose bytes contain the text.
+function filesHolding(dir, text) {
+  const found = [];
+  const pending = fs.existsSync(dir) ? [dir] : [];
+  while (pending.length) {
+    const current = pending.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) pending.push(file);
+      else if (entry.isFile() && fs.readFileSync(file).includes(text)) found.push(path.relative(dir, file));
+    }
+  }
+  return found;
+}
+
 async function checkChat(options, where, record) {
   const earlier = sessionFiles(options.dataDir);
   const { session, events } = newSession(options, record);
@@ -293,6 +308,8 @@ async function main() {
     await checkAgain(options, where, record, files);
     await checkBlock(options, where);
     await checkLost(options, where);
+    const holding = filesHolding(piTui.paths(dataDir).base, FAKE_KEY);
+    check('after: no file in pi\'s home or sessions holds the key', holding.length === 0, holding.join(',') || 'none');
   } finally {
     if (fake) await fake.close();
     fs.rmSync(dir, { recursive: true, force: true });

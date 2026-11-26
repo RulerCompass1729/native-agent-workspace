@@ -1666,10 +1666,12 @@ What it can do:
   member opens the same pi session again.
 - pi starts with its default DeepSeek model (`deepseek-v4-pro`); `/model` in its
   terminal changes it.
-- Checked: `scripts/pi-tui-offline-check.cjs` (26 checks: a turn through the proxy to a
-  loopback stand-in, reopening, a refused host, a lost witness), and two synthetic
-  turns on `deepseek-flash` against the real service: a reply, and `ls` run by pi's bash
-  tool in the sandbox; the proxy saw only `api.deepseek.com:443` and nothing was refused.
+- Checked: `scripts/pi-tui-offline-check.cjs` (27 checks: a turn through the proxy to a
+  loopback stand-in, reopening, a refused host, a lost witness, no key in pi's files),
+  `scripts/pi-tui-sandbox-check.cjs` (30 checks of the sandbox, each refusal against a
+  control without it), and two synthetic turns on `deepseek-flash` against the real
+  service: a reply, then pi's bash tool writing a file and running `ls` in the working
+  folder; the proxy saw only `api.deepseek.com:443` and nothing was refused.
 
 Known limits:
 
@@ -1678,6 +1680,10 @@ Known limits:
 - pi has no approvals: it runs the model's commands and edits without asking.
 - Any connection other than DeepSeek, by pi or by a command it runs (a package
   install, a download), is refused and stops the session.
+- Commands it runs cannot open apps or URLs, send Apple Events, add launchd jobs, or
+  write outside the working folder, pi's own folder and the temporary folders; they
+  fail and the session goes on. A working folder inside `~/Library` or NAW's data
+  folder is therefore read-only for pi.
 - pi's `find` and `grep` tools need `fd` and `ripgrep`; when they are not installed pi
   says so and, being offline, does not download them. Its other tools work.
 - NAW shows no usage for it; pi's own footer does.
