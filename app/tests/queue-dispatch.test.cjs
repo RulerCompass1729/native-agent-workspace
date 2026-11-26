@@ -828,6 +828,7 @@ class FakeClient extends EventEmitter {
       for (const r of this.state.rooms) {
         if (r.run && r.run.status === 'running' && (!scoped || (r.run.ids || []).includes(session.id))) r.run.status = 'paused';
       }
+      if (this.unconfirmedStop) return { stopped: false };
       if (this.refusesOwnReceipt) {
         // As a real Claude stop on the service (maintenance-stop.test.cjs): the terminal's close ends the
         // session and drops its runtime, SessionEnd revokes control once more, and the service then refuses
@@ -838,7 +839,10 @@ class FakeClient extends EventEmitter {
         if (this.refusesOwnReceipt === 'other change') session.owner = 'another-window';
         throw Object.assign(Error('unconfirmed'), { uiMessage: { key: 'error.backendSwitchDisconnectUnconfirmed' } });
       }
-      return this.call('stop', session.id);
+      await this.call('stop', session.id);
+      session.controlRevision = (session.controlRevision || 0) + 1;
+      session.connectionRevision = (session.connectionRevision || 0) + 1;
+      return { stopped: true, expected: args[1], stoppedState: { ...session, draftRevision: session.draftRevision || 0 } };
     }
     if (method === 'stop') {
       session.state = 'ended';
@@ -3072,6 +3076,25 @@ for (const capable of [true, false]) test(`a send that reaches the old session j
   await dispatcher.schedule();
   assert.deepEqual(notices, ['kept']);
   assert.equal(client.calls.some(call => call[0] === 'stop' && call[1] === 'a'), false);
+});
+
+test('a handoff cannot mark the old session done while native stop is unconfirmed', async t => {
+  const old = member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' });
+  const { room, client, dispatcher, dir } = dispatcherSetup(t, [old]);
+  fakeMembership(room, client);
+  room.queueAdd('next task', 'a');
+  await dispatcher.start();
+  await dispatcher.schedule();
+  client.reply('a', '交接：在 feature 分支。');
+  await dispatcher.schedule();
+  await dispatcher.schedule();
+
+  client.unconfirmedStop = true;
+  await dispatcher.schedule();
+  const entries = () => fs.readFileSync(path.join(dir, 'rotation-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(client.state.sessions.find(s => s.id === 'a').state, 'idle');
+  assert.equal(entries().some(entry => entry.event === 'done' && entry.old.id === 'a'), false);
+  assert.ok(entries().some(entry => entry.event === 'waiting' && entry.reason === 'stop-unproven'));
 });
 
 // A Claude stop the service refuses its own receipt for (seen on the real 2.1.319 window, 2026-11-14): the

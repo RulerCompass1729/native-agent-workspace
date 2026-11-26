@@ -20,7 +20,7 @@ const { codexQuotaBlock } = require('./native-usage.js');
 const { rotationBlocked, rotationEpoch, queuePurposeValid } = require('./submission-policy.cjs');
 const { detached } = require('./background-operation.cjs');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
-const { sessionPlan, endedByThisStop, readRecords } = require('./backend-switch.cjs');
+const { sessionPlan, sameStop, endedByThisStop, readRecords } = require('./backend-switch.cjs');
 const { successor, rotationEdges } = require('./queue-secretary.cjs');
 const { interrupt: terminalInterrupt } = require('./terminal-interrupt.cjs');
 
@@ -4696,7 +4696,13 @@ class QueueDispatcher {
     try {
       guard();
       const scope = scoped ? ['participant'] : [];
-      await withTimeout(target.client.call('maintenanceStop', oldId, plan.stop, false, ...scope), CALL_TIMEOUT_MS, 'stop-timeout');
+      const receipt = await withTimeout(target.client.call('maintenanceStop', oldId, plan.stop, false, ...scope), CALL_TIMEOUT_MS, 'stop-timeout');
+      const stopped = { ...plan.stop, controlRevision: (plan.stop.controlRevision || 0) + 1,
+        connectionRevision: (plan.stop.connectionRevision || 0) + 1 };
+      if (receipt?.stopped !== true || !sameStop(receipt.expected, plan.stop) || !sameStop(receipt.stoppedState, stopped) ||
+          !['ended', 'recoverable', ...(plan.stop.provider === 'codex' ? ['disconnected'] : [])].includes(receipt.stoppedState.state)) {
+        return 'stop-unproven';
+      }
     } catch (error) {
       const key = error && error.uiMessage && error.uiMessage.key;
       if (key === 'error.backendSwitchSessionChanged') {
