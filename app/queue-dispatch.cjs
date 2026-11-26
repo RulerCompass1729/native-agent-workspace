@@ -21,6 +21,7 @@ const { detached } = require('./background-operation.cjs');
 const { CompactionCounter, claudeFiles, claudeProjects } = require('./compaction-count.cjs');
 const { sessionPlan, endedByThisStop, readRecords } = require('./backend-switch.cjs');
 const { successor, rotationEdges } = require('./queue-secretary.cjs');
+const { interrupt: terminalInterrupt } = require('./terminal-interrupt.cjs');
 
 const CAPABILITY = 'queueDispatchV1';
 const ROTATION_CAPABILITY = 'rotationControlEpochV1';
@@ -2180,11 +2181,6 @@ function terminalReplyOnly(data) {
     return false;
   }
   return isTerminalResponse(data) || /^\x1b\[[IO]$/.test(data);
-}
-
-// Esc or Ctrl-C, as workspace.cjs input() reads it (a unit test keeps them equal).
-function terminalInterrupt(data) {
-  return typeof data === 'string' && (data === '\x1b' || data.includes('\x03'));
 }
 
 // 「名字」→「名字 · 续」→「名字 · 续2」→「名字 · 续3」…
