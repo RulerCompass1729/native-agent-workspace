@@ -7490,6 +7490,8 @@ test('R207: what does not leave a prompt in a Codex terminal does not hold it', 
   const cases = {
     'a message after the keys': f => { f.dispatcher.noteHuman('a', 'input', 'x'); f.advance(1000); f.person('sent'); },
     'Esc alone': f => f.dispatcher.noteHuman('a', 'input', '\x1b'),
+    'Esc as a key report': f => f.dispatcher.noteHuman('a', 'input', '\x1b[27u'),
+    'Esc as a modified key report': f => f.dispatcher.noteHuman('a', 'input', '\x1b[27;5;99~'),
     'Ctrl-C alone': f => f.dispatcher.noteHuman('a', 'input', '\x03'),
     'a look': f => f.dispatcher.noteHuman('a', 'terminal'),
     'a mark of another provider\'s terminal': f => { f.old.provider = 'claude'; f.dispatcher.typed.a = { at: f.clock }; },
