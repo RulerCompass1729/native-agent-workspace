@@ -243,13 +243,18 @@ function menuInference(values) {
   }).sort((a, b) => a.display - b.display);
 }
 // At most one hidden window of the GUI process that is not a BrowserWindow ('unproven': the GUI could not list them).
+// 'closed-background': a background window Electron already dropped, at its default frame (install-electron-frames.py).
+const CLOSED_BACKGROUND_LIMIT = 64;
 function offscreenInference(values) {
-  if (!Array.isArray(values) || values.length > 1) throw refusal('frame 口径待核实');
-  return values.map(row => {
-    if (!row || Object.keys(row).sort().join(',') !== 'basis,bounds' || !['outside-electron', 'unproven'].includes(row.basis) ||
+  if (!Array.isArray(values) || values.length > CLOSED_BACKGROUND_LIMIT + 1) throw refusal('frame 口径待核实');
+  const rows = values.map(row => {
+    if (!row || Object.keys(row).sort().join(',') !== 'basis,bounds' || !['outside-electron', 'unproven', 'closed-background'].includes(row.basis) ||
         !row.bounds || Object.keys(row.bounds).sort().join(',') !== 'height,width,x,y') throw refusal('frame 口径待核实');
     return { bounds: bounds(row.bounds), basis: row.basis };
   });
+  const closed = rows.filter(row => row.basis === 'closed-background').length;
+  if (closed > CLOSED_BACKGROUND_LIMIT || rows.length - closed > 1) throw refusal('frame 口径待核实');
+  return rows;
 }
 function collector(options, helper, target) {
   const version = {};
@@ -299,8 +304,8 @@ function compare(before, after, expected) {
     ['inferred menu windows (geometry only, not provenance)', JSON.stringify(inferredBefore), JSON.stringify(inferredAfter), JSON.stringify(inferredBefore) === JSON.stringify(inferredAfter)],
     // Not compared with before: an outside window can change shape after start (287's 1071, 11-23).
     // Windows NAW forgot to register are caught by the v4 Electron list instead.
-    ['offscreen windows outside Electron (max 1, v4 proof after install)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
-      offscreenAfter.length <= 1 && offscreenAfter.every(w => w.basis === 'outside-electron')],
+    ['offscreen windows outside Electron (max 1, v4 proof after install; closed background max 64)', JSON.stringify(offscreenBefore), JSON.stringify(offscreenAfter),
+      offscreenAfter.every(w => ['outside-electron', 'closed-background'].includes(w.basis))],
   ];
 }
 async function post(before, collect, expected, gate, options) {
@@ -341,7 +346,7 @@ async function main(argv = process.argv.slice(2)) {
       const savedViews = state.views; state.views = liveViewBaseline(state.views, state.windows);
       if (!geometry(state.views, state.windows)) throw refusal('Pre-install views/native geometry mismatch');
       fs.writeFileSync(snapshot, JSON.stringify({ format: 1, capturedAt: new Date().toISOString(), savedViews, ...state }, null, 2), { flag: 'wx', mode: 0o600 });
-      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['inferred menu windows (geometry only, not provenance)', JSON.stringify(state.inferredMenuWindows), 'recorded per display; max 4', true], ['unregistered offscreen windows', JSON.stringify(state.offscreenWindows), 'recorded; max 1', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
+      print([['pre snapshot', 'private metadata only', 'recorded', true], ['on-screen windows', state.windows.filter(w => w.onScreen).length, 'recorded', true], ['active views / geometry', state.views.length, 'one-to-one match', true], ['inferred menu windows (geometry only, not provenance)', JSON.stringify(state.inferredMenuWindows), 'recorded per display; max 4', true], ['unregistered offscreen windows', JSON.stringify(state.offscreenWindows), 'recorded; max 1 plus closed background max 64', true], ['active backend closure', state.backend.version, state.backend.runtimeHash, true], ['DSH runtime', 'qualified or known recovery donor', state.dsh.status + (state.dsh.reason ? ': ' + state.dsh.reason : '') + '; qualified donors=' + (state.dsh.donors?.length || 0), preDshReady(state.dsh)]], state.windows);
       return preDshReady(state.dsh) ? 0 : 1;
     }
     if (!/^0\.1\.0-alpha\.\d+$/.test(expected.version || '') || !/^[a-f0-9]{40}$/.test(expected.revision || '')) throw refusal('Post requires explicit release version and full revision');
@@ -360,4 +365,4 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 if (require.main === module) main().then(code => { process.exitCode = code; }).catch(error => { console.error('FAIL: ' + (error.installStateReason || 'Metadata unavailable; verify input files and OS metadata access without changing permissions') + '. No settings or permissions were changed.'); process.exitCode = 1; });
-module.exports = { liveViewBaseline, windowFrames, offscreenInference, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };
+module.exports = { liveViewBaseline, windowFrames, offscreenInference, CLOSED_BACKGROUND_LIMIT, processInfo, runtimeClosure, preDsh, preDshReady, snapshotPath, bundleMetadata, read, projectViews, projectWindows, geometry, runtimeDigest, dshState, backendState, stable, compare, post, main };

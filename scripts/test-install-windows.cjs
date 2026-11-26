@@ -48,7 +48,7 @@ const state = windows => ({ profile: '/synthetic', gui: { pid: 1, started: 'x' }
   assert.ok(windows.every(w => Object.keys(w).sort().join() === 'bounds,cgBounds,frameBasis,id,onScreen,owner,pid'));
   const calls = await app.evaluate(() => global.__testFrameCalls);
   assert.deepEqual(calls.at(-1), legacy ? [true, undefined] : [true, true], 'the installer reached the expected frame version');
-  assert.ok(Array.isArray(offscreenWindows) && offscreenWindows.length <= 1);
+  assert.ok(Array.isArray(offscreenWindows) && offscreenWindows.filter(w => w.basis !== 'closed-background').length <= 1);
   const background = await app.evaluate(() => { const w = global.__testBackgroundWindow; return { visible: w.isVisible(), focusable: w.isFocusable(), focused: w.isFocused() }; });
   assert.deepEqual(background, { visible: false, focusable: false, focused: false });
   await app.evaluate(async ({ BrowserWindow }) => {
