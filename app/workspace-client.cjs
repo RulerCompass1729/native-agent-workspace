@@ -22,10 +22,8 @@ const sharedDisplayMessage = (message, source) => message.id === 'shared-native-
   ? { ...message, id: `${message.id}:${encodeURIComponent(source)}` } : message;
 // An older backend cannot verify an undo proof even for the original space.
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
-// Each backend's state frame used to build the combined snapshot of every backend for each window, and main's
-// listeners then read every session's messages: with busy backends main's event loop stayed full and typing lagged
-// (R255, 2026-11-26). The first change emits at once; later ones within this wait emit once, as the state is then.
-// A window's page takes snapshots no closer together than this anyway (main.cjs STATE_PUSH_WAIT).
+// Per-frame combined snapshots and listeners kept main at a full core (R255). The first change emits at once,
+// later ones within this wait once, as the state is then; the page is spaced so anyway (main.cjs STATE_PUSH_WAIT).
 const STATE_EMIT_WAIT = 250;
 let creationQueue = Promise.resolve();
 const controls = new Map();
