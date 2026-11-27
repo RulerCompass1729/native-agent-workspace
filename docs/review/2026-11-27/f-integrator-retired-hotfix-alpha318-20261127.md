@@ -1,0 +1,7 @@
+# Retired-history reader and surviving-window hotfix
+
+The standalone next-version candidate adopts the reviewed retired-history proof and window handoff fix without changing its seven source/test files. Only release metadata and this record are added. Explicitly retired stores remain in identity uniqueness, records, draft and retention checks; an unmarked missing transport, malformed store, duplicate identity or possibly-owned native process still refuses. A readonly history is never a restart or activation candidate. A closing window no longer prevents the remaining original WorkspaceClient instances from committing their replacement connections.
+
+The original three focused cases fail on the preceding release and pass on the approved source. The accepted non-author evidence also includes 803 related checks, hidden two-window Electron retirement/reconnection and a synthetic authorized message delivery without reviving the history daemon. Final full-source, signed-package and daily checks are recorded in private release evidence. The original observed peer closures do not establish their first runtime cause.
+
+An installed frontend does not replace the code of retained occupied native backends. The message-reader repair applies to a sender running the new daemon; old senders keep their original behavior and accepted work is not replayed. No existing native session is forcibly moved to qualify this release.
