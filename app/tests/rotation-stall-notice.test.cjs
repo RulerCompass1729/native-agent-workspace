@@ -101,7 +101,7 @@ test('a normal rotation says nothing', async t => {
 
 test('R268.2: an unresolved joining rotation reports once per attempt after one hour', async t => {
   const old = session('old', 'native-old', { provider: 'codex', state: 'working', roomIds: ['shared'], roomId: 'shared' });
-  const next = session('next', null, { provider: 'codex', state: 'starting', roomIds: ['shared'], roomId: 'shared',
+  let next = session('next', null, { provider: 'codex', state: 'starting', roomIds: ['shared'], roomId: 'shared',
     terminalState: { alive: true } });
   const f = setup(t, { sessions: [old, next], compactions: {}, steward: null });
   const attempt = {
@@ -132,37 +132,46 @@ test('R268.2: an unresolved joining rotation reports once per attempt after one 
   assert.equal(f.d.rotations[old.id].phase, 'created');
   assert.equal(f.d.lastGates.get(old.id)?.gate, undefined);
 
-  const later = NOW + 4 * HOUR;
-  f.d.rotations[old.id] = { ...attempt, createdNewAt: later };
-  next.nativeId = null;
-  next.state = 'starting';
-  await at(later + HOUR);
-  assert.deepEqual(stalls(f).map(event => event.title), [new Date(NOW).toISOString(), new Date(later).toISOString()]);
+  next = { ...next, id: 'later-successor', state: 'starting', nativeId: null };
+  f.sessions[1] = next;
+  f.d.rotations[old.id] = { ...attempt, newId: next.id, newName: next.id };
+  await at(NOW + HOUR);
+  assert.deepEqual(stalls(f).map(event => event.title), [new Date(NOW).toISOString(), new Date(NOW).toISOString()]);
+
+  f.d.rotations[old.id].createdNewAt = NOW + MINUTE;
+  const due = NOW + MINUTE + HOUR;
+  await at(due);
+  assert.equal(stalls(f).length, 2, 'a changed start time does not make this successor a new attempt');
+  f.d.save();
+  f.d.close();
+  restart(t, f);
+  await at(due);
+  assert.equal(stalls(f).length, 2, 'the same successor is still deduplicated after restart');
 
   f.roomState.update({ archivedSessions: [next.id] });
-  await at(later + HOUR + 1);
+  await at(due + 1);
   assert.equal(f.d.lastGates.has(old.id), false, 'putting the successor away clears the gate');
   assert.equal(f.d.stalls.has(old.id), false);
   f.roomState.update({ archivedSessions: [] });
-  await at(later + HOUR + 2);
+  await at(due + 2);
   assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
   assert.equal(stalls(f).length, 2, 'the same attempt was already reported before it was archived');
 
   next.state = 'disconnected';
   next.activityUiMessage = { version: 1, key: 'notice.activity.connectionDetached' };
   next.transportDisconnected = true;
-  await at(later + HOUR + 3);
+  await at(due + 3);
   assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining', 'a broken transport does not prove the person handled it');
   next.transportDisconnected = false;
-  await at(later + HOUR + 4);
+  await at(due + 4);
   assert.equal(f.d.stalls.has(old.id), false, 'the confirmed detach clears the gate');
   next.state = 'starting';
-  await at(later + HOUR + 5);
+  await at(due + 5);
   assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
 
   f.d.rotations[old.id].phase = 'failed';
-  f.d.rotations[old.id].failedAt = later + HOUR;
-  await at(later + 2 * HOUR);
+  f.d.rotations[old.id].failedAt = due;
+  await at(due + HOUR);
   assert.notEqual(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
   assert.equal(f.d.stalls.has(old.id), false);
 

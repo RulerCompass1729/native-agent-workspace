@@ -1419,7 +1419,7 @@ function planDispatch(input) {
           prior.withdrawn || prior.stopped || prior.handoffConfirmed ||
           prior.oldNativeId && prior.oldNativeId !== session.nativeId ||
           successor?.archived || successor?.state === 'ended' || detached) return;
-      gates.set(id, { gate: 'rotation-joining', reason: prior.reason || 'content', since });
+      gates.set(id, { gate: 'rotation-joining', reason: prior.reason || 'content', since, successorId: prior.newId });
       return;
     }
     if (gate === 'rotating') return;
@@ -4207,17 +4207,18 @@ class QueueDispatcher {
     for (const id of [...this.stalls.keys()]) {
       if (!gates.has(id)) this.stalls.delete(id);
     }
-    for (const [id, { gate, reason, since: joiningSince }] of gates) {
+    for (const [id, { gate, reason, since: joiningSince, successorId }] of gates) {
       const nativeId = sessions.find(s => s.id === id)?.nativeId ?? null;
       let stall = this.stalls.get(id);
-      if (!stall || stall.nativeId !== nativeId || stall.joiningSince !== joiningSince) {
-        stall = { since: joiningSince ?? now, joiningSince, nativeId, told: new Set() };
+      if (!stall || stall.nativeId !== nativeId || stall.successorId !== successorId) {
+        stall = { since: now, successorId, nativeId, told: new Set() };
         this.stalls.set(id, stall);
       }
-      const key = joiningSince === undefined ? `${reason}:${gate}` : gate;
-      if (!this.rotationStalled || now - stall.since < ROTATION_STALL_MS || stall.told.has(key)) continue;
+      const since = joiningSince ?? stall.since;
+      const key = successorId === undefined ? `${reason}:${gate}` : gate;
+      if (!this.rotationStalled || now - since < ROTATION_STALL_MS || stall.told.has(key)) continue;
       try {
-        this.rotationStalled({ memberId: id, nativeId, reason, gate, since: stall.since });
+        this.rotationStalled({ memberId: id, nativeId, reason, gate, since, ...(successorId ? { successorId } : {}) });
         stall.told.add(key);
       } catch { /* Tried again on the next pass; nothing else waits on it. */ }
     }

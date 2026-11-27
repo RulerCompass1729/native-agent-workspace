@@ -381,9 +381,9 @@ class ButlerIngress {
   }
   // A session due for rotation an hour and still not rotated (queue-dispatch.cjs noteRotationStalls): one line per
   // native session, reason and gate (or joining attempt), kept across restarts by its id.
-  rotationStalled({ memberId, nativeId, reason, gate, since }) {
+  rotationStalled({ memberId, nativeId, reason, gate, since, successorId }) {
     if (!Number.isSafeInteger(since)) return false;
-    const identity = gate === 'rotation-joining' ? [memberId, nativeId, gate, since] : [memberId, nativeId, reason, gate];
+    const identity = gate === 'rotation-joining' ? [memberId, nativeId, gate, successorId] : [memberId, nativeId, reason, gate];
     const eventId = `rotation-stalled:${hash(identity)}`;
     if (this.rotationStalls.has(eventId)) return false;
     this.record({ eventId, sourceRef: `rotation-stalled:${memberId}`, kind: 'blocked',
