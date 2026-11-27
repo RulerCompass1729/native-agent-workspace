@@ -99,6 +99,77 @@ test('a normal rotation says nothing', async t => {
   assert.deepEqual(stalls(f), []);
 });
 
+test('R268.2: an unresolved joining rotation reports once per attempt after one hour', async t => {
+  const old = session('old', 'native-old', { provider: 'codex', state: 'working', roomIds: ['shared'], roomId: 'shared' });
+  const next = session('next', null, { provider: 'codex', state: 'starting', roomIds: ['shared'], roomId: 'shared',
+    terminalState: { alive: true } });
+  const f = setup(t, { sessions: [old, next], compactions: {}, steward: null });
+  const attempt = {
+    phase: 'joining', oldId: old.id, oldNativeId: old.nativeId, newId: next.id, name: old.name || old.id, newName: next.id,
+    provider: 'codex', view: 'terminal', reason: 'content', cwd: old.cwd, roomIds: ['shared'], createdNewAt: NOW,
+  };
+  f.d.rotations[old.id] = { ...attempt };
+  f.d.save();
+  const itemId = f.roomState.queueAdd('Synthetic task still held by the old session', old.id);
+  f.roomState.queueMarkSent('shared', itemId, old.id, 'Old', NOW, false, old.nativeId);
+  f.roomState.queueSetDelivery('shared', itemId, 'synthetic-sent-tag', 0);
+  const sent = structuredClone(f.roomState.queueFind('shared', itemId));
+  const at = async time => { f.clock.now = time; await f.d.schedule(); };
+  await at(NOW + HOUR - 1);
+  assert.deepEqual(stalls(f), []);
+  await at(NOW + HOUR);
+  assert.deepEqual(stalls(f), [{ kind: 'blocked', memberId: old.id, reason: 'rotation-stalled',
+    outcome: 'content:rotation-joining', title: new Date(NOW).toISOString() }]);
+  await at(NOW + 2 * HOUR);
+  f.d.close();
+  restart(t, f);
+  await at(NOW + 3 * HOUR);
+  assert.equal(stalls(f).length, 1);
+
+  next.nativeId = 'native-next';
+  next.state = 'idle';
+  await at(NOW + 3 * HOUR + 1);
+  assert.equal(f.d.rotations[old.id].phase, 'created');
+  assert.equal(f.d.lastGates.get(old.id)?.gate, undefined);
+
+  const later = NOW + 4 * HOUR;
+  f.d.rotations[old.id] = { ...attempt, createdNewAt: later };
+  next.nativeId = null;
+  next.state = 'starting';
+  await at(later + HOUR);
+  assert.deepEqual(stalls(f).map(event => event.title), [new Date(NOW).toISOString(), new Date(later).toISOString()]);
+
+  f.roomState.update({ archivedSessions: [next.id] });
+  await at(later + HOUR + 1);
+  assert.equal(f.d.lastGates.has(old.id), false, 'putting the successor away clears the gate');
+  assert.equal(f.d.stalls.has(old.id), false);
+  f.roomState.update({ archivedSessions: [] });
+  await at(later + HOUR + 2);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+  assert.equal(stalls(f).length, 2, 'the same attempt was already reported before it was archived');
+
+  next.state = 'disconnected';
+  next.activityUiMessage = { version: 1, key: 'notice.activity.connectionDetached' };
+  next.transportDisconnected = true;
+  await at(later + HOUR + 3);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining', 'a broken transport does not prove the person handled it');
+  next.transportDisconnected = false;
+  await at(later + HOUR + 4);
+  assert.equal(f.d.stalls.has(old.id), false, 'the confirmed detach clears the gate');
+  next.state = 'starting';
+  await at(later + HOUR + 5);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+
+  f.d.rotations[old.id].phase = 'failed';
+  f.d.rotations[old.id].failedAt = later + HOUR;
+  await at(later + 2 * HOUR);
+  assert.notEqual(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+  assert.equal(f.d.stalls.has(old.id), false);
+
+  assert.deepEqual(f.roomState.queueFind('shared', itemId), sent);
+  assert.deepEqual(f.sends, []);
+});
+
 test('the same stall seen on every pass and after a restart: one line; a new gate: one more', async t => {
   const f = setup(t, { sessions: [session(BUTLER.sessionId, BUTLER.nativeId, { liveDraft: 'x' })], compactions: { butler: 52 } });
   await run(f, 3 * HOUR);
