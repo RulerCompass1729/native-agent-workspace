@@ -14,7 +14,8 @@ async function fixture(t, provider = 'codex', named = true) {
   t.after(() => { workspace.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const room = named ? rooms.create('Original') : 'shared', other = rooms.create('Other');
   const ids = [], moves = [];
-  const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(), call: async (method, ...args) => {
+  const client = { snapshot: () => workspace.snapshot(), refresh: async () => workspace.snapshot(),
+    retainRestoredSuccessor: (id, observed) => workspace.retainRestoredSuccessor(id, observed.nativeId), call: async (method, ...args) => {
     if (method === 'initial') return { ...workspace.snapshot(), capabilities: ['singleHomeMoveV1', 'archiveIdleMoveV1'] };
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') { moves.push(args); return workspace.moveMembership(...args); }

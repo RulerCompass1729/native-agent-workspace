@@ -43,6 +43,7 @@ async function fixture(t, provider) {
     if (method === 'importHistory') return workspace.importHistory(args[0], 'owner', args[1]);
     throw Error('Unexpected business call: ' + method);
   } };
+  client.retainRestoredSuccessor = id => workspace.retainRestoredSuccessor(id, workspace.get(id).nativeId ?? null);
   // One backend that has adopted background control, as main.cjs checks before a non-local command.
   Object.defineProperty(client, 'entries', { get: () => [{ key: 'backend', state: { ...workspace.snapshot(), capabilities: [operation.CAPABILITY] } }] });
   const actor = { id, nativeId: workspace.get(id).nativeId, provider, name: 'Butler' };
@@ -83,6 +84,113 @@ async function refused(f, card, pattern = /operation target changed/i) {
   assert.equal(result.state, 'unconfirmed'); assert.match(result.error, pattern);
   assert.equal(f.calls.length, before, 'Refusal must happen before the business handler');
 }
+test('R263: an ended session with a historical background count keeps its original archive confirmation', async t => {
+  const f = await fixture(t, 'codex');
+  await f.workspace.stop(f.other);
+  f.workspace.get(f.other).background = 2;
+  const card = await f.ask('archiveSession', [f.other]);
+  assert.equal(card.state, 'confirmation-required', card.error || 'archive must present the existing card');
+  assert.equal(archived(f, f.other), false);
+  assert.equal(new RoomState(f.dir).value.sessionArchives[f.other], undefined);
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', result.error || 'one approval archives the ended session');
+  assert.equal(new RoomState(f.dir).value.archivedSessions.includes(f.other), true);
+  await f.rooms.restoreSession(f.client, f.other);
+  assert.equal(archived(f, f.other), false);
+});
+
+test('R263: restore waits for a committed native stop before making the session visible', async t => {
+  const f = await fixture(t, 'codex'), id = f.other, session = f.workspace.get(id);
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  const client = Object.create(WorkspaceClient.prototype);
+  const backend = { key: 'synthetic', client: { call: (method, ...args) => {
+    assert.equal(method, 'retainRestoredSuccessor');
+    return f.workspace.retainRestoredSuccessor(...args);
+  } } };
+  client.entries = [backend];
+  client.control = { maintenance: new Set(), generations: new Map() };
+  f.client.retainRestoredSuccessor = (target, observed) => {
+    backend.state = f.workspace.snapshot();
+    return client.retainRestoredSuccessor(target, { ...observed, handoffGroup: 0 });
+  };
+  const committed = Promise.withResolvers(), finish = Promise.withResolvers();
+  f.workspace.runtime(id).stopForMaintenance = async check => {
+    check();
+    committed.resolve();
+    return finish.promise;
+  };
+  const proof = { nativeId: session.nativeId, controlRevision: 0, draftRevision: 0, placementRevision: 0 };
+  const stopping = f.workspace.stopUnusedSuccessor(id, proof);
+  await committed.promise;
+  let restored, reported = false;
+  try {
+    await f.rooms.archiveSession(f.client, id);
+    restored = f.rooms.restoreSession(f.client, id).then(result => { reported = true; return result; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.state, 'stopping');
+    assert.equal(reported, false);
+    assert.equal(archived(f, id), true);
+  } finally {
+    finish.resolve({ state: 'ended' });
+    await Promise.all([stopping, restored]);
+  }
+  assert.equal((await restored).restored, true);
+  assert.equal(session.state, 'ended');
+  assert.equal(archived(f, id), false);
+});
+
+for (const guarded of [true, false]) {
+  test(`R263: first restore read finds the session on a ${guarded ? 'guarded' : 'legacy'} backend`, async t => {
+    const f = await fixture(t, 'codex'), id = f.other;
+    await f.rooms.archiveSession(f.client, id);
+    const { WorkspaceClient } = require('../workspace-client.cjs');
+    const reads = [], retains = [];
+    const project = key => {
+      const state = f.workspace.snapshot();
+      state.sessions = state.sessions.filter(s => key === 'owner' ? s.id === id : s.id !== id);
+      if (!guarded && key === 'owner') for (const session of state.sessions) delete session.guardedSuccessorRestore;
+      return state;
+    };
+    const entries = ['active', 'owner'].map(key => ({
+      key, state: key === 'active' ? project(key) : { ...project(key), sessions: [] },
+      client: Object.assign(new EventEmitter(), {
+        close() {},
+        async call(method, ...args) {
+          if (method === 'initial') { reads.push(key); return project(key); }
+          assert.equal(key, 'owner');
+          assert.equal(method, 'retainRestoredSuccessor');
+          assert.equal(archived(f, id), true);
+          retains.push(args);
+          return f.workspace.retainRestoredSuccessor(...args);
+        },
+      }),
+    }));
+    const client = new WorkspaceClient(entries, 'active');
+    t.after(() => client.close());
+    assert.equal(client.snapshot().sessions.some(s => s.id === id), false);
+    assert.equal((await f.rooms.restoreSession(client, id)).restored, true);
+    assert.deepEqual(reads, ['active', 'owner']);
+    assert.deepEqual(retains, guarded ? [[id, f.workspace.get(id).nativeId]] : []);
+    assert.equal(archived(f, id), false);
+  });
+}
+
+test('R263: historical-count handling leaves active and changed archive targets guarded', async t => {
+  const f = await fixture(t, 'codex'), target = f.workspace.get(f.other);
+  target.background = 2;
+  await assert.rejects(f.ask('archiveSession', [f.other]), error => error.uiMessage?.key === 'error.planWorking');
+  assert.equal(archived(f, f.other), false);
+  await f.workspace.stop(f.other);
+  target.pendingTag = 'pending';
+  await assert.rejects(f.ask('archiveSession', [f.other]), error => error.uiMessage?.key === 'error.planWorking');
+  target.pendingTag = null;
+  const card = await f.ask('archiveSession', [f.other]);
+  assert.equal(card.state, 'confirmation-required', card.error || 'eligible ended target is bound to a card');
+  target.nativeId = randomUUID();
+  await refused(f, card);
+  assert.equal(archived(f, f.other), false);
+});
+
 for (const method of ['archiveSession', 'restoreSession', 'resume', 'importHistory']) {
   test(`${method}: unrelated stop, placement, archive and room changes leave the card valid`, async t => {
     const f = await fixture(t, 'codex'), c = await addSession(f);

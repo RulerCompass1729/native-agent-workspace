@@ -10,7 +10,7 @@ async function fixture(t) {
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   for (const name of ['First', 'Middle', 'Last']) ids.push(await w.create('codex', dir, 'owner', name));
   let moves = 0;
-  const client = { snapshot: () => w.snapshot(), call: async (method, ...args) => {
+  const client = { snapshot: () => w.snapshot(), retainRestoredSuccessor: (id, observed) => w.retainRestoredSuccessor(id, observed.nativeId), call: async (method, ...args) => {
     if (method === 'initial') return { ...w.snapshot(), capabilities: ['singleHomeMoveV1', 'archiveIdleMoveV1'] };
     if (method === 'pause' || method === 'pauseSpace') return;
     if (method === 'moveMembership') { moves++; return w.moveMembership(...args); }
@@ -63,7 +63,7 @@ test('session archive saves location before detaching and cold restore returns e
   assert.deepEqual(spaces.roomIds(original), [f.a]); assert.deepEqual(cold.metadata(f.a).memberOrder, order);
   assert.equal(original.nativeId, nativeId); assert.equal(original.owner, 'owner'); assert.equal(cold.value.archivedSessions.includes(id), false);
 });
-for (const mode of ['other-room', 'ABA', 'native', 'archived-room', 'missing-room', 'multi-home', 'backend-unavailable', 'join-unconfirmed']) test(`restore releases the session despite ${mode}, without stealing a later placement`, async t => {
+for (const mode of ['other-room', 'ABA', 'native', 'archived-room', 'missing-room', 'multi-home', 'join-unconfirmed']) test(`restore releases the session despite ${mode}, without stealing a later placement`, async t => {
   const f = await fixture(t), id = f.ids[1]; await f.state.archiveSession(f.client, id);
   if (mode === 'other-room' || mode === 'ABA') {
     const s = f.w.get(id), proof = () => ({ operationId: randomUUID(), nativeId: s.nativeId, revision: spaces.placementRevision(s), connectionRevision: s.connectionRevision || 0 });
@@ -77,13 +77,26 @@ for (const mode of ['other-room', 'ABA', 'native', 'archived-room', 'missing-roo
   }
   if (mode === 'multi-home') f.state.value.sessionArchives[id].rooms.push({ id: f.b, index: 0, expected: null, done: false });
   const call = f.client.call;
-  if (mode === 'backend-unavailable') f.client.call = async () => { throw Error('Synthetic disconnected backend'); };
   if (mode === 'join-unconfirmed') f.client.call = async (method, ...args) => { if (method === 'moveMembership') throw Error('Synthetic uncertain join'); return call(method, ...args); };
   const before = spaces.roomIds(f.w.get(id)), result = await f.state.restoreSession(f.client, id);
   assert.equal(result.restored, true); assert.equal(result.placement, 'unavailable');
   assert.equal(result.uiMessage.key, 'notice.room.sessionRestoreFallback');
   assert.deepEqual(spaces.roomIds(f.w.get(id)), before); assert.equal(f.state.value.archivedSessions.includes(id), false);
   assert.equal(new RoomState(f.dir).value.sessionArchives[id], undefined); assert.doesNotThrow(() => f.state.assertAvailable(id));
+});
+test('restore keeps the archive while the session owner is unavailable and can retry', async t => {
+  const f = await fixture(t), id = f.ids[1];
+  await f.state.archiveSession(f.client, id);
+  const saved = structuredClone(f.state.value.sessionArchives[id]), call = f.client.call;
+  f.client.call = async () => { throw Error('Synthetic disconnected backend'); };
+  await assert.rejects(f.state.restoreSession(f.client, id), /Synthetic disconnected backend/);
+  const cold = new RoomState(f.dir);
+  assert.ok(cold.value.archivedSessions.includes(id));
+  assert.deepEqual(cold.value.sessionArchives[id], saved);
+  assert.equal(cold.value.restoredSessions.includes(id), false);
+  f.client.call = call;
+  assert.equal((await f.state.restoreSession(f.client, id)).placement, 'restored');
+  assert.equal(f.state.value.archivedSessions.includes(id), false);
 });
 test('archive then actual Workspace.stop still restores the same native identity to its original home', async t => {
   const f = await fixture(t), id = f.ids[1], nativeId = f.w.get(id).nativeId, order = [...f.state.metadata(f.a).memberOrder];

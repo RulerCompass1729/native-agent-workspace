@@ -69,6 +69,10 @@ const spliceSaved = (json, text) => {
 };
 // Every persist(), and a timed checkpoint at least this often, serialises all messages again.
 const SAVE_ALL_MS = 30 * 1000;
+// A timed checkpoint rewrites the whole store. From 1 MiB on, checkpoints are spaced so that they write about
+// 1 MiB a second, at most 15 s apart: a daily store of 15 MB was rewritten every two seconds, 137 GB in 4.4 hours
+// (2026-11-26). persist(), for records that must be on disk, is not spaced; the next checkpoint is spaced from it.
+const SAVE_PACED_BYTES = 1024 * 1024, SAVE_PACED_BYTES_PER_MS = 1024 * 1024 / 1000, SAVE_PACED_MAX_MS = 15 * 1000;
 // Why a failed native turn is continued automatically: the suffix of its notice keys and the opening of its
 // collaboration pause. All reasons share one timer, one limit and the same cancellations.
 const RECOVERY_REASONS = Object.freeze({
@@ -182,6 +186,7 @@ class Workspace extends EventEmitter {
     this.rooms = new Map([['shared', this.room]]);
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false; this.saveJob = null;
+    this.laterSavedAt = -Infinity; this.laterSavedBytes = 0; // performance.now(): a clock set back must not postpone saves
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.saved = null; // the JSON of both files as last saved (its parts) and the files that save left: unchanged()
@@ -197,6 +202,7 @@ class Workspace extends EventEmitter {
     // Waits that may become stuck, in memory only: a restart leaves no interrupt or approval pending.
     this.stuckWaits = new Map();
     this.stops = new Map();
+    this.restoredSuccessors = new WeakSet();
     this.preflightFailures = new WeakMap();
     this.progress = new Map(); this.observedTerminals = new Map();
     this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
@@ -287,7 +293,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, wakeInput: { ...wake.arrivals(s) }, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, guardedSuccessorRestore: true, wakeInput: { ...wake.arrivals(s) }, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -442,6 +448,7 @@ class Workspace extends EventEmitter {
       fs.writeFileSync(temp, snapshot.workspace, { mode: 0o600 });
       // Numbered before the rename: a rename that fails after it took place still keeps an older checkpoint out.
       this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
+      this.laterSavedAt = performance.now(); this.laterSavedBytes = Buffer.byteLength(snapshot.workspace);
       if (snapshot.rooms !== null) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
         fs.writeFileSync(pending, snapshot.rooms, { mode: 0o600 });
@@ -457,10 +464,13 @@ class Workspace extends EventEmitter {
     if (this.storageWarning || this.closed) return;
     // One write at a time: a checkpoint due meanwhile is taken when it ends, from the state then.
     if (this.saveWriting) { this.saveAgain = true; return; }
+    const spacing = this.laterSavedBytes < SAVE_PACED_BYTES ? 0 : Math.min(this.laterSavedBytes / SAVE_PACED_BYTES_PER_MS, SAVE_PACED_MAX_MS);
+    const early = this.laterSavedAt + spacing - performance.now();
+    if (early > 0) { this.saveDeadline = setTimeout(() => this.persistLater(), early); return; }
     let snapshot;
     try { snapshot = this.storeSnapshot(undefined, true, true); } catch { this.saveFailed(); return; }
     if (!snapshot) return;
-    this.saveWriting = true;
+    this.saveWriting = true; this.laterSavedAt = performance.now(); this.laterSavedBytes = Buffer.byteLength(snapshot.workspace);
     const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
     const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
     const job = (async () => {
@@ -2308,6 +2318,14 @@ class Workspace extends EventEmitter {
     if (!s.failedHandoffStop || !handoff.owned(current(this.runtimes.get(id)), s.failedHandoffStop.proof, tag)) throw refuse();
     return { basis: 'stopped-by-this-attempt', state: s.state, receipt: s.failedHandoffStop };
   }
+  async retainRestoredSuccessor(id, nativeId) {
+    const session = this.get(id), changed = () => uiError('error.room.sessionRestoreChanged');
+    if (this.closed || (session.nativeId ?? null) !== nativeId || session.nativeContextPending) throw changed();
+    // The final stop check and the committed-stop reservation share this event loop.
+    this.restoredSuccessors.add(session);
+    await this.stops.get(id);
+    if (this.closed || this.sessions.get(id) !== session || (session.nativeId ?? null) !== nativeId || session.nativeContextPending) throw changed();
+  }
   async stopUnusedSuccessor(id, proof) {
     // Automatic cleanup has narrower authority than a person's Stop action.
     // A persisted caller proof cannot authorize stopping newer work or a new
@@ -2329,7 +2347,7 @@ class Workspace extends EventEmitter {
     const expected = maintenanceProof(current());
     const check = () => {
       const goal = runtime.nativeGoalSnapshot?.();
-      if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
+      if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) || this.restoredSuccessors.has(s) ||
           !sameStop(current(), expected) || s.nativeId !== proof.nativeId || s.controlRevision !== proof.controlRevision ||
           (this.draftRevisions.get(id) ?? 0) !== proof.draftRevision || spaces.placementRevision(s) !== proof.placementRevision || this.drafts.get(id) ||
           !['starting', 'idle', 'error'].includes(s.state) || s.nativeContextPending || s.pendingTag || s.approval ||

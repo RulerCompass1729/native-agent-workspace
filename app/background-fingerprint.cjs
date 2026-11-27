@@ -21,7 +21,9 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
     const metadata = roomState.apply(state), auditRooms = new Set();
     if (maintenance === 'archiveSession') {
       const target = metadata.sessions.find(s => s.id === command.arguments[0]);
-      if (target && sessionBusy(target)) throw uiError('error.planWorking');
+      // An ended process cannot keep reporting progress from its last turn.
+      const observed = target?.state === 'ended' ? { ...target, background: 0 } : target;
+      if (observed && sessionBusy(observed)) throw uiError('error.planWorking');
     }
     const controlTarget = ['interrupt', 'pause', 'claim', 'terminal', 'terminalSnapshot', 'resize', 'answer', 'input', 'prepareInput', 'observe', 'stageImages', 'pasteNativeContent'].includes(command.method) ? command.arguments[0] : null;
     for (const s of state.sessions) if (s.id === actor.id || strings.has(s.id)) {
