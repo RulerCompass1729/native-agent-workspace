@@ -185,6 +185,7 @@ test('the compact session menu and member menu expose the same project manager c
       vm.runInContext(section('const headerMenuKey =', 'function renderHeaderLayout('), f.c);
       f.c.openHeaderMenu(anchor);
     } else {
+      vm.runInContext(section('function listedSpaceManager(', 'function openSidebarRow('), f.c);
       vm.runInContext(section('function memberMenuKey(', 'function sidebarSessions('), f.c);
       f.c.openMemberMenu(f.record.id, anchor);
     }

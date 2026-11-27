@@ -231,7 +231,7 @@ test('the actual overview measures column heights after its final header and sha
   Object.assign(context, {
     sessionComposers: new Map([[binding.id, binding]]), columnTerminalBinding: () => binding,
     document: { activeElement: null }, members: () => [], orderedMembers: () => [],
-    focusedRoomMember: () => false, roomSurface: 'overview', disconnected: false,
+    focusedRoomMember: () => false, roomSurface: 'overview', spaceId: 'shared', disconnected: false,
     state: { room: { id: 'shared', name: 'Fixture space' } }, spaceName: room => room.name, ui: { display: { text() {} } },
     roomOverview: { toolbar: {}, update() { context.applyColumnTerminalHeight(binding, 112); } },
     renderHeaderLayout() { limits.max = 64; }, current: () => null, selected: 'room',
@@ -241,6 +241,8 @@ test('the actual overview measures column heights after its final header and sha
   });
   const refresh = renderer.indexOf('function fitColumnTerminalWidth(');
   if (refresh >= 0) vm.runInContext(renderer.slice(refresh, renderer.indexOf("window.addEventListener('resize'", refresh)), context);
+  const managerStart = renderer.indexOf('function listedSpaceManager(');
+  vm.runInContext(renderer.slice(managerStart, renderer.indexOf('function openSidebarRow(', managerStart)), context);
   const begin = renderer.indexOf('function renderRoomOverview(');
   vm.runInContext(renderer.slice(begin, renderer.indexOf('const nativeUsable =', begin)), context);
   context.renderRoomOverview();
