@@ -1523,11 +1523,14 @@ class RoomState {
         if (saved) { const remaining = { ...this.value.sessionArchives }; delete remaining[id]; this.update({ sessionArchives: remaining }); }
         return { restored: false };
       }
-      await client.retainRestoredSuccessor?.(id);
+      let current, readError;
+      try { current = (await client.call('initial')).sessions.find(s => s.id === id); }
+      catch (error) { readError = error; }
+      await client.retainRestoredSuccessor?.(id, current);
       let placement = 'unavailable';
       try {
         if (!saved || !saved.detached || saved.rooms.length > 1) throw Error('No unambiguous saved home');
-        let current = (await client.call('initial')).sessions.find(s => s.id === id);
+        if (readError) throw readError;
         if (!current) throw Error('Native session unavailable');
         const recovered = saved.restoreExpected && current.placementReceipt?.operationId === saved.restoreExpected.operationId;
         if ((current.nativeId ?? null) !== saved.nativeId || !recovered && !sameHome(current, saved.detached)) throw Error('Placement changed');

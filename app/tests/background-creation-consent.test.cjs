@@ -139,6 +139,42 @@ test('R263: restore waits for a committed native stop before making the session 
   assert.equal(archived(f, id), false);
 });
 
+for (const guarded of [true, false]) {
+  test(`R263: first restore read finds the session on a ${guarded ? 'guarded' : 'legacy'} backend`, async t => {
+    const f = await fixture(t, 'codex'), id = f.other;
+    await f.rooms.archiveSession(f.client, id);
+    const { WorkspaceClient } = require('../workspace-client.cjs');
+    const reads = [], retains = [];
+    const project = key => {
+      const state = f.workspace.snapshot();
+      state.sessions = state.sessions.filter(s => key === 'owner' ? s.id === id : s.id !== id);
+      if (!guarded && key === 'owner') for (const session of state.sessions) delete session.guardedSuccessorRestore;
+      return state;
+    };
+    const entries = ['active', 'owner'].map(key => ({
+      key, state: key === 'active' ? project(key) : { ...project(key), sessions: [] },
+      client: Object.assign(new EventEmitter(), {
+        close() {},
+        async call(method, ...args) {
+          if (method === 'initial') { reads.push(key); return project(key); }
+          assert.equal(key, 'owner');
+          assert.equal(method, 'retainRestoredSuccessor');
+          assert.equal(archived(f, id), true);
+          retains.push(args);
+          return f.workspace.retainRestoredSuccessor(...args);
+        },
+      }),
+    }));
+    const client = new WorkspaceClient(entries, 'active');
+    t.after(() => client.close());
+    assert.equal(client.snapshot().sessions.some(s => s.id === id), false);
+    assert.equal((await f.rooms.restoreSession(client, id)).restored, true);
+    assert.deepEqual(reads, ['active', 'owner']);
+    assert.deepEqual(retains, guarded ? [[id, f.workspace.get(id).nativeId]] : []);
+    assert.equal(archived(f, id), false);
+  });
+}
+
 test('R263: historical-count handling leaves active and changed archive targets guarded', async t => {
   const f = await fixture(t, 'codex'), target = f.workspace.get(f.other);
   target.background = 2;
