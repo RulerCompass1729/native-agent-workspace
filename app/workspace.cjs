@@ -197,6 +197,7 @@ class Workspace extends EventEmitter {
     // Waits that may become stuck, in memory only: a restart leaves no interrupt or approval pending.
     this.stuckWaits = new Map();
     this.stops = new Map();
+    this.retirementCreates = new WeakMap();
     this.restoredSuccessors = new WeakSet();
     this.preflightFailures = new WeakMap();
     this.progress = new Map(); this.observedTerminals = new Map();
@@ -288,7 +289,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, guardedSuccessorRestore: true, wakeInput: { ...wake.arrivals(s) }, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...(this.retirementUnused(s) ? { retirementUnused: true } : {}), guardedSuccessorRestore: true, wakeInput: { ...wake.arrivals(s) }, ...sessionMaker(s), ...(this.pagelessOwners.has(s.owner) ? { ownerPageless: true } : {}), ...this.stuckFor(s), usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeStartupPrompt: directoryTrustPrompt(s, this.runtimes.get(s.id)), nativeTerminalDialog: terminalDialogPrompt(s, this.runtimes.get(s.id)), controlRefusal: this.runtimes.get(s.id)?.controlRefusal || null, wakeUndelivered: this.runtimes.get(s.id)?.wakeUndelivered || null, nativeUnbound: this.runtimes.get(s.id)?.nativeUnbound || null, interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeCreationSettings: this.runtimes.get(s.id)?.creationSettingsSnapshot?.() || null, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, ...(s.provider === 'codex' ? { nativeGoal: this.runtimes.get(s.id)?.nativeGoalSnapshot?.() || null } : {}), nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), midturnAvailable: Boolean(this.runtimes.get(s.id)?.midturnAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null, observationIndex: this.runtimes.get(s.id).terminal.journal?.index ?? null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, draftRevision: this.draftRevisions.get(s.id) || 0, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   // kind is 'interrupt' or 'approval'.
   // An interrupt waits for as long as the turn it was sent to keeps running. A later tool or status
@@ -574,6 +575,7 @@ class Workspace extends EventEmitter {
     const now = Date.now();
     const record = { id, nativeId: provider === 'claude' || provider === 'pi' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', modelUiMessage: uiNotice('notice.model.nativeDefault').uiMessage, usage: null, pendingTag: null, activity: '', approval: null, pid: null, ...(requestedSettings ? { requestedSettings } : {}), ...(typeof profileProvider === 'string' ? { modelProvider: profileProvider } : {}), ...(provider === 'dsh' || provider === 'pi' ? { modelProvider: 'deepseek' } : {}) };
     if (fork) record.forkPicker = true;
+    else if (provider === 'claude') this.retirementCreates.set(record, record.nativeId);
     if (worktreePlan) {
       record.worktreePreparation = { ...worktreePlan, status: 'preparing' };
       setActivity(record, ...uiActivity("notice.activity.preparingGit"));
@@ -2260,7 +2262,7 @@ class Workspace extends EventEmitter {
   // only the relays, grants and continuations this session is in; another space's relay keeps running. Without
   // it (the backend switch, which ends every session) the stop pauses all of them, as before.
   // `requireAuto` 'typed': proven idle apart from text perhaps typed in the native terminal, which the caller saved.
-  maintenanceStop(id, expected, requireAuto = false, scope = null) {
+  maintenanceStop(id, expected, requireAuto = false, scope = null, checkRetirement = null) {
     const { sessionPlan, sameStop } = require('./backend-switch.cjs');
     const s = this.get(id), runtime = this.runtime(id);
     if (scope !== null && scope !== undefined && scope !== 'participant') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
@@ -2274,9 +2276,46 @@ class Workspace extends EventEmitter {
       const plan = sessionPlan(current, current.state, running);
       if (this.closed || this.storageWarning || this.sessions.get(id) !== s || this.runtimes.get(id) !== runtime || this.stops.has(id) ||
           !plan.stop || !sameStop(plan.stop, expected) || (requireAuto && !plan.auto) || typeof runtime.stopForMaintenance !== 'function') throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
+      checkRetirement?.();
     };
     check();
     return this.stop(id, { check, expected, participantOnly: scope === 'participant' });
+  }
+  retirementUnused(s) {
+    return this.retirementCreates.get(s) === s.nativeId && typeof s.nativeId === 'string' &&
+      s.controlRevision === 0 && !s.peerRevision && !s.connectionRevision && !this.draftRevisions.get(s.id) &&
+      !s.nativeContexts?.length && s.messages.every(message => message.role === 'system' && !message.turnId);
+  }
+  async observeRetirement(id) {
+    const s = this.get(id), runtime = this.runtime(id);
+    if (s.provider !== 'claude' || s.state !== 'idle' || !runtime.terminal?.observe) return null;
+    const { alive, epoch, index } = await runtime.terminal.observe();
+    return { alive, epoch, index };
+  }
+  async retireSession(id, expected, observation) {
+    const retirement = require('./session-retirement.cjs');
+    const s = this.get(id), runtime = this.runtime(id);
+    const current = () => ({ ...s, retirementUnused: this.retirementUnused(s),
+      draftRevision: this.draftRevisions.get(id) || 0, liveDraft: this.drafts.get(id),
+      activeTurnId: runtime.turnId, pendingQueue: runtime.pendingQueue, pendingSteer: runtime.pendingSteer,
+      nativeInputRequired: runtime.nativeInputRequired, nativeApproval: runtime.nativeApproval,
+      interruptPending: runtime.nativeAbortRequest, backendUnavailable: runtime.backendExitConfirmed,
+      transportDisconnected: runtime.transportDisconnected });
+    const check = () => {
+      const row = current(), terminal = runtime.terminal;
+      const held = retirement.heldInRooms(this.rooms.values(), this.sessions.values());
+      const operator = this.operator.data;
+      if (!retirement.quietClaude(row) || !require('node:util').isDeepStrictEqual(retirement.proof(row), expected) ||
+          !observation || !terminal?.alive || terminal.nativeExited || terminal.journal?.epoch !== observation.epoch ||
+          terminal.journal?.index !== observation.index || held.has(id) || this.restoredSuccessors.has(s) ||
+          this.operator.error || Object.values(operator.requests).some(request => !request.closed &&
+            (request.initiatorId === id || Object.values(operator.dispatches).some(dispatch => dispatch.requestId === request.id && dispatch.executorId === id)))) {
+        throw uiError('error.backendSwitchSessionChanged', { name: s.name || id });
+      }
+    };
+    const result = await this.maintenanceStop(id, expected, true, 'participant', check);
+    if (result.stoppedState?.state === 'ended' && (!this.persist() || this.storageWarning)) throw uiError('error.workspace.automaticRecordUnsaved');
+    return result;
   }
   async stopFailedSuccessor(id, proof, tag) {
     const handoff = require('./rotation-handoff.cjs'), s = this.get(id);

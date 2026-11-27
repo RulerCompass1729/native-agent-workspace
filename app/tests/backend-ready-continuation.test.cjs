@@ -37,6 +37,7 @@ function fixture(settings = { auto: true, migrate: false }) {
     app: { getVersion: () => current }, backendSwitch: { ...backendSwitch, readSettings: () => settings },
     windows: new Map([[1, context]]), backendSwitching: null, autoSwitchRunning: false, autoSwitchFailed: new Set(), quitting: false, quietWindows: null,
     lastAutomaticHistoryCandidate: null,
+    async retireIdleSession(context) { await f.onRetireIdleSession?.(context); },
     queueDispatcher: null, queueRules: { ...queueRules, nextBackendMove(...args) { events.push('nextMove'); return queueRules.nextBackendMove(...args); } },
     migrateQuietMs: () => queueRules.MIGRATE_QUIET_MS, migrateUnprovenQuietMs: () => queueRules.MIGRATE_UNPROVEN_QUIET_MS,
     runningRelays: () => new Set(), dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' },
@@ -261,4 +262,17 @@ test('automatic continuation runs the actual socket replacement in every window 
   assert.equal(replaced[0][2], connected[0][1]); assert.equal(replaced[1][2], connected[1][1]);
   assert.equal(f.control.maintenance.size, 0); assert.equal(f.notices.at(-1).event, 'workspace:backend-switched');
   assert.equal(f.notices.at(-1).notice.error, undefined);
+});
+
+test('the existing maintenance pass reaches idle-session retirement only after refreshing and with maintenance enabled', async () => {
+  const enabled = fixture();
+  enabled.old.state.sessions = [];
+  enabled.onRetireIdleSession = context => { assert.equal(context, enabled.context); enabled.events.push('retire-idle'); };
+  await enabled.scope.autoBackendSwitchOnce();
+  assert.deepEqual(enabled.events, ['refresh', 'nextMove', 'retire-idle']);
+
+  const disabled = fixture({ auto: false, migrate: false });
+  disabled.onRetireIdleSession = () => assert.fail('maintenance is off');
+  await disabled.scope.autoBackendSwitchOnce();
+  assert.deepEqual(disabled.events, []);
 });

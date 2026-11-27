@@ -590,6 +590,10 @@ class BackgroundControl {
     }
     return !this.data.records.some(r => ['running', 'confirmation-required'].includes(r.state) && this.key(r.actor) === key);
   }
+  holdsSessionWork(id) {
+    return this.data.records.some(row => (row.state === 'running' || row.state === 'confirmation-required' && !this.expired(row)) &&
+      (row.actor.id === id || row.guard?.sessions?.some(session => session.id === id)));
+  }
   async newView(sender, selected, mode) {
     if (this.closed) throw Error('Background control is closing');
     const viewId = randomUUID(), key = this.key(sender) + ':' + viewId;

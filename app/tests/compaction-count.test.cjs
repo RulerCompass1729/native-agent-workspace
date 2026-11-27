@@ -554,3 +554,16 @@ test('a failed read leaves no size behind', async t => {
   await assert.rejects(counter.recheck(claude(), AT + 1000), /EIO/);
   assert.equal(counter.contexts.has('s1'), false);
 });
+
+test('retirement waits for the longer known cache and preserves an unknown write', async t => {
+  const r = roots(t);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0, retirement: true });
+  fs.writeFileSync(r.claudeFile, [claudeUsage({ write1h: 100, write5m: 1 }), claudeUsage({ read: 100, write5m: 1 }), ''].join('\n'));
+  await counter.sample([claude()], AT);
+  assert.equal(counter.contexts.get('s1').ttlMs, 60 * 60000);
+  const unknown = JSON.parse(claudeUsage({ write5m: 10 }));
+  delete unknown.message.usage.cache_creation;
+  fs.appendFileSync(r.claudeFile, JSON.stringify(unknown) + '\n');
+  await counter.recheck(claude(), AT + 1);
+  assert.equal(counter.contexts.get('s1').ttlMs, null);
+});
