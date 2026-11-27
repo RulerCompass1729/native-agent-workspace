@@ -83,6 +83,37 @@ async function refused(f, card, pattern = /operation target changed/i) {
   assert.equal(result.state, 'unconfirmed'); assert.match(result.error, pattern);
   assert.equal(f.calls.length, before, 'Refusal must happen before the business handler');
 }
+test('R263: an ended session with a historical background count keeps its original archive confirmation', async t => {
+  const f = await fixture(t, 'codex');
+  await f.workspace.stop(f.other);
+  f.workspace.get(f.other).background = 2;
+  const card = await f.ask('archiveSession', [f.other]);
+  assert.equal(card.state, 'confirmation-required', card.error || 'archive must present the existing card');
+  assert.equal(archived(f, f.other), false);
+  assert.equal(new RoomState(f.dir).value.sessionArchives[f.other], undefined);
+  const result = await f.confirm(card);
+  assert.equal(result.state, 'complete', result.error || 'one approval archives the ended session');
+  assert.equal(new RoomState(f.dir).value.archivedSessions.includes(f.other), true);
+  await f.rooms.restoreSession(f.client, f.other);
+  assert.equal(archived(f, f.other), false);
+});
+
+test('R263: historical-count handling leaves active and changed archive targets guarded', async t => {
+  const f = await fixture(t, 'codex'), target = f.workspace.get(f.other);
+  target.background = 2;
+  await assert.rejects(f.ask('archiveSession', [f.other]), error => error.uiMessage?.key === 'error.planWorking');
+  assert.equal(archived(f, f.other), false);
+  await f.workspace.stop(f.other);
+  target.pendingTag = 'pending';
+  await assert.rejects(f.ask('archiveSession', [f.other]), error => error.uiMessage?.key === 'error.planWorking');
+  target.pendingTag = null;
+  const card = await f.ask('archiveSession', [f.other]);
+  assert.equal(card.state, 'confirmation-required', card.error || 'eligible ended target is bound to a card');
+  target.nativeId = randomUUID();
+  await refused(f, card);
+  assert.equal(archived(f, f.other), false);
+});
+
 for (const method of ['archiveSession', 'restoreSession', 'resume', 'importHistory']) {
   test(`${method}: unrelated stop, placement, archive and room changes leave the card valid`, async t => {
     const f = await fixture(t, 'codex'), c = await addSession(f);

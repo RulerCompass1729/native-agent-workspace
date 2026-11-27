@@ -1425,7 +1425,7 @@ class RoomState {
   }
   // automatic: NAW's own archive of a session in no space (an old session a rotation replaced). It never leaves
   // or pauses a space on its own: a session still in one is refused, and nothing waits on a pause.
-  archiveSession(client, id, label, { automatic = false } = {}) {
+  archiveSession(client, id, label, { automatic = false, automaticCheck } = {}) {
     if (typeof id !== 'string' || !id || id.length > 100) return Promise.reject(uiError("error.main.invalidSession"));
     if (this.gates.has(id)) return Promise.reject(uiError("error.room.sessionUpdating"));
     // Read before the gate: a session the snapshot does not hold must not leave its gate set.
@@ -1433,18 +1433,19 @@ class RoomState {
     try { spaces = typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID; }
     catch { return Promise.reject(uiError("error.sessionMissing")); }
     this.gates.add(id);
-    const action = () => this.archiveSessionNow(client, id, label, { automatic });
+    const action = () => this.archiveSessionNow(client, id, label, { automatic, automaticCheck });
     return (automatic ? this.serial(action) : this.enqueue(client, action, id, spaces)).finally(() => this.gates.delete(id));
   }
   // Called only inside this.queue; public entry points own gates and serialization.
-  async archiveSessionNow(client, id, label, { automatic = false, archivedByRoom } = {}) {
+  async archiveSessionNow(client, id, label, { automatic = false, automaticCheck, archivedByRoom } = {}) {
       if (this.value.archivedSessions.includes(id)) return;
       const snapshot = await client.call('initial'), session = snapshot.sessions.find(s => s.id === id);
       if (!session) throw uiError("error.sessionMissing");
       if (archivedByRoom && !this.roomArchiveIdle(session)) throw uiError('error.planWorking');
-      if (automatic && roomIds(session).length) throw uiError('error.room.sessionRestoreChanged');
+      const check = automatic ? automaticCheck : null;
+      if (automatic && (roomIds(session).length || check && !check(session))) throw uiError('error.room.sessionRestoreChanged');
       let plan = Object.hasOwn(this.value.sessionArchives, id) ? this.value.sessionArchives[id] : null;
-      if (archivedByRoom && plan && plan.archivedByRoom !== archivedByRoom) throw uiError('error.room.sessionRestoreChanged');
+      if (plan && (check || archivedByRoom && plan.archivedByRoom !== archivedByRoom)) throw uiError('error.room.sessionRestoreChanged');
       const pending = plan?.rooms.find(r => !r.done);
       if (plan && ((session.nativeId ?? null) !== plan.nativeId || plan.detached ||
           JSON.stringify(restorePlacement(session)) !== JSON.stringify(plan.checkpoint) &&
@@ -1467,7 +1468,7 @@ class RoomState {
           return { id: space, index, next: order[index + 1] || null, expected: null, done: false };
         });
         plan = { nativeId: session.nativeId ?? null, rooms, checkpoint: restorePlacement(session), detached: null, ...(archivedByRoom ? { archivedByRoom } : {}) };
-        this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
+        if (!check) this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
       }
       if ((session.nativeId ?? null) !== plan.nativeId || plan.detached) throw uiError('error.room.sessionRestoreChanged');
       const capabilities = session.serviceCapabilities || snapshot.capabilities || [];
@@ -1506,6 +1507,7 @@ class RoomState {
       if (!current || (current.nativeId ?? null) !== plan.nativeId || roomIds(current).length ||
           JSON.stringify(restorePlacement(current)) !== JSON.stringify(plan.checkpoint)) throw uiError('error.room.sessionRestoreChanged');
       if (archivedByRoom && !this.roomArchiveIdle(current)) throw uiError('error.planWorking');
+      if (check && !check(current)) throw uiError('error.room.sessionRestoreChanged');
       plan = { ...plan, detached: restorePlacement(current) };
       this.update({ archivedSessions: [...this.value.archivedSessions, id], sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
   }

@@ -379,6 +379,16 @@ function trustProof(session) {
     draftRevision: session?.draftRevision, placementRevision: session && placementRevision(session) };
   return validTrustProof(proof, session?.provider) ? proof : null;
 }
+function unusedRotationSuccessor(session) {
+  return session?.nativeId && !session.nativeContextPending && !session.nativeContexts?.length &&
+    !session.backendUnavailable && !session.transportDisconnected && !session.liveDraft &&
+    !session.activeTurnId && !session.pendingTag && !session.pendingQueue && !session.pendingSteer &&
+    !session.nativeInputRequired && !session.approval && !session.nativeApproval?.requests?.length && !session.interruptPending &&
+    session.nativeGoal?.status !== 'active' && session.nativeGoal?.known !== false &&
+    !(session.background > 0) && !(session.scheduled > 0) && !session.fleet?.length &&
+    Array.isArray(session.messages) && session.messages.every(message => message.role === 'system' && !message.turnId);
+}
+
 function validTrustProof(proof, provider) {
   return exactKeys(proof, ['nativeId', 'controlRevision', 'draftRevision', 'placementRevision']) &&
     (proof.nativeId === null ? provider === 'codex' : typeof proof.nativeId === 'string' && proof.nativeId.length > 0 && proof.nativeId.length <= 2000 && !/[\u0000-\u001f]/u.test(proof.nativeId)) &&
@@ -3217,18 +3227,18 @@ class QueueDispatcher {
   // which refuses a session still in a space. Tidiness only: a failure leaves it where it was. An archive that
   // finishes after the wait gave up is recorded then (`late`), so a restore is never undone at a later start.
   // Resolves true (archived here), 'already' (archived by someone else: settle it quietly) or false.
-  async archiveOld(id, label, late) {
+  async archiveOld(id, label, late, automaticCheck) {
     // Archived already (by the person, meanwhile): not NAW's to announce, but settled so a restore stays.
     if ((this.roomState.value.archivedSessions || []).includes(id)) {
       return 'already';
     }
     let waited = false;
-    const archived = this.roomState.archiveSession(this.client, id, label, { automatic: true })
+    const archived = this.roomState.archiveSession(this.client, id, label, { automatic: true, automaticCheck })
       .then(() => (this.roomState.value.archivedSessions || []).includes(id), () => false);
     archived.then(done => {
       if (done && waited && !this.closed) {
         try {
-          late();
+          late?.();
         } catch {
           // The archive stands; only its late line was not written.
         }
@@ -5073,27 +5083,22 @@ class QueueDispatcher {
     this.save();
     let stopped = true;
     if (record.newId && !record.handoffConfirmed && ['joining', 'created', 'handed', 'waiting-trust'].includes(phase)) {
+      let returned = true;
       for (const roomId of record.roomIds) {
         try {
           this.roomState.queueReassign(roomId, record.newId, oldId);
         } catch {
-          // The space may be gone; the failure record still stands.
-        }
-        try {
-          await withTimeout(this.roomState.membership(this.client, record.newId, false, record.newName || record.name, roomId), CALL_TIMEOUT_MS, 'leave-timeout');
-        } catch {
-          // Leaving is cosmetic; stopping the unused session is what frees memory.
+          returned = false;
         }
       }
       try {
-        await withTimeout(this.client.call('stop', record.newId), CALL_TIMEOUT_MS, 'stop-timeout');
+        stopped = returned && await this.retireUnusedSuccessor(oldId, record);
       } catch {
-        // Left for the person; it holds no handoff and no queued work.
         stopped = false;
-        if (trustTimedOut) {
-          record.reason = reason = 'native-directory-trust-timeout-stop-unconfirmed';
-          this.save();
-        }
+      }
+      if (!stopped && trustTimedOut) {
+        record.reason = reason = 'native-directory-trust-timeout-stop-unconfirmed';
+        this.save();
       }
     }
     if (!record.oldId) {
@@ -5113,6 +5118,54 @@ class QueueDispatcher {
     }
     this.notify(outcome, record);
     await this.broadcast();
+  }
+
+  async retireUnusedSuccessor(oldId, record) {
+    // A dispatched handoff without a receipt is ambiguous. The failed-handoff cleanup still owns it.
+    if (record.createdSuccessor !== true || Object.hasOwn(record, 'successorOwner') || record.handoffTag) return false;
+    const id = record.newId, client = this.client;
+    const read = async () => (await withTimeout(client.call('initial'), CALL_TIMEOUT_MS, 'refresh-timeout')).sessions.find(s => s.id === id);
+    const before = await read();
+    const proof = trustProof(before), revision = before?.connectionRevision ?? 0;
+    if (this.closed || !proof || !unusedRotationSuccessor(before) || proof.controlRevision !== 0 || proof.draftRevision !== 0 ||
+        revision !== 0 || before.provider !== record.provider || !['starting', 'idle', 'error', 'ended'].includes(before.state)) return false;
+    const rooms = roomIds(before);
+    if (rooms.length > 1 || (!rooms.length && proof.placementRevision !== 0)) return false;
+    if (rooms.length && (!record.roomIds.includes(rooms[0]) || proof.placementRevision !== 1 || !record.successorJoin ||
+        before.placementReceipt?.operationId !== record.successorJoin)) return false;
+
+    const target = client.route(id), guard = client.operationGuard?.(target) || (() => {});
+    let change = 0;
+    if (before.state !== 'ended') {
+      if (!target.state.capabilities?.includes(GUARDED_STOP_CAPABILITY)) return false;
+      guard();
+      const result = await withTimeout(target.client.call('stopUnusedSuccessor', id, proof), CALL_TIMEOUT_MS, 'stop-timeout');
+      guard();
+      if (result?.state !== 'ended') return false;
+      change = 1;
+    }
+
+    let placement = proof.placementRevision;
+    const ended = session => {
+      guard();
+      return !this.closed && this.rotations[oldId] === record && session.state === 'ended' &&
+        unusedRotationSuccessor(session) && session.nativeId === proof.nativeId &&
+        (session.connectionRevision ?? 0) === revision + change && session.controlRevision === proof.controlRevision + change &&
+        session.draftRevision === proof.draftRevision && placementRevision(session) === placement;
+    };
+    const stopped = await read();
+    if (!stopped || !ended(stopped)) return false;
+    if (rooms.length) {
+      const roomId = rooms[0];
+      const left = await withTimeout(this.roomState.membership(client, id, false, record.newName, roomId, {
+        nativeId: proof.nativeId, placementRevision: placement, connectionRevision: revision + change, unusedSuccessor: true,
+      }), CALL_TIMEOUT_MS, 'leave-timeout');
+      if (!left?.changed || left.placementRevision !== placement + 1) return false;
+      placement = left.placementRevision;
+    }
+    // This is the existing one-shot failed transition. Restoring an archived shell does not replay it.
+    if (!RELEASED_REASONS.includes(record.reason)) await this.archiveOld(id, record.newName, undefined, ended);
+    return true;
   }
 
   async resumeFailedHandoff(oldId, record) {
@@ -5802,6 +5855,7 @@ class QueueDispatcher {
           options.settings = record.carry;
         }
         record.newId = await withTimeout(this.client.call('create', options), CREATE_TIMEOUT_MS, 'create-timeout');
+        record.createdSuccessor = true;
       }
       if (this.closed) return;
       record.createdNewAt = now;
@@ -5819,7 +5873,12 @@ class QueueDispatcher {
       }
       try {
         for (const roomId of record.roomIds) {
-          if (!terminalFirst || !roomIds(latest || {}).includes(roomId)) await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
+          if (terminalFirst && roomIds(latest || {}).includes(roomId)) continue;
+          const placement = await withTimeout(this.roomState.membership(this.client, record.newId, true, record.newName, roomId), CALL_TIMEOUT_MS, 'join-timeout');
+          if (record.createdSuccessor === true && placement?.changed && validId(placement.operationId)) {
+            record.successorJoin = placement.operationId;
+            this.save();
+          }
         }
       } catch (error) {
         if (!BACKEND_UPDATING_KEYS.has(errorKey(error))) throw error;

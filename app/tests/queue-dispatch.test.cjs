@@ -860,7 +860,10 @@ class FakeClient extends EventEmitter {
       assert.ok(['starting', 'idle'].includes(session.state) && !session.pendingTag && !session.liveDraft && !session.nativeInputRequired &&
         !session.activeTurnId && !session.pendingQueue && !session.pendingSteer && session.nativeGoal?.status !== 'active' &&
         !(session.messages || []).some(m => m.role === 'user') && !(session.background > 0), 'the owned successor is still unused');
-      return this.call('stop', session.id);
+      const stopped = await this.call('stop', session.id);
+      session.controlRevision++;
+      session.connectionRevision = (session.connectionRevision || 0) + 1;
+      return stopped;
     }
     if (method === 'terminalSnapshot') {
       if (this.snapshotFails) {
@@ -4587,6 +4590,79 @@ test('a join refused for any other reason still fails the rotation at once', asy
   assert.equal(f.room.value.queue[0].assignee, 'a'); assert.equal(f.successor().state, 'ended');
 });
 
+test('R263: a failed rotation archives only its own unused ended successor, with a durable restore', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation('error.sessionMissing'));
+  const id = f.successor().id;
+  assert.equal(f.dispatcher.rotations.a.phase, 'failed');
+  assert.equal(f.successor().state, 'ended');
+  assert.notEqual(f.client.state.sessions[0].state, 'ended');
+  assert.equal(f.room.value.queue[0].assignee, 'a');
+  assert.deepEqual(new RoomState(f.dir).value.archivedSessions, [id]);
+  assert.equal(f.room.apply(f.client.snapshot()).sessions.find(s => s.id === id).archived, true);
+  await f.room.restoreSession(f.client, id, 'Restored successor');
+  f.dispatcher.close();
+  const reopened = new rules.QueueDispatcher({ roomState: new RoomState(f.dir), dataDir: f.dir, now: () => NOW,
+    tickMs: HOUR, clients: () => f.client, connect: async () => f.client });
+  t.after(() => reopened.close());
+  await reopened.start();
+  await reopened.schedule();
+  assert.deepEqual(new RoomState(f.dir).value.archivedSessions, []);
+  assert.equal(reopened.roomState.apply(f.client.snapshot()).sessions.find(s => s.id === id).archived, false);
+});
+
+const uiErrorForRotation = key => require('../ui-errors.cjs').uiError(key);
+
+for (const change of ['human uses the successor', 'successor still working', 'late native identity', 'stop unconfirmed', 'creation is unproven', 'queue rollback is unproven']) {
+  test('R263: keep the failed successor when ' + change, async t => {
+    const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));
+    const successor = f.successor();
+    const forward = f.client.call.bind(f.client);
+    f.client.call = async (method, ...args) => {
+      if (method === 'stopUnusedSuccessor' || method === 'stop') {
+        if (change === 'stop unconfirmed') throw Error('Synthetic stop not confirmed');
+      }
+      return forward(method, ...args);
+    };
+    if (change === 'human uses the successor') successor.messages.push({ id: 'human', origin: 'human', role: 'user' });
+    if (change === 'successor still working') successor.state = 'working';
+    if (change === 'creation is unproven') delete f.dispatcher.rotations.a.createdSuccessor;
+    if (change === 'queue rollback is unproven') f.room.queueReassign = () => { throw Error('Synthetic rollback failed'); };
+    if (change === 'late native identity') {
+      successor.nativeId = 'replacement-native';
+      successor.connectionRevision = (successor.connectionRevision || 0) + 1;
+    }
+    f.advance(10 * 60 * 1000 + 1);
+    await f.pass();
+    assert.deepEqual(f.room.value.archivedSessions, []);
+    assert.equal(f.room.value.queue[0].assignee, 'a');
+    assert.notEqual(successor.state, 'ended');
+  });
+}
+
+test('R263: an identity change inside the archive transaction leaves no archived session or restore plan', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));
+  const id = f.successor().id;
+  const archive = f.room.archiveSession.bind(f.room), forward = f.client.call.bind(f.client);
+  let duringArchive = false, reads = 0;
+  f.room.archiveSession = async (...args) => {
+    duringArchive = true;
+    try { return await archive(...args); } finally { duringArchive = false; }
+  };
+  f.client.call = async (method, ...args) => {
+    if (method === 'initial' && duringArchive && ++reads === 2) {
+      const s = f.successor();
+      s.nativeId = 'new-native-in-archive';
+      s.connectionRevision++;
+    }
+    return forward(method, ...args);
+  };
+  f.advance(10 * 60 * 1000 + 1);
+  await f.pass();
+  assert.equal(reads, 2);
+  assert.deepEqual(f.room.value.archivedSessions, []);
+  assert.equal(f.room.value.sessionArchives[id], undefined);
+});
+
 test('a done rotation archives the old session it stopped, logs it and says so in the space', async t => {
   const { room, client, dir, newId, savedAtArchive } = await rotateOnce(t);
   assert.deepEqual(savedAtArchive, [[newId]], 'only the successor rests in the saved rotations when the archive starts');
@@ -6176,6 +6252,17 @@ for (const status of ['failed', 'interrupted', 'incomplete']) test(`first snapsh
   assert.equal(f.room.value.queue.find(i => i.id === f.decision).sentTo, 'a');
   assert.equal(f.old.rotationEpisode.state, 'released');
 });
+test('R263: a failed first turn with native receipt remains recoverable after cleanup', async t => {
+  const f = await firstHandoff(t, { state: 'error' });
+  f.record.createdSuccessor = true;
+  f.boundary('failed');
+  await f.step();
+  assert.equal(f.record.failureCleanup.stop.state, 'done');
+  assert.equal(f.fresh.state, 'ended');
+  assert.deepEqual(f.room.value.archivedSessions, []);
+  assert.equal(f.room.value.queue.find(i => i.id === f.task).assignee, 'a');
+});
+
 test('first snapshot already completed confirms nativeId and turnId without inputTag', async t => {
   const f = await firstHandoff(t, { state: 'idle' }); f.boundary('complete'); await f.step();
   assert.equal(f.record.handoffConfirmed, true); assert.equal(f.old.state, 'ended');
