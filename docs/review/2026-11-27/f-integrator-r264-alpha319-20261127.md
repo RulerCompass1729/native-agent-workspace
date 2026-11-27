@@ -1,0 +1,3 @@
+# Confirmation entry followup on the retired-reader repair
+
+The previously reviewed confirmation-entry and task-board followup is replayed without source edits on the standalone retired-reader hotfix. All changed product/test files match that approved candidate except Main, where its unchanged diff applies automatically alongside the surviving-window reconnect repair. The readonly proof module, both callers, installer inspector and package manifest retain the hotfix exactly. Release metadata advances by one; daily activation waits for the urgent preceding release and all independent artifact gates.

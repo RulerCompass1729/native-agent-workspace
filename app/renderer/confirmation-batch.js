@@ -26,7 +26,7 @@
       (summary.method !== 'input' || typeof op.confirmation.options?.detail === 'string' && op.confirmation.options.detail !== ''));
   }
   // `started`: batches the person already answered, by the card keys they covered, kept together until they are gone.
-  function plan(cards, started = []) {
+  function plan(cards, started = [], now = null) {
     const list = Array.isArray(cards) ? cards : [], byKey = new Map(list.map(card => [card.key, card])), used = new Set(), out = [];
     for (const batch of started) {
       const members = batch.keys.map(key => byKey.get(key)).filter(Boolean);
@@ -36,7 +36,7 @@
     }
     const groups = new Map();
     for (const card of list) {
-      if (used.has(card.key) || !batchable(card)) continue;
+      if (used.has(card.key) || !batchable(card) || (now !== null && Number.isSafeInteger(card.expiresAt) && card.expiresAt <= now)) continue;
       const key = groupKey(card);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(card);

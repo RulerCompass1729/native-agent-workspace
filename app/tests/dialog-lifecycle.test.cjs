@@ -47,6 +47,15 @@ function fixture() {
 const preflight = () => ({ paths: {}, configured: {} });
 test('language display refresh also refreshes the task board exactly once', () => {
   const f = fixture();
+  Object.assign(f.context, {
+    window: { nativeWorkspaceActivityStream: { bind(host) {
+      return { render() { host.waitingChanged([]); } };
+    } } },
+    allSpaces: () => [], roomMessageLabel: () => '', attempt() {}, openOriginal() {},
+    confirmationBatchStarted: new Map(),
+  });
+  vm.runInContext(source.slice(source.indexOf('function getActivityStream()'), source.indexOf('async function openOriginal(')), f.context);
+  f.context.getActivityStream();
   f.context.renderInterfaceLanguage();
   assert.equal(f.context.taskBoardRefreshes, 1);
 });

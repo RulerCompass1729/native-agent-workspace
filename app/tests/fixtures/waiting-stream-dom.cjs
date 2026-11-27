@@ -23,10 +23,13 @@ function scene(language, input) {
   const render = () => { status.update(input); stream.render(); };
   render();
   const need = () => f.host.querySelector('.task-status-need'), due = () => f.host.querySelector('.task-status-due');
+  const confirmation = () => f.host.querySelector('.task-confirmation-entry');
   return { input, observed, render, dispose: () => status.dispose(),
     advance(ms) { now += ms; status.tick(); },
-    // Since R251 (11-25) the task board button is the one place the needs-you count is shown.
+    // R264 gives confirmations their own count beside the other waiting items.
     count: () => need().hidden ? 0 : Number(/\d+/u.exec(need().textContent)[0]),
+    confirmationCount: () => confirmation().hidden ? 0 : Number(/\d+/u.exec(confirmation().textContent)[0]),
+    confirmationHidden: () => confirmation().hidden, confirmationLabel: () => confirmation().textContent,
     strip: () => f.doc.getElementById('stream-waiting'),
     deadline: () => due().textContent,
     cardHidden: () => due().hidden,
