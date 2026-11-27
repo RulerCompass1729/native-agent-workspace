@@ -64,11 +64,23 @@ function fixture(settings = { auto: true, migrate: false }) {
   return f;
 }
 test('backend release requires the current desktop and confirmation of the same candidate', async () => {
-  for (const mode of ['background', 'cancel', 'stale', 'release']) {
+  const path = require('node:path');
+  for (const mode of ['background', 'cancel', 'stale', 'release', 'unreadable', 'partial']) {
     const f = fixture(), { old, context, scope, events, control } = f;
     old.state.servicePid = 518;
-    Object.assign(scope, { path: require('node:path'), isCurrentHumanContext: value => !value.background,
-      require: name => { assert.equal(name, './service-lock.cjs'); return { readLock: () => ({ pid: 518, started: 'synthetic start' }) }; },
+    const unreadable = { ...old, key: 'unreadable' };
+    if (mode === 'unreadable') f.client.entries = [unreadable, f.active];
+    if (mode === 'partial') f.client.entries.unshift(unreadable);
+    Object.assign(scope, { path, isCurrentHumanContext: value => !value.background,
+      require: name => {
+        assert.equal(name, './service-lock.cjs');
+        return { readLock(file) {
+          if (file === path.join(scope.dataDir, unreadable.key, 'service.lock')) {
+            throw Object.assign(Error('Synthetic unreadable lock'), { code: 'EIO' });
+          }
+          return { pid: 518, started: 'synthetic start' };
+        } };
+      },
       canRetire: state => state === old.state,
       retireHistoryService: async (_path, key, target) => {
         assert.equal(control.maintenance.has(key), true);
@@ -91,8 +103,9 @@ test('backend release requires the current desktop and confirmation of the same 
     const result = await scope.retireHistoryBackends(context);
     if (mode === 'cancel') { assert.equal(result, null); assert.deepEqual(events, ['dialog']); }
     if (mode === 'stale') { assert.deepEqual([result.retired, result.skipped], [0, 1]); assert.deepEqual(events, ['dialog', 'guard', 'broadcast']); }
-    if (mode === 'release') {
-      assert.deepEqual([result.retired, result.skipped], [1, 0]);
+    if (mode === 'unreadable') { assert.deepEqual([result.retired, result.skipped], [0, 1]); assert.deepEqual(events, []); }
+    if (mode === 'release' || mode === 'partial') {
+      assert.deepEqual([result.retired, result.skipped], [1, mode === 'partial' ? 1 : 0]);
       assert.deepEqual(events, ['dialog', 'guard', 'maintain:old', 'retire', 'sockets:old', 'finish:old', 'broadcast']);
     }
   }

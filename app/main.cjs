@@ -1774,23 +1774,27 @@ function reconnectClosed(context, client) {
 }
 function historyRetirementCandidates(client, automatic = false) {
   const candidates = [];
+  let lockReadFailures = 0;
   for (const entry of client.entries) {
     if (entry === client.active || entry.closed || entry.closing || !canRetire(entry.state, client.active.state)) continue;
     if (automatic && (!entry.state.sessions.length || entry.state.sessions.some(session => session.state !== 'ended'))) continue;
     const { readLock } = require('./service-lock.cjs'), file = path.join(dataDir, entry.key, 'service.lock');
     let lock;
     try { lock = readLock(file); }
-    catch { continue; } // A backend without a verifiable lock cannot be retired.
+    catch {
+      lockReadFailures++;
+      continue;
+    }
     if (!lock?.started || lock.pid !== entry.state.servicePid) continue;
     candidates.push({ entry, pid: lock.pid, started: lock.started, sessions: entry.state.sessions.map(backendSwitch.maintenanceProof),
       guard: client.operationGuard(entry) });
   }
-  return candidates;
+  return { candidates, lockReadFailures };
 }
 async function retireHistoryBackends(c) {
   if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
-  const client = c.client, candidates = historyRetirementCandidates(client);
-  if (!candidates.length) return { retired: 0, skipped: 0 };
+  const client = c.client, { candidates, lockReadFailures } = historyRetirementCandidates(client);
+  if (!candidates.length) return { retired: 0, skipped: lockReadFailures };
   const answer = await showDialog(c, 'message', {
     type: 'question', message: displayText('os.retireHistoryTitle', { count: candidates.length }),
     detail: [displayText('os.retireHistoryDetail'), ...candidates.map(({ entry, pid }) =>
@@ -1799,7 +1803,8 @@ async function retireHistoryBackends(c) {
   });
   if (answer.response !== 1) return null;
   if (!isCurrentHumanContext(c) || c.client !== client || client.closing || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
-  return runHistoryRetirements(client, candidates);
+  const { retired, skipped } = await runHistoryRetirements(client, candidates);
+  return { retired, skipped: skipped + lockReadFailures };
 }
 async function runHistoryRetirements(client, candidates) {
   let retired = 0, skipped = 0;
@@ -1968,7 +1973,7 @@ async function autoBackendSwitchOnce() {
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
-  const histories = historyRetirementCandidates(c.client, true);
+  const { candidates: histories } = historyRetirementCandidates(c.client, true);
   const nextHistory = histories[histories.findIndex(target => target.entry.key === lastAutomaticHistoryCandidate) + 1] || histories[0];
   if (nextHistory) {
     lastAutomaticHistoryCandidate = nextHistory.entry.key;
