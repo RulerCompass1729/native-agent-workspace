@@ -248,6 +248,7 @@ async function build() {
       'scoped-outbox-runtime.cjs',
       'service-binding.cjs',
       'service-client.cjs',
+      'retired-backend.cjs',
       'service-connection.cjs',
       'service-layout.cjs',
       'service-lock.cjs',
