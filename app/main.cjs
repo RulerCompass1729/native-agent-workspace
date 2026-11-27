@@ -1993,7 +1993,7 @@ async function retireIdleSession(c) {
   const { SessionRetirement } = require('./session-retirement.cjs');
   const { CompactionCounter } = require('./compaction-count.cjs');
   automaticSessionRetirement ||= new SessionRetirement({ room: roomState, protectedIds: retirementProtectedIds,
-    rotations: () => queueDispatcher.log, quietMs: queueRules.HUMAN_QUIET_MS, counter: new CompactionCounter({ sampleMs: 0, retirement: true }),
+    rotations: () => queueDispatcher.log, counter: new CompactionCounter({ sampleMs: 0, retirement: true }),
     log: event => createEventLog(path.join(dataDir, 'session-retirement-events.json')).add(event) });
   if (await automaticSessionRetirement.pass(c.client, app.getVersion())) await broadcastRoom();
 }

@@ -45,8 +45,10 @@ function heldInRooms(rooms, sessions) {
   return ids;
 }
 
-function eligibility(session, latest, sessions, context, now, quietMs) {
-  if (!Number.isSafeInteger(session.lastActivityAt) || now - session.lastActivityAt < quietMs) return null;
+function eligibility(session, latest, sessions, context, now) {
+  const { at, ttlMs } = context ?? {};
+  if (!Number.isSafeInteger(session.lastActivityAt) || !Number.isSafeInteger(at) || at <= 0 ||
+      !Number.isSafeInteger(ttlMs) || ttlMs <= 0 || now - Math.max(at, session.lastActivityAt) < ttlMs) return null;
   if (latest) {
     const successor = sessions.get(latest.new?.id);
     return latest.event === 'done' && latest.old.nativeId === session.nativeId &&
@@ -54,12 +56,7 @@ function eligibility(session, latest, sessions, context, now, quietMs) {
       successor?.nativeId && successor.nativeId === latest.new.nativeId && !successor.archived
       ? 'confirmed-successor' : null;
   }
-  if (session.retirementUnused === true) return 'unused';
-  if (context && Number.isSafeInteger(context.ttlMs) && context.ttlMs > 0 &&
-      Number.isSafeInteger(context.at) && context.at > 0 && now - Math.max(context.at, session.lastActivityAt) >= context.ttlMs) {
-    return 'cache-expired';
-  }
-  return null;
+  return session.retirementUnused === true ? 'unused' : 'cache-expired';
 }
 
 function viewProtects(id, views, windows) {
@@ -69,13 +66,12 @@ function viewProtects(id, views, windows) {
 }
 
 class SessionRetirement {
-  constructor({ room, protectedIds, rotations, log, now = Date.now, quietMs = 120000, counter }) {
+  constructor({ room, protectedIds, rotations, log, now = Date.now, counter }) {
     this.room = room;
     this.protectedIds = protectedIds;
     this.rotations = rotations;
     this.log = log;
     this.now = now;
-    this.quietMs = quietMs;
     this.counter = counter;
     this.missingCodex = new Set();
   }
@@ -115,7 +111,7 @@ class SessionRetirement {
     const rotations = new Map(this.rotations().map(entry => [entry.old.id, entry]));
     const byId = new Map(snapshot.sessions.map(session => [session.id, session]));
     for (const session of candidates) {
-      const reason = eligibility(session, rotations.get(session.id), byId, this.counter.contexts.get(session.id), now, this.quietMs);
+      const reason = eligibility(session, rotations.get(session.id), byId, this.counter.contexts.get(session.id), now);
       if (reason) return this.retire(client, session, reason, version);
     }
     return false;
@@ -133,7 +129,7 @@ class SessionRetirement {
     try {
       const observation = await service.call('observeRetirement', id);
       if (!observation?.alive || typeof observation.epoch !== 'string' || !Number.isSafeInteger(observation.index)) return false;
-      if (reason === 'cache-expired') await this.counter.recheck(session, this.now());
+      await this.counter.recheck(session, this.now());
       const observed = await service.call('initial');
       guard();
       const fresh = this.room.apply(client.snapshot()), held = this.localProtection(fresh);
@@ -142,7 +138,7 @@ class SessionRetirement {
       if (observed.storageWarning || !native || !quietClaude(native) || !isDeepStrictEqual(proof(native), expected)) return false;
       const latest = this.rotations().findLast(row => row.old.id === id);
       if (pending.revoked || entry.state.runtimeVersion !== version || !held || held.has(id) || this.room.gates.has(id) || !current || !quietClaude(current) || !isDeepStrictEqual(proof(current), expected) ||
-          eligibility(current, latest, byId, this.counter.contexts.get(id), this.now(), this.quietMs) !== reason) return false;
+          eligibility(current, latest, byId, this.counter.contexts.get(id), this.now()) !== reason) return false;
       const result = await service.call('retireSession', id, expected, { epoch: observation.epoch, index: observation.index });
       guard();
       if (result?.stopped !== true || !sameStop(result.expected, expected) || result.stoppedState?.id !== id ||
