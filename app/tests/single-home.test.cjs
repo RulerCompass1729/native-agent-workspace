@@ -110,6 +110,7 @@ const { RoomState } = require('../room-state.cjs');
 function metadataClient(f) {
   const controls = {}, calls = [];
   const client = {
+    retainRestoredSuccessor: (id, observed) => f.w.retainRestoredSuccessor(id, observed.nativeId),
     async call(method, ...args) {
       calls.push({ method, args });
       if (method === 'initial') return { ...f.w.snapshot(), capabilities: controls.capabilities || ['collaborationSpacesV1', 'singleHomeMoveV1', 'archiveIdleMoveV1', 'guardedSessionStopV1'] };

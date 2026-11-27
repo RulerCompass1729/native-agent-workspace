@@ -908,17 +908,25 @@ class FakeClient extends EventEmitter {
   }
 }
 
-function fakeMembership(room, client) {
+function fakeMembership(room, client, { receipt = false } = {}) {
   const joins = [];
   room.membership = async (_client, id, join, label, roomId) => {
     joins.push([id, join, roomId]);
     const session = client.state.sessions.find(s => s.id === id);
+    const was = receipt && (session.roomIds || []).includes(roomId);
     if (join) {
       session.roomIds = [roomId];
       session.roomId = roomId === 'shared' ? roomId : null;
     } else {
       session.roomIds = [];
       session.roomId = null;
+    }
+    if (receipt) {
+      if (Boolean(join) === was) return { changed: false, placementRevision: session.placementRevision || 0 };
+      const operationId = require('node:crypto').randomUUID();
+      session.placementRevision = (session.placementRevision || 0) + 1;
+      session.placementReceipt = { operationId };
+      return { changed: true, operationId, placementRevision: session.placementRevision };
     }
   };
   return joins;
@@ -1785,7 +1793,7 @@ test('if the old member is in use when the handoff lands, it is kept running', a
 
 test('a new member that never gets ready ends the rotation, is stopped, and the old member keeps its work', async t => {
   const { room, client, dispatcher, advance } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })]);
-  fakeMembership(room, client);
+  fakeMembership(room, client, { receipt: true });
   const original = client.call.bind(client);
   client.call = async (method, ...args) => {
     const result = await original(method, ...args);
@@ -2907,7 +2915,7 @@ test('a backend that ignores the settings gives a successor with another model: 
   const { room, client, dispatcher } = dispatcherSetup(t, [member('a', { createdAt: NOW - 30 * HOUR, messages: heavyMessages(), cwd: '/tmp' })], {
     notify: (kind, record) => notices.push([kind, record.reason]),
   });
-  fakeMembership(room, client);
+  fakeMembership(room, client, { receipt: true });
   client.ignoreSettings = true;
   room.queueAdd('next task', 'a');
   await dispatcher.start();
@@ -3942,9 +3950,10 @@ for (const inactive of ['ended', 'disconnected']) test(`B2 receipt: a started st
 
 test('B2 receipt: a started stop with unchanged unused ownership may retry once through the guarded capability', async t => {
   const f = trustTimeoutSetup(t); expiredTrustCleanup(f, 'started', 1);
+  const expected = trustProof(f.fresh);
   const resumed = restoreTrustFixture(t, f); await resumed.at(NOW + 1);
   assert.equal(resumed.record.trustCleanup.stop.state, 'confirmed'); assert.equal(resumed.record.trustCleanup.stop.attempts, 2);
-  assert.deepEqual(f.client.calls.find(c => c[0] === 'stopUnusedSuccessor'), ['stopUnusedSuccessor', f.fresh.id, trustProof(f.fresh)]);
+  assert.deepEqual(f.client.calls.find(c => c[0] === 'stopUnusedSuccessor'), ['stopUnusedSuccessor', f.fresh.id, expected]);
   assert.equal(f.client.calls.filter(c => c[0] === 'stop').length, 1);
 });
 
