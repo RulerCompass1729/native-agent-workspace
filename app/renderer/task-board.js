@@ -48,24 +48,29 @@
         kind: q.kind === 'waiting' && endedSession(sessions.get(q.memberKey)) ? 'stale' : q.kind })) });
     });
     const groups = historyGroups.filter(p => !p.statusExcluded);
-    const cards = new Map();
+    const cards = new Map(), submittedCards = new Set();
     const cardsAvailable = input.confirmationsAvailable !== false && Array.isArray(input.confirmations);
     if (!cardsAvailable) unknown++;
     for (const card of Array.isArray(input.confirmations) ? input.confirmations : []) {
       if (!card || !['confirmation-required', 'unverifiable'].includes(card.state) || card.replacedBy || card.disposition) continue;
       const key = typeof card.key === 'string' && card.key ? card.key : [card.sessionId, card.nativeId, card.operationId].every(v => typeof v === 'string' && v) ? JSON.stringify([card.sessionId, card.nativeId, card.operationId]) : null;
       if (!key) { unknown++; continue; }
+      if (card.submitted) { submittedCards.add(key); continue; }
       if (Number.isSafeInteger(card.expiresAt) && card.expiresAt <= now) continue;
-      const valid = card.state === 'confirmation-required' && card.actionable === true && Number.isSafeInteger(card.expiresAt);
-      cards.set(key, { key: JSON.stringify(['confirmation', key]), id: key, source: 'confirmation', kind: valid ? 'waiting' : 'unknown', memberKey: card.sessionId || '',
-        expiresAt: Number.isSafeInteger(card.expiresAt) ? card.expiresAt : null });
+      const session = sessions.get(card.sessionId);
+      const current = session && !session.archived && Boolean(card.nativeId) && session.nativeId === card.nativeId;
+      const valid = cardsAvailable && input.connected !== false && current && card.state === 'confirmation-required' && card.actionable === true && Number.isSafeInteger(card.expiresAt);
+      const summary = current && !valid ? card.safeSummary : null;
+      const text = summary?.titles?.[input.language] ? [summary.titles[input.language], summary.detail].filter(Boolean).join(' · ') : '';
+      cards.set(key, { key: JSON.stringify(['confirmation', key]), id: key, source: 'confirmation', kind: valid ? 'waiting' : 'unknown',
+        memberKey: current ? card.sessionId : '', text, expiresAt: Number.isSafeInteger(card.expiresAt) ? card.expiresAt : null });
     }
     const cardRows = [...cards.values()], current = groups.flatMap(p => p.current);
     unknown += current.filter(q => q.kind === 'unknown').length + cardRows.filter(c => c.kind === 'unknown').length;
     // Only a card the person can still act on has a deadline. An unverifiable card's stored expiry is evidence, not a countdown.
     const dueCards = cardRows.filter(c => c.kind === 'waiting' && c.expiresAt !== null);
     const cardCount = dueCards.length;
-    return { groups, historyGroups, cards: cardRows, doing: current.filter(q => q.kind === 'sent').length,
+    return { groups, historyGroups, cards: cardRows, submittedCards, doing: current.filter(q => q.kind === 'sent').length,
       waiting: current.filter(q => q.kind === 'waiting').length + cardCount,
       done: current.filter(q => q.kind === 'done').length, cancelled: current.filter(q => q.kind === 'cancelled').length,
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
@@ -125,7 +130,7 @@
     }
     // The stream lists only cards the person can act on; one that cannot be verified is checked under 异常, with no countdown.
     for (const card of status.cards || []) if (card.kind === 'unknown') rows.push({ key: card.key, id: card.id, source: 'confirmation', kind: 'unknown', group: 'problem', sub: 'unverified',
-      text: '', reason: '', memberKey: card.memberKey, memberName: '', route: card.memberKey, spaceId: '', spaceName: '', ready: null, expiresAt: null, events: [] });
+      text: card.text || '', reason: '', memberKey: card.memberKey, memberName: '', route: card.memberKey, spaceId: '', spaceName: '', ready: null, expiresAt: null, events: [] });
     return rows;
   }
   const latest = row => row.events.at(-1) || null;
@@ -135,7 +140,7 @@
     return [row.text, row.memberName, row.spaceName].some(v => typeof v === 'string' && v.toLowerCase().includes(term)) ||
       row.source === 'space' && (row.id.toLowerCase().startsWith(term.replace(/^#/, '')) || typeof row.ready?.commit === 'string' && row.ready.commit.toLowerCase().startsWith(term));
   }
-  function bind({ host, document: doc, text, onQueue, onConfirmation, onSession, onOriginal, onWaiting, now = () => Date.now() }) {
+  function bind({ host, document: doc, text, onQueue, onConfirmation, onSession, onOriginal, onWaiting, onConfirmationRefresh, confirmationTarget, now = () => Date.now() }) {
     const win = doc.defaultView;
     const f = (key, params) => text('taskBoard.' + key, params), make = (tag, cls) => { const e = doc.createElement(tag); if (cls) e.className = cls; return e; };
     const set = (e, value) => { if (e.textContent !== value) e.textContent = value; };
@@ -151,10 +156,14 @@
     let status = overview(input, now()), all = [], day = new Date(now()).toDateString(), grouping = 'status', term = '', expanded = '', frozen = null, rewound = false;
     const folds = new Map(), shown = new Map(), views = new Map(), groupViews = new Map();
     const toggle = control(event => { event.preventDefault(); opened ? close() : open(); }, 'task-board-toggle task-status-button');
+    const confirmation = control(event => { event.preventDefault(); openConfirmations(); }, 'task-confirmation-entry task-status-button');
+    confirmation.hidden = true;
+    let opener = toggle;
     const board = make('span', 'task-status-board'), need = make('span', 'task-status-need'), due = make('span', 'task-status-due'), chevron = make('span', 'task-status-chevron');
     set(chevron, '⌄'); attr(chevron, 'aria-hidden', 'true'); toggle.append(board, need, due, chevron);
     const panel = make('section', 'task-board-panel'); panel.hidden = true; panel.id = 'task-board-panel';
-    attr(panel, 'popover', 'auto'); attr(panel, 'aria-labelledby', 'task-board-title'); attr(toggle, 'popovertarget', panel.id); attr(toggle, 'aria-controls', panel.id);
+    attr(panel, 'popover', 'auto'); attr(panel, 'aria-labelledby', 'task-board-title');
+    for (const trigger of [confirmation, toggle]) { attr(trigger, 'popovertarget', panel.id); attr(trigger, 'aria-controls', panel.id); }
     const heading = make('div', 'task-board-heading'), h2 = make('h2'), dismiss = control(() => close(), 'task-board-close');
     h2.id = 'task-board-title'; h2.tabIndex = -1;
     const search = make('input', 'task-board-search'); search.type = 'search'; search.autocomplete = 'off';
@@ -165,7 +174,7 @@
     const availability = make('p', 'task-board-availability'); attr(availability, 'role', 'status');
     const list = make('div', 'task-board-list'), empty = make('p', 'task-board-empty');
     const footer = make('div', 'task-board-footer'), retention = make('span', 'task-board-retention'); footer.append(retention);
-    panel.append(heading, availability, list, footer); host.classList.add('task-board'); host.append(toggle, panel);
+    panel.append(heading, availability, list, footer); host.classList.add('task-board'); host.append(confirmation, toggle, panel);
     const lang = () => doc.documentElement?.lang || undefined;
     function when(value) {
       const d = new Date(value), today = new Date(now()), yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
@@ -269,10 +278,12 @@
       settle();
       if (!opened) { grouping = 'status'; term = ''; search.value = ''; folds.clear(); shown.clear(); expanded = ''; }
       if (!opened || typeof options.expand === 'string') relayout();
-      opened = true; panel.hidden = false;
+      opened = true; panel.hidden = false; opener = options.source || toggle;
       if (typeof options.expand === 'string') { arrange(); reveal(options.expand); }
-      drawPanel(); positionPanel(); panel.showPopover({ source: toggle });
-      if (typeof options.expand === 'string') views.get(options.expand)?.entry.focus({ preventScroll: true });
+      drawBar(); drawPanel(); positionPanel(); panel.showPopover({ source: opener });
+      const entry = views.get(options.expand)?.entry;
+      if (opener === confirmation) (entry || h2).scrollIntoView({ block: 'nearest' });
+      if (entry || opener === confirmation) (entry || h2).focus({ preventScroll: true });
     }
     function reveal(key) {
       const row = all.find(r => r.key === key);
@@ -284,12 +295,12 @@
     }
     function closed(restore = false) {
       if (!opened) return;
-      const inside = panel.contains(doc.activeElement);
-      opened = false; panel.hidden = true; translate(); drawBar();
+      const inside = panel.contains(doc.activeElement), trigger = opener.hidden ? toggle : opener;
+      opened = false; opener = toggle; panel.hidden = true; translate(); drawBar();
       // A closed board keeps no open row, so no hidden card keeps a countdown; the next opening starts folded (F).
       const v = views.get(expanded); expanded = '';
       if (v) { v.detail?.box.remove(); v.element.classList.remove('open'); attr(v.entry, 'aria-expanded', 'false'); }
-      if ((restore || inside || doc.activeElement === doc.body) && toggle.isConnected && !doc.querySelector('dialog:modal')) toggle.focus({ preventScroll: true });
+      if ((restore || inside || doc.activeElement === doc.body) && trigger.isConnected && !doc.querySelector('dialog:modal')) trigger.focus({ preventScroll: true });
     }
     // A click outside hides the popover before its toggle event reports it (N2): that board is already closed.
     function settle() { if (opened && !panel.matches(':popover-open')) closed(); }
@@ -299,7 +310,16 @@
     search.oncompositionend = () => { term = search.value.trim().toLowerCase(); relayout(); drawPanel(); };
     const waitingRows = () => all.filter(r => r.group === 'waiting');
     function drawBar() {
-      const count = waitingRows().length, cards = all.filter(r => r.expiresAt !== null), next = cards.reduce((v, r) => v === null || r.expiresAt < v ? r.expiresAt : v, null);
+      const cardCount = status.cardCount;
+      const waitingForCheck = status.stale || (!status.cardsAvailable && input.confirmationsAvailable !== undefined) ||
+        status.cards.some(c => c.kind === 'unknown');
+      confirmation.hidden = !cardCount && !waitingForCheck;
+      confirmation.dataset.state = cardCount ? 'pending' : 'unverified';
+      set(confirmation, cardCount ? f('confirmationEntry', { count: cardCount }) : f('confirmationEntryUnverified'));
+      attr(confirmation, 'aria-expanded', String(opened && opener === confirmation));
+      // The card count is on its own entry. The board button shows the other waits.
+      const rows = waitingRows().filter(row => !row.waiting?.card || confirmation.hidden && !status.submittedCards.has(row.id));
+      const count = rows.length, next = rows.reduce((v, r) => r.expiresAt !== null && (v === null || r.expiresAt < v) ? r.expiresAt : v, null);
       const time = next === null ? '' : remaining(next);
       set(board, f('boardButton')); set(need, count ? f(count === 1 ? 'needOne' : 'need', { count }) : ''); need.hidden = !count;
       set(due, time ? f('cardDue', { time }) : ''); due.hidden = !time;
@@ -362,7 +382,7 @@
         d.slot.box.dataset.waitingId = row.waiting.card?.id || row.id; set(d.slot.heading, row.kind === 'question' ? row.text : '');
         onWaiting(d.slot, row.waiting); parts.push(d.slot.box);
       }
-      if (row.kind !== 'question') { paint(d.full, row.text); if (row.text) parts.push(d.full); }
+      if (row.kind !== 'question' && row.source !== 'confirmation') { paint(d.full, row.text); if (row.text) parts.push(d.full); }
       const reason = row.kind === 'review' && REVIEW_REASONS[row.reason] ? f(REVIEW_REASONS[row.reason]) : '';
       set(d.reason, reason); if (reason) parts.push(d.reason);
       set(d.timeline, [...row.events.map(e => f('event.' + e[0]) + ' ' + when(e[1])), ...(row.ready ? [f('ready', { commit: row.ready.commit })] : [])].join(' → '));
@@ -427,31 +447,44 @@
       all = taskRows(status, waiting, now());
       if (expanded && !all.some(r => r.key === expanded)) expanded = '';
     }
-    function update(next = input) {
+    function update(next = input, items = waiting) {
       if (disposed) return;
-      input = next; status = overview(input, now()); day = new Date(now()).toDateString();
+      const waitingChanged = items !== waiting;
+      waiting = items; input = next; status = overview(input, now()); day = new Date(now()).toDateString();
       status.historyGroups = status.historyGroups.map(p => ({ ...p, name: p.archived ? f('archivedName', { name: p.name }) : p.name }));
       refreshRows();
       // A waiting row's message and card bodies stay with their renderer; the row's own fields decide a redraw.
-      const nextSignature = JSON.stringify([all.map(r => ({ ...r, waiting: r.waiting ? r.waiting.id : undefined })), input.sessions?.map(s => [s.id, s.nativeId, s.name, s.archived]), status.stale, status.cardsAvailable, unavailable().map(p => p.id), day, Math.floor(now() / 60000), f('title')]);
-      if (signature === nextSignature) return;
+      const nextSignature = JSON.stringify([all.map(r => ({ ...r, waiting: r.waiting ? r.waiting.id : undefined })), input.sessions?.map(s => [s.id, s.nativeId, s.name, s.archived]), status.stale, status.cardsAvailable, status.cardCount, [...status.submittedCards], unavailable().map(p => p.id), day, Math.floor(now() / 60000), f('title')]);
+      if (signature === nextSignature) {
+        if (waitingChanged && opened && expanded) { const v = views.get(expanded), row = all.find(r => r.key === expanded); if (v && row?.source === 'waiting') detail(v, row, liveSession(row.route)); }
+        return;
+      }
       signature = nextSignature; translate(); drawBar(); drawPanel();
     }
     // The waiting list's renderers keep their own state; an open row's card or answer form is refreshed on every pass.
-    function setWaiting(items) {
-      if (disposed) return;
-      waiting = Array.isArray(items) ? items : [];
-      const before = signature; update();
-      if (before === signature && opened && expanded) { const v = views.get(expanded), row = all.find(r => r.key === expanded); if (v && row?.source === 'waiting') detail(v, row, liveSession(row.route)); }
-    }
+    function setWaiting(items) { update(input, Array.isArray(items) ? items : []); }
     function tick() {
       if (disposed) return;
       const cards = all.filter(r => r.expiresAt !== null);
-      if (new Date(now()).toDateString() !== day || cards.some(r => r.expiresAt <= now())) { update(); return; }
+      const clock = now();
+      if (status.cards.some(r => r.expiresAt !== null && r.expiresAt <= clock)) { refreshConfirmations(); return; }
+      if (new Date(clock).toDateString() !== day || cards.some(r => r.expiresAt <= clock)) { update(); return; }
       if (cards.length) { drawBar(); for (const r of cards) { const v = views.get(r.key); if (v) set(v.sub, subText(r)); } }
     }
     function show(id) { settle(); if (opened && term) { term = ''; search.value = ''; } open({ expand: JSON.stringify(['waiting', id]) }); }
-    const visible = () => { if (!doc.hidden) update(); }, resize = () => { drawBar(); if (opened) positionPanel(); };
+    function refreshConfirmations() { if (onConfirmationRefresh) onConfirmationRefresh(); else update(); }
+    function openConfirmations() {
+      refreshConfirmations(); settle();
+      if (confirmation.hidden) return;
+      if (opened && term) { term = ''; search.value = ''; relayout(); }
+      const next = status.cards.reduce((first, card) => card.kind === 'waiting' &&
+        (!first || card.expiresAt < first.expiresAt) ? card : first, null);
+      const key = next ? JSON.stringify(['waiting', confirmationTarget?.(next.id) || next.id]) :
+        status.cards.find(c => c.kind === 'unknown')?.key;
+      open({ expand: key, source: confirmation });
+    }
+    const visible = () => { if (!doc.hidden) refreshConfirmations(); };
+    const resize = () => { drawBar(); if (opened) positionPanel(); };
     const observer = new win.ResizeObserver(resize); observer.observe(host); win.addEventListener('resize', resize); doc.addEventListener('visibilitychange', visible);
     translate(); drawBar();
     return { update, open, close, tick, setWaiting, show, refresh: () => update(), dispose() { if (disposed) return; close(); disposed = true; observer.disconnect(); win.removeEventListener('resize', resize); doc.removeEventListener('visibilitychange', visible); host.replaceChildren(); groupViews.clear(); views.clear(); } };

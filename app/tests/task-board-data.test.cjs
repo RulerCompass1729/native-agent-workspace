@@ -4,7 +4,7 @@ const board = require('../renderer/task-board.js');
 const now = 1700000000000;
 function intake(queue) {
   const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
-  const start = source.indexOf('function updateTaskBoard() {'), end = source.indexOf('\nconst spaceCall', start);
+  const start = source.indexOf('function updateTaskBoard('), end = source.indexOf('\nconst spaceCall', start);
   assert.ok(start >= 0 && end > start);
   let input;
   const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js'), nativeWorkspaceTaskBoard: board },
