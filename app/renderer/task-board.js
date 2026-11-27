@@ -48,13 +48,14 @@
         kind: q.kind === 'waiting' && endedSession(sessions.get(q.memberKey)) ? 'stale' : q.kind })) });
     });
     const groups = historyGroups.filter(p => !p.statusExcluded);
-    const cards = new Map();
+    const cards = new Map(), submittedCards = new Set();
     const cardsAvailable = input.confirmationsAvailable !== false && Array.isArray(input.confirmations);
     if (!cardsAvailable) unknown++;
     for (const card of Array.isArray(input.confirmations) ? input.confirmations : []) {
       if (!card || !['confirmation-required', 'unverifiable'].includes(card.state) || card.replacedBy || card.disposition) continue;
       const key = typeof card.key === 'string' && card.key ? card.key : [card.sessionId, card.nativeId, card.operationId].every(v => typeof v === 'string' && v) ? JSON.stringify([card.sessionId, card.nativeId, card.operationId]) : null;
       if (!key) { unknown++; continue; }
+      if (card.submitted) { submittedCards.add(key); continue; }
       if (Number.isSafeInteger(card.expiresAt) && card.expiresAt <= now) continue;
       const session = sessions.get(card.sessionId);
       const current = session && !session.archived && Boolean(card.nativeId) && session.nativeId === card.nativeId;
@@ -69,7 +70,7 @@
     // Only a card the person can still act on has a deadline. An unverifiable card's stored expiry is evidence, not a countdown.
     const dueCards = cardRows.filter(c => c.kind === 'waiting' && c.expiresAt !== null);
     const cardCount = dueCards.length;
-    return { groups, historyGroups, cards: cardRows, doing: current.filter(q => q.kind === 'sent').length,
+    return { groups, historyGroups, cards: cardRows, submittedCards, doing: current.filter(q => q.kind === 'sent').length,
       waiting: current.filter(q => q.kind === 'waiting').length + cardCount,
       done: current.filter(q => q.kind === 'done').length, cancelled: current.filter(q => q.kind === 'cancelled').length,
       failed: current.filter(q => q.kind === 'failed').length, unknown, cardCount, cardsAvailable,
@@ -317,7 +318,7 @@
       set(confirmation, cardCount ? f('confirmationEntry', { count: cardCount }) : f('confirmationEntryUnverified'));
       attr(confirmation, 'aria-expanded', String(opened && opener === confirmation));
       // The card count is on its own entry. The board button shows the other waits.
-      const rows = waitingRows().filter(row => confirmation.hidden || !row.waiting?.card);
+      const rows = waitingRows().filter(row => !row.waiting?.card || confirmation.hidden && !status.submittedCards.has(row.id));
       const count = rows.length, next = rows.reduce((v, r) => r.expiresAt !== null && (v === null || r.expiresAt < v) ? r.expiresAt : v, null);
       const time = next === null ? '' : remaining(next);
       set(board, f('boardButton')); set(need, count ? f(count === 1 ? 'needOne' : 'need', { count }) : ''); need.hidden = !count;
@@ -381,7 +382,7 @@
         d.slot.box.dataset.waitingId = row.waiting.card?.id || row.id; set(d.slot.heading, row.kind === 'question' ? row.text : '');
         onWaiting(d.slot, row.waiting); parts.push(d.slot.box);
       }
-      if (row.kind !== 'question') { paint(d.full, row.text); if (row.text) parts.push(d.full); }
+      if (row.kind !== 'question' && row.source !== 'confirmation') { paint(d.full, row.text); if (row.text) parts.push(d.full); }
       const reason = row.kind === 'review' && REVIEW_REASONS[row.reason] ? f(REVIEW_REASONS[row.reason]) : '';
       set(d.reason, reason); if (reason) parts.push(d.reason);
       set(d.timeline, [...row.events.map(e => f('event.' + e[0]) + ' ' + when(e[1])), ...(row.ready ? [f('ready', { commit: row.ready.commit })] : [])].join(' → '));
@@ -453,7 +454,7 @@
       status.historyGroups = status.historyGroups.map(p => ({ ...p, name: p.archived ? f('archivedName', { name: p.name }) : p.name }));
       refreshRows();
       // A waiting row's message and card bodies stay with their renderer; the row's own fields decide a redraw.
-      const nextSignature = JSON.stringify([all.map(r => ({ ...r, waiting: r.waiting ? r.waiting.id : undefined })), input.sessions?.map(s => [s.id, s.nativeId, s.name, s.archived]), status.stale, status.cardsAvailable, status.cardCount, unavailable().map(p => p.id), day, Math.floor(now() / 60000), f('title')]);
+      const nextSignature = JSON.stringify([all.map(r => ({ ...r, waiting: r.waiting ? r.waiting.id : undefined })), input.sessions?.map(s => [s.id, s.nativeId, s.name, s.archived]), status.stale, status.cardsAvailable, status.cardCount, [...status.submittedCards], unavailable().map(p => p.id), day, Math.floor(now() / 60000), f('title')]);
       if (signature === nextSignature) {
         if (waitingChanged && opened && expanded) { const v = views.get(expanded), row = all.find(r => r.key === expanded); if (v && row?.source === 'waiting') detail(v, row, liveSession(row.route)); }
         return;

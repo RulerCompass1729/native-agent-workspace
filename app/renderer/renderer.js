@@ -287,7 +287,7 @@ async function openGrants(id) {
   updateState(await api.initial()); render();
   setupGrantRows.get(id)?.quotaHeading?.focus();
 }
-function updateTaskBoard(items, language) {
+function updateTaskBoard(items, language, submitted = new Set()) {
   if (!state) return;
   taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
     queue: Array.isArray(r.queue) ? r.queue.filter(q => q && typeof q.id === 'string').map(q => ({ id: q.id, status: q.status, text: q.text,
@@ -297,7 +297,8 @@ function updateTaskBoard(items, language) {
     // The board lists tasks, not live session state (R250): names and whether a session has ended.
     sessions: state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, archived: s.archived })),
     confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
-      state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition, safeSummary: c.safeSummary })), language,
+      state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition, safeSummary: c.safeSummary,
+      submitted: submitted.has(c.key) })), language,
     confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId }, items);
 }
 // The tool a session is running now, in words, for the board and the session header (11-24).
@@ -5203,7 +5204,15 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
-    waitingChanged: items => updateTaskBoard(items, ui.language.getSnapshot().active),
+    waitingChanged: items => {
+      // A local submission can precede the backend's queued or running answer.
+      const submitted = new Set([...confirmationBatchStarted.values()].flatMap(batch => batch.keys));
+      for (const card of state?.backgroundConfirmations || []) {
+        const op = card.message?.backgroundOperation;
+        if (op?.answer || op && confirmationCardPending(op)) submitted.add(card.key);
+      }
+      updateTaskBoard(items, ui.language.getSnapshot().active, submitted);
+    },
     cardHidden: card => backgroundExecutionUnavailable() || !Number.isSafeInteger(card.expiresAt) || card.expiresAt <= Date.now() ||
       card.disposition || card.state !== 'confirmation-required' || confirmationCardHidden(card),
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),

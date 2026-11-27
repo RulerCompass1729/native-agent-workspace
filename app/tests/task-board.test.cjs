@@ -48,9 +48,10 @@ test('the real renderer intake only passes task-board fields and a waiting flag'
   let input;
   const context = vm.createContext({ window: { nativeWorkspaceSpaces: require('../collaboration-spaces.cjs'), nativeWorkspaceFleet: require('../renderer/fleet-observation.js'), nativeWorkspaceAgentDistribution: require('../renderer/agent-distribution.js'), nativeWorkspaceTaskBoard: board }, sidebarPresentation: () => ({ compact: '', tone: 'idle', workTone: '' }), state: { sessions: [s], backgroundConfirmations: [card], backgroundConfirmationsAvailable: true }, disconnected: false, spaceId: r.id,
     allSpaces: () => [r, { id: 'missing', unavailable: true }], spaceName: value => value.name,
-    taskBoard: { update(value) { input = value; } } });
-  vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard();', context);
+    taskBoard: { update(value) { input = value; } }, submitted: new Set([card.key]) });
+  vm.runInContext(source.slice(start, end) + '\nupdateTaskBoard(undefined, undefined, submitted);', context);
   assert.equal(input.confirmations[0].expiresAt, card.expiresAt);
+  assert.equal(input.confirmations[0].submitted, true);
   assert.equal(Object.hasOwn(input.confirmations[0], 'message'), false);
   const projected = input.rooms[0].queue[0];
   assert.notEqual(input.rooms[0].queue, r.queue); assert.notEqual(projected, q);

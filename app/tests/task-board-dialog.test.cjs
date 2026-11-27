@@ -476,6 +476,15 @@ test('the fixed confirmation trigger opens the earliest live card and leaves oth
   trigger.fire('click');
   assert.equal(f.entry('checking').getAttribute('aria-expanded'), 'true');
   assert.equal(f.entry('checking').textContent, '归档会话 · Synthetic target');
+  assert.equal(f.row('checking').querySelector('.task-board-full'), null);
+
+  const submitted = card(f, 60);
+  f.board.update({ ...f.input, confirmations: [{ ...submitted.card, state: 'confirmation-required', actionable: true, submitted: true }] }, [submitted]);
+  assert.equal(trigger.hidden, true);
+  assert.equal(need.textContent, '1 件等你');
+  f.board.close();
+  f.button.fire('click');
+  assert.ok(f.entry(submitted.id), 'the submitted card remains in the board');
   assert.deepEqual(f.calls, []);
   f.board.dispose();
 });
