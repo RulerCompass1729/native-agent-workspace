@@ -606,6 +606,28 @@ test('B2/B6: the vacancy projection retains both integration and trust holds', (
   assert.equal(rules.queueVacancies({ ...input, quarantineUnknown: true })[0].active, false);
 });
 
+for (const [label, holder, available, rotations] of [
+  ['has left', member('owner', { roomIds: ['other'], roomId: 'other', state: 'working' }), ['free']],
+  ['is archived', member('owner', { archived: true }), ['free']],
+  ['has ended', member('owner', { state: 'ended' }), ['free']],
+  ['is missing', null, ['free']],
+  ['is still working', member('owner', { state: 'working' }), []],
+  ['looks ended on an unavailable backend', member('owner', { state: 'ended', backendUnavailable: true }), []],
+  ['looks ended on a disconnected transport', member('owner', { state: 'ended', transportDisconnected: true }), []],
+  ['still owns the task while its successor is joining', member('owner'), [], { owner: { phase: 'joining', newId: 'successor' } }],
+]) test(`R268: a sent item when its holder ${label}`, () => {
+  const sent = item('sent', { status: 'sent', sentTo: 'owner' });
+  const sessions = [member('free')];
+  if (holder) sessions.push(holder);
+  if (rotations) sessions.push(member('successor'));
+  const open = queue => rules.queueVacancies({ rooms: [{ id: 'shared', queue }], sessions, rotations,
+    wakePolicy: AWAKE, idleSince: settledSince(sessions.map(session => session.id)), now: NOW })[0];
+  if (rotations) assert.deepEqual(open([]).availableIds, ['free'], 'Neither side of the joining rotation is a vacancy');
+  const vacancy = open([sent]);
+  assert.deepEqual(vacancy.availableIds, available);
+  assert.equal(vacancy.active, available.length > 0);
+});
+
 test('an old, quiet space member is rotated even with no work queued; a recent conversation is not cut off', () => {
   const finished = item('1', { status: 'done', sentTo: 'a', sentAt: NOW - 2 * HOUR, tag: 't1' });
   const rooms = [{ id: 'shared', name: 'Team', queue: [finished] }];

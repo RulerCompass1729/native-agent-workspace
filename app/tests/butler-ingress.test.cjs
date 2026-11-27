@@ -176,7 +176,7 @@ test('queue vacancies require an actually ready unoccupied member and an empty l
     { idleSince: new Map([['agent-a', NOW]]) },
     { rooms: [{ id: 'shared', name: 'Synthetic team', archived: true, queue: [] }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'queued' }] }] },
-    { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'sent' }] }] },
+    { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [{ status: 'sent', sentTo: 'agent-a' }] }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [], run: { status: 'running', ids: ['agent-a'] } }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [], run: { status: 'running', ids: ['agent-a'] } }] },
     { rooms: [{ id: 'shared', name: 'Synthetic team', queue: [] }, { id: 'other', queue: [{ status: 'sent', sentTo: 'agent-a' }] }] },
@@ -235,6 +235,28 @@ test('default settle time records one vacancy through ordinary empty-queue maint
   const f = fixture(t), window = passiveWindow(t, f);
   for (let elapsed = 0; elapsed <= 120000; elapsed += 3000) await window.tick(elapsed);
   assert.equal(f.ledger.snapshot().events.filter(event => event.kind === 'queue-empty').length, 1);
+});
+
+test('R268: a departed holder leaves one queue-empty event and its sent item stays in place', async t => {
+  const f = fixture(t), window = passiveWindow(t, f, { settleMs: 0 });
+  const holder = window.client.state.sessions[0];
+  holder.state = 'working';
+  window.client.state.sessions.push(ready({ id: 'agent-b', nativeId: 'native-b' }));
+  const id = f.room.queueAdd('Synthetic task still running after its holder leaves', holder.id);
+  f.room.queueMarkSent('shared', id, holder.id, holder.name, NOW, false, holder.nativeId);
+  f.room.queueSetDelivery('shared', id, 'sent-tag', 0);
+  const sent = structuredClone(f.room.queueFind('shared', id));
+
+  await window.tick(0);
+  assert.deepEqual(f.ledger.snapshot().events, []);
+  holder.roomId = null;
+  holder.roomIds = [];
+  window.client.emit('state', window.client.state);
+  await window.tick(60001);
+  await window.tick(120002);
+  assert.deepEqual(f.room.queueFind('shared', id), sent);
+  assert.deepEqual(window.projections.at(-1)[0].availableIds, ['agent-b']);
+  assert.deepEqual(f.ledger.snapshot().events.map(event => [event.kind, event.payload.spaceId]), [['queue-empty', 'shared']]);
 });
 
 test('a session whose model the person is changing is not reported as free for work until that is settled', async t => {
