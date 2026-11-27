@@ -16,7 +16,7 @@ function fixture() {
     } } }, terminal: { stop: async () => { calls.push(['terminal.stop']); } } });
   const w = Object.create(Workspace.prototype); EventEmitter.call(w);
   Object.assign(w, { sessions: new Map([[s.id, s]]), runtimes: new Map([[s.id, r]]), draftRevisions: new Map(), drafts: new Map(),
-    stops: new Map(), rooms: new Map([['shared', { run: null }]]), approvalRoutes: new Map(),
+    stops: new Map(), restoredSuccessors: new WeakSet(), rooms: new Map([['shared', { run: null }]]), approvalRoutes: new Map(),
     pause: () => calls.push(['workspace.pause']), changed: () => {}, persist: () => {} });
   return { s, r, w, calls, proof: { nativeId: s.nativeId, controlRevision: s.controlRevision, draftRevision: 0, placementRevision: 0 } };
 }
@@ -155,6 +155,18 @@ test('a runtime without the final guard does not fall back to its ordinary stop'
   assert.deepEqual(f.calls, []);
 });
 
+test('restore receives a stop failure instead of success while the native result is unconfirmed', async () => {
+  const f = fixture();
+  const committed = Promise.withResolvers(), native = Promise.withResolvers();
+  f.r.terminal.stop = () => { committed.resolve(); return native.promise; };
+  const stop = f.w.stopUnusedSuccessor(f.s.id, f.proof);
+  await committed.promise;
+  const restore = f.w.retainRestoredSuccessor(f.s.id, f.s.nativeId);
+  const results = Promise.allSettled([stop, restore]);
+  native.reject(Error('Synthetic native end unconfirmed'));
+  assert.deepEqual((await results).map(result => result.status), ['rejected', 'rejected']);
+});
+
 test('serialized daemon RPC advertises and executes guarded stop on a synthetic provider', { timeout: 15000 }, async t => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const { fork } = require('node:child_process'), { once } = require('node:events');
@@ -187,4 +199,13 @@ test('serialized daemon RPC advertises and executes guarded stop on a synthetic 
     placementRevision: require('../collaboration-spaces.cjs').placementRevision(s) }), { state: 'ended' });
   await client.refresh();
   assert.equal(client.snapshot().sessions.find(session => session.id === id).state, 'ended');
+
+  const restoredId = await client.call('create', { provider: 'codex', cwd: directory, name: 'Restored', view: 'terminal' });
+  const restoredTarget = client.route(restoredId), before = restoredTarget.state.sessions.find(session => session.id === restoredId);
+  assert.equal(before.guardedSuccessorRestore, true);
+  await client.retainRestoredSuccessor(restoredId);
+  await assert.rejects(restoredTarget.client.call('stopUnusedSuccessor', restoredId, { nativeId: before.nativeId, controlRevision: before.controlRevision,
+    draftRevision: 0, placementRevision: require('../collaboration-spaces.cjs').placementRevision(before) }), refused);
+  await client.refresh();
+  assert.equal(client.snapshot().sessions.find(session => session.id === restoredId).state, before.state);
 });

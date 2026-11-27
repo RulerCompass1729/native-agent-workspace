@@ -800,7 +800,7 @@ class FakeClient extends EventEmitter {
       if (args[0].settings && args[0].settings.model && !this.ignoreSettings) {
         model = args[0].settings.model;
       }
-      const created = member(`new-${this.sequence}`, { name: args[0].name, createdAt: NOW, roomIds: [], roomId: null, cwd: args[0].cwd, model, view: args[0].view });
+      const created = member(`new-${this.sequence}`, { name: args[0].name, createdAt: NOW, roomIds: [], roomId: null, cwd: args[0].cwd, model, view: args[0].view, guardedSuccessorRestore: true });
       this.state.sessions.push(created);
       return created.id;
     }
@@ -4657,7 +4657,7 @@ test('R263: a human restore after stop prevents the pending automatic archive', 
   assert.equal(f.room.value.sessionArchives[id], undefined);
 });
 
-for (const change of ['human uses the successor', 'successor still working', 'late native identity', 'stop unconfirmed', 'creation is unproven', 'queue rollback is unproven']) {
+for (const change of ['human uses the successor', 'successor still working', 'late native identity', 'stop unconfirmed', 'creation is unproven', 'queue rollback is unproven', 'backend cannot coordinate restore']) {
   test('R263: keep the failed successor when ' + change, async t => {
     const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));
     const successor = f.successor();
@@ -4672,6 +4672,7 @@ for (const change of ['human uses the successor', 'successor still working', 'la
     if (change === 'successor still working') successor.state = 'working';
     if (change === 'creation is unproven') delete f.dispatcher.rotations.a.createdSuccessor;
     if (change === 'queue rollback is unproven') f.room.queueReassign = () => { throw Error('Synthetic rollback failed'); };
+    if (change === 'backend cannot coordinate restore') delete successor.guardedSuccessorRestore;
     if (change === 'late native identity') {
       successor.nativeId = 'replacement-native';
       successor.connectionRevision = (successor.connectionRevision || 0) + 1;
@@ -4681,6 +4682,7 @@ for (const change of ['human uses the successor', 'successor still working', 'la
     assert.deepEqual(f.room.value.archivedSessions, []);
     assert.equal(f.room.value.queue[0].assignee, 'a');
     assert.notEqual(successor.state, 'ended');
+    if (change === 'backend cannot coordinate restore') assert.equal(f.client.calls.some(call => call[0] === 'stopUnusedSuccessor'), false);
   });
 }
 

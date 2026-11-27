@@ -1523,6 +1523,7 @@ class RoomState {
         if (saved) { const remaining = { ...this.value.sessionArchives }; delete remaining[id]; this.update({ sessionArchives: remaining }); }
         return { restored: false };
       }
+      await client.retainRestoredSuccessor?.(id);
       let placement = 'unavailable';
       try {
         if (!saved || !saved.detached || saved.rooms.length > 1) throw Error('No unambiguous saved home');

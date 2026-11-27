@@ -43,6 +43,7 @@ async function fixture(t, provider) {
     if (method === 'importHistory') return workspace.importHistory(args[0], 'owner', args[1]);
     throw Error('Unexpected business call: ' + method);
   } };
+  client.retainRestoredSuccessor = id => workspace.retainRestoredSuccessor(id, workspace.get(id).nativeId ?? null);
   // One backend that has adopted background control, as main.cjs checks before a non-local command.
   Object.defineProperty(client, 'entries', { get: () => [{ key: 'backend', state: { ...workspace.snapshot(), capabilities: [operation.CAPABILITY] } }] });
   const actor = { id, nativeId: workspace.get(id).nativeId, provider, name: 'Butler' };
@@ -96,6 +97,46 @@ test('R263: an ended session with a historical background count keeps its origin
   assert.equal(new RoomState(f.dir).value.archivedSessions.includes(f.other), true);
   await f.rooms.restoreSession(f.client, f.other);
   assert.equal(archived(f, f.other), false);
+});
+
+test('R263: restore waits for a committed native stop before making the session visible', async t => {
+  const f = await fixture(t, 'codex'), id = f.other, session = f.workspace.get(id);
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  const client = Object.create(WorkspaceClient.prototype);
+  const backend = { key: 'synthetic', client: { call: (method, ...args) => {
+    assert.equal(method, 'retainRestoredSuccessor');
+    return f.workspace.retainRestoredSuccessor(...args);
+  } } };
+  client.entries = [backend];
+  client.control = { maintenance: new Set(), generations: new Map() };
+  f.client.retainRestoredSuccessor = target => {
+    backend.state = f.workspace.snapshot();
+    return client.retainRestoredSuccessor(target);
+  };
+  const committed = Promise.withResolvers(), finish = Promise.withResolvers();
+  f.workspace.runtime(id).stopForMaintenance = async check => {
+    check();
+    committed.resolve();
+    return finish.promise;
+  };
+  const proof = { nativeId: session.nativeId, controlRevision: 0, draftRevision: 0, placementRevision: 0 };
+  const stopping = f.workspace.stopUnusedSuccessor(id, proof);
+  await committed.promise;
+  let restored, reported = false;
+  try {
+    await f.rooms.archiveSession(f.client, id);
+    restored = f.rooms.restoreSession(f.client, id).then(result => { reported = true; return result; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(session.state, 'stopping');
+    assert.equal(reported, false);
+    assert.equal(archived(f, id), true);
+  } finally {
+    finish.resolve({ state: 'ended' });
+    await Promise.all([stopping, restored]);
+  }
+  assert.equal((await restored).restored, true);
+  assert.equal(session.state, 'ended');
+  assert.equal(archived(f, id), false);
 });
 
 test('R263: historical-count handling leaves active and changed archive targets guarded', async t => {

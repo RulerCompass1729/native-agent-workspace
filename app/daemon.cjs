@@ -238,6 +238,7 @@ async function main() {
         setTimeout(shutdown, 100); return true;
       case 'stopFailedSuccessor': return workspace.stopFailedSuccessor(args[0], args[1], args[2]);
       case 'stopUnusedSuccessor': return workspace.stopUnusedSuccessor(args[0], args[1]);
+      case 'retainRestoredSuccessor': return workspace.retainRestoredSuccessor(args[0], args[1]);
       case 'stop': return workspace.stop(args[0]);
       case 'resume': return workspace.resume(args[0], owner);
       case 'clearSharedHistory': return workspace.rooms.has(roomId) ? workspace.clearSharedHistory(roomId) : undefined;

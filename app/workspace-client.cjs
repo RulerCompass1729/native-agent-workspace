@@ -280,6 +280,14 @@ class WorkspaceClient extends EventEmitter {
     if (matches.length !== 1) throw uiError("error.client.uniqueSessionOwnerMissing");
     return matches[0];
   }
+  async retainRestoredSuccessor(id) {
+    if (!this.entries.some(entry => entry.state.sessions.some(s => s.id === id && s.guardedSuccessorRestore === true))) return;
+    const entry = this.route(id), session = entry.state.sessions.find(s => s.id === id);
+    const guard = this.operationGuard(entry);
+    guard();
+    await entry.client.call('retainRestoredSuccessor', id, session.nativeId ?? null);
+    guard();
+  }
   observeLegacyOwners(entry) {
     if (entry.state.runtimeVersion !== '0.1.0-alpha.2') return;
     for (const record of entry.state.sessions) {

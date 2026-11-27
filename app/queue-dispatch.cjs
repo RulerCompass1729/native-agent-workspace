@@ -5138,7 +5138,7 @@ class QueueDispatcher {
     const target = client.route(id), guard = client.operationGuard?.(target) || (() => {});
     let change = 0;
     if (before.state !== 'ended') {
-      if (!target.state.capabilities?.includes(GUARDED_STOP_CAPABILITY)) return false;
+      if (before.guardedSuccessorRestore !== true || !target.state.capabilities?.includes(GUARDED_STOP_CAPABILITY)) return false;
       guard();
       this.roomState.assertAvailable(id);
       const result = await withTimeout(target.client.call('stopUnusedSuccessor', id, proof), CALL_TIMEOUT_MS, 'stop-timeout');
