@@ -4612,6 +4612,51 @@ test('R263: a failed rotation archives only its own unused ended successor, with
 
 const uiErrorForRotation = key => require('../ui-errors.cjs').uiError(key);
 
+test('R263: a successor restored by the person survives an outstanding join timeout', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));
+  const successor = f.successor(), id = successor.id;
+  assert.equal(f.dispatcher.rotations.a.phase, 'joining');
+  assert.equal(successor.state, 'idle');
+  const forward = f.client.call.bind(f.client);
+  f.client.call = (method, ...args) => method === 'pause' ? Promise.resolve(true) : forward(method, ...args);
+  await f.room.archiveSession(f.client, id, 'Synthetic successor');
+  assert.deepEqual(f.room.value.archivedSessions, [id]);
+  assert.equal((await f.room.restoreSession(f.client, id)).restored, true);
+  f.room.readAgain();
+  assert.equal(f.room.apply(f.client.snapshot()).sessions.find(s => s.id === id).archived, false);
+
+  f.advance(10 * 60 * 1000 + 1);
+  await f.pass();
+  const { phase, reason } = f.dispatcher.rotations.a;
+  assert.deepEqual([phase, reason], ['failed', 'join-timeout']);
+  const stopCalls = f.client.calls.filter(call => call[0] === 'stopUnusedSuccessor').length;
+  assert.deepEqual({ state: successor.state, stopCalls, archived: f.room.value.archivedSessions },
+    { state: 'idle', stopCalls: 0, archived: [] });
+});
+
+test('R263: a human restore after stop prevents the pending automatic archive', async t => {
+  const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));
+  const id = f.successor().id;
+  const archive = f.room.archiveSession.bind(f.room), forward = f.client.call.bind(f.client);
+  f.client.call = (method, ...args) => method === 'pause' ? Promise.resolve(true) : forward(method, ...args);
+  let restored = false;
+  f.room.archiveSession = async (client, targetId, label, options) => {
+    if (targetId === id && options?.automatic) {
+      await archive(client, id, label);
+      restored = (await f.room.restoreSession(client, id)).restored;
+    }
+    return archive(client, targetId, label, options);
+  };
+
+  f.advance(10 * 60 * 1000 + 1);
+  await f.pass();
+  assert.equal(f.dispatcher.rotations.a.reason, 'join-timeout');
+  assert.equal(restored, true);
+  assert.equal(f.client.calls.filter(call => call[0] === 'stopUnusedSuccessor').length, 1);
+  assert.deepEqual(f.room.value.archivedSessions, []);
+  assert.equal(f.room.value.sessionArchives[id], undefined);
+});
+
 for (const change of ['human uses the successor', 'successor still working', 'late native identity', 'stop unconfirmed', 'creation is unproven', 'queue rollback is unproven']) {
   test('R263: keep the failed successor when ' + change, async t => {
     const f = await rotateIntoRefusedJoin(t, () => uiErrorForRotation(BACKEND_UPDATING[0]));

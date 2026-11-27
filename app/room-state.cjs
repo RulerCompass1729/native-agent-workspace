@@ -16,7 +16,7 @@ const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 10
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 const contentEvents = events => events.filter(e => !(e.kind === 'control-audit' && e.controlAudit));
 const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], restorePlacements: {}, memberOrder: [], files: [] });
-const initialShared = () => ({ ...initialRoom('共同工作'), archivedSessions: [], sessionArchives: {} });
+const initialShared = () => ({ ...initialRoom('共同工作'), archivedSessions: [], sessionArchives: {}, restoredSessions: [] });
 const roomGate = id => id === DEFAULT_ROOM_ID ? 'room' : `room:${id}`;
 const mergeSignature = value => createHash('sha256').update(JSON.stringify({ name: value.name, notes: value.notes,
   files: value.files, events: contentEvents(value.events).map(e => e.id), memberOrder: value.memberOrder })).digest('hex');
@@ -77,7 +77,7 @@ function validateRoom(data) {
   if (data.events.some(e => e.rotationReceipt !== undefined && (e.kind !== 'rotation' || typeof e.rotationReceipt !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(e.rotationReceipt)))) throw Error('Invalid rotation receipt');
   if (data.events.some(e => e.controlAudit !== undefined && (e.kind !== 'control-audit' || !validControlAudit(e.controlAudit)))) throw Error('Invalid maintenance event');
   // B4 metadata is auxiliary; intake policy must not disable this space.
-  for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
+  for (const key of ['archivedSessions', 'restoreMembers', 'restoredSessions']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
   if (data.sessionArchives !== undefined && (!data.sessionArchives || typeof data.sessionArchives !== 'object' || Array.isArray(data.sessionArchives) || Object.keys(data.sessionArchives).length > 10000 ||
       Object.entries(data.sessionArchives).some(([id, p]) => !orderId(id) || !validSessionArchive(p)))) throw Error('Invalid session archive placement');
   if (data.archived !== undefined && typeof data.archived !== 'boolean') throw Error('Invalid archive');
@@ -1571,7 +1571,9 @@ class RoomState {
       }
       const remaining = { ...this.value.sessionArchives }; delete remaining[id];
       const notice = placement === 'restored' ? null : uiNotice('notice.room.sessionRestoreFallback');
-      this.update({ archivedSessions: this.value.archivedSessions.filter(value => value !== id), sessionArchives: remaining },
+      // Standalone restore can leave every backend revision unchanged.
+      this.update({ archivedSessions: this.value.archivedSessions.filter(value => value !== id), sessionArchives: remaining,
+        restoredSessions: [...new Set([...this.value.restoredSessions, id])] },
         notice ? { kind: 'restore-session', sessionId: id, ...notice } : undefined);
       return { restored: true, placement, ...(notice || {}) };
   }

@@ -5124,10 +5124,11 @@ class QueueDispatcher {
     // A dispatched handoff without a receipt is ambiguous. The failed-handoff cleanup still owns it.
     if (record.createdSuccessor !== true || Object.hasOwn(record, 'successorOwner') || record.handoffTag) return false;
     const id = record.newId, client = this.client;
+    const restored = () => this.roomState.value.restoredSessions.includes(id);
     const read = async () => (await withTimeout(client.call('initial'), CALL_TIMEOUT_MS, 'refresh-timeout')).sessions.find(s => s.id === id);
     const before = await read();
     const proof = trustProof(before), revision = before?.connectionRevision ?? 0;
-    if (this.closed || !proof || !unusedRotationSuccessor(before) || proof.controlRevision !== 0 || proof.draftRevision !== 0 ||
+    if (this.closed || restored() || !proof || !unusedRotationSuccessor(before) || proof.controlRevision !== 0 || proof.draftRevision !== 0 ||
         revision !== 0 || before.provider !== record.provider || !['starting', 'idle', 'error', 'ended'].includes(before.state)) return false;
     const rooms = roomIds(before);
     if (rooms.length > 1 || (!rooms.length && proof.placementRevision !== 0)) return false;
@@ -5139,6 +5140,7 @@ class QueueDispatcher {
     if (before.state !== 'ended') {
       if (!target.state.capabilities?.includes(GUARDED_STOP_CAPABILITY)) return false;
       guard();
+      this.roomState.assertAvailable(id);
       const result = await withTimeout(target.client.call('stopUnusedSuccessor', id, proof), CALL_TIMEOUT_MS, 'stop-timeout');
       guard();
       if (result?.state !== 'ended') return false;
@@ -5148,7 +5150,7 @@ class QueueDispatcher {
     let placement = proof.placementRevision;
     const ended = session => {
       guard();
-      return !this.closed && this.rotations[oldId] === record && session.state === 'ended' &&
+      return !this.closed && this.rotations[oldId] === record && !restored() && session.state === 'ended' &&
         unusedRotationSuccessor(session) && session.nativeId === proof.nativeId &&
         (session.connectionRevision ?? 0) === revision + change && session.controlRevision === proof.controlRevision + change &&
         session.draftRevision === proof.draftRevision && placementRevision(session) === placement;
