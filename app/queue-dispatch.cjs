@@ -1289,8 +1289,14 @@ function queueVacancies(input) {
   const byId = new Map((input.sessions || []).map(session => [session.id, session]));
   return (input.rooms || []).map(room => {
     const members = new Set(memberIds(room, input.sessions || []));
-    // A space with only items left for the person to look at has nothing to send or wait for.
-    const candidates = !room.archived && !(room.queue || []).some(item => item.status === 'queued' || holdsMember(item))
+    const occupied = (room.queue || []).some(item => {
+      if (item.status === 'queued') return true;
+      if (!holdsMember(item) || !members.has(item.sentTo)) return false;
+      const holder = byId.get(item.sentTo);
+      // An unavailable backend or disconnected transport cannot confirm an end.
+      return holder.state !== 'ended' || holder.backendUnavailable || holder.transportDisconnected;
+    });
+    const candidates = !room.archived && !occupied
       ? (input.sessions || []).filter(session => !busy.has(session.id) && roomIds(session).includes(room.id) &&
         !carriedOn(session.id, input.handedOff, members, byId) &&
         sessionReady(session, input.wakePolicy, true).ready &&
