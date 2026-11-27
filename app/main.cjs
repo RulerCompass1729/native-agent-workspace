@@ -1772,16 +1772,21 @@ function reconnectClosed(context, client) {
   });
   return reconnector(context, client);
 }
-async function retireHistoryBackends(c) {
-  if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
-  const client = c.client, candidates = [];
+function historyRetirementCandidates(client, automatic = false) {
+  const candidates = [];
   for (const entry of client.entries) {
     if (entry === client.active || entry.closed || entry.closing || !canRetire(entry.state, client.active.state)) continue;
+    if (automatic && (!entry.state.sessions.length || entry.state.sessions.some(session => session.state !== 'ended'))) continue;
     const lock = require('./service-lock.cjs').readLock(path.join(dataDir, entry.key, 'service.lock'));
     if (!lock?.started || lock.pid !== entry.state.servicePid) continue;
     candidates.push({ entry, pid: lock.pid, started: lock.started, sessions: entry.state.sessions.map(backendSwitch.maintenanceProof),
       guard: client.operationGuard(entry) });
   }
+  return candidates;
+}
+async function retireHistoryBackends(c) {
+  if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  const client = c.client, candidates = historyRetirementCandidates(client);
   if (!candidates.length) return { retired: 0, skipped: 0 };
   const answer = await showDialog(c, 'message', {
     type: 'question', message: displayText('os.retireHistoryTitle', { count: candidates.length }),
@@ -1791,6 +1796,9 @@ async function retireHistoryBackends(c) {
   });
   if (answer.response !== 1) return null;
   if (!isCurrentHumanContext(c) || c.client !== client || client.closing || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  return runHistoryRetirements(client, candidates);
+}
+async function runHistoryRetirements(client, candidates) {
   let retired = 0, skipped = 0;
   backendSwitching = candidates[0].entry.key;
   try {
@@ -1819,6 +1827,7 @@ async function retireHistoryBackends(c) {
 
 let backendSwitching = null, switchRecords = {};
 const autoSwitchFailed = new Set();
+let lastAutomaticHistoryCandidate = null;
 // Sessions a move ended (or left disconnected or in error) that are still not live with the same native
 // identity; reconnected or archived ones drop out.
 const notReconnected = (sessions, value) => sessions.some(s => s.id === value.id && s.nativeId === value.nativeId && !s.archived && !['idle', 'working', 'approval', 'starting'].includes(s.state));
@@ -1956,6 +1965,12 @@ async function autoBackendSwitchOnce() {
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
+  const histories = historyRetirementCandidates(c.client, true);
+  const nextHistory = histories[histories.findIndex(target => target.entry.key === lastAutomaticHistoryCandidate) + 1] || histories[0];
+  if (nextHistory) {
+    lastAutomaticHistoryCandidate = nextHistory.entry.key;
+    if ((await runHistoryRetirements(c.client, [nextHistory])).retired) return;
+  }
   await c.client.refresh();
   const sessions = roomState.apply(c.client.snapshot()).sessions;
   let humanAt = new Map();

@@ -3,7 +3,7 @@ const fs = require('node:fs'), vm = require('node:vm');
 const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
 const locale = require('../ui-locale.js');
 const { uiError } = require('../ui-errors.cjs');
-const { continuationStatus } = require('../service-client.cjs');
+const { canRetire, continuationStatus } = require('../service-client.cjs');
 const backendSwitch = require('../backend-switch.cjs');
 const queueRules = require('../queue-dispatch.cjs');
 const { WorkspaceClient } = require('../workspace-client.cjs');
@@ -33,9 +33,10 @@ function fixture(settings = { auto: true, migrate: false }) {
   };
   control.views.add(client);
   const context = { client, view: { owner: 'synthetic-owner' }, win: { isDestroyed: () => false, webContents: { send: (event, notice) => notices.push({ event, notice }) } } };
-  const scope = vm.createContext({ continuationStatus, uiError, uiLocale: locale, roomState: { apply: state => state },
+  const scope = vm.createContext({ canRetire, continuationStatus, uiError, uiLocale: locale, roomState: { apply: state => state },
     app: { getVersion: () => current }, backendSwitch: { ...backendSwitch, readSettings: () => settings },
     windows: new Map([[1, context]]), backendSwitching: null, autoSwitchRunning: false, autoSwitchFailed: new Set(), quitting: false, quietWindows: null,
+    lastAutomaticHistoryCandidate: null,
     queueDispatcher: null, queueRules: { ...queueRules, nextBackendMove(...args) { events.push('nextMove'); return queueRules.nextBackendMove(...args); } },
     migrateQuietMs: () => queueRules.MIGRATE_QUIET_MS, migrateUnprovenQuietMs: () => queueRules.MIGRATE_UNPROVEN_QUIET_MS,
     runningRelays: () => new Set(), dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' },
@@ -54,6 +55,9 @@ function fixture(settings = { auto: true, migrate: false }) {
   for (const name of ['passQuietWindows', 'quietWindowMoved']) if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === name)) vm.runInContext(source(name), scope);
   // The baseline has no shared helper; the automatic-success assertions still expose its missing route.
   if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === 'runConnectionContinuation')) vm.runInContext(source('runConnectionContinuation'), scope);
+  for (const name of ['historyRetirementCandidates', 'runHistoryRetirements']) {
+    if (ast.body.some(node => node.type === 'FunctionDeclaration' && node.id.name === name)) vm.runInContext(source(name), scope);
+  }
   const start = main.indexOf("  register('continueConnection',"), end = main.indexOf("  for (const action of ['resume', 'forget'])", start);
   vm.runInContext(main.slice(start, end), scope);
   const f = { old, active, control, client, context, scope, events, notices, handlers, answer: () => { throw Error('automatic continuation must not ask for confirmation'); } };
@@ -108,12 +112,49 @@ test('ready all-ended backends use guarded continuation under either automatic s
     assert.equal(f.scope.connectionUpdateOptions(f.client, current, f.scope.roomState).length, 0);
   }
 });
+test('automatic maintenance releases an ended history backend and never prompts or stops a session', async () => {
+  const f = fixture(), { old, active, scope, control, events } = f;
+  old.state.runtimeVersion = current;
+  old.state.capabilities.push('conditionalMaintenanceStopV1');
+  old.state.servicePid = 519;
+  active.state.capabilities.push('conditionalMaintenanceStopV1');
+  active.state.sessions = [{ ...old.state.sessions[0], id: 'active-session', nativeId: 'active-native' }];
+  Object.assign(scope, { path: require('node:path'), connectProfileBackend() {},
+    require: name => {
+      assert.equal(name, './service-lock.cjs');
+      return { readLock: file => {
+        assert.equal(file, require('node:path').join('synthetic-profile', 'old', 'service.lock'));
+        return { pid: 519, started: 'synthetic start' };
+      } };
+    },
+    async retireHistoryService(_path, key, target) {
+      assert.equal(control.maintenance.has(key), true);
+      assert.deepEqual([key, target.pid, target.started, target.sessions[0].nativeId], ['old', 519, 'synthetic start', 'native-ended']);
+      events.push('retire');
+      old.state.capabilities = [];
+      return true;
+    },
+  });
+  old.state.sessions.push({ ...old.state.sessions[0], id: 'still-native', state: 'disconnected' });
+  await scope.autoBackendSwitchOnce();
+  assert.equal(events.includes('retire'), false);
+  old.state.sessions.pop();
+  events.length = 0;
+  await scope.autoBackendSwitchOnce();
+  assert.deepEqual(events, ['guard', 'maintain:old', 'retire', 'sockets:old', 'finish:old', 'broadcast']);
+  assert.equal(scope.backendSwitching, null);
+  await scope.autoBackendSwitchOnce();
+  assert.equal(events.filter(event => event === 'retire').length, 1);
+});
 test('disabled settings, shutdown, another move and unavailable foreground connections make no automatic writes', async () => {
   const changes = [f => { f.scope.quitting = true; }, f => { f.scope.backendSwitching = 'another'; },
     f => { f.context.background = true; }, f => { f.context.win.isDestroyed = () => true; },
     f => { f.client.closing = true; }, f => { f.client.socket.destroyed = true; }];
   for (const change of changes) { const f = fixture(); change(f); await f.scope.autoBackendSwitchOnce(); assert.deepEqual(f.events, []); }
-  const off = fixture({ auto: false, migrate: false }); await off.scope.autoBackendSwitchOnce(); assert.deepEqual(off.events, []);
+  const off = fixture({ auto: false, migrate: false });
+  off.old.state.capabilities.push('conditionalMaintenanceStopV1');
+  await off.scope.autoBackendSwitchOnce();
+  assert.deepEqual(off.events, []);
 });
 test('disconnected and all other non-ended sessions remain ineligible, including hidden siblings and effective active state', async () => {
   for (const state of ['disconnected', 'idle', 'working', 'approval', 'error', 'stopping']) {
