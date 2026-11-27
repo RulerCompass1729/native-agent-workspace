@@ -71,3 +71,25 @@ test('every file pi-tui loads or reads beside itself is in the private runtime c
   assert.deepEqual({ absent, gateError }, { absent: [], gateError: null });
   assert.equal(fs.readFileSync(piTui.paths(dataDir).gateFile, 'utf8'), fs.readFileSync(path.join(app, 'pi-confirm.mjs'), 'utf8'));
 });
+
+for (const operation of ['lookupWake', 'visibleSessions']) test('copied runtime can perform ' + operation + ' without frontend-only modules', async () => {
+  const runtime = runtimeCopy(), profile = path.join(runtime, 'lookup-' + operation);
+  fs.mkdirSync(profile, { mode: 0o700 });
+  const session = { id: 'synthetic-recipient', name: 'Synthetic recipient', provider: 'codex', state: 'idle' };
+  let calls = 0, closes = 0;
+  const peer = { root: () => profile, connect: async () => ({
+    call: async method => { assert.equal(method, 'initial'); calls++; return { sessions: [session], capabilities: ['agentWakeV1'] }; },
+    close: () => { closes++; },
+  }) };
+  if (operation === 'lookupWake') {
+    const { PeerRunner } = require(path.join(runtime, 'peer-handoffs.cjs'));
+    const found = await PeerRunner.prototype.lookupWake.call(peer, session.id);
+    assert.deepEqual(found.session, session);
+  } else {
+    const { OperatorControl } = require(path.join(runtime, 'operator-control.cjs'));
+    const found = await OperatorControl.prototype.visibleSessions.call({ w: { peerRunner: peer, dataDir: path.join(profile, 'local') } }, []);
+    assert.deepEqual(found.sessions.map(row => row.id), [session.id]);
+    assert.equal(found.metadataIncomplete, false);
+  }
+  assert.deepEqual({ calls, closes }, { calls: 1, closes: 1 });
+});

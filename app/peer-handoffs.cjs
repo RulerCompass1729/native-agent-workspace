@@ -144,7 +144,7 @@ class PeerRunner {
   }
   async lookupWake(id, readiness) {
     const root = this.root(), layout = readLayout(root);
-    const { readRetiredBackend } = require('./service-client.cjs');
+    const { readRetiredBackend } = require('./retired-backend.cjs');
     const holders = (await eachBackend(layout.entries, async key => {
       const retired = readRetiredBackend(root, key, layout);
       if (retired) return retired.sessions.some(s => s.id === id) ? { retired: true } : null;

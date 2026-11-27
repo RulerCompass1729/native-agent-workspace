@@ -15,42 +15,8 @@ const serviceBinding = require('./service-binding.cjs');
 const { sessionPlan, sameStop, maintenanceProof, readRecords } = require('./backend-switch.cjs');
 const { Workspace } = require('./workspace.cjs');
 
-const retiredStates = new Map();
+const { retiredState, hasServiceTransport, readRetiredBackend, invalidateRetiredState } = require('./retired-backend.cjs');
 const openingRetired = new Map();
-function retiredState(directory) {
-  const workspace = fs.lstatSync(path.join(directory, 'workspace.json'));
-  if (!workspace.isFile() || workspace.uid !== process.getuid() || (workspace.mode & 0o077)) throw uiError('error.service.invalidLayout');
-  const files = ['room-records.json', 'operator-records.json'].map(name => {
-    try { return fs.lstatSync(path.join(directory, name)); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  });
-  const stamp = [workspace, ...files].map(stat => stat ? [stat.dev, stat.ino, stat.ctimeMs, stat.mtimeMs, stat.size].join(':') : '').join('/');
-  const cached = retiredStates.get(directory);
-  const cachedState = cached?.stamp === stamp ? cached.state.deref() : null;
-  if (cachedState) return cachedState;
-  const stored = Workspace.recordedSnapshot(directory);
-  if (stored.storageWarning || !stored.sessions.every(session => ['ended', 'recoverable'].includes(session.state) &&
-      sessionPlan(session, session.state).carry)) throw uiError('error.service.invalidLayout');
-  const state = { ...stored, protocol: 1, capabilities: ['collaborationSpacesV1', 'clearSharedHistory', 'resume', 'operatorControl1a'],
-    storageRetryable: false, wakePolicy: undefined };
-  retiredStates.set(directory, { stamp, state: new WeakRef(state) });
-  return state;
-}
-
-function hasServiceTransport(directory) {
-  if (readLock(path.join(directory, 'service.lock')) !== undefined) return true;
-  try { fs.lstatSync(path.join(directory, 'connection.json')); return true; }
-  catch (error) { if (error.code !== 'ENOENT') throw error; return false; }
-}
-
-function readRetiredBackend(dataDir, key, layout = readLayout(dataDir)) {
-  if (!layout.retired?.includes(key)) return null;
-  const directory = path.join(dataDir, key);
-  if (hasServiceTransport(directory)) return null;
-  serviceBinding.assertBinding(serviceBinding.readBinding(directory));
-  const state = retiredState(directory);
-  return hasServiceTransport(directory) ? null : state;
-}
 
 async function openRetired(scope, key, directory) {
   let opening = openingRetired.get(directory);
@@ -60,7 +26,7 @@ async function openRetired(scope, key, directory) {
   }
   try { await opening; }
   finally { if (openingRetired.get(directory) === opening) openingRetired.delete(directory); }
-  retiredStates.delete(directory);
+  invalidateRetiredState(directory);
 }
 
 class RetiredClient extends EventEmitter {
@@ -182,7 +148,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (ownerMayBeAlive(record, dataDir, 'service') || !releaseLock(lock, record)) throw uiError("error.service.existingBackendUnreachable");
   }
   if (expectedBinding && !serviceBinding.runnerAbsent(dataDir)) throw serviceBinding.failure('runner-exit-unconfirmed');
-  const names = ['service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'state-share.cjs', 'daemon.cjs', 'adapters.cjs', 'agy-tui.cjs', 'agy_hook.py', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'pi-tui.cjs', 'pi-confirm.mjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'rotation-handoff.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'terminal-interrupt.cjs', 'session-wake.cjs', 'session-retirement.cjs', 'session-model.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'space-managers.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
+  const names = ['retired-backend.cjs', 'service-binding.cjs', 'butler-backend.cjs', 'butler-runner.cjs', 'butler-runner.py', 'service-lock.cjs', 'ui-errors.cjs', 'ui-locale.js', 'ui-messages.js', 'service-transport.cjs', 'state-delta.cjs', 'state-share.cjs', 'daemon.cjs', 'adapters.cjs', 'agy-tui.cjs', 'agy_hook.py', 'discussion-guidelines.cjs', 'dsh-tui.cjs', 'pi-tui.cjs', 'pi-confirm.mjs', 'dsh-egress.cjs', 'dsh-witness.cjs', 'dsh-tui-update-off.cjs', 'dsh-tui-preload.mjs', 'butler-dsh-privacy.cjs', 'native-accessibility.cjs', 'native-computer-use.cjs', 'computer-use-outbox-native.cjs', 'scoped-outbox-runtime.cjs', 'background-control.cjs', 'record-history.cjs', 'background-operation.cjs', 'background-fingerprint.cjs', 'background-control-native.cjs', 'native-root-proof.cjs', 'computer-use-outbox-tool.cjs', 'operator-control.cjs', 'terminal-keyboard.cjs', 'terminal-continuation.js', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'submission-policy.cjs', 'renderer/fleet-observation.js', 'backend-switch.cjs', 'goal-continuation.cjs', 'goal-continuation-runner.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'mobile-receipts.cjs', 'rotation-handoff.cjs', 'native-blocks.cjs', 'native-images.cjs', 'space-images.cjs', 'local-images.cjs', 'shared-replies.cjs', 'terminal-interrupt.cjs', 'session-wake.cjs', 'session-retirement.cjs', 'session-model.cjs', 'quiet-windows.cjs', 'steward-role.cjs', 'queue-secretary.cjs', 'space-managers.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'claude-session-list.cjs', 'native-directory-trust.cjs', 'native-terminal-dialog.cjs', 'codex-qualification.cjs', 'codex-profile.cjs', 'claude-pin.cjs', 'claude-mod-check.cjs', 'claude-qualification.cjs', 'claude-native-journeys.cjs', 'claude-loopback.cjs', 'codex-surface.cjs', 'codex-surface/0.167.0.json', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs', 'claude-compat-plugin.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.
@@ -257,7 +223,7 @@ async function retireHistoryService(dataDir, key, expected) {
     if (!parents.trim() || parents.split('\n').some(parent => parent.trim() === String(identity.pid))) return false;
     await service.call('maintenanceShutdown', current.sessions.map(maintenanceProof));
     await waitForShutdown(service, directory, identity);
-    retiredStates.delete(directory);
+    invalidateRetiredState(directory);
     layout.retired = [...(layout.retired || []), key];
     try { writeLayout(dataDir, layout); }
     catch (error) {

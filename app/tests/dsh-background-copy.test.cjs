@@ -1,4 +1,5 @@
 'use strict';
+const { readRetiredBackend } = require('../retired-backend.cjs');
 // A slow runtime copy must hold up neither the start nor the install, and DSH must appear later by itself.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm'),crypto=require('node:crypto');
 const tui=require('../dsh-tui.cjs'),layout=require('../service-layout.cjs'),locks=require('../service-lock.cjs'),{qualification,runtime,write}=require('./helpers/dsh-runtime.cjs');
@@ -23,7 +24,7 @@ function fixture(t,{files=40,slow={},limits={},pending=true,row=true,other=false
  environment(t,{NODE_OPTIONS:'--require '+JSON.stringify(preload),NAW_TEST_DSH_CHILD:'1',NAW_TEST_DSH_SLOW_ROOT:donor.root,NAW_TEST_DSH_FILE_MS:String(slow.fileMs||0),NAW_TEST_DSH_CLOCK_MS:String(slow.clockMs||0)});
  const retired=[],warnings=[];let copies=0;
  const state=dir=>({runtimeVersion:dir===root?'synthetic-old':VERSION,sessions:dir===root?donorSessions:[],room:{messages:[]}});
- const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env:{NAW_APP_VERSION:VERSION}},uiError:key=>Error(key),...layout,...locks,
+ const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env:{NAW_APP_VERSION:VERSION}},uiError:key=>Error(key),...layout,readRetiredBackend,...locks,
   console:{warn:(...args)=>warnings.push(args)},waitForShutdown:async()=>{},emptyService:s=>s.sessions.length===0,emptyStore:()=>true,
   require(name){assert.equal(name,'./dsh-tui.cjs');return tui;},ensureServiceAt:async dir=>state(dir),
   connectService:async dir=>({call:async method=>{if(method==='shutdown')retired.push(dir);return state(dir);},close(){}}),

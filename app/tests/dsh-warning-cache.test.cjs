@@ -1,4 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
+const { readRetiredBackend } = require('../retired-backend.cjs');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm'), crypto = require('node:crypto');
 const app = path.join(__dirname, '..'), tui = require(path.join(app, 'dsh-tui.cjs'));
 const helper = require(path.join(app, 'tests/helpers/dsh-runtime.cjs'));
@@ -24,7 +25,7 @@ function scene(t, retainTargets = false) {
   const state = directory => ({ runtimeVersion: 'synthetic-review', servicePid: 0,
     sessions: retainTargets || directory === root ? [{ id: 'synthetic-ended', state: 'ended' }] : [], room: { messages: [] } });
   const ctx = { fs: fakeFs, path, crypto, __dirname: app, process: { env: { NAW_APP_VERSION: 'synthetic-review' } },
-    uiError: key => Error(key), ...layout, ...locks, require: () => wrapped, dshCopy: helper.inProcess(wrapped), console: { warn: (...args) => warnings.push(args) },
+    uiError: key => Error(key), ...layout,readRetiredBackend, ...locks, require: () => wrapped, dshCopy: helper.inProcess(wrapped), console: { warn: (...args) => warnings.push(args) },
     ensureServiceAt: async directory => state(directory),
     connectService: async directory => ({ call: async method => { if (method === 'shutdown') retired.push(directory); return state(directory); }, close() {} }),
     lockIdentity: () => null, waitForShutdown: async () => {} };

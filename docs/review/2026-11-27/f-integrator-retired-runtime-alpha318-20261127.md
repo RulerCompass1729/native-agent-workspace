@@ -1,0 +1,5 @@
+# Retired-reader private-runtime closure repair
+
+The isolated production runtime copy could load Workspace, but invoking either cross-backend wake lookup or operator session metadata failed before any connection with a missing frontend service-client module. Both regressions fail on the approved source and pass after the repair. The readonly retired-store proof functions move verbatim to one backend-safe module, copied and hashed with the existing runtime inputs. Both readers and the frontend share its cache and invalidation; retired identity, native ownership, missing-transport and record checks are unchanged.
+
+Four existing VM test harnesses now inject the real readonly helper required by their extracted ensureService body. The original copy, donor, timeout, retry, locking and refusal assertions remain unchanged. The install operator's readonly inspector still consumes the same exported proof. Source-diff and focused raw results go to independent review before any daily activation or publication. A retained occupied backend keeps its previous code; no accepted work is replayed or session forcibly moved.

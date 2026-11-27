@@ -1,4 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm'),crypto=require('node:crypto');
+const { readRetiredBackend } = require('../retired-backend.cjs');
 const tui=require('../dsh-tui.cjs'),{qualification,runtime,inProcess}=require('./helpers/dsh-runtime.cjs'),layout=require('../service-layout.cjs');
 function fixture(t,{fault=null,empty=true,pending=false,targetFault=null}={}){
  qualification(t);const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'naw-donor-budget-')));let restore=()=>{};t.after(()=>{restore();fs.rmSync(root,{recursive:true,force:true});});
@@ -16,7 +17,7 @@ function fixture(t,{fault=null,empty=true,pending=false,targetFault=null}={}){
  const env={NAW_APP_VERSION:'synthetic-v1'},retired=[],warnings=[];
  const state=dir=>({runtimeVersion:env.NAW_APP_VERSION,sessions:dir===root&&!empty?[{id:'retained',state:'ended'}]:[],room:{messages:[]}});
  const wrapped={...tui,inheritRuntime:async(...args)=>{assert.equal(locked,true);inheritCalls++;if(broken&&fault==='unexpected')throw Error('SYNTHETIC_PRIVATE_REASON');return tui.inheritRuntime(...args);}};
- const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env},uiError:key=>Error(key),...layout,readLock:()=>undefined,createLock:()=>{locked=true;return {};},releaseLock:()=>{locked=false;return true;},ownerMayBeAlive:()=>false,
+ const ctx={fs,path,crypto,__dirname:path.join(__dirname,'..'),process:{env},uiError:key=>Error(key),...layout,readRetiredBackend,readLock:()=>undefined,createLock:()=>{locked=true;return {};},releaseLock:()=>{locked=false;return true;},ownerMayBeAlive:()=>false,
   emptyService:s=>s.sessions.length===0,emptyStore:()=>true,lockIdentity:()=>null,waitForShutdown:async()=>{},console:{warn:(...args)=>warnings.push(args)},require:()=>wrapped,dshCopy:inProcess(wrapped),
   ensureServiceAt:async dir=>{boots++;return state(dir);},connectService:async dir=>({call:async method=>{if(method==='initial')return state(dir);if(method==='shutdown')retired.push(dir);},close(){}})};
  const source=fs.readFileSync(require.resolve('../service-client.cjs'),'utf8'),start=source.indexOf('async function ensureService(dataDir,'),end=source.indexOf('\nfunction continuationStatus',start);

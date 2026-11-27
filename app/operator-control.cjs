@@ -410,7 +410,7 @@ class OperatorControl {
     // lookupWake. Only this whitelist ever crosses the native tool boundary.
     // No new daemon, provider, prompt or remote endpoint is involved.
     const root = peer.root(), layout = require('./service-layout.cjs').readLayout(root), deadline = Date.now() + 2000;
-    const { readRetiredBackend } = require('./service-client.cjs');
+    const { readRetiredBackend } = require('./retired-backend.cjs');
     const sessions = new Map(fallback.map(s => [s.id, s])), duplicates = new Set(); let incomplete = false;
     for (const key of layout.entries) {
       const directory = path.join(root, key);
