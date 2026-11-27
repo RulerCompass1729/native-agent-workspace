@@ -186,7 +186,7 @@ class Workspace extends EventEmitter {
     this.rooms = new Map([['shared', this.room]]);
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null; this.saveSeq = 0; this.renamedSeq = 0; this.saveWriting = false; this.saveAgain = false; this.saveJob = null;
-    this.laterSavedAt = -Infinity; this.laterSavedBytes = 0;
+    this.laterSavedAt = -Infinity; this.laterSavedBytes = 0; // performance.now(): a clock set back must not postpone saves
     // Change counters: each session record's own (changed(id)) and the workspace's (changed() naming none).
     this.revisionAll = 0; this.revisions = new WeakMap(); this.savedJson = new WeakMap(); this.savedAllAt = -Infinity;
     this.saved = null; // the JSON of both files as last saved (its parts) and the files that save left: unchanged()
@@ -447,7 +447,7 @@ class Workspace extends EventEmitter {
       fs.writeFileSync(temp, snapshot.workspace, { mode: 0o600 });
       // Numbered before the rename: a rename that fails after it took place still keeps an older checkpoint out.
       this.renamedSeq = snapshot.seq; fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
-      this.laterSavedAt = Date.now(); this.laterSavedBytes = snapshot.workspace.length;
+      this.laterSavedAt = performance.now(); this.laterSavedBytes = Buffer.byteLength(snapshot.workspace);
       if (snapshot.rooms !== null) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
         fs.writeFileSync(pending, snapshot.rooms, { mode: 0o600 });
@@ -464,12 +464,12 @@ class Workspace extends EventEmitter {
     // One write at a time: a checkpoint due meanwhile is taken when it ends, from the state then.
     if (this.saveWriting) { this.saveAgain = true; return; }
     const spacing = this.laterSavedBytes < SAVE_PACED_BYTES ? 0 : Math.min(this.laterSavedBytes / SAVE_PACED_BYTES_PER_MS, SAVE_PACED_MAX_MS);
-    const early = this.laterSavedAt + spacing - Date.now();
+    const early = this.laterSavedAt + spacing - performance.now();
     if (early > 0) { this.saveDeadline = setTimeout(() => this.persistLater(), early); return; }
     let snapshot;
     try { snapshot = this.storeSnapshot(undefined, true, true); } catch { this.saveFailed(); return; }
     if (!snapshot) return;
-    this.saveWriting = true; this.laterSavedAt = Date.now(); this.laterSavedBytes = snapshot.workspace.length;
+    this.saveWriting = true; this.laterSavedAt = performance.now(); this.laterSavedBytes = Buffer.byteLength(snapshot.workspace);
     const target = path.join(this.dataDir, 'workspace.json'), file = path.join(this.dataDir, 'room-records.json');
     const temp = `${target}.later.tmp`, pending = `${file}.later.tmp`;
     const job = (async () => {

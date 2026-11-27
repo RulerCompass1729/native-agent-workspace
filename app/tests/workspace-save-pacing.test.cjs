@@ -25,14 +25,17 @@ function store(t) {
     w.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });
-  const disk = () => JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8')).drafts.mark;
+  const disk = () => {
+    const file = path.join(directory, 'workspace.json');
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).drafts.mark : null;
+  };
   return { w, writes, disk };
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function firstCheckpoint(w, writes) {
-  w.drafts.set('big', 'x'.repeat(2 * 1024 * 1024));
+async function firstCheckpoint(w, writes, big = 'x'.repeat(3 * 1024 * 1024)) {
+  w.drafts.set('big', big);
   w.drafts.set('mark', 'A');
   w.changed();
   for (let i = 0; i < 100 && !writes.length; i++) {
@@ -50,10 +53,10 @@ test('a store over 1 MiB that keeps changing is checkpointed about once per MiB-
     w.changed();
     await sleep(50);
   }
-  assert.deepEqual(writes, ['A'], 'Within 2 s of writing 2 MiB no other checkpoint is written');
+  assert.deepEqual(writes, ['A'], 'Within 3 s of writing 3 MiB no other checkpoint is written');
   w.drafts.set('mark', 'last');
   w.changed();
-  for (let i = 0; i < 300 && disk() !== 'last'; i++) {
+  for (let i = 0; i < 500 && disk() !== 'last'; i++) {
     await sleep(10);
   }
   assert.equal(disk(), 'last');
@@ -70,14 +73,14 @@ test('persist() is not spaced: a record that must be on disk is written at once'
 
 test('a timed checkpoint after persist() is spaced from that write', async t => {
   const { w, writes, disk } = store(t);
-  w.drafts.set('big', 'x'.repeat(2 * 1024 * 1024));
+  w.drafts.set('big', 'x'.repeat(3 * 1024 * 1024));
   w.drafts.set('mark', 'saved');
   assert.equal(w.persist(), true);
   w.drafts.set('mark', 'later');
   w.changed();
   await sleep(1300);
-  assert.deepEqual(writes, [], 'persist() just wrote 2 MiB: no checkpoint within 2 s of it');
-  for (let i = 0; i < 200 && disk() !== 'later'; i++) {
+  assert.deepEqual(writes, [], 'persist() just wrote 3 MiB: no checkpoint within 3 s of it');
+  for (let i = 0; i < 400 && disk() !== 'later'; i++) {
     await sleep(10);
   }
   assert.equal(disk(), 'later');
@@ -97,4 +100,32 @@ test('a store under 1 MiB keeps the one-second deadline', async t => {
     await sleep(50);
   }
   assert.ok(writes.length >= 2, `A small store streaming for 1.3 s is checkpointed again (${writes.length} writes)`);
+});
+
+test('the size counts bytes: 700,000 Chinese characters (2.1 MB) are spaced although under a million characters', async t => {
+  const { w, writes } = store(t);
+  await firstCheckpoint(w, writes, '字'.repeat(700 * 1000));
+  const started = Date.now();
+  for (let i = 0; Date.now() - started < 1300; i++) {
+    w.drafts.set('mark', 'B' + i);
+    w.changed();
+    await sleep(50);
+  }
+  assert.deepEqual(writes, ['A'], 'About 2 s of spacing for 2.1 MB, not the one-second deadline');
+});
+
+test('a clock set back an hour does not postpone the next checkpoint', async t => {
+  const { w, writes, disk } = store(t);
+  await firstCheckpoint(w, writes);
+  const realNow = Date.now;
+  Date.now = () => realNow() - 60 * 60 * 1000;
+  t.after(() => {
+    Date.now = realNow;
+  });
+  w.drafts.set('mark', 'after the clock change');
+  w.changed();
+  for (let i = 0; i < 500 && disk() !== 'after the clock change'; i++) {
+    await sleep(10);
+  }
+  assert.equal(disk(), 'after the clock change');
 });

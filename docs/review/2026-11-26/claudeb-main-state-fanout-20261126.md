@@ -17,22 +17,34 @@
 ## Change
 
 - `persistLater()`: from 1 MiB on, timed checkpoints are spaced so that they write about 1 MiB a second, at most
-  15 s apart (an 18 MB store: about every 15 s instead of every second). Below 1 MiB nothing changes.
+  15 s apart (an 18 MB store: about every 15 s instead of every second). Below 1 MiB nothing changes. The size is
+  the store's UTF-8 byte length (Chinese text is 3 bytes a character), and the spacing runs on the monotonic clock,
+  so a clock set back does not postpone a save.
 - `persist()`, for records that must be on disk, is not spaced; the next timed checkpoint is spaced from it.
-- Trade-off: if a backend process dies without `close()`, a store over 1 MiB can lose up to about 15 s of changes
-  that were not saved through `persist()` (before: about 1 s). `close()` still saves last.
+- Trade-off: only when a backend dies without `close()` (SIGKILL, a crash, an out-of-memory kill, power loss;
+  SIGTERM and SIGINT still close and save), a store over 1 MiB can lose up to about 15 s of what only the timed
+  checkpoint saves: drafts (`setDraft`), messages in the shared space without images, and streamed replies and
+  other native output. Before: about 1 s.
 
 ## Checks
 
-- `app/tests/workspace-save-pacing.test.cjs`, 4 tests. Against the unchanged sources 2 fail (spacing; spacing
-  from `persist()`); 2 pass on both sides and keep what must not change (`persist()` at once; under 1 MiB the
-  one-second deadline). With the change: 4 pass.
+- `app/tests/workspace-save-pacing.test.cjs`, 6 tests, 6 pass.
+  - Against main: 3 fail (spacing; spacing from `persist()`; spacing counted in bytes).
+  - Against the first commit of this lane, 1b41b200: 2 fail (bytes; a clock set back an hour).
+  - On both: 2 keep what must not change (`persist()` at once; under 1 MiB the one-second deadline).
 - The 8 test files that exercise checkpoints (`persistLater`, `saveDeadline`, `storeSnapshot`, `.later.tmp` and so
-  on) plus the new file: 365 tests, 365 pass. A full suite (11,892 tests, all passing) ran on an earlier candidate
-  of this lane that also held the state changes below; `workspace.cjs` changed once more during it, so it is not
-  counted for this commit.
-- Isolated R50 harness scaled to 36 members x 1200 rows (37 MB state), during a streamed conversation: daemon CPU
-  11.49 % before, 5.96 % with the earlier candidate (its only change to the daemon was this one).
+  on) plus the new file, `node scripts/test.cjs` on this version: 367 tests, 367 pass, 0 fail, 0 skipped.
+- A full suite (11,892 tests, all passing) ran on an earlier candidate of this lane that also held other changes;
+  it is not counted for this version.
+- Isolated R50 harness, 36 members x 1200 rows (37 MB state), streamed conversation, on 1b41b200: daemon 1.39 s of
+  CPU before, 0.72 s after (11.49 % to 5.96 %); main and renderer unchanged; all 162 rows reached the page.
+
+## Review
+
+- Independent review of 1b41b200 (headless session, Read/Grep/Glob only): PASS, no blocking findings. Adopted
+  from its non-blocking suggestions: byte length, monotonic clock, the trade-off wording above, a byte-counting
+  test, and more slack in the timing tests (3 MiB stores). Not adopted: a test of the 15 s cap, which needs a
+  store over 15 MiB and a wait over 15 s; add it when someone changes `SAVE_PACED_MAX_MS`.
 
 ## Not in this lane
 
