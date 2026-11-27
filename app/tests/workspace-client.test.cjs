@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const { WorkspaceClient } = require('../workspace-client.cjs');
+const { WorkspaceClient, STATE_EMIT_WAIT } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
 for (const roomId of ['shared', '11111111-1111-4111-8111-111111111111']) test('backend-local cache gaps survive combined live updates and reconnect: ' + roomId, async () => {
@@ -18,6 +18,8 @@ for (const roomId of ['shared', '11111111-1111-4111-8111-111111111111']) test('b
   let closed = 0, updates = 0; c.on('closed', () => closed++); c.on('state', () => updates++);
   try {
     for (const entry of [old, next]) entry.client.emit('state', structuredClone(entry.real));
+    // The second frame's combined snapshot is built after the wait (R255).
+    await new Promise(resolve => setTimeout(resolve, STATE_EMIT_WAIT + 60));
     assert.equal(closed, 0, 'A second backend gap must not disconnect the window'); assert.equal(updates, 2);
     const snapshot = await c.refresh(roomId), rows = snapshot.room.messages;
     assert.equal(rows.length, 2); assert.equal(new Set(rows.map(m => m.id)).size, 2);

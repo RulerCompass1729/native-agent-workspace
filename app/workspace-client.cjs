@@ -22,6 +22,11 @@ const sharedDisplayMessage = (message, source) => message.id === 'shared-native-
   ? { ...message, id: `${message.id}:${encodeURIComponent(source)}` } : message;
 // An older backend cannot verify an undo proof even for the original space.
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
+// Each backend's state frame used to build the combined snapshot of every backend for each window, and main's
+// listeners then read every session's messages: with busy backends main's event loop stayed full and typing lagged
+// (R255, 2026-11-26). The first change emits at once; later ones within this wait emit once, as the state is then.
+// A window's page takes snapshots no closer together than this anyway (main.cjs STATE_PUSH_WAIT).
+const STATE_EMIT_WAIT = 250;
 let creationQueue = Promise.resolve();
 const controls = new Map();
 // Input the person confirmed reaches its target whichever window holds it (2026-11-23). A backend from before
@@ -82,7 +87,7 @@ class WorkspaceClient extends EventEmitter {
       entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
       if (backendRooms(entry.state).some(r => r?.run?.status === 'running') && !this.control.armed.has(entry.key)) this.control.armed.set(entry.key, { entry, roomId: backendRooms(entry.state).find(r => r?.run?.status === 'running').id || 'shared' });
     }
-    this.socket = { destroyed: false };
+    this.socket = { destroyed: false }; this.stateTimer = null; this.stateEmitted = -Infinity;
     for (const entry of entries) {
       this.bindEntry(entry);
     }
@@ -95,8 +100,7 @@ class WorkspaceClient extends EventEmitter {
         entry.stateOrder = client.receivedOrder?.(state) || entry.stateOrder;
         entry.state = { ...entry.state, ...state };
         this.observeLegacyOwners(entry);
-        try { this.emit('state', this.snapshot()); }
-        catch { this.socket.destroyed = true; this.emit('closed'); this.close(); }
+        this.stateChanged();
       });
       client.on('terminal', data => { if (entry.client === client) { this.emit('terminal', data); this.legacyObservers.get(data.id)?.changed(); } });
       client.on('progress', data => { if (entry.client === client) this.emit('progress', data); });
@@ -109,6 +113,19 @@ class WorkspaceClient extends EventEmitter {
         if (this.control.maintenance.has(entry.key)) return;
         this.socket.destroyed = true; if (!this.closing) this.emit('closed');
       });
+  }
+  stateChanged() {
+    if (this.closing || this.stateTimer) return;
+    const left = Math.min(this.stateEmitted + STATE_EMIT_WAIT - performance.now(), STATE_EMIT_WAIT);
+    if (left <= 0) { this.emitState(); return; }
+    this.stateTimer = setTimeout(() => { this.stateTimer = null; this.emitState(); }, left);
+    this.stateTimer.unref?.();
+  }
+  emitState() {
+    if (this.closing) return;
+    this.stateEmitted = performance.now();
+    try { this.emit('state', this.snapshot()); }
+    catch { this.socket.destroyed = true; this.emit('closed'); this.close(); }
   }
   // reconnected: this window's own transport to the same service came back (service-reconnect.cjs). The window's
   // operations on the closed one have failed already; the generation every window's operations are checked
@@ -1032,7 +1049,7 @@ class WorkspaceClient extends EventEmitter {
   // holds none of its sessions against the windows still open.
   close({ leave = false } = {}) {
     if (this.closing) return;
-    this.closing = true; this.socket.destroyed = true; this.control.revision++; this.control.manualEpoch++;
+    this.closing = true; this.socket.destroyed = true; this.control.revision++; this.control.manualEpoch++; clearTimeout(this.stateTimer); this.stateTimer = null;
     for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();
     for (const e of this.entries) { e.closing = true; if (leave) e.client.call('leave').catch(() => {}); e.client.close(); }
     this.control.views.delete(this);
@@ -1051,11 +1068,11 @@ class WorkspaceClient extends EventEmitter {
     if (this.control.clients <= 1 || this.control.maintenance.size || [...this.control.armed.values()].some(arm => this.entries.includes(arm.entry)) ||
         [...(this.control.legacyInput?.targets?.values() || [])].some(target => this.entries.includes(target.readsThrough)) ||
         this.entries.some(e => backendRooms(e.state).some(r => r?.run?.status === 'running') || e.state.peerLeases?.some(p => p.status === 'running'))) return false;
-    this.retired = true; this.closing = true; this.socket.destroyed = true;
+    this.retired = true; this.closing = true; this.socket.destroyed = true; clearTimeout(this.stateTimer); this.stateTimer = null;
     for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();
     for (const e of this.entries) { e.closing = true; e.client.close(); }
     this.control.views.delete(this); this.control.clients--;
     return true;
   }
 }
-module.exports = { WorkspaceClient, consentedInputBlocked };
+module.exports = { WorkspaceClient, consentedInputBlocked, STATE_EMIT_WAIT };
