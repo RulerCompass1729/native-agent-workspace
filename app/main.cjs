@@ -1759,22 +1759,39 @@ async function replaceBackendSockets(key, connectOne = (owner, opts) => connectS
   // Replace only the updated backend's sockets. Other live transports and every
   // renderer DOM/IME stay intact; reopening a window is unnecessary.
   const replacements = [];
+  const current = (context, workspace) => !context.win.isDestroyed() && context.client === workspace && !workspace.closing;
   try {
-    for (const context of windows.values()) if (!context.win.isDestroyed()) {
-      const client = await connectOne(context.view.owner, { page: !context.background });
-      const replacement = { context, client }; replacements.push(replacement);
-      replacement.state = await client.call('initial');
+    for (const context of windows.values()) {
+      const workspace = context.client;
+      if (!current(context, workspace)) continue;
+      let client;
+      try {
+        client = await connectOne(context.view.owner, { page: !context.background });
+        const state = await client.call('initial');
+        replacements.push({ context, workspace, client, state });
+      } catch (error) {
+        client?.close();
+        if (current(context, workspace)) throw error;
+      }
     }
   } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
-  for (const { context, client, state } of replacements) {
-    context.client.replaceService(key, client, state);
-    if (!context.client.socket.destroyed && !context.win.isDestroyed() && !context.background) {
-      const refreshed = displayState(await context.client.refresh(), context, null, true);
+  for (const { context, workspace, client, state } of replacements) {
+    if (current(context, workspace)) workspace.replaceService(key, client, state);
+    else client.close();
+  }
+  let notificationFailure;
+  for (const { context, workspace } of replacements) {
+    if (!current(context, workspace) || workspace.socket.destroyed || context.background) continue;
+    try {
+      const snapshot = await workspace.refresh();
+      if (!current(context, workspace) || workspace.socket.destroyed) continue;
+      const refreshed = displayState(snapshot, context, null, true);
       // This complete state is newer than any snapshot still waiting behind the bound.
       context.statePush?.discardWaiting();
       sendToPage(context, 'workspace:reconnected', omitHidden(refreshed, context.shown));
-    }
+    } catch (error) { notificationFailure ||= error; }
   }
+  if (notificationFailure) throw notificationFailure;
 }
 let connectionEvents = null, reconnector = null;
 function noticeDisconnected(context) { const notice = uiError('error.warning.serviceDisconnected'); sendToPage(context, 'workspace:disconnected', notice.message, notice.uiMessage); }

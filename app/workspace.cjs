@@ -213,6 +213,8 @@ class Workspace extends EventEmitter {
     }
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
+      if (dormant && (!Array.isArray(stored.sessions) || stored.sessions.some(record => typeof record?.id !== 'string' || !record.id) ||
+          new Set(stored.sessions.map(record => record.id)).size !== stored.sessions.length)) throw Error('Invalid stored sessions');
       this.savedGoalContinuation = stored.goalContinuation;
       this.mobileRetiredRequests = stored.mobileRetiredRequests ?? null;
       this.mobileRequests = Array.isArray(stored.mobileRequests) ? stored.mobileRequests.map(r => r && typeof r === 'object' && ['prepared', 'awaiting-native', 'reply-written'].includes(r.status) ? { ...r, status: 'unconfirmed' } : r) : stored.mobileRequests ?? [];
@@ -238,7 +240,7 @@ class Workspace extends EventEmitter {
       if (this.room.run?.kind === 'cross-service' && (this.room.run.pausePending || stored.room.run.status === 'running')) Object.assign(this.room.run, { pausePending: false, pauseUnconfirmed: true, reason: '协调后台曾中断，未重发任务；请核对各后台授权与原生工作。', reasonUiMessage: uiActivity('notice.run.coordinatorInterrupted')[1] });
       if (stored.drafts) for (const [key, value] of Object.entries(stored.drafts)) this.drafts.set(key, value);
     } catch (error) {
-      if (error.code !== 'ENOENT') { this.storageFailure = 'read'; setWarning(this, 'storageWarning', 'error.warning.workspaceRead'); }
+      if (dormant || error.code !== 'ENOENT') { this.storageFailure = 'read'; setWarning(this, 'storageWarning', 'error.warning.workspaceRead'); }
     }
     try {
       const file = path.join(dataDir, 'room-records.json'), stat = fs.lstatSync(file);

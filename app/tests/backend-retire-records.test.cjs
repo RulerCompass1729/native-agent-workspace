@@ -2,20 +2,25 @@
 // Synthetic records only. These tests start their own daemons and never inherit the developer's backend.
 for (const key of ['NAW_WORKSPACE', 'NAW_APP_VERSION', 'NAW_RUNTIME_CONFIG']) delete process.env[key];
 const test = require('node:test');
+const vm = require('node:vm');
+const { createInspector } = require('../../scripts/install-runtime.cjs');
+const { PeerRunner } = require('../peer-handoffs.cjs');
+const { OperatorControl } = require('../operator-control.cjs');
+const { createReconnector } = require('../service-reconnect.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
-const { connect, ensureService, ensureServiceAt, connectService, retireHistoryService } = require('../service-client.cjs');
-const { maintenanceProof } = require('../backend-switch.cjs');
+const { connect, ensureService, ensureServiceAt, connectService, connectProfileBackend, retireHistoryService } = require('../service-client.cjs');
+const { maintenanceProof, writeSettings } = require('../backend-switch.cjs');
 const { readLayout, writeLayout } = require('../service-layout.cjs');
 const { readLock, ownerMayBeAlive } = require('../service-lock.cjs');
 
 const ACTIVE = `backends/${'b'.repeat(20)}`, VERSION = 'retire-v1';
 
 // The current backend: a socket that answers like an empty service of this version.
-async function currentService(directory) {
+async function currentService(directory, sessions = []) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const transport = fs.mkdtempSync(path.join(os.tmpdir(), 'retire-fixture-')), endpoint = path.join(transport, 's.sock'), sockets = new Set();
-  const state = { runtimeVersion: VERSION, capabilities: [], sessions: [], room: { messages: [], run: null } };
+  const state = { runtimeVersion: VERSION, capabilities: ['agentWakeV1'], sessions, room: { messages: [], run: null } };
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
     let buffer = '', ready = false;
@@ -43,7 +48,7 @@ async function stopOwnService(directory) {
   throw Error('Test backend did not finish shutdown');
 }
 // The old backend is the root store with these records; the current one is a separate slot.
-async function oldBackend(t, stored, realCurrent = false) {
+async function oldBackend(t, stored, realCurrent = false, currentSessions) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-retire-')), oldVersion = process.env.NAW_APP_VERSION;
   let current;
   t.after(async () => {
@@ -61,7 +66,7 @@ async function oldBackend(t, stored, realCurrent = false) {
     fs.mkdirSync(active, { recursive: true, mode: 0o700 });
     fs.copyFileSync(path.join(directory, 'runtime-locations.json'), path.join(active, 'runtime-locations.json'));
     await ensureService(active, process.execPath);
-  } else current = await currentService(path.join(directory, ACTIVE));
+  } else current = await currentService(path.join(directory, ACTIVE), currentSessions);
   writeLayout(directory, { format: 1, active: ACTIVE, entries: ['.', ACTIVE] });
   return directory;
 }
@@ -109,6 +114,100 @@ test('normal desktop reconnect reads retired history without booting its daemon'
   } finally {
     client.close();
   }
+});
+
+test('the install inspector keeps retired records and still refuses a missing live backend', async t => {
+  const directory = await oldBackend(t, records(), true);
+  fs.writeFileSync(path.join(directory, 'views.json'), '[]', { mode: 0o600 });
+  writeSettings(directory, false, false);
+  const inspector = createInspector({ data: directory, release: path.resolve(__dirname, '../..'),
+    resultDir: directory, newVersion: VERSION }, { run: () => '' });
+  const live = await inspector.capture();
+  assert.equal(await retire(directory), true);
+  const before = await inspector.capture();
+  const historical = before.state.services.find(service => service.key === '.');
+  assert.deepEqual([historical.retired, historical.pid, historical.identity, historical.sessions, historical.messages], [true, null, null, 1, live.state.services.find(service => service.key === '.').messages]);
+  assert.ok(!before.restarting.includes('.'));
+  assert.equal(before.expectedActive, ACTIVE);
+  assert.equal(before.state.sessions.find(s => s.id === 'old-session').nativeId, 'old-native');
+  assert.equal(fs.existsSync(path.join(directory, 'connection.json')), false);
+  assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+
+  await inspector.verifyUpgrade(before);
+  const file = path.join(directory, 'workspace.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...saved, room: { messages: [] } }));
+  const after = await inspector.capture();
+  assert.throws(() => inspector.retained(before, after), /Room records kept/);
+  await assert.rejects(inspector.verifyUpgrade(before), /Room records kept/);
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const layout = readLayout(directory);
+  writeLayout(directory, { ...layout, retired: [] });
+  await assert.rejects(inspector.capture(), { code: 'ENOENT', path: path.join(directory, 'connection.json') });
+});
+
+test('wake lookup reaches a live recipient with retired entries and refuses an ambiguous or dormant target', async t => {
+  const target = { id: 'live-session', nativeId: 'live-native', state: 'idle' };
+  const directory = await oldBackend(t, records(), false, [target]);
+  const site = path.join(directory, ACTIVE), runner = new PeerRunner({ room: {}, on() {} }, site);
+  assert.equal(await retire(directory), true);
+  assert.deepEqual((await runner.lookupWake(target.id)).session, target);
+  const metadata = await OperatorControl.prototype.visibleSessions.call({ w: { peerRunner: runner, dataDir: site } }, []);
+  assert.equal(metadata.metadataIncomplete, false);
+  const historical = metadata.sessions.find(s => s.id === 'old-session');
+  assert.deepEqual([historical?.state, historical?.canReport], ['unknown', false]);
+  await assert.rejects(runner.lookupWake('old-session'), error => error.uiMessage?.key === 'error.peer.recipientBackendUnavailable');
+  const file = path.join(directory, 'workspace.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  fs.writeFileSync(file, JSON.stringify({ ...saved, sessions: [{ ...saved.sessions[0], id: target.id }] }));
+  await assert.rejects(runner.lookupWake(target.id), error => error.uiMessage?.key === 'error.peer.recipientBackendUnavailable');
+  fs.writeFileSync(file, '{}');
+  await assert.rejects(runner.lookupWake(target.id), error => error.uiMessage?.key === 'error.service.invalidLayout');
+  assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+});
+
+test('Main hands off a retired backend to all surviving GUI connections even if a window closes during replacement', async t => {
+  const directory = await oldBackend(t, records());
+  const views = await Promise.all(['closed-view', 'retained-view', 'retained-background'].map(async (owner, i) => {
+    const client = await connect(directory, owner, { page: i !== 2 });
+    t.after(() => client.close());
+    let closed = false;
+    return { client, view: { owner }, background: i === 2, win: { isDestroyed: () => closed }, close() { closed = true; client.close(); } };
+  }));
+  const [, retained] = views, previous = retained.client.active.client;
+  const raw = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+  const box = { exports: {} };
+  vm.runInNewContext(process.binding('natives')['internal/deps/acorn/acorn/dist/acorn'], { module: box, exports: box.exports });
+  const functions = box.exports.parse(raw, { ecmaVersion: 'latest' }).body.filter(node =>
+    ['historyRetirementCandidates', 'runHistoryRetirements', 'replaceBackendSockets', 'reconnectClosed'].includes(node.id?.name));
+  const connectionEvents = [], notices = [];
+  const scope = vm.createContext({ require: require('node:module').createRequire(require.resolve('../main.cjs')), path, dataDir: directory, windows: new Map(views.map(v => [v.view.owner, v])),
+    connectionEvents: { add: e => connectionEvents.push(e) }, reconnector: null, backendSwitching: null,
+    backendSwitch: { maintenanceProof }, canRetire: require('../service-client.cjs').canRetire, retireHistoryService,
+    connectProfileBackend: async (root, key, owner, options) => {
+      if (owner === retained.view.owner && key === '.') views[0].close();
+      return connectProfileBackend(root, key, owner, options);
+    },
+    createReconnector: args => createReconnector({ ...args, delays: [0] }),
+    displayState: value => value, omitHidden: value => value, broadcastRoom: async () => {},
+    sendToPage: (view, name) => notices.push([view.view.owner, name]), noticeDisconnected: () => assert.fail('GUI became disconnected'),
+  });
+  vm.runInContext(functions.map(node => raw.slice(node.start, node.end)).join('\n'), scope);
+  const { candidates } = scope.historyRetirementCandidates(retained.client, true);
+  assert.equal(candidates.length, 1);
+  assert.equal((await scope.runHistoryRetirements(retained.client, candidates)).retired, 1);
+  for (const { client } of views.slice(1)) {
+    assert.equal(client.entries.find(e => e.key === '.').closed, false);
+    assert.equal(client.snapshot().sessions.find(s => s.id === 'old-session').nativeId, 'old-native');
+  }
+  assert.equal(retained.client.active.client, previous);
+  assert.ok(notices.some(([, name]) => name === 'workspace:reconnected'));
+
+  const closed = new Promise(resolve => retained.client.once('closed', resolve));
+  previous.socket.destroy();
+  await closed;
+  assert.equal(await scope.reconnectClosed(retained, retained.client), 'restored');
+  assert.deepEqual(connectionEvents.map(e => [e.event, [...e.backends]]), [['closed', [ACTIVE]], ['restored', [ACTIVE]]]);
+  assert.equal(retained.client.socket.destroyed, false);
+  assert.equal(fs.existsSync(path.join(directory, 'connection.json')), false);
 });
 
 test('an explicit desktop action wakes one retired store and preserves the original record', async t => {

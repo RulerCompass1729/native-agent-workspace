@@ -409,16 +409,19 @@ class OperatorControl {
     // The same authenticated local registry/initial channel already used by
     // lookupWake. Only this whitelist ever crosses the native tool boundary.
     // No new daemon, provider, prompt or remote endpoint is involved.
-    const layout = require('./service-layout.cjs').readLayout(peer.root()), deadline = Date.now() + 2000;
+    const root = peer.root(), layout = require('./service-layout.cjs').readLayout(root), deadline = Date.now() + 2000;
+    const { readRetiredBackend } = require('./service-client.cjs');
     const sessions = new Map(fallback.map(s => [s.id, s])), duplicates = new Set(); let incomplete = false;
     for (const key of layout.entries) {
-      const directory = path.join(peer.root(), key);
+      const directory = path.join(root, key);
       if (path.resolve(directory) === path.resolve(this.w.dataDir)) continue;
       const remaining = deadline - Date.now(); if (remaining <= 0) { incomplete = true; break; }
       let client, timer, cancelled = false;
       try {
         const read = (async () => {
-          client = await peer.connect(directory, 'workspace-operator-metadata');
+          const retired = readRetiredBackend(root, key, layout);
+          if (retired) return retired;
+          client = await peer.connect(directory, 'workspace-operator-metadata', { page: false });
           if (cancelled) { client.close(); return null; }
           return client.call('initial');
         })();

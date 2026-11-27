@@ -29,11 +29,27 @@ function retiredState(directory) {
   const cachedState = cached?.stamp === stamp ? cached.state.deref() : null;
   if (cachedState) return cachedState;
   const stored = Workspace.recordedSnapshot(directory);
-  if (stored.storageWarning || !stored.sessions.every(session => ['ended', 'recoverable'].includes(session.state))) throw uiError('error.service.invalidLayout');
+  if (stored.storageWarning || !stored.sessions.every(session => ['ended', 'recoverable'].includes(session.state) &&
+      sessionPlan(session, session.state).carry)) throw uiError('error.service.invalidLayout');
   const state = { ...stored, protocol: 1, capabilities: ['collaborationSpacesV1', 'clearSharedHistory', 'resume', 'operatorControl1a'],
     storageRetryable: false, wakePolicy: undefined };
   retiredStates.set(directory, { stamp, state: new WeakRef(state) });
   return state;
+}
+
+function hasServiceTransport(directory) {
+  if (readLock(path.join(directory, 'service.lock')) !== undefined) return true;
+  try { fs.lstatSync(path.join(directory, 'connection.json')); return true; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return false; }
+}
+
+function readRetiredBackend(dataDir, key, layout = readLayout(dataDir)) {
+  if (!layout.retired?.includes(key)) return null;
+  const directory = path.join(dataDir, key);
+  if (hasServiceTransport(directory)) return null;
+  serviceBinding.assertBinding(serviceBinding.readBinding(directory));
+  const state = retiredState(directory);
+  return hasServiceTransport(directory) ? null : state;
 }
 
 async function openRetired(scope, key, directory) {
@@ -81,7 +97,7 @@ class RetiredClient extends EventEmitter {
   async call(method, ...args) {
     if (this.closed) throw uiError('error.client.serviceNotConnected');
     if (this.live) return this.live.call(method, ...args);
-    if (readLock(path.join(this.directory, 'service.lock')) !== undefined) return (await this.liveClient()).call(method, ...args);
+    if (hasServiceTransport(this.directory)) return (await this.liveClient()).call(method, ...args);
     if (method === 'initial') return { ...(this.state = retiredState(this.directory)), owner: this.owner };
     if (method === 'operatorAction' && args[0] === null && args[1] === 'enabled') {
       if (readLock(path.join(this.scope, 'services.lock'))?.pid !== process.pid || backgroundOperation.current()) throw uiError('error.operator.desktopOnly');
@@ -103,9 +119,8 @@ const { ServiceClient, connectService, eachBackend } = require('./service-connec
 async function connectProfileBackend(dataDir, key, owner, options, layout = readLayout(dataDir)) {
   if (!layout.entries.includes(key)) throw uiError('error.service.connectionOutsideWorkspace');
   const directory = path.join(dataDir, key);
-  if (!layout.retired?.includes(key)) return connectService(directory, owner, options);
-  const snapshot = readLock(path.join(directory, 'service.lock')) === undefined ? retiredState(directory) : null;
-  return new RetiredClient(dataDir, key, owner, options, snapshot);
+  const snapshot = readRetiredBackend(dataDir, key, layout);
+  return snapshot ? new RetiredClient(dataDir, key, owner, options, snapshot) : connectService(directory, owner, options);
 }
 async function connect(dataDir, owner, options) {
   const layout = readLayout(dataDir);
@@ -292,7 +307,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
     }
     for (const key of layout.entries) {
       const directory = path.join(dataDir, key);
-      if (layout.retired?.includes(key) && readLock(path.join(directory, 'service.lock')) === undefined) continue;
+      if (readRetiredBackend(dataDir, key, layout)) continue;
       states.set(key, await ensureServiceAt(directory, executablePath, defaultWorkspace));
     }
     if (layout.retired?.some(key => states.has(key))) {
@@ -467,4 +482,4 @@ async function continueService(dataDir, executablePath, id) {
     return { key };
   } finally { fresh.close(); }
 }
-module.exports = { ServiceClient, connect, connectService, connectProfileBackend, ensureService, continuationStatus, continueService, ensureServiceAt, canRetire, retireHistoryService };
+module.exports = { ServiceClient, connect, connectService, connectProfileBackend, readRetiredBackend, ensureService, continuationStatus, continueService, ensureServiceAt, canRetire, retireHistoryService };

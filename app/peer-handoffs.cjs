@@ -144,8 +144,11 @@ class PeerRunner {
   }
   async lookupWake(id, readiness) {
     const root = this.root(), layout = readLayout(root);
+    const { readRetiredBackend } = require('./service-client.cjs');
     const holders = (await eachBackend(layout.entries, async key => {
-      const client = await this.connect(path.join(root, key), 'workspace-wake-lookup');
+      const retired = readRetiredBackend(root, key, layout);
+      if (retired) return retired.sessions.some(s => s.id === id) ? { retired: true } : null;
+      const client = await this.connect(path.join(root, key), 'workspace-wake-lookup', { page: false });
       try {
         const state = await client.call('initial'), session = state.sessions.find(s => s.id === id);
         if (!session) return null;
@@ -156,6 +159,7 @@ class PeerRunner {
     if (holders.length > 1) throw uiError("error.peer.recipientBackendUnavailable");
     const [found] = holders;
     if (!found) throw uiError("error.peer.exactSessionMissing");
+    if (found.retired) throw uiError("error.peer.recipientBackendUnavailable");
     if (readiness && found.canCheckWake) {
       const client = await this.connect(path.join(root, found.key), 'workspace-wake-check');
       try {

@@ -13,8 +13,16 @@ function createInspector(config, platform) {
 async function readBackends() {
   const layout = readLayout(DATA);
   const backends = [];
+  const readRetiredBackend = layout.retired?.length
+    ? require(path.join(config.release, 'app/service-client.cjs')).readRetiredBackend
+    : null;
   for (const key of layout.entries) {
-    const client = await connectService(path.join(DATA, key), 'installer-readonly');
+    const retired = readRetiredBackend?.(DATA, key, layout);
+    if (retired) {
+      backends.push({ key, state: retired, retired: true });
+      continue;
+    }
+    const client = await connectService(path.join(DATA, key), 'installer-readonly', { page: false });
     const timeout = setTimeout(() => client.socket.destroy(), 5000);
     try {
       backends.push({ key, state: await client.call('initial') });
@@ -40,8 +48,9 @@ function summary(view) {
   const sessions = [];
   const services = [];
   for (const backend of view.backends) {
-    const pid = backend.state.servicePid;
-    services.push({ key: backend.key, pid, identity: processIdentity(pid), version: backend.state.runtimeVersion, sessions: backend.state.sessions.length, messages: roomMessageCount(backend.state) });
+    const pid = backend.retired ? null : backend.state.servicePid;
+    services.push({ key: backend.key, pid, identity: backend.retired ? null : processIdentity(pid), version: backend.state.runtimeVersion,
+      sessions: backend.state.sessions.length, messages: roomMessageCount(backend.state), ...(backend.retired ? { retired: true } : {}) });
     for (const s of backend.state.sessions) {
       let identity = null;
       if (Number.isSafeInteger(s.pid) && s.pid > 1) {
@@ -120,7 +129,7 @@ function assertQuiet(view) {
 // restarts must have no child process left.
 function startupRestarts(backend) {
   const state = backend.state;
-  if (state.runtimeVersion === NEW_VERSION) {
+  if (backend.retired || state.runtimeVersion === NEW_VERSION) {
     return false;
   }
   if (state.sessions.some(s => s.state !== 'ended')) {
@@ -158,6 +167,7 @@ function assertRestartsSafe(view) {
 // new backend (null). A backend with no sessions is restarted on the new code too.
 function versionAfterStartup(backend) {
   const state = backend.state;
+  if (backend.retired) return null;
   if (state.runtimeVersion !== NEW_VERSION && (!state.sessions.length || startupRestarts(backend))) {
     return NEW_VERSION;
   }
@@ -219,7 +229,7 @@ function views() {
     assert.equal(readSettings(DATA).auto, false, 'Automatic backend switching must be off');
     const view = await readBackends(); const staleWakes = assertQuiet(view); assertRestartsSafe(view);
     const state = { ...summary(view), staleWakes };
-    for (const service of state.services) assert.ok(service.identity, 'Backend identity unavailable');
+    for (const service of state.services) assert.ok(service.retired || service.identity, 'Backend identity unavailable');
     return { state, views: views(), restarting: restartedKeys(view), expectedActive: predictActive(view), view };
   }
   // A session still working may finish its turn, reply or start the next one meanwhile; it stays on its backend.
@@ -232,7 +242,7 @@ function views() {
     assert.deepEqual(now.services.map(s => s.key), was.services.map(s => s.key), 'Backends retained');
     for (const service of was.services) {
       const kept = now.services.find(s => s.key === service.key);
-      assert.deepEqual([kept.pid, kept.identity, kept.version], [service.pid, service.identity, service.version], 'Backend process unchanged: ' + service.key);
+      assert.deepEqual([kept.pid, kept.identity, kept.version, kept.retired], [service.pid, service.identity, service.version, service.retired], 'Backend process unchanged: ' + service.key);
       assert.ok(kept.sessions >= service.sessions, 'Sessions kept: ' + service.key);
       assert.ok(kept.messages >= service.messages, 'Room records kept: ' + service.key);
     }
@@ -279,6 +289,17 @@ function views() {
     assert.equal(kept.nativeId, session.nativeId, 'Native id retained: ' + session.id);
   }
   for (const service of final.services) {
+    if (service.retired) {
+      const kept = after.services.find(row => row.key === service.key);
+      assert.ok(kept?.retired, 'Retired backend kept: ' + service.key);
+      assert.ok(kept.sessions >= service.sessions, 'Sessions kept: ' + service.key);
+      assert.ok(kept.messages >= service.messages, 'Room records kept: ' + service.key);
+      for (const session of final.sessions.filter(s => s.backend === service.key)) {
+        const record = after.sessions.find(s => s.id === session.id);
+        assert.deepEqual([record.backend, record.state], [service.key, session.state], 'Retired session kept: ' + session.id);
+      }
+      continue;
+    }
     if (service.sessions === 0) {
       // An empty backend may be restarted at the new version or retired; it held no session.
       continue;
