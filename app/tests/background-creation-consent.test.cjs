@@ -109,9 +109,9 @@ test('R263: restore waits for a committed native stop before making the session 
   } } };
   client.entries = [backend];
   client.control = { maintenance: new Set(), generations: new Map() };
-  f.client.retainRestoredSuccessor = target => {
+  f.client.retainRestoredSuccessor = (target, observed) => {
     backend.state = f.workspace.snapshot();
-    return client.retainRestoredSuccessor(target);
+    return client.retainRestoredSuccessor(target, { ...observed, handoffGroup: 0 });
   };
   const committed = Promise.withResolvers(), finish = Promise.withResolvers();
   f.workspace.runtime(id).stopForMaintenance = async check => {

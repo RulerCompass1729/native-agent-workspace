@@ -201,9 +201,10 @@ test('serialized daemon RPC advertises and executes guarded stop on a synthetic 
   assert.equal(client.snapshot().sessions.find(session => session.id === id).state, 'ended');
 
   const restoredId = await client.call('create', { provider: 'codex', cwd: directory, name: 'Restored', view: 'terminal' });
+  const observed = (await client.call('initial')).sessions.find(session => session.id === restoredId);
   const restoredTarget = client.route(restoredId), before = restoredTarget.state.sessions.find(session => session.id === restoredId);
   assert.equal(before.guardedSuccessorRestore, true);
-  await client.retainRestoredSuccessor(restoredId);
+  await client.retainRestoredSuccessor(restoredId, observed);
   await assert.rejects(restoredTarget.client.call('stopUnusedSuccessor', restoredId, { nativeId: before.nativeId, controlRevision: before.controlRevision,
     draftRevision: 0, placementRevision: require('../collaboration-spaces.cjs').placementRevision(before) }), refused);
   await client.refresh();

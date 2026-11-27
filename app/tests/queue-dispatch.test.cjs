@@ -742,6 +742,7 @@ class FakeClient extends EventEmitter {
     this.calls = [];
     this.sequence = 0;
     this.reads = 0;
+    this.retained = new Set();
     this.capabilities = ['failedSuccessorCleanupV1', rules.CAPABILITY, rules.ROTATION_CAPABILITY, GUARDED_STOP, CONDITIONAL_STOP, PARTICIPANT_STOP];
   }
   snapshot() {
@@ -762,6 +763,11 @@ class FakeClient extends EventEmitter {
       throw Error('unknown session');
     }
     return { client: this, state: { capabilities: this.capabilities } };
+  }
+  async retainRestoredSuccessor(id, observed) {
+    const session = this.state.sessions.find(s => s.id === id);
+    assert.equal(session.nativeId, observed.nativeId);
+    if (session.guardedSuccessorRestore === true) this.retained.add(session);
   }
   async call(method, ...args) {
     this.calls.push([method, ...args]);
@@ -856,6 +862,7 @@ class FakeClient extends EventEmitter {
       return { basis: 'stopped-by-this-attempt', state: session.state, receipt: session.failedHandoffStop };
     }
     if (method === 'stopUnusedSuccessor') {
+      assert.equal(this.retained.has(session), false);
       assert.deepEqual(args[1], trustProof(session), 'the server checks the exact current identity and person revisions');
       assert.ok(['starting', 'idle'].includes(session.state) && !session.pendingTag && !session.liveDraft && !session.nativeInputRequired &&
         !session.activeTurnId && !session.pendingQueue && !session.pendingSteer && session.nativeGoal?.status !== 'active' &&

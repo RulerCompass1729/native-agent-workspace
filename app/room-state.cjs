@@ -1523,15 +1523,18 @@ class RoomState {
         if (saved) { const remaining = { ...this.value.sessionArchives }; delete remaining[id]; this.update({ sessionArchives: remaining }); }
         return { restored: false };
       }
-      let current, readError;
-      try { current = (await client.call('initial')).sessions.find(s => s.id === id); }
-      catch (error) { readError = error; }
+      const snapshot = await client.call('initial');
+      if (snapshot?.unavailable || !Array.isArray(snapshot?.sessions)) throw uiError('error.room.memberStateUnconfirmed');
+      const current = snapshot.sessions.find(s => s.id === id);
+      if (!current || current.nativeContextPending) throw uiError('error.room.memberStateUnconfirmed');
+      if (current.guardedSuccessorRestore !== undefined &&
+          (current.guardedSuccessorRestore !== true || typeof client.retainRestoredSuccessor !== 'function')) {
+        throw uiError('error.room.memberStateUnconfirmed');
+      }
       await client.retainRestoredSuccessor?.(id, current);
       let placement = 'unavailable';
       try {
         if (!saved || !saved.detached || saved.rooms.length > 1) throw Error('No unambiguous saved home');
-        if (readError) throw readError;
-        if (!current) throw Error('Native session unavailable');
         const recovered = saved.restoreExpected && current.placementReceipt?.operationId === saved.restoreExpected.operationId;
         if ((current.nativeId ?? null) !== saved.nativeId || !recovered && !sameHome(current, saved.detached)) throw Error('Placement changed');
         const place = saved.rooms[0];
@@ -1544,8 +1547,7 @@ class RoomState {
               placementRevision: placementRevision(current), connectionRevision: current.connectionRevision || 0 } };
             this.update({ sessionArchives: { ...this.value.sessionArchives, [id]: plan } });
           }
-          // A backend pause/rejoin failure only prevents placement restoration;
-          // it must never prevent the local session from leaving the archive.
+          // Owner is confirmed. A failed rejoin only prevents placement from being restored.
           if (typeof client.callSpace === 'function') await client.callSpace(place.id, 'pause', []);
           else await client.call('pause', id);
           await this.changeMember(client, id, true, label, place.id, plan.restoreExpected, true);
