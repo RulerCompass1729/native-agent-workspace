@@ -1254,7 +1254,12 @@ function displayState(snapshot, context, read = null, toPage = false) {
   const warning = [outboxWarning, managerWarning, integratorWarning, stewardWarning].filter(Boolean).join('\n');
   // The page asks about handoffs only where they are enabled (or could not start): elsewhere the state is as it always was.
   const handoffEnabled = queueDispatcher?.integration || queueDispatcher?.integrationError ? { handoffEnabled: true } : {};
-  const result = { ...display, spaceManagers: managers, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations, backgroundConfirmationsAvailable: Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable) }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
+  const backgroundConfirmationsAvailable = Boolean(backgroundControl && !backgroundControl.failed && !backgroundUnavailable);
+  const result = { ...display, spaceManagers: managers, integrator, ...handoffEnabled, steward, ...(context?.background ? {} : { stewardDuty, vendorIcons: localVendorIcons() }), ...(context?.background ? {} : { operatorCreations, backgroundConfirmations: backgroundConfirmations.map(card => {
+    if (card.state !== 'confirmation-required' && card.state !== 'unverifiable') return card;
+    const { titles, detail } = confirmationInbox.confirmationSummary(card);
+    return { ...card, safeSummary: { titles, detail } };
+  }), backgroundConfirmationsAvailable }), ...(warning ? { storageWarning: [display.storageWarning, warning].filter(Boolean).join('\n'), storageWarningUiMessage: null } : {}), sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     ...(context?.background ? {} : { stewardWakeStatus: stewardWake?.view({ early: true }).blocked || null }),
     switchEnded: endedByMove(display.sessions), rotationChains: queueDispatcher ? queueDispatcher.rotationChains() : [],
     ...(context?.background ? {} : { modelChanges: sessionModelChanges?.view() || [], sessionRotations: queueDispatcher?.rotationRows || {} }),

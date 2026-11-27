@@ -33,6 +33,15 @@ function fixture() {
 
 test('language display refresh updates the task board exactly once', () => {
   const f = fixture(), before = f.boardRefreshes(), squares = f.distributionRefreshes();
+  Object.assign(f.context, {
+    window: { nativeWorkspaceActivityStream: { bind(host) {
+      return { render() { host.waitingChanged([]); } };
+    } } },
+    allSpaces: () => [], spaceName: room => room?.name, roomMessageLabel: () => '', attempt() {}, openOriginal() {},
+    confirmationBatchStarted: new Map(),
+  });
+  vm.runInContext(renderer.slice(renderer.indexOf('function getActivityStream()'), renderer.indexOf('async function openOriginal(')), f.context);
+  f.context.getActivityStream();
   f.context.renderInterfaceLanguage(); assert.equal(f.boardRefreshes(), before + 1); assert.equal(f.distributionRefreshes(), squares + 1);
 });
 

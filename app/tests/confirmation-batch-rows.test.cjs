@@ -4,10 +4,11 @@ const all = el => [el, ...el.children.filter(c => typeof c !== 'string').flatMap
 const find = (el, cls) => all(el).filter(c => String(c.className).split(' ').includes(cls));
 const detailOf = d => d.children.find(c => c.tag === 'pre')?.textContent;
 let time = 0;
+const deadline = Date.now() + 60_000;
 function inputCard(id, target, extra = {}, op = {}) {
   const summary = { action: 'input', method: 'input', target, risks: [] };
   const detail = JSON.stringify({ method: 'input', arguments: [target, 'Synthetic words for ' + target] }, null, 2);
-  const backgroundOperation = { id, sessionId: 'agent', nativeId: 'native', state: 'confirmation-required', summary, expiresAt: 5000000,
+  const backgroundOperation = { id, sessionId: 'agent', nativeId: 'native', state: 'confirmation-required', summary, expiresAt: deadline,
     arguments: JSON.stringify([target, 'Synthetic words for ' + target], null, 2),
     confirmation: { kind: 'message', options: { message: 'Input?', detail, buttons: ['Cancel', 'Confirm'], cancelId: 0 } }, ...op };
   return { key: 'agent:native:' + id, operationId: id, sessionId: 'agent', nativeId: 'native', time: ++time, state: 'confirmation-required',
@@ -37,10 +38,10 @@ test('rows stay expandable while running and after the result, with the single c
 test('rows show their own deadline only when the deadlines differ; the card keeps the soonest', () => {
   const same = render([inputCard('a', 'Target A'), inputCard('b', 'Target B')]).sandbox.entry.backgroundControls;
   assert.equal(find(same, 'background-batch-remaining').length, 0);
-  const cards = [inputCard('a', 'Target A', { expiresAt: 4000000 }), inputCard('b', 'Target B', { expiresAt: 4600000 })];
+  const cards = [inputCard('a', 'Target A', { expiresAt: deadline + 20000 }), inputCard('b', 'Target B', { expiresAt: deadline + 40000 })];
   const differ = render(cards).sandbox.entry.backgroundControls, own = find(differ, 'background-batch-remaining');
-  assert.deepEqual(own.map(el => el.dataset.expiresAt), ['4000000', '4600000']);
-  assert.equal(find(differ, 'background-state')[0].dataset.expiresAt, '4000000');
+  assert.deepEqual(own.map(el => el.dataset.expiresAt), [String(deadline + 20000), String(deadline + 40000)]);
+  assert.equal(find(differ, 'background-state')[0].dataset.expiresAt, String(deadline + 20000));
 });
 test('confirm all runs merged input cards one at a time, each with its own receipt', async () => {
   const f = await fixture(); let submit;

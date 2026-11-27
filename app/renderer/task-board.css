@@ -2,6 +2,8 @@
 .task-board{display:flex;align-items:center;gap:6px;flex:none;min-width:0;--task-board-error:#b03938}
 body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-status-button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12px;border:1px solid var(--border);border-radius:7px;background:transparent;padding:3px 9px;min-height:28px}
+.task-board .task-confirmation-entry[data-state="pending"]{color:var(--approval-ink,var(--ink));font-weight:650;border-color:color-mix(in srgb,currentColor 42%,var(--border));background:color-mix(in srgb,currentColor 9%,var(--surface));font-variant-numeric:tabular-nums}
+.task-board .task-confirmation-entry[data-state="unverified"]{background:var(--raised)}
 .task-status-button[aria-expanded=true]{background:var(--hover)}
 .task-status-need,.task-status-due{color:var(--approval-ink,var(--ink));font-weight:600}.task-status-due{font-variant-numeric:tabular-nums;font-weight:500}
 .task-status-need::before,.task-status-due::before{content:"· ";color:var(--muted);font-weight:400}
@@ -55,6 +57,7 @@ body[data-ds-dark-theme] & .task-board{--task-board-error:#f2a29b}
 .task-board-dot[data-group=done]{background:var(--green,var(--muted))}
 .task-board-entry{display:block;min-width:0;font:inherit;text-align:left;border:0;background:transparent;color:var(--ink);padding:0;white-space:nowrap;overflow:hidden}
 .task-board-task-title{display:block;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.task-board-entry[data-source="confirmation"][aria-expanded=true]{white-space:normal;overflow-wrap:anywhere}
 .task-board-sub{font-size:11px;border-radius:5px;padding:1px 6px;white-space:nowrap;justify-self:start;background:var(--panel);color:var(--muted)}
 .task-board-sub:is([data-sub=decide],[data-sub=look],[data-sub=card],[data-sub=question],[data-sub=approval],[data-sub=butler-question],[data-sub=background-confirmation],[data-sub=operator-creation]){color:var(--approval-ink,var(--ink));background:color-mix(in srgb,var(--approval-ink,var(--ink)) 14%,transparent)}
 .task-board-sub[data-sub=card]{font-variant-numeric:tabular-nums}
