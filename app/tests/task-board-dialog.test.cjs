@@ -54,11 +54,11 @@ test('the global bar uses no separate height and keeps one original panel', () =
 test('native popover lifecycle does not move content and returns focus to the same trigger', () => {
   const f = setup(), before = f.content.getBoundingClientRect();
   f.button.focus(); f.button.fire('click');
-  assert.equal(f.doc.modal, undefined); assert.equal(f.panel.matches(':popover-open'), true);
+  assert.ok(f.doc.modal === undefined, 'Opening the task board does not open a modal'); assert.equal(f.panel.matches(':popover-open'), true);
   assert.equal(f.button.getAttribute('aria-expanded'), 'true'); assert.deepEqual(f.content.getBoundingClientRect(), before);
   assert.ok(parseFloat(f.panel.style.width) <= 1140); assert.ok(parseFloat(f.panel.style.top) + parseFloat(f.panel.style.maxHeight) <= 600);
   f.key('Escape');
-  assert.equal(f.panel.matches(':popover-open'), false); assert.equal(f.doc.activeElement, f.button); assert.equal(f.button.getAttribute('aria-expanded'), 'false');
+  assert.equal(f.panel.matches(':popover-open'), false); assert.ok(f.doc.activeElement === f.button, 'Escape returns focus to the task board trigger'); assert.equal(f.button.getAttribute('aria-expanded'), 'false');
   f.board.dispose();
 });
 
@@ -80,7 +80,8 @@ test('dispose detaches contents, observers and listeners without a countdown lea
 test('the button reads 任务板 · N 件等你 · 卡 m:ss and nothing else', () => {
   for (const lang of ['zh', 'en']) {
     const f = setup(lang), need = f.host.querySelector('.task-status-need'), due = f.host.querySelector('.task-status-due');
-    assert.equal(f.host.querySelector('.task-status-chips'), null); assert.equal(f.host.querySelector('.task-status-warning'), null);
+    assert.ok(f.host.querySelector('.task-status-chips') === null, 'No separate status chips');
+    assert.ok(f.host.querySelector('.task-status-warning') === null, 'No separate status warning');
     assert.equal(f.host.querySelector('.task-status-board').textContent, f.format('taskBoard.boardButton'));
     assert.deepEqual([need.hidden, need.textContent], [false, { zh: '1 件等你', en: '1 needs you' }[lang]], 'a no-reply review waits for the person; one is singular (N1)');
     assert.equal(due.hidden, true);
@@ -101,7 +102,7 @@ test('a card counts down while the board is closed and leaves at expiry without 
   f.advance(1000); assert.equal(due.textContent, '卡 1:39');
   f.board.open(); assert.equal(f.host.querySelector('[data-sub="card"]')?.textContent, '确认卡 · 1:39');
   f.advance(99000);
-  assert.equal(due.hidden, true); assert.equal(f.entry('actor:native:operation'), undefined);
+  assert.equal(due.hidden, true); assert.ok(f.entry('actor:native:operation') === undefined, 'The expired confirmation row is gone');
   assert.equal(f.timers.size, 0); assert.deepEqual(f.calls, []);
   f.board.dispose();
 });
@@ -157,7 +158,7 @@ test('eight rows a group, then 再显示 shows eight more with the total', () =>
     assert.equal(queued().length, 8); assert.equal(more.textContent, f.format('taskBoard.more', { count: 3, total: 11 }));
     assert.deepEqual(queued().slice(0, 2), ['queued0', 'queued1'], 'newest first');
     more.fire('click');
-    assert.equal(queued().length, 11); assert.equal(f.host.querySelector('.task-board-more'), null);
+    assert.equal(queued().length, 11); assert.ok(f.host.querySelector('.task-board-more') === null, 'No more rows to show');
     f.board.dispose();
   }
 });
@@ -200,7 +201,7 @@ test('a row shows title, sub-label, agent, space, latest event and #id, and open
   assert.deepEqual(detail.querySelectorAll('.task-board-action').map(b => [b.dataset.action, b.textContent]),
     [['openSessionOf', '打开 Synthetic member 的会话 ↗'], ['openQueueOf', '打开「Synthetic space」队列 ↗']]);
   f.entry('review').fire('click');
-  assert.equal(f.row('sent1234abcd').querySelector('.task-board-detail'), null, 'one row open at a time');
+  assert.ok(f.row('sent1234abcd').querySelector('.task-board-detail') === null, 'One row open at a time');
   assert.equal(f.row('review').querySelector('.task-board-reason').textContent, f.format('taskBoard.reasonNoReply'));
   assert.equal(f.row('review').querySelector('.task-board-action').dataset.action, 'checkIn');
   f.row('review').querySelectorAll('.task-board-action')[1].fire('click');
@@ -219,7 +220,7 @@ test('an open board changes only text; the next opening moves the row', () => {
   q.push({ id: 'late', status: 'sent', text: 'Synthetic late arrival', sentTo: 'member', sentAt: f.now() });
   f.board.update(f.input);
   assert.deepEqual(f.groups().find(g => g.key === 'sent').rows, ['sent1234abcd', 'late'], 'a new row goes to the end of its group');
-  assert.equal(f.row('sent1234abcd'), node); assert.equal(f.row('sent1234abcd').querySelector('.task-board-sub').textContent, '已完成');
+  assert.ok(f.row('sent1234abcd') === node, 'The live update keeps the same row'); assert.equal(f.row('sent1234abcd').querySelector('.task-board-sub').textContent, '已完成');
   assert.ok(node.querySelector('.task-board-detail'), 'the open row stays open');
   f.board.close(); f.board.open();
   assert.deepEqual(f.groups().find(g => g.key === 'sent').rows, ['late']);
@@ -298,7 +299,7 @@ test('a status update on an open board keeps focus, the scroll position and a ha
   q.push(...waitingItems(f, 10, 10)); q[0] = { ...q[0], status: 'done', finishedAt: f.now() };
   f.board.update(f.input); f.board.setWaiting([question]);
   assert.equal(answer(), box, 'the same answer form'); assert.equal(box.value, 'half-typed synthetic answer');
-  assert.equal(f.doc.activeElement, box); assert.equal(list.scrollTop, 200);
+  assert.ok(f.doc.activeElement === box, 'Focus stays on the same control'); assert.equal(list.scrollTop, 200);
   assert.equal(f.host.querySelector('.task-board-total').textContent, '共 23 件');
   f.board.dispose();
 });
@@ -335,7 +336,7 @@ test('an open card sits under its card id, and a closed board keeps no open card
   f.board.open(); f.entry('actor:native:operation').fire('click');
   assert.equal(f.row('actor:native:operation').querySelector('.task-board-waiting').dataset.waitingId, 'message');
   f.board.close();
-  assert.equal(f.row('actor:native:operation').querySelector('.task-board-waiting'), null);
+  assert.ok(f.row('actor:native:operation').querySelector('.task-board-waiting') === null, 'Closing the row removes its inline card');
   assert.equal(f.entry('actor:native:operation').getAttribute('aria-expanded'), 'false');
   f.board.dispose();
 });
@@ -464,7 +465,7 @@ test('the fixed confirmation trigger opens the earliest live card and leaves oth
   assert.equal(f.groups().find(g => g.key === 'waiting').rows.length, 3);
   assert.deepEqual(f.calls, []);
   f.key('Escape');
-  assert.equal(f.doc.activeElement, trigger);
+  assert.ok(f.doc.activeElement === trigger, 'Escape returns focus to the confirmation trigger');
 
   f.advance(20000);
   assert.equal(trigger.textContent, '待确认 1');
@@ -472,11 +473,11 @@ test('the fixed confirmation trigger opens the earliest live card and leaves oth
   assert.equal(f.entry(later.id).getAttribute('aria-expanded'), 'true');
   f.advance(80000);
   assert.equal(trigger.textContent, '确认卡 · 待核验');
-  assert.equal(f.entry(later.id), undefined);
+  assert.ok(f.entry(later.id) === undefined, 'The expired later confirmation is gone');
   trigger.fire('click');
   assert.equal(f.entry('checking').getAttribute('aria-expanded'), 'true');
   assert.equal(f.entry('checking').textContent, '归档会话 · Synthetic target');
-  assert.equal(f.row('checking').querySelector('.task-board-full'), null);
+  assert.ok(f.row('checking').querySelector('.task-board-full') === null, 'The read-only summary is not repeated below the row');
 
   const submitted = card(f, 60);
   f.board.update({ ...f.input, confirmations: [{ ...submitted.card, state: 'confirmation-required', actionable: true, submitted: true }] }, [submitted]);
@@ -487,4 +488,29 @@ test('the fixed confirmation trigger opens the earliest live card and leaves oth
   assert.ok(f.entry(submitted.id), 'the submitted card remains in the board');
   assert.deepEqual(f.calls, []);
   f.board.dispose();
+});
+
+test('a submitted confirmation stays listed for verification while its backend is unavailable', () => {
+  for (const connected of [false, true]) {
+    const f = setup('zh', { onWaiting: () => assert.fail('An unverifiable card must not render the original decision controls') });
+    const submitted = card(f, 60);
+    const pending = { ...submitted.card, state: 'confirmation-required', actionable: true, submitted: true };
+    const trigger = f.host.querySelector('.task-confirmation-entry');
+    f.board.update({ ...f.input, confirmations: [pending] }, [submitted]);
+    assert.equal(trigger.hidden, true, 'A submitted decision does not count as waiting for an answer');
+
+    const unverifiable = { ...pending, state: 'unverifiable', actionable: false,
+      safeSummary: { titles: { zh: '归档会话' }, detail: 'Synthetic target' } };
+    f.board.update({ ...f.input, connected, confirmationsAvailable: connected, language: 'zh', confirmations: [unverifiable] }, []);
+    assert.equal(trigger.hidden, false);
+    assert.equal(trigger.textContent, '确认卡 · 待核验');
+    trigger.fire('click');
+    assert.deepEqual(f.groups().find(g => g.key === 'problem')?.rows, [submitted.id], 'A submitted card remains visible under Problems');
+    assert.equal(f.entry(submitted.id).textContent, '归档会话 · Synthetic target');
+    assert.equal(f.entry(submitted.id).getAttribute('aria-expanded'), 'true');
+    assert.deepEqual(f.row(submitted.id).querySelectorAll('.task-board-action').map(button => button.dataset.action), ['openSessionOf']);
+    assert.equal(f.button.querySelector('.task-status-need').textContent, '1 件等你', 'Only the unrelated review counts');
+    assert.deepEqual(f.calls, []);
+    f.board.dispose();
+  }
 });

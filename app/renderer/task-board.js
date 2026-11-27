@@ -55,7 +55,7 @@
       if (!card || !['confirmation-required', 'unverifiable'].includes(card.state) || card.replacedBy || card.disposition) continue;
       const key = typeof card.key === 'string' && card.key ? card.key : [card.sessionId, card.nativeId, card.operationId].every(v => typeof v === 'string' && v) ? JSON.stringify([card.sessionId, card.nativeId, card.operationId]) : null;
       if (!key) { unknown++; continue; }
-      if (card.submitted) { submittedCards.add(key); continue; }
+      if (card.state === 'confirmation-required' && card.submitted) { submittedCards.add(key); continue; }
       if (Number.isSafeInteger(card.expiresAt) && card.expiresAt <= now) continue;
       const session = sessions.get(card.sessionId);
       const current = session && !session.archived && Boolean(card.nativeId) && session.nativeId === card.nativeId;
