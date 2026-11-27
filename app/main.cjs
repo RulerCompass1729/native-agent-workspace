@@ -200,7 +200,7 @@ function confirmationSnapshot(client, snapshot = client.snapshot()) {
   return { ...snapshot, unavailable: Boolean(snapshot.unavailable || client.closing || client.socket?.destroyed ||
     client.entries?.some(e => e.closed || e.closing || e.client?.socket?.destroyed)) };
 }
-function appRecordsStatus(snapshot = null, suppliedTemp = null) {
+function appRecordsStatus(snapshot = null, suppliedTemp = null, { managerAppointments = false } = {}) {
   let standing = { rows: [], known: false }; try { standing = stewardStanding?.switches() ?? standing; } catch { /* The other reminders are shown. */ }
   const records = recordReminders.status(dataDir, Date.now(), { standing, unavailable: {
     ...(operationsUnavailable ? { operations: operationsUnavailable } : {}),
@@ -210,7 +210,8 @@ function appRecordsStatus(snapshot = null, suppliedTemp = null) {
   try { temp = suppliedTemp ? tempSummary(suppliedTemp) : tempReminders?.cached ? tempSummary(tempReminders.cached) : readTempSummary(dataDir); }
   catch { temp = { id: 'naw-temp-files', version: 0, state: 'unavailable', checkedAt: Date.now(), directories: 0, bytes: 0, oldestDay: null, shown: true, result: null }; }
   const names = snapshot && sessionLabels.apply(roomState.apply(snapshot));
-  const cards = snapshot?.backgroundConfirmations || (backgroundControl && names ? backgroundControl.confirmations(names, snapshot) : []);
+  const cards = (!managerAppointments && snapshot?.backgroundConfirmations) ||
+    (backgroundControl && names ? backgroundControl.confirmations(names, snapshot, { managerAppointments }) : []);
   let health;
   try { health = require('./mobile-workspace.cjs').healthSummary(stewardWake?.view(), require('./steward-wake.cjs').BLOCK_REASONS); }
   catch { health = { available: false, alerts: [] }; }
@@ -746,6 +747,8 @@ async function carryGrants(client, snapshot, now = Date.now()) {
   }
 }
 function auditBackgroundOperation(record) {
+  if (record.command?.method === 'spaceManager' && record.state === 'unconfirmed' &&
+      record.approvedBy !== 'standing' && record.humanDecision !== 1) return;
   const rooms = new Set(record.guard?.auditRooms || ['shared']);
   if (record.approvedBy === 'standing' && record.state === 'complete' && record.command.method === 'spaceCreate' && typeof record.value === 'string') rooms.add(record.value);
   roomState.recordControlOperation(record, [...rooms]);
@@ -882,10 +885,11 @@ function stewardReadsUnasked(actor, snapshot) {
   try { return roomIds(record).length === 0; } catch { return false; }
 }
 // In the queue every join runs in: the session cannot leave the space while it becomes its manager.
-async function designateManager(c, roomId, id, { vacant = false } = {}) {
+async function designateManager(c, roomId, id, { vacant = false, butler = null } = {}) {
   if (spaceManagers.failed) spaceManagers.read();
   const reset = spaceManagers.failed;
   if (reset) {
+    if (butler) throw uiError('error.manager.state');
     const answer = await showDialog(c, 'message', { type: 'warning', message: displayText('os.managerRecordTitle'), detail: displayText('os.managerRecordDetail'),
       buttons: [displayText('common.cancel'), displayText('background.confirm')], defaultId: 0, cancelId: 0 });
     if (answer.response !== 1) return;
@@ -895,7 +899,7 @@ async function designateManager(c, roomId, id, { vacant = false } = {}) {
   return roomState.serial(async () => {
     roomState.writable(roomId);
     const room = roomState.metadata(roomId);
-    if (id === null) {
+    if (id === null && !butler) {
       if (!reset && !spaceManagers.current(roomId)) return;
       spaceManagers.set(roomId, null, { reset });
       note('notice.room.managerCleared');
@@ -903,13 +907,37 @@ async function designateManager(c, roomId, id, { vacant = false } = {}) {
     }
     if (room.archived) throw uiError('error.queue.archived');
     // The backend's own list does not say which sessions the person archived; the desktop's record does.
-    const sessions = roomState.apply(await c.client.call('initial')).sessions;
+    const snapshot = await c.client.call('initial');
+    const state = roomState.apply(snapshot), { sessions } = state;
+    if (butler) {
+      const actor = backgroundOperation.current();
+      assertButlerManager(actor, butler.args.arguments, state);
+      if (!butler.approved && (!butler.standing || !stewardRecord.recording(actor) ||
+          !stewardStanding.valid(actor, butler.args, state, c.view.spaceId || 'shared', butler.standing))) throw uiError('error.manager.appointmentChanged');
+      const guard = backgroundOperation.controlFingerprint(butler.args, { state: snapshot, actor, context: c, roomState, sessionLabels, spaceManagers });
+      if (JSON.stringify(butler.guard) !== JSON.stringify(guard)) throw uiError('error.manager.appointmentChanged');
+      butler.approved?.authorize?.();
+    }
     const record = sessions.find(s => s.id === id);
     if (!record?.nativeId || !usableRecord(record, sessions) || !isMember(record, roomId) || midRotation(id) || isStewardActor(record)) throw uiError('error.manager.invalid');
     if (vacant && activeManagers(sessions)[roomId]) throw uiError('error.manager.changed');
     spaceManagers.set(roomId, { sessionId: record.id, nativeId: record.nativeId }, { reset });
     note('notice.room.managerSet', { name: sessionLabels.labels.get(record.id) || record.name }, record.id);
   });
+}
+function assertButlerManager(actor, args, state) {
+  const caller = usableRecord(actor, state.sessions);
+  if (!isStewardActor(actor) || !caller || roomIds(caller).length) throw uiError('error.manager.personOnly');
+  if (!stewardRecord || stewardRecord.failed) throw uiError('error.steward.recordUnavailable');
+  if (spaceManagers.failed) throw uiError('error.manager.state');
+  const [roomId, id] = args;
+  const room = state.rooms.find(r => r.id === roomId);
+  if (!validRoomId(roomId) || !room) throw uiError('error.main.invalidSpace');
+  if (room.archived) throw uiError('error.queue.archived');
+  const member = state.sessions.find(s => s.id === id);
+  if (args.length !== 2 || typeof id !== 'string' || id === actor.id || !member?.nativeId ||
+      !usableRecord(member, state.sessions) || !isMember(member, roomId) || midRotation(id) ||
+      [...spaceManagers.all()].some(([other, manager]) => other !== roomId && manager.sessionId === id)) throw uiError('error.manager.invalid');
 }
 // With the native defaults every Claude session the person opens has; no task, no input. One at a time for a space.
 const creatingManagers = new Set();
@@ -2138,7 +2166,7 @@ async function boot() {
   views = loaded.views;
   try { backgroundControl ||= new background.BackgroundControl({ dataDir, handlers: applicationHandlers, changed: change => { observePersonActions(); backgroundNotifications?.sync(); broadcastRoom().catch(() => {}); recordsChanged(change?.confirmations === true); },
     confirmationFingerprint: (row, snapshot, view, live) => backgroundOperation.controlFingerprint(row.command,
-      { state: snapshot, actor: row.actor, context: live || { view }, roomState, sessionLabels, client: live?.client }),
+      { state: snapshot, actor: row.actor, context: live || { view }, roomState, sessionLabels, client: live?.client, spaceManagers }),
     confirmationPending: notifyBackgroundConfirmation,
     decided: (actor, receipt, decision) => answerNotices.add(actor, receipt, decision),
     receiptRead: (actor, id) => answerNotices.read(actor, id),
@@ -2157,6 +2185,7 @@ async function boot() {
         if (access.metadataOnly || !access.roomIds.includes(command.arguments[0])) throw new background.PreconditionRefused(uiError('error.background.spaceFileMembership'), 'space-file-membership-required');
       }
       const state = sessionLabels.apply(roomState.apply(context.client.snapshot()));
+      if (action === 'spaceManager') assertButlerManager(actor, command.arguments, state);
       const firstMessage = command.method === 'create' && backgroundOperation.creationMessage(command.arguments[0]);
       const target = state.sessions.find(s => s.id === backgroundOperation.conversationTarget(command.method, command.arguments, actor));
       if (action === 'changeModel') {
@@ -2179,6 +2208,9 @@ async function boot() {
       const grant = stewardStanding.take(actor, command, state, context.view.spaceId || 'shared');
       if (!grant) return null;
       const action = backgroundOperation.maintenanceAction(command.method, command.arguments, actor);
+      if (action === 'spaceManager') return { ...grant, actionText: displayText('background.action.spaceManager'),
+        target: displayText('standing.managerTarget', { room: grant.summary.room, name: grant.summary.target }),
+        undo: displayText('standing.undo.manager') };
       const old = state.sessions.find(s => s.id === command.arguments[0]);
       const room = state.rooms.find(r => r.id === (command.method === 'spaceAction' ? command.arguments[0] : 'shared'));
       const kind = ['create', 'spaceCreate'].includes(action) ? 'created' : ['joinRoom', 'leaveRoom'].includes(action) ? 'placement'
@@ -2218,7 +2250,8 @@ async function boot() {
         if (!record || record.nativeId !== actor.nativeId || record.archived || record.nativeContextPending) throw Error('The originating native session changed');
       };
       context.fingerprint = command => {
-        return backgroundOperation.controlFingerprint(command, { state: client.snapshot(), actor, context, roomState, sessionLabels, client });
+        return backgroundOperation.controlFingerprint(command, { state: client.snapshot(), actor, context, roomState, sessionLabels, client,
+          ...(command.method === 'spaceManager' ? { spaceManagers } : {}) });
       };
       context.delivery = async (command, value, sender, guard) => {
         const method = command.method === 'spaceAction' ? command.arguments[1] : command.method;
@@ -2607,7 +2640,7 @@ async function boot() {
       let temp;
       try { temp = await currentTempReminders().present(c, force); }
       catch { if (!isCurrentHumanContext(c)) throw uiError('error.records.personOnly'); temp = { id: 'naw-temp-files', version: 0, checkedAt: Date.now(), directories: 0, bytes: 0, shown: true, anomaly: 'inspection-unavailable' }; }
-      return { ...appRecordsStatus(confirmationSnapshot(c.client), temp), temp };
+      return { ...appRecordsStatus(confirmationSnapshot(c.client), temp, { managerAppointments: true }), temp };
     };
     if (action === 'status' && (args.length === 0 || args.length === 1 && args[0] === true)) return status(args[0] === true);
     if (action === 'tempClean' && args.length === 1 && tempReminders) { const result = await tempReminders.clean(c, args[0]); return { ...await status(), result }; }
@@ -2681,10 +2714,15 @@ async function boot() {
     return stewardRecords.view(stewardRecord, snapshot, { current: known ? current : null, stateOf, readOf, wake, limit });
   });
   applicationHandlers.delete('stewardRecord');
-  // Designating, changing or revoking a space's project manager is the person's alone: a member of that space, or
-  // `{ create: true }`, a Claude session opened for it (nothing is sent to it). The background-operation gate is a fixed
-  // method table that does not know this method, so the refusal is made here.
+  // The person can also revoke the role or open a new manager. The butler assigns an existing member through maintenance consent.
   register('spaceManager', async (c, roomId, choice) => {
+    if (c.background) {
+      const request = backgroundOperation.request();
+      if (!request?.maintenanceApproved || request.args.method !== 'spaceManager' || !isStewardActor(backgroundOperation.current())) throw uiError('error.manager.personOnly');
+      try { await designateManager(c, roomId, choice, { butler: request }); }
+      finally { await broadcastRoom(); }
+      return;
+    }
     if (!isCurrentHumanContext(c)) throw uiError('error.manager.personOnly');
     if (!validRoomId(roomId)) throw uiError('error.main.invalidSpace');
     try {

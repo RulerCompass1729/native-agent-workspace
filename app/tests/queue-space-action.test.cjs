@@ -261,6 +261,153 @@ test('only the person designates/revokes, and a member of that space; unrelated 
   }
   assert.equal(f.managers.current('shared'), null);
 });
+async function managerControl(t, { standing = true } = {}) {
+  const { StewardRecord } = require('../steward-record.cjs');
+  const { StewardRole } = require('../steward-role.cjs');
+  const { StewardStanding } = require('../steward-standing.cjs');
+  const f = fixture(t), role = new StewardRole(f.dir), roomId = f.room.create('Synthetic space');
+  f.record.roomIds = [roomId];
+  f.record.provider = 'codex';
+  const record = (id, name, roomIds) => ({ id, nativeId: 'native-' + id, name, roomIds, state: 'idle', provider: 'codex' });
+  const butler = record('butler', 'Butler', []), next = record('next', 'New manager', [roomId]);
+  const member = record('member', 'Ordinary member', [roomId]), outsider = record('outsider', 'Foreign member', ['shared']);
+  const sessions = [f.record, butler, next, member, outsider];
+  f.designate(null);
+  f.managers.set(roomId, { sessionId: f.record.id, nativeId: f.record.nativeId });
+  role.set({ sessionId: butler.id, nativeId: butler.nativeId });
+  const person = { client: f.c.client };
+  const stewardStanding = new StewardStanding(f.dir, { role, person: c => c === person });
+  const stewardRecord = new StewardRecord(f.dir, { steward: () => role.current(), selected: () => role.selected });
+  if (standing) stewardStanding.set(person, true);
+  const source = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+  const read = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start) + start.length));
+  const context = f.context;
+  const snapshot = () => ({ sessions, rooms: [{ id: 'shared' }, { id: roomId }] });
+  Object.assign(f.c.client, { snapshot, call: async () => snapshot() });
+  const { SessionLabels } = require('../session-labels.cjs');
+  Object.assign(context, { stewardOf: () => role.current(), stewardRecord, stewardStanding, sessionLabels: new SessionLabels(f.dir) });
+  vm.runInContext(read('async function stewardCaller(', 'function conversationReaderAllowed('), context);
+  vm.runInContext(read('function auditBackgroundOperation(', 'function notifyBackgroundConfirmation('), context);
+  const callbacks = vm.runInContext('({' + read('    confirmation: (actor, command, action, context) => {', '    audit:') +
+    read('    standing: (actor, command, context) => {', '    inputDelivery:') + '})', context);
+  const changes = [];
+  const controller = new BackgroundControl({ dataDir: f.dir, handlers: f.handlers, ...callbacks, audit: context.auditBackgroundOperation, changed: value => changes.push(value),
+    context: actor => ({ ...f.c, actor,
+      fingerprint: command => backgroundOperation.controlFingerprint(command, { state: snapshot(), actor, context: f.c, roomState: f.room,
+        sessionLabels: context.sessionLabels, client: f.c.client, spaceManagers: f.managers }) }) });
+  t.after(() => controller.close());
+  const ask = ({ id: sessionId, nativeId, name, provider }, method, args, id) => {
+    const sender = { id: sessionId, nativeId, name, provider };
+    const input = { action: 'invoke', method, arguments: args, operation_id: id };
+    return stewardRecord.around(sender, input, () => controller.call({
+      sender, identity: { callId: id, turnId: 'synthetic-turn' }, valid: () => true }, input));
+  };
+  const set = (sender = butler, args = [roomId, next.id], id = 'appoint') => ask(sender, 'spaceManager', args, id);
+  Object.assign(context, { backgroundControl: controller, confirmationInbox: require('../confirmation-inbox.cjs'),
+    recordReminders: require('../record-reminders.cjs'), dataDir: f.dir, operationsUnavailable: null, tempSummary: value => value, stewardWake: null });
+  vm.runInContext(read('function appRecordsStatus(', '// The one list of fixed alert codes'), context);
+  return { ...f, controller, stewardRecord, stewardStanding, role, person, roomId, butler, next, member, outsider, sessions, set, changes,
+    add: (sender, id) => ask(sender, 'spaceAction', [roomId, 'queueAdd', ['Synthetic task', null]], id) };
+}
+
+test('R262.1 standing butler appoints exactly once, the badge and queue authority follow, and both records identify the request', async t => {
+  const f = await managerControl(t);
+  const receipt = await f.set();
+  assert.equal(receipt.state, 'complete', receipt.error);
+  assert.equal(receipt.approvedBy, 'standing');
+  assert.equal(new SpaceManagers(f.dir).current(f.roomId).sessionId, f.next.id);
+  assert.equal(f.context.activeManagers(f.sessions)[f.roomId].sessionId, f.next.id);
+  assert.equal(f.stewardStanding.read().used.length, 1);
+  const repeated = await f.set();
+  assert.equal(repeated.duplicate, true);
+  assert.equal(f.stewardStanding.read().used.length, 1);
+  const [audit] = f.room.metadata(f.roomId).events.filter(e => e.controlAudit?.operationId === receipt.id);
+  assert.equal(audit.uiMessage.key, 'notice.background.standing.complete');
+  assert.equal(audit.controlAudit.method, 'spaceManager');
+  assert.match(audit.uiMessage.params.target, /Synthetic space.*New manager/);
+  const step = f.stewardRecord.entries().find(e => e.operationId === receipt.id);
+  assert.deepEqual([step.method, step.state, step.recorded], ['spaceManager', 'complete', true]);
+  const old = await f.add(f.record, 'old-add');
+  assert.equal(old.state, 'unconfirmed');
+  assert.match(old.error, /New manager/);
+  assert.equal((await f.add(f.next, 'new-add')).state, 'complete');
+  assert.equal(f.room.queueItems(f.roomId).length, 1);
+});
+
+test('R262.1 standing appointment appears as settled desktop bell history', async t => {
+  const f = await managerControl(t);
+  const receipt = await f.set();
+  assert.equal(receipt.state, 'complete', receipt.error);
+  const snapshot = f.c.client.snapshot(), temp = { shown: false };
+  const bell = f.context.appRecordsStatus(snapshot, temp, { managerAppointments: true });
+  const [row] = bell.confirmations.filter(card => card.operationId === receipt.id);
+  assert.ok(row, 'completed appointment appears in the desktop bell');
+  assert.deepEqual([row.state, row.actionable, row.canDecide, row.summary.target, row.summary.room],
+    ['complete', false, false, 'New manager', 'Synthetic space']);
+  assert.equal(bell.confirmationCount, 0);
+  assert.ok(f.changes.some(change => change.confirmations === true));
+  assert.ok(f.controller.rows(f.butler.id).some(message => message.id === row.id));
+  const scoped = f.context.appRecordsStatus(snapshot, temp);
+  assert.equal(scoped.confirmations.some(card => card.operationId === receipt.id), false);
+});
+
+test('R262.1 ordinary agents and managers cannot ask for an appointment and the butler can only assign a current member', async t => {
+  const f = await managerControl(t);
+  for (const [sender, args] of [
+    [f.member, [f.roomId, f.next.id]], [f.record, [f.roomId, f.record.id]],
+    [f.record, ['shared', f.outsider.id]], [f.butler, [f.roomId, f.outsider.id]],
+    [f.butler, [f.roomId, f.butler.id]], [f.butler, [f.roomId, null]], [f.butler, [f.roomId, { create: true }]],
+  ]) {
+    const receipt = await f.set(sender, args, require('node:crypto').randomUUID());
+    assert.equal(receipt.state, 'unconfirmed', receipt.error);
+  }
+  assert.equal(f.managers.current(f.roomId).sessionId, f.record.id);
+  assert.equal(f.stewardStanding.read().used.length, 0);
+  assert.equal(f.room.metadata(f.roomId).events.filter(e => e.controlAudit?.method === 'spaceManager').length, 0);
+});
+
+for (const change of ['butler designation', 'standing revision', 'candidate native identity']) {
+  test(`R262.1 rechecks ${change} after the native lookup starts`, async t => {
+    const f = await managerControl(t);
+    const call = f.c.client.call;
+    let intercepted = false;
+    f.c.client.call = async (...args) => {
+      intercepted = true;
+      if (change === 'butler designation') f.role.set(null);
+      if (change === 'standing revision') {
+        f.stewardStanding.set(f.person, false);
+        f.stewardStanding.set(f.person, true);
+      }
+      if (change === 'candidate native identity') f.next.nativeId = 'replacement-native';
+      return call(...args);
+    };
+    const receipt = await f.set();
+    assert.equal(intercepted, true);
+    assert.equal(receipt.state, 'unconfirmed', receipt.error);
+    assert.equal(f.managers.current(f.roomId).sessionId, f.record.id);
+  });
+}
+
+test('R262.1 without standing the butler uses one existing confirmation and newer human choices invalidate it', async t => {
+  const f = await managerControl(t, { standing: false });
+  const card = await f.set();
+  assert.equal(card.state, 'confirmation-required', card.error);
+  assert.match(card.confirmation.options.detail, /New manager/);
+  assert.match(card.confirmation.options.detail, /Synthetic space/);
+  const accepted = await f.controller.decide(f.butler.id, f.butler.nativeId, card.id, 1);
+  assert.equal(accepted.state, 'complete', accepted.error);
+  assert.equal(f.managers.current(f.roomId).sessionId, f.next.id);
+  const nextCard = await f.set(f.butler, [f.roomId, f.record.id], 'restore');
+  assert.equal(nextCard.state, 'confirmation-required', nextCard.error);
+  await f.handlers.get('spaceManager')(f.person, f.roomId, f.member.id);
+  const stale = await f.controller.decide(f.butler.id, f.butler.nativeId, nextCard.id, 1);
+  assert.equal(stale.state, 'unconfirmed', stale.error);
+  assert.equal(f.managers.current(f.roomId).sessionId, f.member.id);
+  await f.handlers.get('spaceManager')(f.person, f.roomId, null);
+  assert.equal(f.managers.current(f.roomId), null);
+  assert.equal(f.stewardStanding.read().used.length, 0);
+});
+
 test('a project manager adds to its own space only, and not while it is out of it', async t => {
   const f = fixture(t), add = roomId => f.invoke('spaceAction', [roomId, 'queueAdd', ['task', null]]), refused = error => error.uiMessage?.key === 'error.queue.managerOnly',
     vacant = error => error.uiMessage?.key === 'error.queue.managerVacant';

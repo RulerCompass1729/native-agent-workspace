@@ -131,6 +131,7 @@ function maintenanceAction(method, args = [], actor) {
   if (conversationTarget(method, args, actor)) return 'readConversation';
   if (method === 'roomMemberOrder' || method === 'spaceAction' && args[1] === 'memberOrder') return 'memberOrder';
   if (method === 'roomRename' || method === 'spaceAction' && args[1] === 'rename') return 'renameRoom';
+  if (method === 'spaceManager') return 'spaceManager';
   if (['create', 'spaceCreate', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'resume', 'importHistory'].includes(method)) return method;
   if (['runtimeLocation', 'openLocalFile', 'saveLocalFile', 'spaceFiles', 'openMessageFile'].includes(method)) return method;
   // WorkspaceClient.pause stops routing across backends even when passed an ID;
@@ -238,7 +239,8 @@ function operationSummary(command, actor, names = {}) {
     put('room', room(args[0]));
     if (args[1] === 'join') put('target', session(Array.isArray(args[2]) ? args[2][0] : undefined));
     if (args[1] === 'rename') put('name', shown(Array.isArray(args[2]) ? args[2][0] : undefined));
-  } else if (method === 'rename') { put('target', session(args[0])); put('name', shown(args[1])); }
+  } else if (method === 'spaceManager') { put('room', room(args[0])); put('target', session(args[1])); }
+  else if (method === 'rename') { put('target', session(args[0])); put('name', shown(args[1])); }
   else if (method === 'changeModel') {
     put('target', session(args[0]));
     const shownValue = value => value === null ? null : shown(value);

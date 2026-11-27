@@ -25,6 +25,7 @@ const recordTime = r => Number.isSafeInteger(r.finishedAt) ? r.finishedAt : r.at
 const fixedStates = new Set(['complete', 'received', 'cancelled', 'not-executed', 'unconfirmed']);
 const fixedRows = new WeakMap(), archivedFacts = new WeakMap(); let namesMade = 0;
 const isCard = r => r.confirmation?.kind === 'message' || Number.isSafeInteger(r.confirmationRequestedAt) || Number.isSafeInteger(r.humanDecision);
+const isStandingManagerResult = r => r.command?.method === 'spaceManager' && r.approvedBy === 'standing' && r.state === 'complete';
 const checkArchived = r => { if (!r || !token(r.id) || !r.actor || !token(r.actor.id) || !r.command || !token(r.state)) throw Error('Invalid archived operation'); };
 const MAX_PENDING_PER_ACTOR = 32, MAX_PENDING = 128;
 // Person-approved 2026-11-15: one policy point for new and retained pending cards.
@@ -103,8 +104,8 @@ const parameters = {
   join: ['sessionId', 'join: boolean'], roomRename: ['name'], roomNotes: ['text', 'expectedRevision'], roomMemberOrder: ['change'],
   archiveSession: ['sessionId'], restoreSession: ['sessionId'], archiveRoom: [], restoreRoom: [],
   spaceCreate: ['name'], spaceMerge: ['action: preview|status|commit|recover|discard|undo', 'value'],
-  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|queueClaim|releaseRotation|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'notes: [text, expectedRevision]; refused while the person has this space attach its notes to queued work; queueAdd: [text, assignee or null]; only this space\'s project manager (designated by the person) or the butler may add, and a project manager not to itself or to another space\'s project manager; queueCancel: the person or the butler, and a session for an item it added itself that is still queued (not yet sent); queueResolve: only the person or the butler; queueClaim: [itemId from initial rooms[].queue], a session already doing an item queued for it and not yet sent, so NAW does not send it again; NAW settles it by your reply when this turn ends; not while an item sent to you has not settled; releaseRotation: [sessionId, expectedNativeId, epoch, tag, reason], only the person or designated butler may discard an unresolved handoff without sending native input; other arguments in the corresponding command order'],
-  spaceManager: ['roomId', 'sessionId of a member, or null to revoke; person-only, agents cannot designate a project manager'],
+  spaceAction: ['roomId', 'action: join|rename|notes|memberOrder|archive|restore|stageImages|removeImage|acceptImages|removeFile|queueAdd|queueCancel|queueResolve|queueClaim|releaseRotation|forward|queueShared|steerShared|run|pause|clearSharedHistory', 'notes: [text, expectedRevision]; refused while the person has this space attach its notes to queued work; queueAdd: [text, assignee or null]; only this space\'s project manager or the butler may add, and a project manager not to itself or to another space\'s project manager; queueCancel: the person or the butler, and a session for an item it added itself that is still queued (not yet sent); queueResolve: only the person or the butler; queueClaim: [itemId from initial rooms[].queue], a session already doing an item queued for it and not yet sent, so NAW does not send it again; NAW settles it by your reply when this turn ends; not while an item sent to you has not settled; releaseRotation: [sessionId, expectedNativeId, epoch, tag, reason], only the person or designated butler may discard an unresolved handoff without sending native input; other arguments in the corresponding command order'],
+  spaceManager: ['roomId', 'sessionId of an existing member; only the person-designated butler can use this tool command'],
   stewardEvents: ['position from the last read (through), or null to read from the start; the designated butler only. Returns {events, through, more}: what NAW recorded since, oldest first, a few at a time; while more is true, read again from through'],
   stewardStanding: ['on: true or false to turn the person\'s permission to organize work on this Mac on or off; omit it to see how it stands. The designated butler or the person only. Once the person turned it off, only the person turns it on again. Each switch is a step of the butler\'s record and a line in the person\'s bell; changed in the answer says whether this call switched it'],
   stewardWake: ['on: true or false to turn waking on events on or off; omit it to see how it stands. The designated butler or the person only; off by default. While on, NAW sends the butler, once it is idle and at most once a minute, one 【NAW 事件】 message naming a position: read stewardEvents from that position. A migration quiet window holds it, except for the person\'s own act (such as a click on a card). Omitted, it also says what holds a wake now (blocked: the reason with its own since and minutes; waitingSince and waitingMinutes, the whole wait when longer; deadline while it is a quiet window), and to the butler the backends in a migration quiet window (quietWindows: backend, openedAt, deadline, sessions, and queued, how many queued items wait behind it as of the last dispatch pass; null when not known). Times are in epoch milliseconds'],
@@ -323,7 +324,7 @@ class BackgroundControl {
     throw Error('No place for the older background operation record');
   }
   commit(change) {
-    const signature = records => records.filter(r => r.confirmation || r.confirmationRequestedAt != null || r.humanDecision != null)
+    const signature = records => records.filter(r => r.confirmation || r.confirmationRequestedAt != null || r.humanDecision != null || isStandingManagerResult(r))
       .map(r => [this.key(r.actor), r.id, r.state, r.disposition, r.reason, r.confirmation, r.confirmationSummary, r.humanDecision]);
     const before = signature(this.data.records);
     if (this.failed) throw Error('Background operation storage is unavailable');
@@ -893,6 +894,7 @@ class BackgroundControl {
             if (standing) {
               await context.refresh?.(); await valid();
               if (!this.standingValid(actor, args, context, standing) || !isDeepStrictEqual(row.guard, controlGuard(context, args))) throw Error('Standing permission or operation target changed before execution');
+              request.standing = standing;
             }
             if (spaceFileRead(args)) {
               this.commit(data => { data.records.find(r => r.id === row.id && this.key(r.actor) === key).readAuthorization = { roomId: args.arguments[0], fileId: args.arguments[1] }; });
@@ -1303,17 +1305,23 @@ class BackgroundControl {
   }
   // One ledger projection for the bell, waiting strip and scoped phone reader.
   // No context is opened and no command is invoked while inspecting it.
-  confirmations(names = {}, snapshot = names) {
+  confirmations(names = {}, snapshot = names, { managerAppointments = false } = {}) {
     let unavailable = this.failed;
     const observed = { ...snapshot, ...(Array.isArray(names.sessions) ? { sessions: names.sessions } : {}) };
     // Expiry may persist a receipt. A failed write cannot take the person's
     // conversation down or make a pending card look executable.
     try { this.expirePending(); this.settleArchivedOrigins(observed); } catch { unavailable = true; }
-    const source = [...this.archivedBySession.values()].flatMap(list => this.archivedFacts(list).cards).concat(this.data.records.filter(isCard));
+    const archived = [...this.archivedBySession.values()].flatMap(list => {
+      const facts = this.archivedFacts(list);
+      if (!managerAppointments) return facts.cards;
+      facts.managerAppointments ??= list.filter(isStandingManagerResult);
+      return facts.cards.concat(facts.managerAppointments);
+    });
+    const source = archived.concat(this.data.records.filter(r => isCard(r) || managerAppointments && isStandingManagerResult(r)));
     const version = this.namesVersion(names), owned = new Map();
     const own = id => owned.get(id) || owned.set(id, this.own(id)).get(id);
     const card = (row, status, replacedBy, message) => {
-      const summary = row.confirmationSummary || operation.operationSummary(row.command, row.actor, names);
+      const summary = row.confirmationSummary || (isStandingManagerResult(row) && row.standing?.summary) || operation.operationSummary(row.command, row.actor, names);
       return { id: message.id, key: [row.actor.id, row.actor.nativeId, row.id].join(':'), operationId: row.id, sessionId: row.actor.id, nativeId: row.actor.nativeId,
         actorName: operation.visibleText(row.actor.name), targetName: summary?.target || summary?.room || summary?.name || '',
         title: row.confirmationTitle || row.confirmation?.options?.message || summary?.method || '', summary,

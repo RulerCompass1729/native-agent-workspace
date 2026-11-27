@@ -9,6 +9,7 @@ const CREATION_OBSERVATION_MAX_AGE_MS = 60000;
 const same = (a, b) => Boolean(a && b && a.sessionId === b.sessionId && a.nativeId === b.nativeId);
 const localAction = command => {
   if (command.method === 'create' && Object.hasOwn(command.arguments?.[0] ?? {}, 'initialMessage')) return null;
+  if (command.method === 'spaceManager' && command.arguments?.length === 2 && typeof command.arguments[1] === 'string') return command.method;
   if (['create', 'spaceCreate', 'join', 'rename', 'roomRename', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'roomMemberOrder'].includes(command.method)) return command.method;
   if (command.method === 'spaceAction' && ['join', 'rename', 'archive', 'restore', 'memberOrder'].includes(command.arguments?.[1])) return command.arguments[1];
   return null;

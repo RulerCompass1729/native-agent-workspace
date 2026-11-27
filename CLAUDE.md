@@ -31,7 +31,7 @@ or start paid model runs as a side effect of editing documents.
   member) and on what the person asks it directly; another agent may ask it only
   about its current item (questions, reviews, handoffs), and the asking agent
   leaves new tasks for the person. New tasks enter the queue only through the
-  person, the person-designated project manager of that space (项目经理, its own
+  person, the project manager of that space (项目经理, its own
   space's queue only), or the person-designated butler (大管家). The butler queues
   only the person's own requests; a project manager, those and the steps needed
   to finish work the person gave its space, not new outcomes; other agents cannot
@@ -82,9 +82,12 @@ or start paid model runs as a side effect of editing documents.
   treat idle/working labels as task eligibility or accomplishment. Measure useful
   work left waiting, time to a usable result, and avoidable handoffs/rework from
   existing records instead of creating polling/model activity to look busy.
-- For each space the person designates at most one project manager, a member of
-  it, through the member's or the space's menu, and can replace or revoke it; a
-  space the person creates arranges one by default, which the person can leave out.
+- The person or the person-designated butler can appoint or replace a space's
+  single project manager, an existing member of that space. The butler uses `spaceManager`
+  under the existing standing permission or the person's confirmation, with a record
+  of the action. The person can also appoint, replace or revoke through the member's
+  or the space's menu. A space the person creates arranges one by default, which the
+  person can leave out.
   The role grants only queue addition in that space, not execution tools, model
   calls, or other queue controls; the separately metered native-session, consent
   and cost conditions in product V12 remain in force. What it reads through NAW is
@@ -99,7 +102,7 @@ or start paid model runs as a side effect of editing documents.
   while the old session stays for the person; a session that held the role is
   then refused queue additions with the current manager's name. A handoff that
   fails afterwards gives the role back, and branching successors do not
-  transfer it. The session the person designates holds the role at once: a
+  transfer it. A newly designated session holds the role at once: a
   handoff logged before that designation moves it only once that old session
   is ended (`done`). No automatic heartbeat or routing model is added. NAW tells an idle
   manager who joined or left its space and what became of the items in its queue,
@@ -260,8 +263,10 @@ or start paid model runs as a side effect of editing documents.
   uploading, publishing, or messages to other people; spending money;
   connecting to the real DeepSeek service; deleting data or anything else
   irreversible; switches only the person may use (the automatic-messages
-  switch, automatic migration, authorizations, designating a project manager,
-  the integrator or the butler); loosening permissions or confirmation gates; ending
+  switch, automatic migration, authorizations, designating the integrator or the
+  butler, revoking a project manager); appointing a project manager is for the person
+  or the person-designated butler under the existing consent rules; loosening
+  permissions or confirmation gates; ending
   sessions or backends, exposing this machine, or quitting or restarting the
   daily NAW other than for an installation; the person's own financial or
   career decisions, including proposals made for them; a conflict with the

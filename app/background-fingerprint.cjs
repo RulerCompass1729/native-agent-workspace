@@ -12,7 +12,7 @@ function sessionBusy(target) {
     target.approval || target.nativeApproval?.requests?.length || target.nativeGoal?.status === 'active' ||
     target.background > 0 || target.scheduled > 0);
 }
-function fingerprint(command, { state, actor, context, roomState, sessionLabels, client }) {
+function fingerprint(command, { state, actor, context, roomState, sessionLabels, client, spaceManagers }) {
   const strings = new Set();
   const scan = v => { if (typeof v === 'string') strings.add(v); else if (Array.isArray(v)) v.forEach(scan); else if (v && typeof v === 'object') Object.values(v).forEach(scan); };
   scan(command.arguments);
@@ -43,6 +43,13 @@ function fingerprint(command, { state, actor, context, roomState, sessionLabels,
       // Confirmed input does not depend on which window holds the target; a takeover still moves controlRevision.
       ...(s.id === controlTarget && s.id !== actor.id ? { ...(command.method === 'input' ? {} : { owner: s.owner }), controlRevision: s.controlRevision, activeTurnId: s.activeTurnId,
         approvalId: s.approval?.requestId, nativeApprovalIds: s.nativeApproval?.requests?.map(r => r.id), nativeInputRequired: s.nativeInputRequired } : {}) });
+    if (maintenance === 'spaceManager') {
+      const [roomId, memberId] = command.arguments;
+      const room = metadata.rooms.find(r => r.id === roomId);
+      return { auditRooms: [room?.id || 'shared'],
+        sessions: metadata.sessions.filter(s => s.id === actor.id || s.id === memberId).map(placement),
+        rooms: room ? [{ id: room.id, name: room.name, archived: room.archived, manager: spaceManagers.current(roomId) }] : [] };
+    }
     // These operations do not depend on another member's progress, roster
     // ordering, unrelated archives or space notes. Keep identity/placement
     // for the actual member and actor, and only the affected space facts.
