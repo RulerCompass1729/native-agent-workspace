@@ -1135,7 +1135,13 @@ test('legacy observation appears inline but remains volatile and cannot alter re
   const body = { sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: 1, id: randomUUID(), kind: 'response', text: 'PRIVATE_NATIVE_OUTPUT', gap: true, truncated: true };
   r.observeRoot(body); assert.throws(() => r.observeRoot({ ...body, gap: false }), /Stale/);
   const after = w.snapshot(); assert.equal(after.sessions[0].messages.at(-1).text, body.text);
-  after.sessions[0].messages = []; assert.equal(JSON.stringify(after), before); const observed = await w.observe(id);
+  const original = JSON.parse(before);
+  assert.equal(original.sessions[0].retirementUnused, true);
+  assert.equal(after.sessions[0].retirementUnused, undefined, 'Observed native work revokes unused-session retirement');
+  delete original.sessions[0].retirementUnused;
+  after.sessions[0].messages = [];
+  assert.deepEqual(after, original);
+  const observed = await w.observe(id);
   assert.equal(observed.progress.items.length, 2); assert.equal(observed.progress.items.at(-1).truncated, true);
   w.persist(); assert.ok(!fs.readFileSync(path.join(dir, 'workspace.json'), 'utf8').includes(body.text));
 });
