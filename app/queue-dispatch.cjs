@@ -1407,13 +1407,13 @@ function planDispatch(input) {
     if (!why.has(id)) why.set(id, reason);
   }
   // A session due for rotation that this pass leaves as it is, with the first gate that held it (input.rotationGates,
-  // filled when the caller passes a Map). Not one: a session being rotated, rotated by this pass, or handed off.
+  // filled when the caller passes a Map). Active rotations are excluded except an overdue joining phase.
   const gates = input.rotationGates instanceof Map ? input.rotationGates : null;
   // Sent items this pass leaves open because their member is not at rest (filled when the caller passes a Map).
   const openItems = input.openItems instanceof Map ? input.openItems : null;
   function stalled(id, gate) {
     const session = byId.get(id);
-    if (!gates || gates.has(id) || !gate || gate === 'rotating' || !session || session.archived ||
+    if (!gates || gates.has(id) || !gate || !session || session.archived ||
         session.state === 'ended' || session.wakeDisabled || input.wakePolicy?.enabled !== true) {
       return;
     }
@@ -1421,6 +1421,18 @@ function planDispatch(input) {
       return;
     }
     const prior = rotations[id], episode = session.rotationEpisode;
+    if (prior?.phase === 'joining') {
+      const since = prior.createdNewAt, successor = byId.get(prior.newId);
+      const detached = successor?.state === 'disconnected' && !successor.transportDisconnected &&
+        successor.activityUiMessage?.key === 'notice.activity.connectionDetached';
+      if (!validId(prior.newId) || !Number.isSafeInteger(since) || since <= 0 || now - since < ROTATION_STALL_MS ||
+          prior.withdrawn || prior.stopped || prior.handoffConfirmed ||
+          prior.oldNativeId && prior.oldNativeId !== session.nativeId ||
+          successor?.archived || successor?.state === 'ended' || detached) return;
+      gates.set(id, { gate: 'rotation-joining', reason: prior.reason || 'content', since, successorId: prior.newId });
+      return;
+    }
+    if (gate === 'rotating') return;
     // A writer's completed episode cannot still be this same failed attempt.
     if (prior?.phase === 'failed' && ['complete', 'released'].includes(episode?.state) &&
         validId(prior.oldNativeId) && validId(prior.episodeEpoch) && validId(prior.tag) &&
@@ -1451,6 +1463,7 @@ function planDispatch(input) {
     } else if (record && !RESTING_PHASES.includes(record.phase)) {
       if (record.phase !== 'waiting-provider') rotationSlots -= 1;
       hold(id, record.phase === 'waiting-provider' ? 'waiting-provider' : 'rotating');
+      if (record.phase === 'joining') stalled(id, 'rotating');
       if (record.newId && !record.handoffConfirmed) {
         hold(record.newId, 'rotating');
       }
@@ -4198,23 +4211,24 @@ class QueueDispatcher {
   }
 
   // Sessions a pass found due for rotation and left as they were (planDispatch rotationGates), an hour or more since
-  // this run first found each so: one line to the butler's record per stall and gate, again only when the gate
-  // changes (the person, 2026-11-23: 「而且以后咋办」). Only told: nothing here rotates or relaxes a gate.
+  // this run first found each so: one line per stall and gate. Joining uses the saved start of the attempt,
+  // so restarting the app does not restart the hour. Only told: nothing here rotates or relaxes a gate.
   noteRotationStalls(gates, sessions, now) {
     for (const id of [...this.stalls.keys()]) {
       if (!gates.has(id)) this.stalls.delete(id);
     }
-    for (const [id, { gate, reason }] of gates) {
+    for (const [id, { gate, reason, since: joiningSince, successorId }] of gates) {
       const nativeId = sessions.find(s => s.id === id)?.nativeId ?? null;
       let stall = this.stalls.get(id);
-      if (!stall || stall.nativeId !== nativeId) {
-        stall = { since: now, nativeId, told: new Set() };
+      if (!stall || stall.nativeId !== nativeId || stall.successorId !== successorId) {
+        stall = { since: now, successorId, nativeId, told: new Set() };
         this.stalls.set(id, stall);
       }
-      const key = `${reason}:${gate}`;
-      if (!this.rotationStalled || now - stall.since < ROTATION_STALL_MS || stall.told.has(key)) continue;
+      const since = joiningSince ?? stall.since;
+      const key = successorId === undefined ? `${reason}:${gate}` : gate;
+      if (!this.rotationStalled || now - since < ROTATION_STALL_MS || stall.told.has(key)) continue;
       try {
-        this.rotationStalled({ memberId: id, nativeId, reason, gate, since: stall.since });
+        this.rotationStalled({ memberId: id, nativeId, reason, gate, since, ...(successorId ? { successorId } : {}) });
         stall.told.add(key);
       } catch { /* Tried again on the next pass; nothing else waits on it. */ }
     }

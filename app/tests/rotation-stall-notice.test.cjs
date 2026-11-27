@@ -99,6 +99,86 @@ test('a normal rotation says nothing', async t => {
   assert.deepEqual(stalls(f), []);
 });
 
+test('R268.2: an unresolved joining rotation reports once per attempt after one hour', async t => {
+  const old = session('old', 'native-old', { provider: 'codex', state: 'working', roomIds: ['shared'], roomId: 'shared' });
+  let next = session('next', null, { provider: 'codex', state: 'starting', roomIds: ['shared'], roomId: 'shared',
+    terminalState: { alive: true } });
+  const f = setup(t, { sessions: [old, next], compactions: {}, steward: null });
+  const attempt = {
+    phase: 'joining', oldId: old.id, oldNativeId: old.nativeId, newId: next.id, name: old.name || old.id, newName: next.id,
+    provider: 'codex', view: 'terminal', reason: 'content', cwd: old.cwd, roomIds: ['shared'], createdNewAt: NOW,
+  };
+  f.d.rotations[old.id] = { ...attempt };
+  f.d.save();
+  const itemId = f.roomState.queueAdd('Synthetic task still held by the old session', old.id);
+  f.roomState.queueMarkSent('shared', itemId, old.id, 'Old', NOW, false, old.nativeId);
+  f.roomState.queueSetDelivery('shared', itemId, 'synthetic-sent-tag', 0);
+  const sent = structuredClone(f.roomState.queueFind('shared', itemId));
+  const at = async time => { f.clock.now = time; await f.d.schedule(); };
+  await at(NOW + HOUR - 1);
+  assert.deepEqual(stalls(f), []);
+  await at(NOW + HOUR);
+  assert.deepEqual(stalls(f), [{ kind: 'blocked', memberId: old.id, reason: 'rotation-stalled',
+    outcome: 'content:rotation-joining', title: new Date(NOW).toISOString() }]);
+  await at(NOW + 2 * HOUR);
+  f.d.close();
+  restart(t, f);
+  await at(NOW + 3 * HOUR);
+  assert.equal(stalls(f).length, 1);
+
+  next.nativeId = 'native-next';
+  next.state = 'idle';
+  await at(NOW + 3 * HOUR + 1);
+  assert.equal(f.d.rotations[old.id].phase, 'created');
+  assert.equal(f.d.lastGates.get(old.id)?.gate, undefined);
+
+  next = { ...next, id: 'later-successor', state: 'starting', nativeId: null };
+  f.sessions[1] = next;
+  f.d.rotations[old.id] = { ...attempt, newId: next.id, newName: next.id };
+  await at(NOW + HOUR);
+  assert.deepEqual(stalls(f).map(event => event.title), [new Date(NOW).toISOString(), new Date(NOW).toISOString()]);
+
+  f.d.rotations[old.id].createdNewAt = NOW + MINUTE;
+  const due = NOW + MINUTE + HOUR;
+  await at(due);
+  assert.equal(stalls(f).length, 2, 'a changed start time does not make this successor a new attempt');
+  f.d.save();
+  f.d.close();
+  restart(t, f);
+  await at(due);
+  assert.equal(stalls(f).length, 2, 'the same successor is still deduplicated after restart');
+
+  f.roomState.update({ archivedSessions: [next.id] });
+  await at(due + 1);
+  assert.equal(f.d.lastGates.has(old.id), false, 'putting the successor away clears the gate');
+  assert.equal(f.d.stalls.has(old.id), false);
+  f.roomState.update({ archivedSessions: [] });
+  await at(due + 2);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+  assert.equal(stalls(f).length, 2, 'the same attempt was already reported before it was archived');
+
+  next.state = 'disconnected';
+  next.activityUiMessage = { version: 1, key: 'notice.activity.connectionDetached' };
+  next.transportDisconnected = true;
+  await at(due + 3);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining', 'a broken transport does not prove the person handled it');
+  next.transportDisconnected = false;
+  await at(due + 4);
+  assert.equal(f.d.stalls.has(old.id), false, 'the confirmed detach clears the gate');
+  next.state = 'starting';
+  await at(due + 5);
+  assert.equal(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+
+  f.d.rotations[old.id].phase = 'failed';
+  f.d.rotations[old.id].failedAt = due;
+  await at(due + HOUR);
+  assert.notEqual(f.d.lastGates.get(old.id)?.gate, 'rotation-joining');
+  assert.equal(f.d.stalls.has(old.id), false);
+
+  assert.deepEqual(f.roomState.queueFind('shared', itemId), sent);
+  assert.deepEqual(f.sends, []);
+});
+
 test('the same stall seen on every pass and after a restart: one line; a new gate: one more', async t => {
   const f = setup(t, { sessions: [session(BUTLER.sessionId, BUTLER.nativeId, { liveDraft: 'x' })], compactions: { butler: 52 } });
   await run(f, 3 * HOUR);
