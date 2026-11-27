@@ -1777,7 +1777,10 @@ function historyRetirementCandidates(client, automatic = false) {
   for (const entry of client.entries) {
     if (entry === client.active || entry.closed || entry.closing || !canRetire(entry.state, client.active.state)) continue;
     if (automatic && (!entry.state.sessions.length || entry.state.sessions.some(session => session.state !== 'ended'))) continue;
-    const lock = require('./service-lock.cjs').readLock(path.join(dataDir, entry.key, 'service.lock'));
+    const { readLock } = require('./service-lock.cjs'), file = path.join(dataDir, entry.key, 'service.lock');
+    let lock;
+    try { lock = readLock(file); }
+    catch { continue; } // A backend without a verifiable lock cannot be retired.
     if (!lock?.started || lock.pid !== entry.state.servicePid) continue;
     candidates.push({ entry, pid: lock.pid, started: lock.started, sessions: entry.state.sessions.map(backendSwitch.maintenanceProof),
       guard: client.operationGuard(entry) });

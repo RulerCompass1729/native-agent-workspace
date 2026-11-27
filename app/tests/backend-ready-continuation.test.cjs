@@ -114,6 +114,7 @@ test('ready all-ended backends use guarded continuation under either automatic s
 });
 test('automatic maintenance releases an ended history backend and never prompts or stops a session', async () => {
   const f = fixture(), { old, active, scope, control, events } = f;
+  let unreadableLock = false;
   old.state.runtimeVersion = current;
   old.state.capabilities.push('conditionalMaintenanceStopV1');
   old.state.servicePid = 519;
@@ -124,6 +125,7 @@ test('automatic maintenance releases an ended history backend and never prompts 
       assert.equal(name, './service-lock.cjs');
       return { readLock: file => {
         assert.equal(file, require('node:path').join('synthetic-profile', 'old', 'service.lock'));
+        if (unreadableLock) throw Object.assign(Error('Synthetic lock read failure'), { code: 'EIO' });
         return { pid: 519, started: 'synthetic start' };
       } };
     },
@@ -139,6 +141,11 @@ test('automatic maintenance releases an ended history backend and never prompts 
   await scope.autoBackendSwitchOnce();
   assert.equal(events.includes('retire'), false);
   old.state.sessions.pop();
+  unreadableLock = true;
+  events.length = 0;
+  await scope.autoBackendSwitchOnce();
+  assert.deepEqual(events, ['refresh', 'nextMove']);
+  unreadableLock = false;
   events.length = 0;
   await scope.autoBackendSwitchOnce();
   assert.deepEqual(events, ['guard', 'maintain:old', 'retire', 'sockets:old', 'finish:old', 'broadcast']);
