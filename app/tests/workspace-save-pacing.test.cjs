@@ -53,7 +53,7 @@ test('a store over 1 MiB that keeps changing is checkpointed about once per MiB-
     w.changed();
     await sleep(50);
   }
-  assert.deepEqual(writes, ['A'], 'Within 3 s of writing 3 MiB no other checkpoint is written');
+  assert.deepEqual(writes, ['A'], 'For 1.5 s after writing 3 MiB no other checkpoint is written');
   w.drafts.set('mark', 'last');
   w.changed();
   for (let i = 0; i < 500 && disk() !== 'last'; i++) {

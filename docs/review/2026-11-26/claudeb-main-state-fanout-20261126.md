@@ -36,8 +36,10 @@
   on) plus the new file, `node scripts/test.cjs` on this version: 367 tests, 367 pass, 0 fail, 0 skipped.
 - A full suite (11,892 tests, all passing) ran on an earlier candidate of this lane that also held other changes;
   it is not counted for this version.
-- Isolated R50 harness, 36 members x 1200 rows (37 MB state), streamed conversation, on 1b41b200: daemon 1.39 s of
-  CPU before, 0.72 s after (11.49 % to 5.96 %); main and renderer unchanged; all 162 rows reached the page.
+- Isolated R50 harness, 36 members x 1200 rows (37 MB state), streamed conversation, main cb9a3907 against 1b41b200
+  (private run `s2-final`, 21:58 PT, after that commit; not rerun on the follow-up, which changes only how the
+  spacing is counted): daemon 1.39 s of CPU before, 0.72 s after (11.49 % to 5.96 %); main 9.6 % to 10.2 %,
+  renderer 57.7 % to 57.9 %; on both, the last of the 162 streamed rows was confirmed on the page.
 
 ## Review
 
