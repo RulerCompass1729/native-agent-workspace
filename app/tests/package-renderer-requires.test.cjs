@@ -17,3 +17,15 @@ test('every renderer module main-process code requires is packaged', () => {
   const missing = [...required].filter(name => !packaging.includes(`'${name}'`));
   assert.deepEqual(missing, []);
 });
+
+
+test('every local CommonJS dependency required by Main is in the production allowlist', () => {
+  const source = fs.readFileSync(path.join(app, 'main.cjs'), 'utf8');
+  const required = new Set([...source.matchAll(/require\(['"]\.\/([\w.-]+\.cjs)['"]\)/g)].map(match => match[1]));
+  const declaration = packaging.match(/const sources = (\[[\s\S]*?\n    \]);/);
+  assert.ok(declaration, 'The actual package source allowlist is readable');
+  const included = new Set(require('node:vm').runInNewContext(declaration[1]));
+  assert.ok(required.has('backend-switch.cjs'));
+  assert.ok(included.size > 100);
+  assert.deepEqual([...required].filter(name => !included.has(name)), []);
+});

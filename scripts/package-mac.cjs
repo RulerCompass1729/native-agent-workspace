@@ -255,6 +255,7 @@ async function build() {
       'service-transport.cjs',
       'session-labels.cjs',
       'session-model.cjs',
+      'session-retirement.cjs',
       'session-wake.cjs',
       'shared-replies.cjs',
       'shown-sessions.cjs',

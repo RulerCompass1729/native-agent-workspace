@@ -79,7 +79,7 @@ function compactionLine(line, provider, nativeId) {
 // The conversation after one Claude request: { tokens, at, ttlMs, cached }, or null for any other line. ttlMs is
 // the lifetime that request's cache write was billed at (one hour within the plan, five minutes beyond it), or
 // null when it wrote nothing. cached: whether it read or wrote the cache at all.
-function contextLine(line, nativeId) {
+function contextLine(line, nativeId, retirement) {
   let entry;
   try {
     entry = JSON.parse(line.toString('utf8'));
@@ -92,14 +92,20 @@ function contextLine(line, nativeId) {
   const parts = [usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens];
   const tokens = parts.reduce((sum, part) => sum + part, 0), at = Date.parse(entry.timestamp);
   if (!parts.every(part => Number.isSafeInteger(part) && part >= 0) || !tokens || !Number.isFinite(at)) return null;
-  const written = usage.cache_creation || {};
+  const written = usage.cache_creation || {}, cached = parts[1] + parts[2] > 0;
+  if (retirement) {
+    const hour = written.ephemeral_1h_input_tokens ?? 0, short = written.ephemeral_5m_input_tokens ?? 0;
+    const known = [hour, short].every(value => Number.isSafeInteger(value) && value >= 0) && hour + short === parts[1];
+    const ttlMs = hour > 0 ? 60 * 60 * 1000 : short > 0 ? 5 * 60 * 1000 : null;
+    return { tokens, at, ttlMs: known ? ttlMs : null, cached, unknownWrite: !known };
+  }
   const ttlMs = written.ephemeral_5m_input_tokens > 0 ? 5 * 60 * 1000 : written.ephemeral_1h_input_tokens > 0 ? 60 * 60 * 1000 : null;
-  return { tokens, at, ttlMs, cached: parts[1] + parts[2] > 0 };
+  return { tokens, at, ttlMs, cached };
 }
 
 // Reads on from state.offset; returns the bytes read. state: { dev, ino, offset, count, skipping, context, whole }.
 // whole: this read reached the end of the record. context is null from an unread line until a request after it.
-async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
+async function readOn(state, file, provider, nativeId, maxBytes, lineCap, retirement = false) {
   let handle;
   try {
     handle = await fs.promises.open(file, 'r');
@@ -111,7 +117,7 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
     if (!stat.isFile()) return -1;
     // Another file at the path, or one cut shorter: counted again from its start.
     if (state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.offset) {
-      Object.assign(state, { dev: stat.dev, ino: stat.ino, offset: 0, count: 0, skipping: false, context: null });
+      Object.assign(state, { dev: stat.dev, ino: stat.ino, offset: 0, count: 0, skipping: false, context: null, cacheUnknown: false, longestCache: null });
     }
     const length = Math.min(stat.size - state.offset, maxBytes);
     if (length <= 0) {
@@ -119,6 +125,9 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
       return 0;
     }
     const buffer = Buffer.allocUnsafe(length);
+    // The original retirement reader only parses lines with a cache usage marker.
+    const legacyRetirement = retirement && provider === 'claude' && !Object.hasOwn(state, 'retirementHasRequest');
+    if (legacyRetirement && state.offset === 0) state.retirementUnknown = false;
     let read = 0;
     while (read < length) {
       const { bytesRead } = await handle.read(buffer, read, length - read, state.offset + read);
@@ -138,41 +147,65 @@ async function readOn(state, file, provider, nativeId, maxBytes, lineCap) {
         // What was requested before a compaction is no longer the conversation's size.
         requests = [];
         state.context = null;
+        state.cacheUnknown = false; state.longestCache = null;
       } else if (provider === 'claude' && data.subarray(start, end).includes(CLAUDE_USAGE)) {
         requests.push([start, end]);
       }
       start = end + 1;
     }
-    // The last request, and the lifetime last written at, so usually one line is parsed however much was read. A
-    // request that neither read nor wrote the cache ends the search: no lifetime from before it still holds.
-    let latest = null, ttlMs;
-    for (const [from, to] of requests.reverse()) {
-      const request = contextLine(data.subarray(from, to), nativeId);
-      if (!request) continue;
-      latest ||= request;
-      if (request.ttlMs === null && request.cached) continue;
-      ttlMs = request.ttlMs;
-      break;
+    if (retirement) {
+      // Retiring loses the whole cache, including an earlier long-lived prefix.
+      for (const [from, to] of requests) {
+        const request = contextLine(data.subarray(from, to), nativeId, true);
+        if (!request) continue;
+        if (!request.cached) { state.cacheUnknown = false; state.longestCache = null; }
+        if (request.unknownWrite) state.cacheUnknown = true;
+        if (request.ttlMs) state.longestCache = Math.max(state.longestCache || 0, request.ttlMs);
+        state.context = { tokens: request.tokens, at: request.at, ttlMs: state.cacheUnknown ? null : state.longestCache ?? null };
+      }
+    } else {
+      // The last request, and the lifetime last written at, so usually one line is parsed however much was read. A
+      // request that neither read nor wrote the cache ends the search: no lifetime from before it still holds.
+      let latest = null, ttlMs;
+      for (const [from, to] of requests.reverse()) {
+        const request = contextLine(data.subarray(from, to), nativeId);
+        if (!request) continue;
+        latest ||= request;
+        if (request.ttlMs === null && request.cached) continue;
+        ttlMs = request.ttlMs;
+        break;
+      }
+      if (latest) state.context = { tokens: latest.tokens, at: latest.at, ttlMs: ttlMs === undefined ? state.context?.ttlMs ?? null : ttlMs };
     }
-    if (latest) state.context = { tokens: latest.tokens, at: latest.at, ttlMs: ttlMs === undefined ? state.context?.ttlMs ?? null : ttlMs };
     // The rest is a line still being written, read again next time; one longer than the cap is skipped.
     if (state.skipping || (start === 0 && data.length >= lineCap)) {
       state.skipping = true;
       start = data.length;
       // It may be a request or a compaction: neither the size nor the lifetime from before it is known to hold.
       state.context = null;
+      state.cacheUnknown = true; state.longestCache = null;
     }
     state.offset += start;
     state.whole = state.offset === stat.size;
+    if (legacyRetirement && !state.retirementUnknown &&
+        (state.skipping || hasMalformedRetirementLine(data.subarray(0, start)))) state.retirementUnknown = true;
     return read;
   } finally {
     await handle.close().catch(() => {});
   }
 }
 
+function hasMalformedRetirementLine(data) {
+  for (const line of data.toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { JSON.parse(line); } catch { return true; }
+  }
+  return false;
+}
+
 function publish(id, state, counts, contexts) {
   if (state.dev !== null) counts.set(id, state.count);
-  if (state.context && state.whole) contexts.set(id, state.context);
+  if (state.context && state.whole && !state.retirementUnknown) contexts.set(id, state.context);
 }
 
 class CompactionCounter {
@@ -184,6 +217,7 @@ class CompactionCounter {
     this.readBytes = options.readBytes ?? READ_BYTES;
     this.lineCap = options.lineCap ?? LINE_CAP_BYTES;
     this.sampleMs = options.sampleMs ?? SAMPLE_MS;
+    this.retirement = options.retirement === true;
     this.missingRetryMs = options.missingRetryMs ?? MISSING_RETRY_MS;
     this.states = new Map();
     // Session id -> { tokens, at, ttlMs } after its last request, Claude only; renewed by each sample. Only of a
@@ -245,7 +279,7 @@ class CompactionCounter {
     }
     state.whole = false;
     if (maxBytes <= 0) return { state, read: 0 };
-    const read = await readOn(state, file, session.provider, session.nativeId, maxBytes, this.lineCap);
+    const read = await readOn(state, file, session.provider, session.nativeId, maxBytes, this.lineCap, this.retirement);
     if (read < 0) {
       this.states.delete(session.id);
       // A rollout found but not readable is looked for again only after the same wait as one not found.

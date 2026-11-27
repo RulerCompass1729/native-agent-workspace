@@ -1478,7 +1478,7 @@ async function openWindow(saved) {
     win.setMinimumSize(Math.min(850, view.bounds.width), Math.min(600, view.bounds.height));
     win.setBounds(view.bounds);
   }
-  const context = { win, client, view, failed: false, uiReady: false };
+  const context = { win, client, view, failed: false, uiReady: false, viewedSession: id => automaticSessionRetirement?.protect(id) };
   windows.set(win.webContents.id, context); bindClient(context); bindStatePush(context);
   // The page first reads the whole state, which the backend may take 40 s to answer (service-connection.cjs).
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.notReady = reject; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 90000); });
@@ -1800,17 +1800,29 @@ function reconnectClosed(context, client) {
   });
   return reconnector(context, client);
 }
-async function retireHistoryBackends(c) {
-  if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
-  const client = c.client, candidates = [];
+function historyRetirementCandidates(client, automatic = false) {
+  const candidates = [];
+  let lockReadFailures = 0;
   for (const entry of client.entries) {
     if (entry === client.active || entry.closed || entry.closing || !canRetire(entry.state, client.active.state)) continue;
-    const lock = require('./service-lock.cjs').readLock(path.join(dataDir, entry.key, 'service.lock'));
+    if (automatic && (!entry.state.sessions.length || entry.state.sessions.some(session => session.state !== 'ended'))) continue;
+    const { readLock } = require('./service-lock.cjs'), file = path.join(dataDir, entry.key, 'service.lock');
+    let lock;
+    try { lock = readLock(file); }
+    catch {
+      lockReadFailures++;
+      continue;
+    }
     if (!lock?.started || lock.pid !== entry.state.servicePid) continue;
     candidates.push({ entry, pid: lock.pid, started: lock.started, sessions: entry.state.sessions.map(backendSwitch.maintenanceProof),
       guard: client.operationGuard(entry) });
   }
-  if (!candidates.length) return { retired: 0, skipped: 0 };
+  return { candidates, lockReadFailures };
+}
+async function retireHistoryBackends(c) {
+  if (c.background || !isCurrentHumanContext(c) || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  const client = c.client, { candidates, lockReadFailures } = historyRetirementCandidates(client);
+  if (!candidates.length) return { retired: 0, skipped: lockReadFailures };
   const answer = await showDialog(c, 'message', {
     type: 'question', message: displayText('os.retireHistoryTitle', { count: candidates.length }),
     detail: [displayText('os.retireHistoryDetail'), ...candidates.map(({ entry, pid }) =>
@@ -1819,6 +1831,10 @@ async function retireHistoryBackends(c) {
   });
   if (answer.response !== 1) return null;
   if (!isCurrentHumanContext(c) || c.client !== client || client.closing || backendSwitching) throw uiError('error.main.historyRetireUnavailable');
+  const { retired, skipped } = await runHistoryRetirements(client, candidates);
+  return { retired, skipped: skipped + lockReadFailures };
+}
+async function runHistoryRetirements(client, candidates) {
   let retired = 0, skipped = 0;
   backendSwitching = candidates[0].entry.key;
   try {
@@ -1847,6 +1863,7 @@ async function retireHistoryBackends(c) {
 
 let backendSwitching = null, switchRecords = {};
 const autoSwitchFailed = new Set();
+let lastAutomaticHistoryCandidate = null;
 // Sessions a move ended (or left disconnected or in error) that are still not live with the same native
 // identity; reconnected or archived ones drop out.
 const notReconnected = (sessions, value) => sessions.some(s => s.id === value.id && s.nativeId === value.nativeId && !s.archived && !['idle', 'working', 'approval', 'starting'].includes(s.state));
@@ -1977,6 +1994,37 @@ function passQuietWindows(input) {
 function quietWindowMoved(key, code) {
   try { quietWindows?.moved(key, code); } catch { /* Readers stop at its deadline. */ }
 }
+let automaticSessionRetirement;
+const openingSessionViews = new Map();
+function retirementProtectedIds(snapshot) {
+  if (quitting || backendSwitching || viewStorageWarning || !queueDispatcher || !backgroundControl || backgroundControl.failed ||
+      !spaceManagers || !stewardRole || !integratorRole || !butlerRole || mobileBroker?.openUntil()) return null;
+  const { viewProtects } = require('./session-retirement.cjs');
+  const ids = new Set(openingSessionViews.keys());
+  for (const designation of [stewardRole.current(), integratorRole.current(), butlerRole.current()?.identity, queueSecretary?.current()]) {
+    if (designation?.sessionId) ids.add(designation.sessionId);
+  }
+  for (const [, manager] of spaceManagers.all()) ids.add(manager.sessionId);
+  for (const [oldId, rotation] of Object.entries(queueDispatcher.rotations)) {
+    ids.add(oldId);
+    if (rotation.newId) ids.add(rotation.newId);
+  }
+  for (const id of modelChanges().ids()) ids.add(id);
+  const contexts = [...windows.values()];
+  for (const session of snapshot.sessions) {
+    if (viewProtects(session.id, views, contexts) || backgroundControl.holdsSessionWork(session.id)) ids.add(session.id);
+  }
+  return ids;
+}
+async function retireIdleSession(c) {
+  if (!isCurrentHumanContext(c)) return;
+  const { SessionRetirement } = require('./session-retirement.cjs');
+  const { CompactionCounter } = require('./compaction-count.cjs');
+  automaticSessionRetirement ||= new SessionRetirement({ room: roomState, protectedIds: retirementProtectedIds,
+    rotations: () => queueDispatcher.log, counter: new CompactionCounter({ sampleMs: 0, retirement: true }),
+    log: event => createEventLog(path.join(dataDir, 'session-retirement-events.json')).add(event) });
+  if (await automaticSessionRetirement.pass(c.client, app.getVersion())) await broadcastRoom();
+}
 async function autoBackendSwitchOnce() {
   const settings = backendSwitch.readSettings(dataDir);
   // The person turned migration off: an open window closes now.
@@ -1984,6 +2032,12 @@ async function autoBackendSwitchOnce() {
   if (quitting || backendSwitching || !(settings.auto || settings.migrate)) return;
   const c = [...windows.values()].find(context => !context.background && !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
   if (!c) return;
+  const { candidates: histories } = historyRetirementCandidates(c.client, true);
+  const nextHistory = histories[histories.findIndex(target => target.entry.key === lastAutomaticHistoryCandidate) + 1] || histories[0];
+  if (nextHistory) {
+    lastAutomaticHistoryCandidate = nextHistory.entry.key;
+    if ((await runHistoryRetirements(c.client, [nextHistory])).retired) return;
+  }
   await c.client.refresh();
   const sessions = roomState.apply(c.client.snapshot()).sessions;
   let humanAt = new Map();
@@ -2009,7 +2063,7 @@ async function autoBackendSwitchOnce() {
     return;
   }
   const option = queueRules.nextBackendMove(options, settings, sessions, humanAt, Date.now(), autoSwitchFailed, migrateQuietMs(), migrateUnprovenQuietMs());
-  if (!option) return;
+  if (!option) { await retireIdleSession(c); return; }
   // A move made under the person's migration setting rather than proven automatic updates.
   const viaMigration = !(settings.auto && option.switch.auto);
   let notice;
@@ -3288,6 +3342,7 @@ async function boot() {
     if (c.background || !validShown(ids)) throw uiError("error.main.invalidViewState");
     const report = reportShown(c.shown, ids, () => displayState(c.client.snapshot(), c, null, true));
     c.shown = report.shown;
+    for (const id of ids) c.viewedSession?.(id);
     return { messages: report.messages };
   });
   // Search reads every session's messages, which the page no longer holds (local-search.js, same rules).
@@ -3366,6 +3421,7 @@ async function boot() {
     // Retained UI rollback must still see only the original shared draft.
     if (next.roomViews) for (const key of ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo']) next[key] = next.roomViews.shared?.[key] ?? (key === 'roomMention' ? null : '');
     const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);
+    c.viewedSession?.(next.selected);
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
     if (next.terminalLayout !== undefined) c.view.terminalLayout = next.terminalLayout;
     if (next.terminalSplit !== undefined) c.view.terminalSplit = next.terminalSplit;
@@ -3416,7 +3472,25 @@ async function boot() {
     c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
     return result.filePaths[0];
   });
-  register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound"); if (c.background) return backgroundControl.newView(c.actor, id, c.view.mode); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
+  register('newWindow', async (c, id) => {
+    const opening = !c.background && typeof id === 'string' && id;
+    if (opening) {
+      automaticSessionRetirement?.protect(id);
+      openingSessionViews.set(id, (openingSessionViews.get(id) || 0) + 1);
+    }
+    try {
+      const snapshot = await c.client.call('initial');
+      if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound");
+      if (c.background) return backgroundControl.newView(c.actor, id, c.view.mode);
+      await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true });
+    } finally {
+      if (opening) {
+        const remaining = openingSessionViews.get(id) - 1;
+        if (remaining) openingSessionViews.set(id, remaining);
+        else openingSessionViews.delete(id);
+      }
+    }
+  });
   register('copy', (c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); if (c.background) { c.clipboardText = text; c.clipboardImage = null; c.clipboardRevision = randomUUID(); return; } return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.
   register('pasteText', async c => { const text = c.background ? c.clipboardText || '' : await clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return text; });

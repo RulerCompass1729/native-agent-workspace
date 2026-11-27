@@ -554,3 +554,43 @@ test('a failed read leaves no size behind', async t => {
   await assert.rejects(counter.recheck(claude(), AT + 1000), /EIO/);
   assert.equal(counter.contexts.has('s1'), false);
 });
+
+test('retirement waits for the longer known cache and preserves an unknown write', async t => {
+  const r = roots(t);
+  const counter = new counting.CompactionCounter({ claudeRoot: r.claudeRoot, codexRoot: r.codexRoot, sampleMs: 0, retirement: true });
+  fs.writeFileSync(r.claudeFile, [claudeUsage({ write1h: 100, write5m: 1 }), claudeUsage({ read: 100, write5m: 1 }), ''].join('\n'));
+  await counter.sample([claude()], AT);
+  assert.equal(counter.contexts.get('s1').ttlMs, 60 * 60000);
+  const unknown = JSON.parse(claudeUsage({ write5m: 10 }));
+  delete unknown.message.usage.cache_creation;
+  fs.appendFileSync(r.claudeFile, JSON.stringify(unknown) + '\n');
+  await counter.recheck(claude(), AT + 1);
+  assert.equal(counter.contexts.get('s1').ttlMs, null);
+});
+
+test('an unverifiable transcript withholds the retirement context on sample and recheck', async t => {
+  const { claudeRoot, codexRoot, claudeFile } = roots(t);
+  const options = { claudeRoot, codexRoot, sampleMs: 0 };
+  const retirement = new counting.CompactionCounter({ ...options, retirement: true });
+  const ordinary = new counting.CompactionCounter(options);
+  const hour = claudeUsage({ write1h: 100 });
+  fs.writeFileSync(claudeFile, hour + '\n');
+  await retirement.sample([claude()], AT);
+  assert.equal(retirement.contexts.get('s1').ttlMs, 60 * 60000);
+
+  fs.appendFileSync(claudeFile, '{"type":"assistant",}\n');
+  await retirement.recheck(claude(), AT + 1);
+  assert.equal(retirement.contexts.has('s1'), false);
+  await ordinary.sample([claude()], AT + 1);
+  assert.equal(ordinary.contexts.get('s1').ttlMs, 60 * 60000);
+
+  fs.appendFileSync(claudeFile, hour + '\n');
+  await retirement.sample([claude()], AT + 2);
+  assert.equal(retirement.contexts.has('s1'), false, 'a later request cannot validate the missing history');
+
+  const replacement = claudeFile + '.replacement';
+  fs.writeFileSync(replacement, hour + '\n');
+  fs.renameSync(replacement, claudeFile);
+  await retirement.recheck(claude(), AT + 3);
+  assert.equal(retirement.contexts.get('s1').ttlMs, 60 * 60000);
+});

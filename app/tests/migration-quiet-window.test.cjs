@@ -344,6 +344,8 @@ function wired(t) {
     migrateQuietMs: () => rules.MIGRATE_QUIET_MS, migrateUnprovenQuietMs: () => rules.MIGRATE_UNPROVEN_QUIET_MS, sendToPage() {},
     async runBackendSwitch(c, chosen) { f.switched.push(chosen.backendKey); if (f.fail) throw Error('synthetic move failure'); return { resumed: [], left: [] }; },
     recordMigration() {}, recordMigrationFailure() {} });
+  f.scope.historyRetirementCandidates = () => ({ candidates: [] });
+  f.scope.retireIdleSession = async () => {};
   for (const name of ['connectionUpdateOptions', 'autoBackendSwitchOnce', 'passQuietWindows', 'quietWindowMoved']) {
     const node = declared(name);
     if (node) vm.runInContext(main.slice(node.start, node.end), f.scope);
