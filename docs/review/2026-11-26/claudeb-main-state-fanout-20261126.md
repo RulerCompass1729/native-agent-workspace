@@ -38,7 +38,8 @@
   it is not counted for this version.
 - Isolated R50 harness, 36 members x 1200 rows (37 MB state), streamed conversation, main cb9a3907 against 1b41b200
   (private run `s2-final`, 21:58 PT, after that commit; not rerun on the follow-up, which changes only how the
-  spacing is counted): daemon 1.39 s of CPU before, 0.72 s after (11.49 % to 5.96 %); main 9.6 % to 10.2 %,
+  spacing is counted): daemon 1.39 s of CPU before, 0.72 s after (end minus start of `daemon.seconds` in each
+  run log; 11.49 % to 5.96 %); main 9.6 % to 10.2 %,
   renderer 57.7 % to 57.9 %; on both, the last of the 162 streamed rows was confirmed on the page.
 
 ## Review
@@ -47,6 +48,9 @@
   from its non-blocking suggestions: byte length, monotonic clock, the trade-off wording above, a byte-counting
   test, and more slack in the timing tests (3 MiB stores). Not adopted: a test of the 15 s cap, which needs a
   store over 15 MiB and a wait over 15 s; add it when someone changes `SAVE_PACED_MAX_MS`.
+- Same reviewer on b49a58e6: PASS for the code and tests; one record finding, the harness figures did not name the
+  run they came from (fixed in d4941c55). On d4941c55: PASS; the daemon CPU seconds were not found as literal values,
+  since they are differences, now stated above.
 
 ## Not in this lane
 
