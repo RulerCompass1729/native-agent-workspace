@@ -37,7 +37,7 @@ test('projection never reads conversation bodies or queue replies', () => {
 test('the real renderer intake only passes task-board fields and a waiting flag', () => {
   const fs = require('node:fs'), vm = require('node:vm');
   const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
-  const start = source.indexOf('function updateTaskBoard() {'), end = source.indexOf('\nconst spaceCall', start);
+  const start = source.indexOf('function updateTaskBoard('), end = source.indexOf('\nconst spaceCall', start);
   assert.ok(start >= 0 && end > start);
   const wait = [null]; Object.defineProperty(wait, 0, { get() { throw Error('Wait body access forbidden'); } });
   const q = task('sent', 'safe', { sentTo: 'actual', assignee: 'requested', reason: '', finishedAt: now, wait, unused: 'NOT_FOR_TASK_BOARD' });

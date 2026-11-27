@@ -20,6 +20,11 @@ test('archive cards of one agent with no risk mark become one batch, oldest firs
   assert.deepEqual(find(batches, cards[0].key), { batch: batches[0], anchor: true });
   assert.equal(find(batches, cards[2].key).anchor, false);
 });
+test('an elapsed card releases the batch anchor while started batches retain their receipt rows', () => {
+  const a = card('a', { expiresAt: 100 }), b = card('b', { expiresAt: 200 }), c = card('c', { expiresAt: 300 });
+  assert.deepEqual(keys(plan([a, b, c], [], 100)), [['b', 'c']]);
+  assert.deepEqual(keys(plan([a, b, c], [{ key: 'started', keys: [a.key, b.key, c.key] }], 100)), [['a', 'b', 'c']]);
+});
 test('cards are not merged across risk, method, agent, replacement, repetition, an answer already given or a single card', () => {
   const risky = card('r', { summary: { action: 'archiveSession', method: 'archiveSession', risks: ['shared'] } });
   const other = card('o', { summary: { action: 'deleteSession', method: 'deleteSession', risks: [] } });

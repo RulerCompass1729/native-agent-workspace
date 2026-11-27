@@ -442,3 +442,40 @@ test('a waiting item without its own title names its kind once, as the title', (
   assert.equal(row.querySelector('.task-board-sub').textContent, ''); assert.equal(row.querySelector('.task-board-sub').hidden, true);
   f.board.dispose();
 });
+
+
+test('the fixed confirmation trigger opens the earliest live card and leaves other waits on the board badge', () => {
+  const f = setup(), later = card(f, 100), earliest = card(f, 20, { id: 'first', title: 'First to expire' });
+  earliest.card = { ...earliest.card, key: earliest.id, operationId: 'first' };
+  f.input.language = 'zh';
+  const unknown = { ...earliest.card, key: 'checking', operationId: 'checking', expiresAt: f.now() + 120000,
+    state: 'unverifiable', actionable: false, safeSummary: { titles: { zh: '归档会话' }, detail: 'Synthetic target' } };
+  f.board.update({ ...f.input, confirmations: [later.card, earliest.card].map(value => ({
+    ...value, state: 'confirmation-required', actionable: true,
+  })).concat(unknown) }, [later, earliest]);
+  f.board.tick();
+  const trigger = f.host.querySelector('.task-confirmation-entry'), need = f.button.querySelector('.task-status-need');
+  assert.equal(trigger.textContent, '待确认 2');
+  assert.equal(need.textContent, '1 件等你');
+  trigger.fire('click');
+  assert.equal(f.entry(earliest.id).getAttribute('aria-expanded'), 'true');
+  assert.equal(f.entry(later.id).getAttribute('aria-expanded'), 'false');
+  assert.equal(f.entry('checking').textContent, '归档会话 · Synthetic target');
+  assert.equal(f.groups().find(g => g.key === 'waiting').rows.length, 3);
+  assert.deepEqual(f.calls, []);
+  f.key('Escape');
+  assert.equal(f.doc.activeElement, trigger);
+
+  f.advance(20000);
+  assert.equal(trigger.textContent, '待确认 1');
+  trigger.fire('click');
+  assert.equal(f.entry(later.id).getAttribute('aria-expanded'), 'true');
+  f.advance(80000);
+  assert.equal(trigger.textContent, '确认卡 · 待核验');
+  assert.equal(f.entry(later.id), undefined);
+  trigger.fire('click');
+  assert.equal(f.entry('checking').getAttribute('aria-expanded'), 'true');
+  assert.equal(f.entry('checking').textContent, '归档会话 · Synthetic target');
+  assert.deepEqual(f.calls, []);
+  f.board.dispose();
+});

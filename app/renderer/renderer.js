@@ -229,7 +229,12 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const taskBoard = window.nativeWorkspaceTaskBoard.bind({ host: $('task-board'), document, text: uiText, onQueue: id => openQueue(id), onSession: (id, nativeId) => attempt(async () => { const record = state?.sessions.find(s => s.id === id && !s.archived && (!nativeId || s.nativeId === nativeId)); if (!record) { toastMessage('toast.originalRemoved'); return; } await select(id, 'chat'); }), onConfirmation: request => attempt(async () => { if (await showBackgroundConfirmation(request) === false) toastMessage('records.confirmations.unavailable'); }),
-  onOriginal: target => attempt(() => openOriginal(target)), onWaiting: renderBoardWaiting });
+  onOriginal: target => attempt(() => openOriginal(target)), onWaiting: renderBoardWaiting,
+  onConfirmationRefresh: () => getActivityStream()?.render(), confirmationTarget: key => {
+    const card = state?.backgroundConfirmations?.find(card => card.key === key);
+    const role = confirmationBatchRole(card?.message?.backgroundOperation);
+    return role && !role.open ? globalThis.nativeWorkspaceConfirmationBatch.holder(role.batch).key : key;
+  } });
 // A waiting row the board opens in place (R250 A): the conversation's own card, answer form or creation card.
 function renderBoardWaiting(slot, item) {
   if (item.kind === 'operator-creation') renderOperatorCreation(slot.entry, item.message, { inbox: true });
@@ -282,7 +287,7 @@ async function openGrants(id) {
   updateState(await api.initial()); render();
   setupGrantRows.get(id)?.quotaHeading?.focus();
 }
-function updateTaskBoard() {
+function updateTaskBoard(items, language) {
   if (!state) return;
   taskBoard.update({ rooms: allSpaces().map(r => ({ id: r.id, name: spaceName(r), archived: r.archived, unavailable: r.unavailable,
     queue: Array.isArray(r.queue) ? r.queue.filter(q => q && typeof q.id === 'string').map(q => ({ id: q.id, status: q.status, text: q.text,
@@ -290,9 +295,10 @@ function updateTaskBoard() {
       ready: typeof q.ready?.commit === 'string' ? { commit: q.ready.commit } : null,
       reason: q.reason, sentTo: q.sentTo, assignee: q.assignee, finishedAt: q.finishedAt, waiting: Array.isArray(q.wait) && q.wait.length > 0 })) : undefined })),
     // The board lists tasks, not live session state (R250): names and whether a session has ended.
-    sessions: state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, archived: s.archived })), confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
-      state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition })),
-    confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId });
+    sessions: state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, name: s.name, state: s.state, archived: s.archived })),
+    confirmations: state.backgroundConfirmations?.map(c => ({ key: c.key, id: c.id, sessionId: c.sessionId, nativeId: c.nativeId, operationId: c.operationId,
+      state: c.state, actionable: c.actionable, expiresAt: c.expiresAt, replacedBy: Boolean(c.replacedBy), disposition: c.disposition, safeSummary: c.safeSummary })), language,
+    confirmationsAvailable: state.backgroundConfirmationsAvailable, connected: !disconnected, activeSpace: spaceId }, items);
 }
 // The tool a session is running now, in words, for the board and the session header (11-24).
 function runningStepView(s) {
@@ -3140,7 +3146,7 @@ function confirmationBatchRole(op) {
       reconcileConfirmationBatch(started, cards); started.observed = cards;
     }
   }
-  const role = batch.find(batch.plan(cards.filter(card => !confirmationCardAnswers.has(card.key)), [...confirmationBatchStarted.values()]), [op.sessionId, op.nativeId, op.id].join(':'));
+  const role = batch.find(batch.plan(cards.filter(card => !confirmationCardAnswers.has(card.key)), [...confirmationBatchStarted.values()], Date.now()), [op.sessionId, op.nativeId, op.id].join(':'));
   return role && { ...role, open: !role.batch.started && confirmationBatchOpen.has(role.batch.key) };
 }
 function confirmationBatchTitle(op) {
@@ -5042,7 +5048,7 @@ function renderInterfaceLanguage() {
   entry.querySelector('.rail-label').textContent = uiText('common.settings');
   entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
   activityStream?.render();
-  updateTaskBoard(); updateAgentDistribution();
+  updateAgentDistribution();
 }
 async function changeInterfaceLanguage(value) {
   if (changingLanguage) { renderInterfaceLanguage(); return; }
@@ -5197,7 +5203,9 @@ function getActivityStream() {
     isMember: (session, id) => Boolean(session && inSpace(session, id)), inRoom: () => selected === 'room',
     text: uiText, displayText: (text, notice) => ui.displayText(text, notice), label: roomMessageLabel,
     language: () => ui.language.getSnapshot().active, connected: () => !disconnected, attempt,
-    waitingChanged: items => taskBoard.setWaiting(items), cardHidden: confirmationCardHidden,
+    waitingChanged: items => updateTaskBoard(items, ui.language.getSnapshot().active),
+    cardHidden: card => backgroundExecutionUnavailable() || !Number.isSafeInteger(card.expiresAt) || card.expiresAt <= Date.now() ||
+      card.disposition || card.state !== 'confirmation-required' || confirmationCardHidden(card),
     cardTitle: message => confirmationBatchTitle(message.backgroundOperation) || (message.backgroundOperation?.summary ? backgroundSummaryText(message.backgroundOperation.summary, true) : ''),
     toggleChanged: () => requestAnimationFrame(refreshColumnTerminalHeights),
     original: openOriginal, showStream: () => showRoomSurface('stream'),
@@ -6319,7 +6327,7 @@ function render() {
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderResumeAll(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceRail(); renderSpaceFiles(); renderQueue(); noteHandoffState();
-    updateTaskBoard(); renderSetupGrants(); updateAgentDistribution();
+    renderSetupGrants(); updateAgentDistribution();
     if ($('session-chain-dialog').open) renderSessionChain();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
