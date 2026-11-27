@@ -1215,7 +1215,8 @@ function renderRoomOverview() {
   const focused = focusedRoomMember(), grid = roomSurface === 'overview' && !focused;
   $('collaboration-overview').hidden = !grid && !focused;
   for (const person of members()) readLegacyProgress(person);
-  roomOverview.update(orderedMembers(), !disconnected, grid, focused ? roomSession : '');
+  const people = orderedMembers();
+  roomOverview.update(people, !disconnected, grid, focused ? roomSession : '', listedSpaceManager(spaceId, people));
   renderHeaderLayout(current(), selected === 'room');
   markRoomTabs();
   $('room-record').setAttribute('aria-pressed', 'false');

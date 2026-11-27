@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const locale = require('../ui-locale.js');
 
 const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
 const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
@@ -23,7 +24,11 @@ function room() {
   vm.runInContext(slice('function orderedMembers(', '// R248:') +
     slice('async function moveRoomMember(', 'function draggableSession('), context);
   const ordered = id => Array.from(context.orderedMembers(id), row => row.id);
-  return { state, ordered, stored, moves, move: (...args) => context.moveRoomMember(...args) };
+  return {
+    state, ordered, stored, moves,
+    listedManager: () => context.listedSpaceManager('shared', workers),
+    move: (...args) => context.moveRoomMember(...args),
+  };
 }
 
 test('the current manager leads each member list without changing the stored order', () => {
@@ -46,4 +51,26 @@ test('visual moves leave the manager pinned and reorder only the ordinary rows',
   assert.deepEqual(f.moves, []);
   await f.move('first', 'manager', false);
   assert.deepEqual(f.moves, [['shared', 'memberOrder', [{ id: 'first', target: 'second', after: false }]]]);
+});
+
+test('parallel columns do not announce a move across the pinned manager', async () => {
+  const f = room(), records = f.ordered().map(id => workers.find(worker => worker.id === id));
+  const source = fs.readFileSync(require.resolve('../renderer/collaboration-overview.js'), 'utf8');
+  const order = source.slice(source.indexOf('    const canOrder ='), source.indexOf('    const toolbar ='));
+  const keys = source.slice(source.indexOf("      name.addEventListener('keydown'"), source.indexOf('      const acceptsOrder ='));
+  const announcements = [];
+  for (const [record, key] of [[records[0], 'ArrowDown'], [records[1], 'ArrowUp']]) {
+    const name = new EventTarget(), status = { setAttribute() {}, text: '' };
+    vm.runInNewContext(order + keys, {
+      name, record, records, pinnedMemberId: f.listedManager(),
+      options: { onMove: f.move, label: row => row.name }, connected: true, contentVisible: true, focused: '',
+      host: new EventTarget(), el: () => status, requestAnimationFrame: callback => callback(),
+      display: { text: (node, key, params) => { node.text = locale.format('zh', key, params); } },
+    });
+    name.dispatchEvent(Object.assign(new Event('keydown'), { altKey: true, key }));
+    await new Promise(resolve => setImmediate(resolve));
+    announcements.push(status.text);
+  }
+  assert.deepEqual(f.moves, []);
+  assert.deepEqual(announcements, ['', '顺序未更改。']);
 });

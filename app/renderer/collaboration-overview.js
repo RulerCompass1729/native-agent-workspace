@@ -111,7 +111,9 @@
     const roomKey = options.roomId || 'shared';
     let capacity = 1, visibleLimit = 0, visibleRows = 1, chipsExpanded = false, progressive = false;
     const orderType = 'application/x-native-room-member-order';
+    let pinnedMemberId;
     const canOrder = () => Boolean(options.onMove && connected && contentVisible && !focused);
+    const canMoveMember = id => canOrder() && id !== pinnedMemberId;
     const orderStatus = el('span', undefined, 'collaboration-order-status'); orderStatus.setAttribute('role', 'status');
     const clearOrderMarkers = () => {
       for (const pane of panes.values()) for (const marker of [pane.header, pane.unit]) {
@@ -121,7 +123,7 @@
     host.addEventListener('dragend', clearOrderMarkers);
     host.addEventListener('keydown', event => { if (event.key === 'Escape') clearOrderMarkers(); });
     async function moveMember(id, target, after) {
-      if (!canOrder() || id === target) return;
+      if (!canMoveMember(id) || id === target) return;
       options.beforeInputLayout?.(); options.beforeLayout?.();
       try {
         await options.onMove(id, target, after);
@@ -399,12 +401,14 @@
       // Reuse the application's existing member-drag contract on the handle,
       // leaving the conversation itself available for ordinary text selection.
       options.decorateHeader?.(name, record);
-      name.addEventListener('dragstart', event => { if (canOrder()) event.dataTransfer.setData(orderType, record.id); });
+      name.addEventListener('dragstart', event => { if (canMoveMember(record.id)) event.dataTransfer.setData(orderType, record.id); });
       name.addEventListener('keydown', event => {
-        if (!canOrder() || event.isComposing || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        if (!canMoveMember(record.id) || event.isComposing || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
         event.preventDefault(); event.stopPropagation();
         const index = records.findIndex(s => s.id === record.id), next = records[index + (event.key === 'ArrowUp' ? -1 : 1)];
-        if (next) moveMember(record.id, next.id, event.key === 'ArrowDown');
+        if (!next) return;
+        if (next.id === pinnedMemberId) display.text(orderStatus, 'collab.orderUnchanged');
+        else moveMember(record.id, next.id, event.key === 'ArrowDown');
       });
       const acceptsOrder = event => canOrder() && event.dataTransfer.types.includes(orderType);
       const after = event => {
@@ -548,12 +552,13 @@
           pane.chip.title = label; display.attribute(pane.chip, 'aria-label', 'collab.focus', { name: label });
           if (headers.children[i] !== pane.chip) headers.insertBefore(pane.chip, headers.children[i] || null);
         } else pane.chip.remove();
-        pane.name.dataset.orderHandle = String(canOrder());
-        display.computed(pane.name, 'title', () => fullLabel + (canOrder() ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
+        const reorderable = canMoveMember(record.id);
+        pane.name.dataset.orderHandle = String(reorderable);
+        display.computed(pane.name, 'title', () => fullLabel + (reorderable ? ` · ${locale.format(language(), 'collab.orderHelp')}` : ''));
         display.attribute(pane.name, 'aria-label', 'collab.focus', { name: fullLabel }); pane.name.setAttribute('aria-pressed', String(focused === record.id));
         if (options.onMove) {
-          display.attribute(pane.name, 'aria-description', 'collab.orderPosition', () => ({ index: i + 1, count: records.length, help: canOrder() ? locale.format(language(), 'collab.orderHelp') : '' }));
-          if (canOrder()) pane.name.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
+          display.attribute(pane.name, 'aria-description', 'collab.orderPosition', () => ({ index: i + 1, count: records.length, help: reorderable ? locale.format(language(), 'collab.orderHelp') : '' }));
+          if (reorderable) pane.name.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
           else pane.name.removeAttribute('aria-keyshortcuts');
         }
         pane.more.hidden = !options.onMemberMenu;
@@ -599,11 +604,11 @@
       if (selected?.anchor.isConnected && selected.focus.isConnected) selection.setBaseAndExtent(selected.anchor, selected.start, selected.focus, selected.end);
     }
     return {
-      update(people, isConnected = true, showContent = true, focusId = focused) {
+      update(people, isConnected = true, showContent = true, focusId = focused, pinnedId) {
         const membershipChanged = records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n');
         if (!isConnected || !showContent || focusId !== focused || membershipChanged) cancelColumnSnap();
         if (!isConnected || membershipChanged) { options.beforeInputLayout?.(); dragging = null; clearOrderMarkers(); }
-        records = people; connected = isConnected; contentVisible = showContent;
+        records = people; connected = isConnected; contentVisible = showContent; pinnedMemberId = pinnedId;
         if (!focusId || records.some(r => r.id === focusId)) { if (focusId !== focused) originSelection = null; focused = focusId; }
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }
         render();
