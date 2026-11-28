@@ -952,9 +952,13 @@ function ensureMessages(ids) {
 }
 function orderedMembers(id = spaceId) {
   const people = members(id), ranks = new Map((spaceRecord(id)?.memberOrder || []).map((id, index) => [id, index]));
-  const fallback = ranks.size;
-  return people.map((record, index) => ({ record, rank: ranks.get(record.id) ?? fallback + index }))
+  const manager = listedSpaceManager(id, people), fallback = ranks.size;
+  return people.map((record, index) => ({ record, rank: record.id === manager ? -1 : ranks.get(record.id) ?? fallback + index }))
     .sort((a, b) => a.rank - b.rank).map(item => item.record);
+}
+function listedSpaceManager(id, people) {
+  const manager = state.spaceManagers?.[id];
+  return people.find(record => record.id === manager?.sessionId && record.nativeId === manager.nativeId)?.id;
 }
 // R248: a member of the open space opens in its 成员 view, the left list and the tabs staying; R247: any other
 // row, also one under a space in 按空间分组 outside it, opens its session alone as before.
@@ -1218,7 +1222,8 @@ function renderRoomOverview() {
   const focused = focusedRoomMember(), grid = roomSurface === 'overview' && !focused;
   $('collaboration-overview').hidden = !grid && !focused;
   for (const person of members()) readLegacyProgress(person);
-  roomOverview.update(orderedMembers(), !disconnected, grid, focused ? roomSession : '');
+  const people = orderedMembers();
+  roomOverview.update(people, !disconnected, grid, focused ? roomSession : '', listedSpaceManager(spaceId, people));
   renderHeaderLayout(current(), selected === 'room');
   markRoomTabs();
   $('room-record').setAttribute('aria-pressed', 'false');
@@ -3948,6 +3953,7 @@ async function releaseSessionRotation(record) {
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
+  const firstMovable = group && listedSpaceManager(group, visible) ? 1 : 0;
   const isSteward = state.steward?.sessionId === id;
   const roomItems = isSteward && !window.nativeWorkspaceSpaces.roomIds(record).length ? [] : allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: spaceName(r) }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: spaceName(r) } }));
   // Right under the version fact that says this backend is older (T-131).
@@ -3955,7 +3961,7 @@ function sessionMenuModel(id, row) {
   const chain = sessionChainModel(id);
   if (chain) update.push({ id: 'session-chain', label: uiText('chain.menu', { count: chain.sessions.length }), labelKey: 'chain.menu', labelParams: { count: chain.sessions.length } });
   update.push(...sessionRotationAction(record));
-  const actions = [...update, ...modelAction(record), ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...managerAction(record), ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= 0 && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, ...modelAction(record), ...((record.rotationEpisode && !window.nativeWorkspaceSpaces.roomIds(record).length) ? rotationReleaseAction(record) : []), ...stewardAction(record), ...managerAction(record), ...integratorAction(record), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > firstMovable ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index >= firstMovable && index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [...operatorGlobalMenuItems(), ...(state.operatorPolicy?.enabled ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }] : record.operatorEnabled ? [{ id: 'operator-session-revoke', label: uiText('operator.revokeSessionGrant'), labelKey: 'operator.revokeSessionGrant' }] : []), { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -4274,14 +4280,15 @@ function openMemberMenu(id, anchor) {
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   anchor.focus({ preventScroll: true }); anchor.setAttribute('aria-expanded', 'true');
   const people = orderedMembers(), index = people.findIndex(s => s.id === id), reorder = roomSurface === 'overview' && !roomSession;
+  const firstMovable = listedSpaceManager(spaceId, people) ? 1 : 0;
   const close = ui.menu({
     contextElement: anchor,
     items: [{ id: 'detach', label: uiText('menu.detach'), labelKey: 'menu.detach' }, { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' },
       ...sessionRotationAction(members().find(s => s.id === id)),
       ...managerAction(members().find(s => s.id === id)),
       ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: uiText('menu.terminalHeightAll'), labelKey: 'menu.terminalHeightAll' }] : []),
-      ...(reorder && index > 0 ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
-      ...(reorder && index < people.length - 1 ? [{ id: 'later', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : [])],
+      ...(reorder && index > firstMovable ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
+      ...(reorder && index >= firstMovable && index < people.length - 1 ? [{ id: 'later', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : [])],
     getAnchorRect: () => {
       const rect = anchor.getBoundingClientRect(), band = (anchor.closest('.collaboration-statuses') || anchor.closest('.collaboration-member-status') || anchor).getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: band.bottom, bottom: band.bottom };
@@ -5346,8 +5353,17 @@ function renderTimeline() {
   $('room-record-restore').hidden = !roomFilterHistory || Boolean(roomRecordReturn || roomRecordScope || chosen || $('room-search').value || roomThread);
 }
 async function moveRoomMember(id, target, after, destination = spaceId) {
-  await api.spaceAction(destination, 'memberOrder', [{ id, target, after }]);
-  const people = orderedMembers(destination), index = people.findIndex(s => s.id === id);
+  let people = orderedMembers(destination);
+  const manager = listedSpaceManager(destination, people);
+  if (manager && target === manager) {
+    target = people[1]?.id;
+    after = false;
+  }
+  if (id !== manager && target !== id) {
+    await api.spaceAction(destination, 'memberOrder', [{ id, target, after }]);
+    people = orderedMembers(destination);
+  }
+  const index = people.findIndex(s => s.id === id);
   if (index < 0) throw uiError("error.memberOrderChanged");
   return { name: participantLabel(people[index]), index: index + 1, count: people.length };
 }

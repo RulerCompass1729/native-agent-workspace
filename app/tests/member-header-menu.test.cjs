@@ -47,6 +47,8 @@ function fixture(member = 0) {
     header, name, heading, next, record: records[member], button,
   });
   vm.runInContext(content, context);
+  const managerStart = renderer.indexOf('function listedSpaceManager(');
+  vm.runInContext(renderer.slice(managerStart, renderer.indexOf('function openSidebarRow(', managerStart)), context);
   vm.runInContext(renderer.slice(renderer.indexOf('function memberMenuKey('), renderer.indexOf('function sidebarSessions(')), context);
   context.options = { onMemberMenu: context.openMemberMenu };
   const first = overview.indexOf("      const more = button('⋯'");

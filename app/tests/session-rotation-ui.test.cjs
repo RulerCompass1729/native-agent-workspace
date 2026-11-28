@@ -526,6 +526,7 @@ test('R207: a member\'s menu has it above its project manager', async () => {
     Object.assign(f.c, { selected: 'room', roomSurface: 'overview', roomSession: '', columnTerminalBinding: () => null, $: () => f.control });
     f.state.room = { archived: false };
     f.root.append(f.control);
+    vm.runInContext(section('function listedSpaceManager(', 'function openSidebarRow('), f.c);
     vm.runInContext(section('function memberMenuKey(', 'function sidebarSessions('), f.c);
     f.c.openMemberMenu('old', f.control);
     const menu = f.menus.at(-1), ids = plain(menu.items.map(item => item.id));
